@@ -1,0 +1,22 @@
+name: Python package
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.x"
+          activate-environment: true
+          enable-cache: true
+      - name: Test
+        run: |
+          uv run --frozen ruff format --check
+          uv run --frozen ruff check
+          uv run --frozen pytest haproxy_template_ic/test --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test

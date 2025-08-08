@@ -1,0 +1,43 @@
+[project]
+name = "haproxy-template-ic"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.2.1",
+    "dacite>=1.9.2",
+    "kopf>=1.38.0",
+    "kr8s>=0.20.9",
+    "kubernetes>=33.1.0",
+    "uvloop>=0.21.0",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "docker>=7.1.0",
+    "lint>=1.2.1",
+    "pytest>=8.4.1",
+    "pytest-kind>=22.11.1",
+    "python-on-whales>=0.78.0",
+    "ruff>=0.12.7",
+]
+
+[project.scripts]
+haproxy-template-ic = "haproxy_template_ic.__main__:main"
+
+[tool.uv]
+package = true
+
+[tool.uv.workspace]
+members = [
+    "haproxy-template-ic",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
