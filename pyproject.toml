@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "click>=8.2.1",
     "dacite>=1.9.2",
+    "deepdiff>=8.6.0",
     "kopf>=1.38.0",
     "kr8s>=0.20.9",
     "kubernetes>=33.1.0",
@@ -19,6 +20,7 @@ dev = [
     "lint>=1.2.1",
     "pytest>=8.4.1",
     "pytest-kind>=22.11.1",
+    "pytest-xdist>=3.8.0",
     "python-on-whales>=0.78.0",
     "ruff>=0.12.7",
 ]

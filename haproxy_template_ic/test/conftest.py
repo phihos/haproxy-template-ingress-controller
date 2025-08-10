@@ -65,21 +65,25 @@ def k8s_client(kind_cluster):
 
 @pytest.fixture
 def k8s_namespace(request, k8s_client):
+    # generate a unique but human-recognizable namespace name for each test
+    ns_name = f"{time.strftime('%Y-%m-%d-%H-%M-%S')}-{''.join(char for char in request.node.name if char.isalnum())}"
     ns = Namespace(
         {
             "apiVersion": "v1",
             "kind": "Namespace",
             "metadata": {
-                "name": f"acceptance-test-{time.strftime('%Y-%m-%d-%H-%M-%S')}",
+                "name": ns_name,
             },
         }
     )
     ns.create()
     yield ns.name
     report = request.node.stash[phase_report_key]
+    test_failed = ("setup" in report and report["setup"].failed) or (
+        "call" in report and report["call"].failed
+    )
     if not request.config.getoption("--keep-namespaces") and not (
-        report["call"].failed
-        and request.config.getoption("--keep-namespace-on-failure")
+        test_failed and request.config.getoption("--keep-namespace-on-failure")
     ):
         ns.delete()
 
@@ -92,7 +96,26 @@ def config_dict():
 
 
 @pytest.fixture
-def ingress_controller(k8s_client, k8s_namespace, container_image, config_dict):
+def configmap(config_dict, k8s_client, k8s_namespace):
+    cm = ConfigMap(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "haproxy-template-ic-config",
+                "namespace": k8s_namespace,
+            },
+            "data": config_dict,
+        },
+        namespace=k8s_namespace,
+        api=k8s_client,
+    )
+    cm.create()
+    return cm
+
+
+@pytest.fixture
+def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
     ClusterRoleBinding(
         {
             "apiVersion": "v1",
@@ -115,20 +138,6 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, config_dict):
         },
         api=k8s_client,
     ).create()
-    cm_name = "haproxy-template-ic-config"
-    ConfigMap(
-        {
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {
-                "name": cm_name,
-                "namespace": k8s_namespace,
-            },
-            "data": config_dict,
-        },
-        namespace=k8s_namespace,
-        api=k8s_client,
-    ).create()
     pod = Pod(
         {
             "apiVersion": "v1",
@@ -143,7 +152,7 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, config_dict):
                         "name": "haproxy-template-ic",
                         "image": container_image.repo_tags[0],
                         "env": [
-                            {"name": "CONFIGMAP_NAME", "value": cm_name},
+                            {"name": "CONFIGMAP_NAME", "value": configmap.name},
                             {"name": "VERBOSE", "value": "2"},
                         ],
                         "livenessProbe": {

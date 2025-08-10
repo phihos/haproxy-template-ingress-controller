@@ -1,7 +1,32 @@
-def test_basic_init(ingress_controller, kind_cluster, k8s_client, k8s_namespace):
+import time
+
+import pytest
+
+
+def assert_log_line(pod, log_line, timeout=10):
+    full_log = ""
+    start = time.time()
+    for line in pod.logs(follow=True, timeout=timeout):
+        full_log += f"{line}\n"
+        if log_line in line:
+            return full_log
+        if time.time() - start > timeout:
+            pytest.fail(f'Log line "{log_line}" not found in pod log:\n\n{full_log}')
+    return None
+
+
+def test_basic_init(ingress_controller):
     """The ingress controller should be initialized successfully after a few seconds."""
-    line = ""
-    for line in ingress_controller.logs(follow=True, timeout=10):
-        if "Activity 'init_config' succeeded." in line:
-            break
-    assert "Activity 'init_config' succeeded." in line
+    assert_log_line(ingress_controller, "Activity 'init_config' succeeded.")
+
+
+def test_config_reload(ingress_controller, configmap):
+    assert_log_line(
+        ingress_controller,
+        "Starting the watch-stream for configmaps.v1 cluster-wide.",
+    )
+    configmap.patch({"data": {"pod_selector": "baz=bar"}})
+    assert_log_line(ingress_controller, "Config has changed:")
+    assert_log_line(ingress_controller, "Stop-flag is raised. Operator is stopping.")
+    assert_log_line(ingress_controller, "Config change detected. Reinitializing...")
+    assert_log_line(ingress_controller, "Config initialization complete.")
