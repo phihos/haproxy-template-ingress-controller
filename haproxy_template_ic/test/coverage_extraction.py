@@ -66,9 +66,9 @@ def wait_and_copy_coverage(pod, max_wait_time: float = 1.0) -> Optional[bytes]:
     Returns:
         Coverage data as bytes, or None if not found within timeout
     """
-    max_iterations = int(max_wait_time / 0.1)  # Check more frequently
+    max_iterations = int(max_wait_time / 0.1)
     for i in range(max_iterations):
-        time.sleep(0.1)  # Reduced polling interval
+        time.sleep(0.1)
         result = pod.exec(["test", "-f", "/app/.coverage"], capture_output=True)
         if result.returncode == 0:  # File exists
             print(f"Coverage file found after {i * 0.2:.1f}s")

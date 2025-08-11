@@ -2,13 +2,12 @@ name: Tests
 on: [push]
 jobs:
   test:
-
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required for Coveralls
+          fetch-depth: 0 # Required for Coveralls
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -20,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --group dev
-      
+
       - name: Run linting and fast tests
         run: |
           uv run --frozen ruff format --check
@@ -36,7 +35,7 @@ jobs:
           find . -name '.coverage*' -type f -exec uv run coverage combine {} + || true
           uv run coverage xml
           find . -name '.coverage*' -type f -delete || true
-      
+
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@v2
         with:
