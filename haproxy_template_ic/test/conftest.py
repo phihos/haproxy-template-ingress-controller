@@ -52,11 +52,6 @@ def pytest_addoption(parser):
         default=False,
         help="Enable coverage collection for acceptance tests.",
     )
-    parser.addoption(
-        "--kind-config",
-        default="kind-config.yaml",
-        help="Path to Kind cluster configuration file for faster startup.",
-    )
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -96,37 +91,7 @@ def container_image(docker_client, project_root_path, kind_cluster, request):
 @pytest.fixture(scope="session")
 def k8s_client(kind_cluster):
     """Get a Kubernetes client for the Kind cluster."""
-    client = kr8s.api(kubeconfig=kind_cluster.kubeconfig_path)
-
-    # Pre-warm the cluster by checking if it's ready
-    try:
-        # This will trigger the cluster to be fully ready
-        client.get("nodes")
-        print("Kind cluster is ready")
-
-        # Pre-create common resources to speed up tests
-        try:
-            # Pre-create the default namespace if it doesn't exist
-            from kr8s.objects import Namespace
-
-            default_ns = Namespace.get("default", api=client)
-            if not default_ns:
-                print("Pre-creating default namespace")
-                Namespace(
-                    {
-                        "apiVersion": "v1",
-                        "kind": "Namespace",
-                        "metadata": {"name": "default"},
-                    },
-                    api=client,
-                ).create()
-        except Exception:
-            pass  # Default namespace usually exists
-
-    except Exception as e:
-        print(f"Warning: Kind cluster not fully ready: {e}")
-
-    return client
+    return kr8s.api(kubeconfig=kind_cluster.kubeconfig_path)
 
 
 @pytest.fixture
@@ -139,11 +104,6 @@ def k8s_namespace(request, k8s_client):
             "kind": "Namespace",
             "metadata": {
                 "name": ns_name,
-                # Add labels for faster resource discovery
-                "labels": {
-                    "test": "true",
-                    "test-name": request.node.name,
-                },
             },
         }
     )
