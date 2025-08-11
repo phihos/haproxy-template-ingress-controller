@@ -17,7 +17,7 @@ phase_report_key = StashKey[Dict[str, CollectReport]]()
 
 def wait_for_default_serviceaccount(k8s_client, k8s_namespace):
     """Wait for the default serviceaccount to be created in the given namespace."""
-    max_attempts = 30
+    max_attempts = 5  # Further reduced from 10
     attempt = 0
     while attempt < max_attempts:
         try:
@@ -26,10 +26,10 @@ def wait_for_default_serviceaccount(k8s_client, k8s_namespace):
                 return sa
         except Exception:
             pass
-        time.sleep(1)
+        time.sleep(0.2)  # Further reduced from 0.5 seconds
         attempt += 1
     raise TimeoutError(
-        f"Default serviceaccount in namespace {k8s_namespace} was not created within 30 seconds"
+        f"Default serviceaccount in namespace {k8s_namespace} was not created within 1 second"
     )
 
 
@@ -51,6 +51,11 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Enable coverage collection for acceptance tests.",
+    )
+    parser.addoption(
+        "--kind-config",
+        default="kind-config.yaml",
+        help="Path to Kind cluster configuration file for faster startup.",
     )
 
 
@@ -90,7 +95,38 @@ def container_image(docker_client, project_root_path, kind_cluster, request):
 
 @pytest.fixture(scope="session")
 def k8s_client(kind_cluster):
-    return kr8s.api(kubeconfig=kind_cluster.kubeconfig_path)
+    """Get a Kubernetes client for the Kind cluster."""
+    client = kr8s.api(kubeconfig=kind_cluster.kubeconfig_path)
+
+    # Pre-warm the cluster by checking if it's ready
+    try:
+        # This will trigger the cluster to be fully ready
+        client.get("nodes")
+        print("Kind cluster is ready")
+
+        # Pre-create common resources to speed up tests
+        try:
+            # Pre-create the default namespace if it doesn't exist
+            from kr8s.objects import Namespace
+
+            default_ns = Namespace.get("default", api=client)
+            if not default_ns:
+                print("Pre-creating default namespace")
+                Namespace(
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Namespace",
+                        "metadata": {"name": "default"},
+                    },
+                    api=client,
+                ).create()
+        except Exception:
+            pass  # Default namespace usually exists
+
+    except Exception as e:
+        print(f"Warning: Kind cluster not fully ready: {e}")
+
+    return client
 
 
 @pytest.fixture
@@ -103,6 +139,11 @@ def k8s_namespace(request, k8s_client):
             "kind": "Namespace",
             "metadata": {
                 "name": ns_name,
+                # Add labels for faster resource discovery
+                "labels": {
+                    "test": "true",
+                    "test-name": request.node.name,
+                },
             },
         }
     )

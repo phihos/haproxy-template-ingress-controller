@@ -56,7 +56,7 @@ def trigger_coverage_save(pod) -> bool:
         return success
 
 
-def wait_and_copy_coverage(pod, max_wait_time: float = 4.0) -> Optional[bytes]:
+def wait_and_copy_coverage(pod, max_wait_time: float = 1.0) -> Optional[bytes]:
     """Wait for coverage file to appear and copy it.
 
     Args:
@@ -66,9 +66,9 @@ def wait_and_copy_coverage(pod, max_wait_time: float = 4.0) -> Optional[bytes]:
     Returns:
         Coverage data as bytes, or None if not found within timeout
     """
-    max_iterations = int(max_wait_time / 0.2)
+    max_iterations = int(max_wait_time / 0.1)  # Check more frequently
     for i in range(max_iterations):
-        time.sleep(0.2)
+        time.sleep(0.1)  # Reduced polling interval
         result = pod.exec(["test", "-f", "/app/.coverage"], capture_output=True)
         if result.returncode == 0:  # File exists
             print(f"Coverage file found after {i * 0.2:.1f}s")
