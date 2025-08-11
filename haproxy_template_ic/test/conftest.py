@@ -214,35 +214,132 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
     return pod
 
 
-@pytest.fixture(scope="function", autouse=True)
-def collect_coverage(request):
-    """Collect coverage data from the running container if coverage is enabled and ingress_controller is used."""
+@pytest.fixture(scope="function")
+def collect_coverage(request, ingress_controller):
+    """Collect coverage data from the running container if coverage is enabled."""
     yield
 
-    # Only collect coverage if coverage is enabled and ingress_controller fixture is used
-    if (
-        request.config.getoption("--coverage")
-        and hasattr(request, "_funcargs")
-        and "ingress_controller" in request._funcargs
-    ):
+    # Only collect coverage if coverage is enabled
+    if request.config.getoption("--coverage"):
         try:
-            ingress_controller = request._funcargs["ingress_controller"]
-            # Copy coverage data from the container
-            coverage_file = f"/tmp/coverage_{request.node.name}.coverage"
-            ingress_controller.exec(["coverage", "save", coverage_file])
-
-            # Copy the coverage file to the host
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix=".coverage"
-            ) as tmp_file:
-                tmp_file.write(
-                    ingress_controller.exec(
-                        ["cat", coverage_file], capture_output=True
-                    ).stdout
+            # Check if coverage file already exists
+            try:
+                result = ingress_controller.exec(
+                    [
+                        "find",
+                        "/app",
+                        "-name",
+                        "*.coverage*",
+                        "-o",
+                        "-name",
+                        ".coverage*",
+                    ],
+                    capture_output=True,
                 )
-                request.node.stash["coverage_file"] = tmp_file.name
+                if result.stdout:
+                    print(
+                        f"Coverage files before signal: {result.stdout.decode().strip()}"
+                    )
+                else:
+                    print("No coverage files found before signal")
+            except Exception as e:
+                print(f"Failed to check for existing coverage files: {e}")
+
+            # Try to stop the application gracefully to force coverage save
+            try:
+                print("Finding Python coverage process...")
+                # Find the Python process running coverage using /proc
+                result = ingress_controller.exec(
+                    [
+                        "sh",
+                        "-c",
+                        "for pid in /proc/[0-9]*; do if grep -q coverage_wrapper.py $pid/cmdline 2>/dev/null; then basename $pid; break; fi; done",
+                    ],
+                    capture_output=True,
+                )
+                if result.stdout:
+                    python_pid = result.stdout.decode().strip().split("\n")[0]
+                    print(f"Found Python coverage process at PID: {python_pid}")
+                    # Send SIGUSR1 to the Python process to save coverage without killing it
+                    result = ingress_controller.exec(
+                        ["sh", "-c", f"kill -USR1 {python_pid}"], capture_output=True
+                    )
+                    print(f"USR1 signal result for Python process: {result}")
+                else:
+                    print(
+                        "Python coverage process not found, trying to signal via dumb-init"
+                    )
+                    # With dumb-init, we can send signals to PID 1 and they'll be forwarded
+                    result = ingress_controller.exec(
+                        ["sh", "-c", "kill -USR1 1"], capture_output=True
+                    )
+                    print(f"USR1 signal result for PID 1 (dumb-init): {result}")
+                # Give it time to write the file, but check repeatedly and copy immediately when found
+                for i in range(20):  # Check for up to 4 seconds
+                    time.sleep(0.2)
+                    result = ingress_controller.exec(
+                        ["test", "-f", "/app/.coverage"], capture_output=True
+                    )
+                    if result.returncode == 0:  # File exists
+                        print(
+                            f"Coverage file found after {i * 0.2:.1f}s, copying immediately..."
+                        )
+                        # Copy the file immediately
+                        try:
+                            result = ingress_controller.exec(
+                                ["cat", "/app/.coverage"], capture_output=True
+                            )
+                            if result.stdout and len(result.stdout) > 100:
+                                coverage_data = result.stdout
+                                print(
+                                    f"Successfully copied coverage data ({len(result.stdout)} bytes)"
+                                )
+                                break
+                        except Exception as e:
+                            print(f"Failed to copy coverage file: {e}")
+                            continue
+                else:
+                    print("No coverage files found after signal")
+
+            except Exception as e:
+                print(f"Failed to send kill signal: {e}")
+                pass  # Process might already be stopped
+
+            # Try to copy the coverage data file directly from different locations
+            coverage_paths = ["/app/.coverage", "/tmp/.coverage", "/.coverage"]
+            coverage_data = None
+
+            for path in coverage_paths:
+                try:
+                    result = ingress_controller.exec(["cat", path], capture_output=True)
+                    if (
+                        result.stdout and len(result.stdout) > 100
+                    ):  # Ensure it's not empty
+                        coverage_data = result.stdout
+                        print(
+                            f"Found coverage data at {path} ({len(result.stdout)} bytes)"
+                        )
+                        break
+                except Exception as e:
+                    print(f"Failed to read {path}: {e}")
+                    continue
+
+            if coverage_data:
+                # Save coverage data to a temporary file in the project root for combining
+                import os
+
+                project_root = request.config.rootpath
+                coverage_file = os.path.join(
+                    project_root, f".coverage.acceptance.{request.node.name}"
+                )
+
+                with open(coverage_file, "wb") as f:
+                    f.write(coverage_data)
+
+                request.node.stash["coverage_file"] = coverage_file
+                print(f"Saved coverage data to {coverage_file}")
+            else:
+                print("No coverage data found in container")
 
         except Exception as e:
             print(f"Failed to collect coverage: {e}")

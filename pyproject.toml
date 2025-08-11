@@ -60,6 +60,12 @@ omit = [
     "*/.venv/*",
 ]
 
+[tool.coverage.paths]
+source = [
+    "haproxy_template_ic",
+    "/app/lib/python*/site-packages/haproxy_template_ic",
+]
+
 [tool.coverage.report]
 exclude_lines = [
     "pragma: no cover",
