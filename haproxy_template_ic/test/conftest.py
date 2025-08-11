@@ -9,6 +9,7 @@ from pytest import CollectReport, StashKey
 from python_on_whales import DockerClient
 
 CONTAINER_IMAGE_NAME = "haproxy-template-ic-acceptance-test:test"
+CONTAINER_IMAGE_NAME_COVERAGE = "haproxy-template-ic-acceptance-test:test-coverage"
 
 
 phase_report_key = StashKey[Dict[str, CollectReport]]()
@@ -45,6 +46,12 @@ def pytest_addoption(parser):
         default=False,
         help="Keep Kubernetes namespaces after test failure.",
     )
+    parser.addoption(
+        "--coverage",
+        action="store_true",
+        default=False,
+        help="Enable coverage collection for acceptance tests.",
+    )
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -69,11 +76,15 @@ def docker_client():
 
 
 @pytest.fixture(scope="session")
-def container_image(docker_client, project_root_path, kind_cluster):
+def container_image(docker_client, project_root_path, kind_cluster, request):
+    use_coverage = request.config.getoption("--coverage")
+    image_name = CONTAINER_IMAGE_NAME_COVERAGE if use_coverage else CONTAINER_IMAGE_NAME
+    target = "coverage" if use_coverage else "production"
+
     image = docker_client.build(
-        context_path=str(project_root_path), tags=[CONTAINER_IMAGE_NAME]
+        context_path=str(project_root_path), tags=[image_name], target=target
     )
-    kind_cluster.load_docker_image(CONTAINER_IMAGE_NAME)
+    kind_cluster.load_docker_image(image_name)
     return image
 
 
@@ -201,3 +212,21 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
     pod.create()
     pod.wait("condition=Ready")
     return pod
+
+
+@pytest.fixture(scope="function")
+def collect_coverage(request, ingress_controller):
+    """Collect coverage data from the running container if coverage is enabled."""
+    yield
+
+    if not request.config.getoption("--coverage"):
+        return
+
+    from .coverage_extraction import extract_coverage_from_pod
+
+    coverage_file = extract_coverage_from_pod(
+        ingress_controller, request.node.name, request.config.rootpath
+    )
+
+    if coverage_file:
+        request.node.stash["coverage_file"] = coverage_file

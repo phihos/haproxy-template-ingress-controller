@@ -1,11 +1,15 @@
-FROM python:3.13-slim-bookworm AS base
+ARG PYTHON_VERSION=3.13
+
+FROM python:${PYTHON_VERSION}-slim-bookworm AS base
+# Install dumb-init for proper signal handling
+RUN apt-get update && apt-get install -y dumb-init && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /bin/uv
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
-    UV_PYTHON=python3.13 \
+    UV_PYTHON=python${PYTHON_VERSION} \
     UV_PROJECT_ENVIRONMENT=/app
 
 RUN --mount=type=cache,target=/root/.cache \
@@ -24,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache \
         --no-dev \
         --no-editable
 
-FROM base
+FROM base AS runtime-base
 
 # Optional: add the application virtualenv to search path.
 ENV PATH=/app/bin:$PATH
@@ -46,4 +50,18 @@ python -Im site
 python -c 'import haproxy_template_ic'
 EOT
 
-ENTRYPOINT ["/app/bin/haproxy-template-ic"]
+FROM runtime-base AS production
+ENTRYPOINT ["dumb-init", "/app/bin/haproxy-template-ic"]
+
+FROM runtime-base AS coverage
+# Install coverage for the container
+RUN pip install coverage
+
+# Copy the coverage wrapper script
+COPY coverage_wrapper.py /app/coverage_wrapper.py
+
+# Create a wrapper script 
+RUN echo '#!/bin/bash\ncd /app\nPYTHONPATH=/app/lib/python3.13/site-packages:/app/.local/lib/python3.13/site-packages python /app/coverage_wrapper.py "$@"' > /app/run-with-coverage.sh && \
+    chmod +x /app/run-with-coverage.sh
+
+ENTRYPOINT ["dumb-init", "/app/run-with-coverage.sh"]
