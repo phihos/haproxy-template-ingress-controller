@@ -99,6 +99,7 @@ def container_image(docker_client, project_root_path, kind_cluster, request):
         target=target,
         cache_from=cache_from,
         cache_to=cache_to,
+        output={"type": "docker"},
     )
     kind_cluster.load_docker_image(image_name)
     return image
