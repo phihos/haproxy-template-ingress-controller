@@ -215,12 +215,18 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
 
 
 @pytest.fixture(scope="function", autouse=True)
-def collect_coverage(request, ingress_controller):
-    """Collect coverage data from the running container if coverage is enabled."""
+def collect_coverage(request):
+    """Collect coverage data from the running container if coverage is enabled and ingress_controller is used."""
     yield
 
-    if request.config.getoption("--coverage"):
+    # Only collect coverage if coverage is enabled and ingress_controller fixture is used
+    if (
+        request.config.getoption("--coverage")
+        and hasattr(request, "_funcargs")
+        and "ingress_controller" in request._funcargs
+    ):
         try:
+            ingress_controller = request._funcargs["ingress_controller"]
             # Copy coverage data from the container
             coverage_file = f"/tmp/coverage_{request.node.name}.coverage"
             ingress_controller.exec(["coverage", "save", coverage_file])
