@@ -1,11 +1,13 @@
-FROM python:3.13-slim-bookworm AS base
+ARG PYTHON_VERSION=3.13
+
+FROM python:${PYTHON_VERSION}-slim-bookworm AS base
 
 FROM base AS build
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /bin/uv
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
-    UV_PYTHON=python3.13 \
+    UV_PYTHON=python${PYTHON_VERSION} \
     UV_PROJECT_ENVIRONMENT=/app
 
 RUN --mount=type=cache,target=/root/.cache \
@@ -54,7 +56,7 @@ FROM runtime-base AS coverage
 RUN pip install coverage
 
 # Create a wrapper script that runs with coverage
-RUN echo '#!/bin/bash\ncoverage run --source=haproxy_template_ic /app/bin/haproxy-template-ic "$@"' > /app/run-with-coverage.sh && \
+RUN echo '#!/bin/bash\ncd /app\nPYTHONPATH=/app/lib/python3.13/site-packages /app/.local/bin/coverage run --source=haproxy_template_ic -m haproxy_template_ic.__main__ "$@"' > /app/run-with-coverage.sh && \
     chmod +x /app/run-with-coverage.sh
 
 ENTRYPOINT ["/app/run-with-coverage.sh"]

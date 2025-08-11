@@ -144,4 +144,7 @@ docker build --target production -t haproxy-template-ic:latest .
 
 # Build coverage-enabled image for testing
 docker build --target coverage -t haproxy-template-ic:coverage .
+
+# Build with custom Python version
+docker build --build-arg PYTHON_VERSION=3.12 --target production -t haproxy-template-ic:latest .
 ```
