@@ -20,11 +20,6 @@ jobs:
           activate-environment: true
           enable-cache: true
 
-      - uses: actions/cache@v4
-        with:
-          path: .docker-cache
-          key: docker-cache
-      
       - name: Install dependencies
         run: |
           uv sync --group dev
@@ -38,7 +33,7 @@ jobs:
       - name: Run slow tests with coverage
         run: |
           mkdir -p .docker-cache
-          uv run --frozen pytest haproxy_template_ic/test -m "slow" --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test --coverage --cov=haproxy_template_ic --cov-report=term-missing --cov-append --docker-cache-from="type=local,src=.docker-cache" --docker-cache-to="type=local,dest=docker-cache,mode=max"
+          uv run --frozen pytest haproxy_template_ic/test -m "slow" --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test --coverage --cov=haproxy_template_ic --cov-report=term-missing --cov-append --docker-cache-from="type=gha" --docker-cache-to="type=gha,mode=max"
 
       - name: Combine coverage data and create XML
         run: |
