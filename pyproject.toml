@@ -55,6 +55,7 @@ source = ["haproxy_template_ic"]
 omit = [
     "*/test/*",
     "*/tests/*",
+    "haproxy_template_ic/test/*",
     "*/__pycache__/*",
     "*/venv/*",
     "*/.venv/*",
@@ -67,6 +68,14 @@ source = [
 ]
 
 [tool.coverage.report]
+omit = [
+    "*/test/*",
+    "*/tests/*",
+    "haproxy_template_ic/test/*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/.venv/*",
+]
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
