@@ -24,6 +24,7 @@ jobs:
       
       - name: Install dependencies
         run: |
+          docker info
           uv sync --group dev
       
       - name: Run linting and fast tests
