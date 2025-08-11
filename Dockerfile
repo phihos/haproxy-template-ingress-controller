@@ -23,6 +23,7 @@ RUN --mount=type=cache,target=/root/.cache \
 COPY . /src
 WORKDIR /src
 RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=cache,target=/root/.uv \
     uv sync \
         --locked \
         --no-dev \
@@ -54,8 +55,9 @@ FROM runtime-base AS production
 ENTRYPOINT ["dumb-init", "/app/bin/haproxy-template-ic"]
 
 FROM runtime-base AS coverage
-# Install coverage for the container
-RUN pip install coverage
+# Install coverage for the container (with cache)
+RUN --mount=type=cache,target=/root/.cache \
+    pip install coverage
 
 # Copy the coverage wrapper script
 COPY coverage_wrapper.py /app/coverage_wrapper.py

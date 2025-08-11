@@ -4,7 +4,7 @@ import pytest
 import yaml
 
 
-def assert_log_line(pod, log_line, timeout=10):
+def assert_log_line(pod, log_line, timeout=5):
     full_log = ""
     start = time.time()
     for line in pod.logs(follow=True, timeout=timeout):

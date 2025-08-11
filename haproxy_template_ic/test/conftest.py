@@ -17,7 +17,7 @@ phase_report_key = StashKey[Dict[str, CollectReport]]()
 
 def wait_for_default_serviceaccount(k8s_client, k8s_namespace):
     """Wait for the default serviceaccount to be created in the given namespace."""
-    max_attempts = 30
+    max_attempts = 5
     attempt = 0
     while attempt < max_attempts:
         try:
@@ -26,10 +26,10 @@ def wait_for_default_serviceaccount(k8s_client, k8s_namespace):
                 return sa
         except Exception:
             pass
-        time.sleep(1)
+        time.sleep(0.2)
         attempt += 1
     raise TimeoutError(
-        f"Default serviceaccount in namespace {k8s_namespace} was not created within 30 seconds"
+        f"Default serviceaccount in namespace {k8s_namespace} was not created within 1 second"
     )
 
 
@@ -82,7 +82,10 @@ def container_image(docker_client, project_root_path, kind_cluster, request):
     target = "coverage" if use_coverage else "production"
 
     image = docker_client.build(
-        context_path=str(project_root_path), tags=[image_name], target=target
+        context_path=str(project_root_path),
+        tags=[image_name],
+        target=target,
+        output={"type": "docker"},
     )
     kind_cluster.load_docker_image(image_name)
     return image
@@ -90,6 +93,7 @@ def container_image(docker_client, project_root_path, kind_cluster, request):
 
 @pytest.fixture(scope="session")
 def k8s_client(kind_cluster):
+    """Get a Kubernetes client for the Kind cluster."""
     return kr8s.api(kubeconfig=kind_cluster.kubeconfig_path)
 
 
