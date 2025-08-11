@@ -52,16 +52,6 @@ def pytest_addoption(parser):
         default=False,
         help="Enable coverage collection for acceptance tests.",
     )
-    parser.addoption(
-        "--docker-cache-from",
-        default="",
-        help="Docker build cache-from argument (e.g., 'type=gha').",
-    )
-    parser.addoption(
-        "--docker-cache-to",
-        default="",
-        help="Docker build cache-to argument (e.g., 'type=gha,mode=max').",
-    )
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -88,8 +78,6 @@ def docker_client():
 @pytest.fixture(scope="session")
 def container_image(docker_client, project_root_path, kind_cluster, request):
     use_coverage = request.config.getoption("--coverage")
-    cache_from = request.config.getoption("--docker-cache-from")
-    cache_to = request.config.getoption("--docker-cache-to")
     image_name = CONTAINER_IMAGE_NAME_COVERAGE if use_coverage else CONTAINER_IMAGE_NAME
     target = "coverage" if use_coverage else "production"
 
@@ -97,8 +85,6 @@ def container_image(docker_client, project_root_path, kind_cluster, request):
         context_path=str(project_root_path),
         tags=[image_name],
         target=target,
-        cache_from=cache_from,
-        cache_to=cache_to,
         output={"type": "docker"},
     )
     kind_cluster.load_docker_image(image_name)
