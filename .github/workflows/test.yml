@@ -34,6 +34,7 @@ jobs:
       - name: Combine coverage data and create XML
         run: |
           uv run coverage combine $(find . -name '.coverage*' -type f) || true
+          rm $(find . -name '.coverage*' -type f) || true
           uv run coverage xml
       
       - name: Upload coverage to Coveralls
