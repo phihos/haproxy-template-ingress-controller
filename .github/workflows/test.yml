@@ -17,25 +17,48 @@ jobs:
           activate-environment: true
           enable-cache: true
       
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
       - name: Install dependencies
         run: |
           uv sync --group dev
       
-      - name: Run fast tests with coverage
+      - name: Build and cache Docker image
         run: |
-          uv run --frozen ruff format --check
-          uv run --frozen ruff check
+          # Build the Docker image for acceptance tests with caching
+          docker buildx build --target coverage --cache-from type=gha --cache-to type=gha,mode=max -t haproxy-template-ic-acceptance-test:test-coverage .
+          
+          # Save the image for potential reuse
+          docker save haproxy-template-ic-acceptance-test:test-coverage | gzip > haproxy-image.tar.gz
+      
+      - name: Run linting and fast tests in parallel
+        run: |
+          # Run ruff format and ruff check in parallel
+          uv run --frozen ruff format --check &
+          uv run --frozen ruff check &
+          wait
+          
+          # Run fast tests
           uv run --frozen pytest haproxy_template_ic/test -m "not slow" --cov=haproxy_template_ic --cov-report=term-missing
       
       - name: Run slow tests with coverage
         run: |
-          uv run --frozen pytest haproxy_template_ic/test -m "slow" --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test --coverage --cov=haproxy_template_ic --cov-report=term-missing --cov-append
+          # Load cached image if available
+          if [ -f haproxy-image.tar.gz ]; then
+            echo "Loading cached Docker image..."
+            docker load < haproxy-image.tar.gz
+          fi
+          
+          # Use pre-built image if available to speed up tests
+          uv run --frozen pytest haproxy_template_ic/test -m "slow" --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test --coverage --cov=haproxy_template_ic --cov-report=term-missing --cov-append --skip-docker-build
 
       - name: Combine coverage data and create XML
         run: |
-          uv run coverage combine $(find . -name '.coverage*' -type f) || true
+          # More efficient coverage file finding and combination
+          find . -name '.coverage*' -type f -exec uv run coverage combine {} + || true
           uv run coverage xml
-          rm $(find . -name '.coverage*' -type f) || true
+          find . -name '.coverage*' -type f -delete || true
       
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@v2
