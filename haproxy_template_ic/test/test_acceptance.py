@@ -16,11 +16,13 @@ def assert_log_line(pod, log_line, timeout=10):
     return None
 
 
+@pytest.mark.slow
 def test_basic_init(ingress_controller):
     """The ingress controller should be initialized successfully after a few seconds."""
     assert_log_line(ingress_controller, "Activity 'init_config' succeeded.")
 
 
+@pytest.mark.slow
 def test_config_reload(ingress_controller, configmap, config_dict):
     """Test that the ingress controller properly reloads configuration when the ConfigMap is updated.
 

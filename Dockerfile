@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/root/.cache \
         --no-dev \
         --no-editable
 
-FROM base
+FROM base AS runtime-base
 
 # Optional: add the application virtualenv to search path.
 ENV PATH=/app/bin:$PATH
@@ -46,4 +46,15 @@ python -Im site
 python -c 'import haproxy_template_ic'
 EOT
 
+FROM runtime-base AS production
 ENTRYPOINT ["/app/bin/haproxy-template-ic"]
+
+FROM runtime-base AS coverage
+# Install coverage for the container
+RUN pip install coverage
+
+# Create a wrapper script that runs with coverage
+RUN echo '#!/bin/bash\ncoverage run --source=haproxy_template_ic /app/bin/haproxy-template-ic "$@"' > /app/run-with-coverage.sh && \
+    chmod +x /app/run-with-coverage.sh
+
+ENTRYPOINT ["/app/run-with-coverage.sh"]

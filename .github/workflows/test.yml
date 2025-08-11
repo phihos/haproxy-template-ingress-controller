@@ -21,11 +21,15 @@ jobs:
         run: |
           uv sync --group dev
       
-      - name: Run tests with coverage
+      - name: Run fast tests with coverage
         run: |
           uv run --frozen ruff format --check
           uv run --frozen ruff check
-          uv run --frozen pytest haproxy_template_ic/test --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missing
+          uv run --frozen pytest haproxy_template_ic/test/test_config.py --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missing
+      
+      - name: Run slow tests with coverage
+        run: |
+          uv run --frozen pytest haproxy_template_ic/test/test_acceptance.py --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test --coverage --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missing --cov-append
       
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@v2
