@@ -53,10 +53,14 @@ def pytest_addoption(parser):
         help="Enable coverage collection for acceptance tests.",
     )
     parser.addoption(
-        "--skip-docker-build",
-        action="store_true",
-        default=False,
-        help="Skip Docker build if image already exists (for faster test runs).",
+        "--docker-cache-from",
+        default="",
+        help="Docker build cache-from argument (e.g., 'type=gha').",
+    )
+    parser.addoption(
+        "--docker-cache-to",
+        default="",
+        help="Docker build cache-to argument (e.g., 'type=gha,mode=max').",
     )
 
 
@@ -84,28 +88,20 @@ def docker_client():
 @pytest.fixture(scope="session")
 def container_image(docker_client, project_root_path, kind_cluster, request):
     use_coverage = request.config.getoption("--coverage")
-    skip_build = request.config.getoption("--skip-docker-build")
+    cache_from = request.config.getoption("--docker-cache-from")
+    cache_to = request.config.getoption("--docker-cache-to")
     image_name = CONTAINER_IMAGE_NAME_COVERAGE if use_coverage else CONTAINER_IMAGE_NAME
     target = "coverage" if use_coverage else "production"
 
-    # Check if image already exists to avoid rebuilding
-    try:
-        existing_image = docker_client.image.inspect(image_name)
-        print(f"Using existing Docker image: {image_name}")
-        # Still need to load to kind cluster
-        kind_cluster.load_docker_image(image_name)
-        return existing_image
-    except Exception:
-        if skip_build:
-            raise RuntimeError(
-                f"Docker image {image_name} not found. Use --skip-docker-build only when image exists."
-            )
-        print(f"Building new Docker image: {image_name}")
-        image = docker_client.build(
-            context_path=str(project_root_path), tags=[image_name], target=target
-        )
-        kind_cluster.load_docker_image(image_name)
-        return image
+    image = docker_client.build(
+        context_path=str(project_root_path),
+        tags=[image_name],
+        target=target,
+        cache_from=cache_from,
+        cache_to=cache_to,
+    )
+    kind_cluster.load_docker_image(image_name)
+    return image
 
 
 @pytest.fixture(scope="session")
