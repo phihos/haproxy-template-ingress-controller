@@ -4,6 +4,7 @@ import logging
 import click
 import kopf
 import uvloop
+import yaml
 from deepdiff import DeepDiff
 from kr8s.objects import ConfigMap
 
@@ -12,21 +13,35 @@ from haproxy_template_ic.utils import get_current_namespace
 
 
 def signal_reload(memo):
-    """Shut down the operator, but signal the main() loop to restart is again with updated config."""
+    """Set signal to shut down the operator, but signal the main() loop to restart is again with updated config."""
+    # see kopf._cogs.aiokits.aioadapters about how to raise stop-flags
     memo.config_reload_flag.set_result(None)
-    memo.stop_flag.set_result(
-        None
-    )  # see kopf._cogs.aiokits.aioadapters about how to raise stop-flags
+    memo.stop_flag.set_result(None)
 
 
 async def check_config_change(memo, event, name, type, logger, **kwargs):
     logger.info(f'Configmap "{name}" changed with type {type}.')
-    config = config_from_dict(event["object"]["data"])
+    config = await config_from_configmap(event["object"])
     if memo.config != config:
         logger.info(
             f"Config has changed: {DeepDiff(memo.config, config, verbose_level=2)}. Reloading..."
         )
         signal_reload(memo)
+
+
+async def config_from_configmap(configmap):
+    return config_from_dict(yaml.load(configmap["data"]["config"], Loader=yaml.CLoader))
+
+
+async def generic_index(param, namespace, name, spec, logger, **kwargs_):
+    logger.debug(f"Updating index {param} for {namespace}/{name}...")
+    return {(namespace, name): spec}
+
+
+async def init_watch_resources(memo, logger, **kwargs):
+    watch_resources = memo.config.watch_resources
+    for index_name, watch_resource in watch_resources.items():
+        kopf.index("pods", id=index_name, param=index_name)(generic_index)
 
 
 async def init_config(memo, logger, **kwargs):
@@ -43,11 +58,12 @@ async def init_config(memo, logger, **kwargs):
             f'Failed to retrieve ConfigMap "{configmap_name}": {e}'
         ) from e
     try:
-        memo.config = config_from_dict(configmap["data"])
+        memo.config = await config_from_configmap(configmap)
     except Exception as e:
         raise kopf.TemporaryError(
             f'Failed to parse ConfigMap "{configmap_name}": {e}'
         ) from e
+    kopf.on.startup()(init_watch_resources)
     kopf.on.event(
         "configmap",
         when=lambda name, namespace, type, **_: name == configmap_name

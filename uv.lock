@@ -410,6 +410,7 @@ dependencies = [
     { name = "kopf" },
     { name = "kr8s" },
     { name = "kubernetes" },
+    { name = "pyyaml" },
     { name = "uvloop" },
 ]
 
@@ -433,6 +434,7 @@ requires-dist = [
     { name = "kopf", specifier = ">=1.38.0" },
     { name = "kr8s", specifier = ">=0.20.9" },
     { name = "kubernetes", specifier = ">=33.1.0" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "uvloop", specifier = ">=0.21.0" },
 ]
 

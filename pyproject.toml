@@ -10,6 +10,7 @@ dependencies = [
     "kopf>=1.38.0",
     "kr8s>=0.20.9",
     "kubernetes>=33.1.0",
+    "pyyaml>=6.0.2",
     "uvloop>=0.21.0",
 ]
 

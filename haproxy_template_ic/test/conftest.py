@@ -3,7 +3,8 @@ from typing import Dict
 
 import kr8s
 import pytest
-from kr8s.objects import ClusterRoleBinding, ConfigMap, Namespace, Pod
+import yaml
+from kr8s.objects import ClusterRoleBinding, ConfigMap, Namespace, Pod, ServiceAccount
 from pytest import CollectReport, StashKey
 from python_on_whales import DockerClient
 
@@ -11,6 +12,24 @@ CONTAINER_IMAGE_NAME = "haproxy-template-ic-acceptance-test:test"
 
 
 phase_report_key = StashKey[Dict[str, CollectReport]]()
+
+
+def wait_for_default_serviceaccount(k8s_client, k8s_namespace):
+    """Wait for the default serviceaccount to be created in the given namespace."""
+    max_attempts = 30
+    attempt = 0
+    while attempt < max_attempts:
+        try:
+            sa = ServiceAccount.get("default", namespace=k8s_namespace, api=k8s_client)
+            if sa:
+                return sa
+        except Exception:
+            pass
+        time.sleep(1)
+        attempt += 1
+    raise TimeoutError(
+        f"Default serviceaccount in namespace {k8s_namespace} was not created within 30 seconds"
+    )
 
 
 def pytest_addoption(parser):
@@ -92,6 +111,12 @@ def k8s_namespace(request, k8s_client):
 def config_dict():
     return {
         "pod_selector": "foo=bar",
+        "watch_resources": {
+            "ingresses": {
+                "group": "networking.k8s.io",
+                "kind": "Ingress",
+            }
+        },
     }
 
 
@@ -105,7 +130,9 @@ def configmap(config_dict, k8s_client, k8s_namespace):
                 "name": "haproxy-template-ic-config",
                 "namespace": k8s_namespace,
             },
-            "data": config_dict,
+            "data": {
+                "config": yaml.dump(config_dict, Dumper=yaml.CDumper),
+            },
         },
         namespace=k8s_namespace,
         api=k8s_client,
@@ -116,6 +143,9 @@ def configmap(config_dict, k8s_client, k8s_namespace):
 
 @pytest.fixture
 def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
+    # Wait for the default serviceaccount before proceeding
+    wait_for_default_serviceaccount(k8s_client, k8s_namespace)
+
     ClusterRoleBinding(
         {
             "apiVersion": "v1",

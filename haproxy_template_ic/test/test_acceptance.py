@@ -1,6 +1,7 @@
 import time
 
 import pytest
+import yaml
 
 
 def assert_log_line(pod, log_line, timeout=10):
@@ -20,12 +21,13 @@ def test_basic_init(ingress_controller):
     assert_log_line(ingress_controller, "Activity 'init_config' succeeded.")
 
 
-def test_config_reload(ingress_controller, configmap):
+def test_config_reload(ingress_controller, configmap, config_dict):
     assert_log_line(
         ingress_controller,
         "Starting the watch-stream for configmaps.v1 cluster-wide.",
     )
-    configmap.patch({"data": {"pod_selector": "baz=bar"}})
+    config_dict["pod_selector"] = "baz=bar"
+    configmap.patch({"data": {"config": yaml.dump(config_dict, Dumper=yaml.CDumper)}})
     assert_log_line(ingress_controller, "Config has changed:")
     assert_log_line(ingress_controller, "Stop-flag is raised. Operator is stopping.")
     assert_log_line(ingress_controller, "Config change detected. Reinitializing...")
