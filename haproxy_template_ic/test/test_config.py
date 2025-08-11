@@ -1,0 +1,283 @@
+import pytest
+
+from haproxy_template_ic.config import (
+    Config,
+    WatchResourceConfig,
+    MapConfig,
+    config_from_dict,
+)
+
+
+@pytest.mark.parametrize(
+    "config_dict,expected_pod_selector,expected_watch_resources_count,expected_maps_count",
+    [
+        # Basic config with only required fields
+        ({"pod_selector": "app=myapp"}, "app=myapp", 0, 0),
+        # Config with empty optional fields
+        (
+            {"pod_selector": "app=myapp", "watch_resources": {}, "maps": {}},
+            "app=myapp",
+            0,
+            0,
+        ),
+        # Config with watch_resources
+        (
+            {
+                "pod_selector": "app=myapp",
+                "watch_resources": {
+                    "ingresses": {
+                        "group": "networking.k8s.io",
+                        "version": "v1",
+                        "kind": "Ingress",
+                    },
+                    "services": {"group": "", "version": "v1", "kind": "Service"},
+                },
+            },
+            "app=myapp",
+            2,
+            0,
+        ),
+        # Config with maps
+        (
+            {
+                "pod_selector": "app=myapp",
+                "maps": {
+                    "/etc/haproxy/maps/path-prefix.map": {
+                        "path": "/etc/haproxy/maps/path-prefix.map",
+                        "template": "server {{ name }} {{ ip }}:{{ port }}",
+                    },
+                    "/etc/haproxy/maps/backend-servers.map": {
+                        "path": "/etc/haproxy/maps/backend-servers.map",
+                        "template": "server {{ name }} {{ ip }}:{{ port }}",
+                    },
+                },
+            },
+            "app=myapp",
+            0,
+            2,
+        ),
+        # Config with all fields
+        (
+            {
+                "pod_selector": "app=myapp",
+                "watch_resources": {
+                    "ingresses": {"group": "networking.k8s.io", "kind": "Ingress"}
+                },
+                "maps": {
+                    "/etc/haproxy/maps/path-prefix.map": {
+                        "path": "/etc/haproxy/maps/path-prefix.map",
+                        "template": "server {{ name }} {{ ip }}:{{ port }}",
+                    }
+                },
+            },
+            "app=myapp",
+            1,
+            1,
+        ),
+    ],
+)
+def test_valid_configs(
+    config_dict,
+    expected_pod_selector,
+    expected_watch_resources_count,
+    expected_maps_count,
+):
+    """Test creating valid configs with various field combinations."""
+    config = config_from_dict(config_dict)
+
+    assert isinstance(config, Config)
+    assert config.pod_selector == expected_pod_selector
+    assert len(config.watch_resources) == expected_watch_resources_count
+    assert len(config.maps) == expected_maps_count
+
+
+@pytest.mark.parametrize(
+    "config_dict,expected_watch_resource",
+    [
+        (
+            {
+                "pod_selector": "app=myapp",
+                "watch_resources": {
+                    "ingresses": {
+                        "group": "networking.k8s.io",
+                        "version": "v1",
+                        "kind": "Ingress",
+                    }
+                },
+            },
+            {
+                "name": "ingresses",
+                "group": "networking.k8s.io",
+                "version": "v1",
+                "kind": "Ingress",
+            },
+        ),
+        (
+            {
+                "pod_selector": "app=myapp",
+                "watch_resources": {
+                    "services": {"group": "", "version": "v1", "kind": "Service"}
+                },
+            },
+            {"name": "services", "group": "", "version": "v1", "kind": "Service"},
+        ),
+        (
+            {
+                "pod_selector": "app=myapp",
+                "watch_resources": {
+                    "pods": {"group": None, "version": None, "kind": None}
+                },
+            },
+            {"name": "pods", "group": None, "version": None, "kind": None},
+        ),
+    ],
+)
+def test_watch_resources_structure(config_dict, expected_watch_resource):
+    """Test that watch_resources are properly structured as WatchResourceConfig objects."""
+    config = config_from_dict(config_dict)
+
+    watch_resource = config.watch_resources[expected_watch_resource["name"]]
+    assert isinstance(watch_resource, WatchResourceConfig)
+    assert watch_resource.group == expected_watch_resource["group"]
+    assert watch_resource.version == expected_watch_resource["version"]
+    assert watch_resource.kind == expected_watch_resource["kind"]
+
+
+@pytest.mark.parametrize(
+    "config_dict,expected_map",
+    [
+        (
+            {
+                "pod_selector": "app=myapp",
+                "maps": {
+                    "/etc/haproxy/maps/path-prefix.map": {
+                        "path": "/etc/haproxy/maps/path-prefix.map",
+                        "template": "server {{ name }} {{ ip }}:{{ port }}",
+                    }
+                },
+            },
+            {
+                "name": "/etc/haproxy/maps/path-prefix.map",
+                "path": "/etc/haproxy/maps/path-prefix.map",
+                "template": "server {{ name }} {{ ip }}:{{ port }}",
+            },
+        ),
+        (
+            {
+                "pod_selector": "app=myapp",
+                "maps": {
+                    "/etc/haproxy/maps/backend-servers.map": {
+                        "path": "/etc/haproxy/maps/backend-servers.map",
+                        "template": "server {{ name }} {{ ip }}:{{ port }}",
+                    }
+                },
+            },
+            {
+                "name": "/etc/haproxy/maps/backend-servers.map",
+                "path": "/etc/haproxy/maps/backend-servers.map",
+                "template": "server {{ name }} {{ ip }}:{{ port }}",
+            },
+        ),
+        (
+            {
+                "pod_selector": "app=myapp",
+                "maps": {
+                    "/var/log/app.log": {
+                        "path": "/var/log/app.log",
+                        "template": "log_format {{ format }};",
+                    }
+                },
+            },
+            {
+                "name": "/var/log/app.log",
+                "path": "/var/log/app.log",
+                "template": "log_format {{ format }};",
+            },
+        ),
+    ],
+)
+def test_maps_structure(config_dict, expected_map):
+    """Test that maps are properly structured as MapConfig objects."""
+    config = config_from_dict(config_dict)
+
+    map_config = config.maps[expected_map["name"]]
+    assert isinstance(map_config, MapConfig)
+    assert map_config.path == expected_map["path"]
+    assert map_config.template == expected_map["template"]
+
+
+@pytest.mark.parametrize(
+    "config_dict",
+    [
+        # Missing required pod_selector field
+        {"watch_resources": {}},
+        {"maps": {}},
+        {},
+        # Invalid field types
+        {"pod_selector": 123},  # Should be string
+        {"pod_selector": None},  # Should be string
+        # Extra fields should raise exceptions
+        {"pod_selector": "app=myapp", "extra_field": "should_raise_exception"},
+        {"pod_selector": "app=myapp", "unknown_field": {"nested": "data"}},
+        {
+            "pod_selector": "app=myapp",
+            "watch_resources": {},
+            "maps": {},
+            "extra_field": "should_raise_exception",
+        },
+        # Invalid relative paths in maps
+        {
+            "pod_selector": "app=myapp",
+            "maps": {
+                "relative/path.conf": {
+                    "path": "/etc/app/config.conf",
+                    "template": "config",
+                }
+            },
+        },
+        {
+            "pod_selector": "app=myapp",
+            "maps": {
+                "config.conf": {"path": "/etc/app/config.conf", "template": "config"}
+            },
+        },
+        {
+            "pod_selector": "app=myapp",
+            "maps": {
+                "./config.conf": {"path": "/etc/app/config.conf", "template": "config"}
+            },
+        },
+        # Invalid Jinja2 templates
+        {
+            "pod_selector": "app=myapp",
+            "maps": {
+                "/etc/haproxy/maps/test.map": {
+                    "path": "/etc/haproxy/maps/test.map",
+                    "template": "server {{ name }",
+                }
+            },
+        },
+        {
+            "pod_selector": "app=myapp",
+            "maps": {
+                "/etc/haproxy/maps/test.map": {
+                    "path": "/etc/haproxy/maps/test.map",
+                    "template": "server {{ name }",
+                }
+            },
+        },
+        {
+            "pod_selector": "app=myapp",
+            "maps": {
+                "/etc/haproxy/maps/test.map": {
+                    "path": "/etc/haproxy/maps/test.map",
+                    "template": "server {% if name %}",
+                }
+            },
+        },
+    ],
+)
+def test_invalid_configs(config_dict):
+    """Test that invalid configs raise appropriate exceptions."""
+    with pytest.raises(Exception):  # dacite will raise an error for invalid configs
+        config_from_dict(config_dict)

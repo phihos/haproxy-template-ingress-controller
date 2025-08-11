@@ -7,6 +7,7 @@ dependencies = [
     "click>=8.2.1",
     "dacite>=1.9.2",
     "deepdiff>=8.6.0",
+    "jinja2>=3.1.0",
     "kopf>=1.38.0",
     "kr8s>=0.20.9",
     "kubernetes>=33.1.0",

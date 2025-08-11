@@ -22,6 +22,14 @@ def test_basic_init(ingress_controller):
 
 
 def test_config_reload(ingress_controller, configmap, config_dict):
+    """Test that the ingress controller properly reloads configuration when the ConfigMap is updated.
+
+    This test verifies that:
+    1. The controller starts watching for configmap changes
+    2. When the config is modified, it detects the change
+    3. The controller stops and reinitializes with the new configuration
+    4. The new configuration is successfully applied
+    """
     assert_log_line(
         ingress_controller,
         "Starting the watch-stream for configmaps.v1 cluster-wide.",
