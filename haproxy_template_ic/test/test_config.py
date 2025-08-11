@@ -6,6 +6,7 @@ from haproxy_template_ic.config import (
     MapConfig,
     config_from_dict,
 )
+from jinja2 import Template
 
 
 @pytest.mark.parametrize(
@@ -160,6 +161,7 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
                 "name": "/etc/haproxy/maps/path-prefix.map",
                 "path": "/etc/haproxy/maps/path-prefix.map",
                 "template": "server {{ name }} {{ ip }}:{{ port }}",
+                "expected_rendered": "server test-server 192.168.1.1:8080",
             },
         ),
         (
@@ -176,6 +178,7 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
                 "name": "/etc/haproxy/maps/backend-servers.map",
                 "path": "/etc/haproxy/maps/backend-servers.map",
                 "template": "server {{ name }} {{ ip }}:{{ port }}",
+                "expected_rendered": "server test-server 192.168.1.1:8080",
             },
         ),
         (
@@ -192,6 +195,7 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
                 "name": "/var/log/app.log",
                 "path": "/var/log/app.log",
                 "template": "log_format {{ format }};",
+                "expected_rendered": "log_format combined;",
             },
         ),
     ],
@@ -203,7 +207,12 @@ def test_maps_structure(config_dict, expected_map):
     map_config = config.maps[expected_map["name"]]
     assert isinstance(map_config, MapConfig)
     assert map_config.path == expected_map["path"]
-    assert map_config.template == expected_map["template"]
+    assert isinstance(map_config.template, Template)
+    # Test that the template renders correctly with sample data
+    rendered = map_config.template.render(
+        name="test-server", ip="192.168.1.1", port="8080", format="combined"
+    )
+    assert rendered == expected_map["expected_rendered"]
 
 
 @pytest.mark.parametrize(

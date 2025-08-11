@@ -1,5 +1,7 @@
 # HAProxy Template Ingress Controller
 
+[![Coverage Status](https://coveralls.io/repos/github/phihos/haproxy-template-ingress-controller/badge.svg)](https://coveralls.io/github/phihos/haproxy-template-ingress-controller)
+
 Proof-of-concept of an ingress controller, that is customizable via Jinja2 templating.
 
 ## Contributing
