@@ -7,19 +7,24 @@ import yaml
 def assert_log_line(pod, log_line, timeout=5):
     full_log = ""
     start = time.time()
-    for line in pod.logs(follow=True, timeout=timeout):
-        full_log += f"{line}\n"
-        if log_line in line:
-            return full_log
-        if time.time() - start > timeout:
-            pytest.fail(f'Log line "{log_line}" not found in pod log:\n\n{full_log}')
+    try:
+        for line in pod.logs(follow=True, timeout=timeout):
+            full_log += f"{line}\n"
+            if log_line in line:
+                return full_log
+            if time.time() - start > timeout:
+                pytest.fail(
+                    f'Log line "{log_line}" not found in pod log:\n\n{full_log}'
+                )
+    except Exception:
+        pytest.fail(f'Log line "{log_line}" not found in pod log:\n\n{full_log}')
     return None
 
 
 @pytest.mark.slow
 def test_basic_init(ingress_controller, collect_coverage):
     """The ingress controller should be initialized successfully after a few seconds."""
-    assert_log_line(ingress_controller, "Activity 'init_config' succeeded.")
+    assert_log_line(ingress_controller, "✅ Configuration initialized successfully.")
 
 
 @pytest.mark.slow
@@ -38,7 +43,7 @@ def test_config_reload(ingress_controller, configmap, config_dict, collect_cover
     )
     config_dict["pod_selector"] = "baz=bar"
     configmap.patch({"data": {"config": yaml.dump(config_dict, Dumper=yaml.CDumper)}})
-    assert_log_line(ingress_controller, "Config has changed:")
+    assert_log_line(ingress_controller, "🔄 Config has changed:")
     assert_log_line(ingress_controller, "Stop-flag is raised. Operator is stopping.")
-    assert_log_line(ingress_controller, "Config change detected. Reinitializing...")
-    assert_log_line(ingress_controller, "Config initialization complete.")
+    assert_log_line(ingress_controller, "🔄 Configuration changed. Reinitializing...")
+    assert_log_line(ingress_controller, "✅ Configuration initialized successfully.")

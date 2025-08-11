@@ -12,77 +12,150 @@ from haproxy_template_ic.config import config_from_dict
 from haproxy_template_ic.utils import get_current_namespace
 
 
-def signal_reload(memo):
-    """Set signal to shut down the operator, but signal the main() loop to restart is again with updated config."""
-    # see kopf._cogs.aiokits.aioadapters about how to raise stop-flags
+# =============================================================================
+# Configuration Management
+# =============================================================================
+
+
+async def load_config_from_configmap(configmap):
+    """Load configuration from a Kubernetes ConfigMap."""
+    return config_from_dict(yaml.load(configmap["data"]["config"], Loader=yaml.CLoader))
+
+
+async def fetch_configmap(name, namespace):
+    """Fetch ConfigMap from Kubernetes cluster."""
+    try:
+        return await ConfigMap.get(name, namespace=namespace)
+    except Exception as e:
+        raise kopf.TemporaryError(f'Failed to retrieve ConfigMap "{name}": {e}') from e
+
+
+async def parse_configmap(configmap, name):
+    """Parse configuration from ConfigMap."""
+    try:
+        return await load_config_from_configmap(configmap)
+    except Exception as e:
+        raise kopf.TemporaryError(f'Failed to parse ConfigMap "{name}": {e}') from e
+
+
+# =============================================================================
+# Event Handlers
+# =============================================================================
+
+
+def trigger_reload(memo):
+    """Signal the operator to reload with updated configuration."""
     memo.config_reload_flag.set_result(None)
     memo.stop_flag.set_result(None)
 
 
-async def check_config_change(memo, event, name, type, logger, **kwargs):
-    logger.info(f'Configmap "{name}" changed with type {type}.')
-    config = await config_from_configmap(event["object"])
-    if memo.config != config:
-        logger.info(
-            f"Config has changed: {DeepDiff(memo.config, config, verbose_level=2)}. Reloading..."
-        )
-        signal_reload(memo)
+async def handle_configmap_change(memo, event, name, type, logger, **kwargs):
+    """Handle ConfigMap change events."""
+    logger.info(f'📋 Configmap "{name}" changed with type {type}.')
+
+    new_config = await load_config_from_configmap(event["object"])
+    if memo.config != new_config:
+        diff = DeepDiff(memo.config, new_config, verbose_level=2)
+        logger.info(f"🔄 Config has changed: {diff}. Reloading...")
+        trigger_reload(memo)
 
 
-async def config_from_configmap(configmap):
-    return config_from_dict(yaml.load(configmap["data"]["config"], Loader=yaml.CLoader))
-
-
-async def generic_index(param, namespace, name, spec, logger, **kwargs_):
-    logger.debug(f"Updating index {param} for {namespace}/{name}...")
+async def update_resource_index(param, namespace, name, spec, logger, **kwargs_):
+    """Update resource index for tracking."""
+    logger.debug(f"📝 Updating index {param} for {namespace}/{name}...")
     return {(namespace, name): spec}
 
 
-async def init_watch_resources(memo, logger, **kwargs):
-    watch_resources = memo.config.watch_resources
-    for index_name, watch_resource in watch_resources.items():
-        kopf.index("pods", id=index_name, param=index_name)(generic_index)
+# =============================================================================
+# Initialization
+# =============================================================================
 
 
-async def init_config(memo, logger, **kwargs):
+async def setup_resource_watchers(memo, logger, **kwargs):
+    """Set up watchers for Kubernetes resources."""
+    for index_name in memo.config.watch_resources:
+        kopf.index("pods", id=index_name, param=index_name)(update_resource_index)
+
+
+async def initialize_configuration(memo, logger, **kwargs):
+    """Initialize operator configuration from ConfigMap."""
     configmap_name = memo.configmap_name
-    logger.info(f"Initializing config data structure from configmap {configmap_name}.")
-    current_namespace = get_current_namespace()
-    try:
-        configmap = await ConfigMap.get(
-            configmap_name,
-            namespace=current_namespace,
-        )
-    except Exception as e:
-        raise kopf.TemporaryError(
-            f'Failed to retrieve ConfigMap "{configmap_name}": {e}'
-        ) from e
-    try:
-        memo.config = await config_from_configmap(configmap)
-    except Exception as e:
-        raise kopf.TemporaryError(
-            f'Failed to parse ConfigMap "{configmap_name}": {e}'
-        ) from e
-    kopf.on.startup()(init_watch_resources)
+    logger.info(f"⚙️ Initializing config from configmap {configmap_name}.")
+
+    namespace = get_current_namespace()
+    configmap = await fetch_configmap(configmap_name, namespace)
+    memo.config = await parse_configmap(configmap, configmap_name)
+
+    # Set up event handlers
+    kopf.on.startup()(setup_resource_watchers)
     kopf.on.event(
         "configmap",
-        when=lambda name, namespace, type, **_: name == configmap_name
-        and namespace == current_namespace
-        # Return early if this is just the initial invocation without an event type.
-        # This run is obsolete since we already initialized the config at startup.
-        and type,
-    )(check_config_change)
-    logger.info("Config initialization complete.")
+        when=lambda name, namespace, type, **_: (
+            name == configmap_name
+            and namespace == get_current_namespace()
+            and type  # Skip initial invocation
+        ),
+    )(handle_configmap_change)
+
+    logger.info("✅ Configuration initialized successfully.")
 
 
-def init_logging(verbose):
-    if verbose == 0:
-        log_level = logging.WARNING
-    elif verbose == 1:
-        log_level = logging.INFO
-    else:
-        log_level = logging.DEBUG
-    logging.basicConfig(level=log_level)
+# =============================================================================
+# Logging Setup
+# =============================================================================
+
+
+def setup_logging(verbose_level):
+    """Configure logging based on verbosity level."""
+    log_levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
+    logging.basicConfig(level=log_levels.get(verbose_level, logging.DEBUG))
+
+
+# =============================================================================
+# Main Application
+# =============================================================================
+
+
+def create_operator_memo(configmap_name):
+    """Create memo object for operator state."""
+    loop = uvloop.EventLoopPolicy().new_event_loop()
+    stop_flag = asyncio.Future(loop=loop)
+    config_reload_flag = asyncio.Future(loop=loop)
+
+    return (
+        kopf.Memo(
+            stop_flag=stop_flag,
+            configmap_name=configmap_name,
+            config_reload_flag=config_reload_flag,
+        ),
+        loop,
+        stop_flag,
+    )
+
+
+def run_operator_loop(configmap_name, healthz_port, logger):
+    """Run the main operator loop with config reload capability."""
+    while True:
+        # Set up operator
+        kopf.on.startup()(initialize_configuration)
+        memo, loop, stop_flag = create_operator_memo(configmap_name)
+
+        # Run operator
+        kopf.run(
+            clusterwide=True,
+            loop=loop,
+            liveness_endpoint=f"http://0.0.0.0:{healthz_port}/healthz",
+            stop_flag=stop_flag,
+            memo=memo,
+        )
+
+        # Check if we should exit or reload
+        if not memo.config_reload_flag.done():
+            break  # Normal shutdown
+
+        logger.info("🔄 Configuration changed. Reinitializing...")
+
+    logger.info("👋 Operator shutdown complete.")
 
 
 @click.command()
@@ -98,7 +171,7 @@ def init_logging(verbose):
     "--healthz-port",
     envvar="HEALTHZ_PORT",
     default=8080,
-    help="Name of the Kubernetes ConfigMap used for configuration.",
+    help="Port for health check endpoint.",
 )
 @click.option(
     "-v",
@@ -108,30 +181,10 @@ def init_logging(verbose):
     help="Set log level to INFO via -v and DEBUG via -vv. Use numbers when using the env var.",
 )
 def main(configmap_name, healthz_port, verbose):
-    init_logging(verbose)
+    """HAProxy Template IC Operator - Kubernetes operator for HAProxy configuration management."""
+    setup_logging(verbose)
     logger = logging.getLogger(__name__)
-    while True:
-        kopf.on.startup()(init_config)
-        loop = uvloop.EventLoopPolicy().new_event_loop()
-        stop_flag = asyncio.Future(loop=loop)
-        config_reload_flag = asyncio.Future(loop=loop)
-        memo = kopf.Memo(
-            stop_flag=stop_flag,
-            configmap_name=configmap_name,
-            config_reload_flag=config_reload_flag,
-        )
-        kopf.run(
-            clusterwide=True,
-            loop=loop,
-            liveness_endpoint=f"http://0.0.0.0:{healthz_port}/healthz",
-            stop_flag=stop_flag,
-            memo=memo,
-        )
-
-        if not memo.config_reload_flag.done():
-            break  # if the operator shut down to reload its config we stay in the loop and reinit kopf
-        logger.info("Config change detected. Reinitializing...")
-    logger.info("Shutdown complete. Goodbye.")
+    run_operator_loop(configmap_name, healthz_port, logger)
 
 
 if __name__ == "__main__":
