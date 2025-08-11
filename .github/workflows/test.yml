@@ -1,22 +1,36 @@
 name: Python package
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
-  build:
+  test:
 
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for Coveralls
+      
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.8.x"
           activate-environment: true
           enable-cache: true
-      - name: Test
+      
+      - name: Install dependencies
+        run: |
+          uv sync --group dev
+      
+      - name: Run tests with coverage
         run: |
           uv run --frozen ruff format --check
           uv run --frozen ruff check
-          uv run --frozen pytest haproxy_template_ic/test --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test
+          uv run --frozen pytest haproxy_template_ic/test --keep-cluster --keep-namespaces --cluster-name haproxy-template-ic-test --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missing
+      
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          coveralls-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

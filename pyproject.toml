@@ -21,6 +21,7 @@ dev = [
     "docker>=7.1.0",
     "lint>=1.2.1",
     "pytest>=8.4.1",
+    "pytest-cov>=5.0.0",
     "pytest-kind>=22.11.1",
     "pytest-xdist>=3.8.0",
     "python-on-whales>=0.78.0",
@@ -44,4 +45,28 @@ where = ["."]
 [tool.pytest.ini_options]
 filterwarnings = [
     "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["haproxy_template_ic"]
+omit = [
+    "*/test/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/.venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
 ]

@@ -7,7 +7,18 @@ from jinja2 import Template, TemplateSyntaxError
 
 
 def config_from_dict(config_dict):
-    config = from_dict(Config, config_dict, config=DaciteConfig(strict=True))
+    # Custom type hook to compile Jinja2 templates
+    def compile_template(template_str: str) -> Template:
+        try:
+            return Template(template_str)
+        except TemplateSyntaxError as e:
+            raise ValueError(f"Invalid Jinja2 template: {e}")
+
+    config = from_dict(
+        Config,
+        config_dict,
+        config=DaciteConfig(strict=True, type_hooks={Template: compile_template}),
+    )
 
     # Validate that all map keys are absolute paths
     for map_key in config.maps.keys():
@@ -27,14 +38,7 @@ class WatchResourceConfig:
 @dataclass(frozen=True)
 class MapConfig:
     path: str
-    template: str
-
-    def __post_init__(self):
-        # Validate that the template is a valid Jinja2 template
-        try:
-            Template(self.template)
-        except TemplateSyntaxError as e:
-            raise ValueError(f"Invalid Jinja2 template: {e}")
+    template: Template
 
 
 @dataclass(frozen=True)
