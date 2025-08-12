@@ -5,6 +5,9 @@ from haproxy_template_ic.config import (
     WatchResourceConfig,
     MapConfig,
     config_from_dict,
+    RenderedMap,
+    TemplateContext,
+    HAProxyConfigContext,
 )
 from jinja2 import Template
 
@@ -126,10 +129,10 @@ def test_valid_configs(
             {
                 "pod_selector": "app=myapp",
                 "watch_resources": {
-                    "pods": {"group": None, "version": None, "kind": None}
+                    "pods": {"group": None, "version": None, "kind": "Pod"}
                 },
             },
-            {"name": "pods", "group": None, "version": None, "kind": None},
+            {"name": "pods", "group": None, "version": None, "kind": "Pod"},
         ),
     ],
 )
@@ -284,9 +287,95 @@ def test_maps_structure(config_dict, expected_map):
                 }
             },
         },
+        # Missing mandatory kind field in WatchResourceConfig
+        {
+            "pod_selector": "app=myapp",
+            "watch_resources": {"pods": {"group": "v1", "version": "v1"}},
+        },
     ],
 )
 def test_invalid_configs(config_dict):
     """Test that invalid configs raise appropriate exceptions."""
     with pytest.raises(Exception):  # dacite will raise an error for invalid configs
         config_from_dict(config_dict)
+
+
+# RenderedMap Tests
+def test_rendered_map_creation():
+    """Test RenderedMap dataclass creation."""
+    map_config = MapConfig(path="/test/path", template=Template("test {{ name }}"))
+    rendered_map = RenderedMap(
+        path="/etc/haproxy/maps/test.map", content="test content", map_config=map_config
+    )
+
+    assert rendered_map.path == "/etc/haproxy/maps/test.map"
+    assert rendered_map.content == "test content"
+    assert rendered_map.map_config == map_config
+
+
+def test_rendered_map_is_frozen():
+    """Test that RenderedMap is immutable."""
+    map_config = MapConfig(path="/test/path", template=Template("test"))
+    rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
+
+    with pytest.raises(AttributeError):
+        rendered_map.path = "/new/path"
+
+
+# TemplateContext Tests
+def test_template_context_creation():
+    """Test TemplateContext dataclass creation."""
+    resources = {"name": "test", "host": "example.com"}
+    context = TemplateContext(resources=resources, cluster_name="test-cluster")
+
+    assert context.resources == resources
+    assert context.cluster_name == "test-cluster"
+
+
+def test_template_context_default_resources():
+    """Test TemplateContext with default empty resources."""
+    context = TemplateContext()
+
+    assert context.resources == {}
+    assert context.cluster_name == "default"
+
+
+def test_template_context_is_frozen():
+    """Test that TemplateContext is immutable."""
+    context = TemplateContext(resources={"name": "test"})
+
+    with pytest.raises(AttributeError):
+        context.resources = {"name": "new"}
+
+    with pytest.raises(AttributeError):
+        context.cluster_name = "new-cluster"
+
+
+# HAProxyConfigContext Tests
+def test_haproxy_config_context_creation():
+    """Test HAProxyConfigContext dataclass creation."""
+    context = HAProxyConfigContext()
+
+    assert context.rendered_maps == {}
+
+
+def test_haproxy_config_context_with_custom_data():
+    """Test HAProxyConfigContext with custom rendered maps."""
+    map_config = MapConfig(path="/test", template=Template("test"))
+    rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
+    rendered_maps = {"/test": rendered_map}
+
+    context = HAProxyConfigContext(rendered_maps=rendered_maps)
+
+    assert context.rendered_maps == rendered_maps
+
+
+def test_haproxy_config_context_mutable():
+    """Test that HAProxyConfigContext is mutable (not frozen)."""
+    context = HAProxyConfigContext()
+    map_config = MapConfig(path="/test", template=Template("test"))
+    rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
+
+    # Should be able to modify rendered_maps
+    context.rendered_maps["/test"] = rendered_map
+    assert "/test" in context.rendered_maps

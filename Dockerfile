@@ -1,8 +1,8 @@
 ARG PYTHON_VERSION=3.13
 
 FROM python:${PYTHON_VERSION}-slim-bookworm AS base
-# Install dumb-init for proper signal handling
-RUN apt-get update && apt-get install -y dumb-init && rm -rf /var/lib/apt/lists/*
+# Install dumb-init for proper signal handling and socat for management socket communication
+RUN apt-get update && apt-get install -y dumb-init socat && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /bin/uv
@@ -39,6 +39,9 @@ RUN <<EOT
 groupadd -r app
 useradd -r -d /app -g app -N app
 EOT
+
+# Create dedicated directory for haproxy-template-ic runtime files
+RUN mkdir -p /run/haproxy-template-ic && chown app:app /run/haproxy-template-ic
 
 COPY --from=build --chown=app:app /app /app
 
