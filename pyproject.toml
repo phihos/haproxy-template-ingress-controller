@@ -20,6 +20,7 @@ dev = [
     "black>=25.1.0",
     "docker>=7.1.0",
     "lint>=1.2.1",
+    "mypy>=1.8.0",
     "pytest>=8.4.1",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=5.0.0",
@@ -27,6 +28,9 @@ dev = [
     "pytest-xdist>=3.8.0",
     "python-on-whales>=0.78.0",
     "ruff>=0.12.7",
+    "types-click>=7.1.8",
+    "types-PyYAML>=6.0.0",
+    "types-requests>=2.32.4.20250809",
 ]
 
 [project.scripts]
@@ -102,3 +106,45 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.mypy]
+python_version = "3.13"
+strict = false
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+disallow_untyped_decorators = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+warn_no_return = false
+warn_unreachable = true
+
+# Exclude test files for now to focus on production code
+exclude = [
+    "haproxy_template_ic/test/.*",
+]
+
+# For third-party libraries without type stubs or py.typed markers
+# We only ignore imports for libraries that genuinely lack typing support
+[[tool.mypy.overrides]]
+module = [
+    "kopf.*",        # Kubernetes operator framework - no official type stubs
+    "kr8s.*",        # Kubernetes library - no official type stubs  
+    "kubernetes.*",  # Official Kubernetes client - no official type stubs
+    "dacite.*",      # Dataclass utilities - no official type stubs
+    "deepdiff.*",    # Deep difference library - no official type stubs
+    "docker.*",      # Docker library - no official type stubs
+    "python_on_whales.*",  # Docker wrapper - no official type stubs
+]
+ignore_missing_imports = true
+
+# Be more lenient with kopf-related issues
+[[tool.mypy.overrides]]
+module = "haproxy_template_ic.operator"
+warn_return_any = false
+disallow_any_expr = false
+disallow_any_decorated = false
+disallow_any_explicit = false

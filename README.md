@@ -25,6 +25,26 @@ uv run ruff format
 uv run ruff check --fix
 ```
 
+### Type Checking
+
+The project uses mypy for static type checking. Core modules have been type-annotated:
+
+```bash
+# Check all production code (recommended for development and CI)
+uv run mypy haproxy_template_ic/
+
+# Check specific files if needed
+uv run mypy haproxy_template_ic/__main__.py haproxy_template_ic/config.py haproxy_template_ic/utils.py haproxy_template_ic/management_socket.py haproxy_template_ic/operator.py
+```
+
+**Note**: All production code modules are now fully type-checked. Test files are excluded from type checking to focus on production code quality.
+
+**Type Checking Strategy:**
+- ✅ **Strict checking** for all project code
+- ✅ **Type stubs** included for libraries that support them (`click`, `PyYAML`, etc.)
+- ⚠️ **Selective ignoring** only for libraries genuinely lacking type support (`kopf`, `kr8s`, etc.)
+- 🚫 **No global `--ignore-missing-imports`** - we handle each library specifically
+
 ## Testing
 
 The project has two types of tests:
