@@ -21,6 +21,7 @@ dev = [
     "docker>=7.1.0",
     "lint>=1.2.1",
     "pytest>=8.4.1",
+    "pytest-asyncio>=0.24.0",
     "pytest-cov>=5.0.0",
     "pytest-kind>=22.11.1",
     "pytest-xdist>=3.8.0",
@@ -53,9 +54,14 @@ python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
     "--strict-config",
+    "--cluster-name=haproxy-template-ic-test",
+    "--kubeconfig=.pytest-kind/haproxy-template-ic-test/kubeconfig",
+    "-m",
+    "not slow",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "asyncio: marks tests as async (deselect with '-m \"not asyncio\"')",
 ]
 
 [tool.coverage.run]

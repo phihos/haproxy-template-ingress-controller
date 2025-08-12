@@ -36,8 +36,8 @@ The project has two types of tests:
 Unit tests run quickly and test individual components in isolation:
 
 ```bash
-# Run unit tests only
-uv run pytest haproxy_template_ic/test -m "not slow"
+# Run unit tests only (default behavior)
+uv run pytest
 ```
 
 ### Acceptance Tests
@@ -66,16 +66,13 @@ Before running acceptance tests, ensure you have:
 
 ```bash
 # Run all acceptance tests
-uv run pytest haproxy_template_ic/test -m "slow"
+uv run pytest -m "slow"
 
 # Run with cluster management options
-uv run pytest haproxy_template_ic/test/test_acceptance.py \
-  --keep-cluster \
-  --keep-namespaces \
-  --cluster-name haproxy-template-ic-test
+uv run pytest -m "slow" --keep-cluster --keep-namespaces
 
 # Run with coverage collection
-uv run pytest haproxy_template_ic/test -m "slow" --coverage
+uv run pytest -m "slow" --coverage
 ```
 
 #### Debugging Acceptance Tests
@@ -84,7 +81,7 @@ If tests fail, you can inspect the cluster state:
 
 ```bash
 # Access the test cluster
-export KUBECONFIG="${PWD}"/.pytest-kind/haproxy-template-ic-test/kubeconfig
+export KUBECONFIG=".pytest-kind/haproxy-template-ic-test/kubeconfig"
 
 # Check pod status
 kubectl get pods --all-namespaces
@@ -101,36 +98,36 @@ kubectl cluster-info
 - `--keep-namespaces`: Keep Kubernetes namespaces after tests complete
 - `--keep-namespace-on-failure`: Keep namespaces only if tests fail
 - `--coverage`: Enable coverage collection from the running application
-- `--cluster-name`: Specify a custom name for the test cluster
+- `--keep-cluster`: Keep the test cluster after tests complete
 
 ### Running All Tests
 
 ```bash
-# Run all tests (unit + acceptance)
-uv run pytest haproxy_template_ic/test
+# Run only fast tests (unit tests only) - default behavior
+uv run pytest
 
-# Run only fast tests (unit tests only)
-uv run pytest haproxy_template_ic/test -m "not slow"
+# Run all tests (unit + acceptance)
+uv run pytest -m ""
 
 # Run only slow tests (acceptance tests only)
-uv run pytest haproxy_template_ic/test -m "slow"
+uv run pytest -m "slow"
 ```
 
 ## Test Coverage
 
 ```bash
-# Run all tests with coverage
-uv run pytest haproxy_template_ic/test -m "not slow" --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missing
-uv run pytest haproxy_template_ic/test -m "slow" --coverage --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missing --cov-append
+# Run unit tests with coverage (default)
+uv run pytest --cov=haproxy_template_ic --cov-report=term-missing
 
-# Run fast tests with coverage only
-uv run pytest haproxy_template_ic/test -m "not slow" --cov=haproxy_template_ic --cov-report=term-missing
+# Run acceptance tests with coverage
+uv run pytest -m "slow" --coverage --cov=haproxy_template_ic --cov-report=term-missing
 
-# Run slow tests with coverage only (requires Docker and kind)
-uv run pytest haproxy_template_ic/test -m "slow" --coverage --cov=haproxy_template_ic --cov-report=term-missing
+# Run all tests with combined coverage
+uv run pytest --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missing
+uv run pytest -m "slow" --coverage --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missing --cov-append
 
 # Generate HTML coverage report
-uv run pytest haproxy_template_ic/test --cov=haproxy_template_ic --cov-report=html
+uv run pytest --cov=haproxy_template_ic --cov-report=html
 # Open htmlcov/index.html in your browser
 ```
 
