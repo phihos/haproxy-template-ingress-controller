@@ -53,7 +53,7 @@ where = ["."]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
-testpaths = ["haproxy_template_ic/test"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -73,9 +73,8 @@ markers = [
 [tool.coverage.run]
 source = ["haproxy_template_ic"]
 omit = [
-    "*/test/*",
+    "tests/*",
     "*/tests/*",
-    "haproxy_template_ic/test/*",
     "*/__pycache__/*",
     "*/venv/*",
     "*/.venv/*",
@@ -89,9 +88,8 @@ source = [
 
 [tool.coverage.report]
 omit = [
-    "*/test/*",
+    "tests/*",
     "*/tests/*",
-    "haproxy_template_ic/test/*",
     "*/__pycache__/*",
     "*/venv/*",
     "*/.venv/*",
@@ -126,7 +124,7 @@ warn_unreachable = true
 
 # Exclude test files for now to focus on production code
 exclude = [
-    "haproxy_template_ic/test/.*",
+    "tests/.*",
 ]
 
 # For third-party libraries without type stubs or py.typed markers
@@ -152,7 +150,7 @@ disallow_any_decorated = false
 disallow_any_explicit = false
 
 [tool.bandit]
-exclude_dirs = ["haproxy_template_ic/test"]
+exclude_dirs = ["tests"]
 
 [tool.deptry]
-extend_exclude = ["haproxy_template_ic/test", "coverage_wrapper.py"]  # Test files can use dev dependencies
+extend_exclude = ["tests", "coverage_wrapper.py"]  # Test files can use dev dependencies

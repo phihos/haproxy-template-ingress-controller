@@ -8,7 +8,7 @@ Proof-of-concept ingress controller for users who need direct control over [HAPr
 
 This controller enables full Jinja2 templating of HAProxy configurations, map files, certificates, and any resource pushable via [HAProxy's Dataplane API](https://www.haproxy.com/documentation/haproxy-data-plane-api/). Instead of being limited by predefined annotations, you can implement custom logic for any Kubernetes resource.
 
-**Target users**: Those familiar with `/etc/haproxy/haproxy.cfg` who feel constrained by existing ingress controllers.
+**Target users**: Those familiar with editing `haproxy.cfg` who feel constrained by existing ingress controllers.
 
 **Key capability**: Template any HAProxy resource using watched Kubernetes resources, environment variables, and CLI arguments.
 
