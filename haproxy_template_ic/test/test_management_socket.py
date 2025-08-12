@@ -5,8 +5,9 @@ This module contains tests for management socket functionality focusing on
 critical paths and edge cases that are likely to detect bugs.
 """
 
+import json
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import socket
 import tempfile
 import os
@@ -17,6 +18,7 @@ from haproxy_template_ic.management_socket import (
     serialize_state,
     ManagementSocketServer,
     run_management_socket_server,
+    StateSerializer,
 )
 from haproxy_template_ic.config import (
     Config,
@@ -233,3 +235,554 @@ async def test_management_socket_server_socket_cleanup():
                 await server_task
             except asyncio.CancelledError:
                 pass
+
+
+# =============================================================================
+# StateSerializer Tests
+# =============================================================================
+
+
+def test_state_serializer_get_configmap_name():
+    """Test _get_configmap_name method with various memo states."""
+    from haproxy_template_ic.__main__ import CliOptions
+
+    # Test with valid cli_options
+    memo = MagicMock()
+    memo.cli_options = CliOptions(
+        configmap_name="test-config",
+        healthz_port=8080,
+        verbose=1,
+        socket_path="/tmp/test.sock",
+    )
+
+    serializer = StateSerializer(memo)
+    assert serializer._get_configmap_name() == "test-config"
+
+    # Test with None cli_options
+    memo.cli_options = None
+    assert serializer._get_configmap_name() is None
+
+    # Test with missing cli_options attribute
+    delattr(memo, "cli_options")
+    assert serializer._get_configmap_name() is None
+
+
+def test_state_serializer_serialize_cli_options():
+    """Test _serialize_cli_options method edge cases."""
+
+    # Test with missing cli_options attribute
+    memo = MagicMock()
+    delattr(memo, "cli_options")
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_cli_options()
+    assert result == {}
+
+    # Test with None cli_options
+    memo.cli_options = None
+    result = serializer._serialize_cli_options()
+    assert result == {}
+
+
+def test_state_serializer_serialize_config_with_template_source():
+    """Test _serialize_config method with template source availability."""
+    memo = MagicMock()
+
+    # Create a template with source attribute
+    template_with_source = Template("test template")
+    template_with_source.source = "test_file.j2"
+
+    memo.config = Config(
+        pod_selector="app=test",
+        watch_resources={},
+        maps={"/test/map": MapConfig(path="/test/map", template=template_with_source)},
+    )
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_config()
+
+    assert result["maps"]["/test/map"]["template_source"] == "test_file.j2"
+
+    # Test with template without source attribute
+    template_without_source = Template("test template")
+    memo.config.maps["/test/map2"] = MapConfig(
+        path="/test/map2", template=template_without_source
+    )
+
+    result = serializer._serialize_config()
+    assert result["maps"]["/test/map2"]["template_source"] == "unavailable"
+
+
+def test_state_serializer_serialize_haproxy_config_context():
+    """Test _serialize_haproxy_config_context method edge cases."""
+    memo = MagicMock()
+
+    # Test with missing haproxy_config_context
+    delattr(memo, "haproxy_config_context")
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_haproxy_config_context()
+    assert result == {"rendered_maps": {}}
+
+    # Test with None haproxy_config_context
+    memo.haproxy_config_context = None
+    result = serializer._serialize_haproxy_config_context()
+    assert result == {"rendered_maps": {}}
+
+
+def test_state_serializer_serialize_indices_with_actual_indices():
+    """Test _serialize_indices method with real indices that have items method."""
+    memo = MagicMock()
+
+    # Create real index-like objects with items method
+    memo.pods_index = {"key1": "value1", "key2": "value2"}
+    memo.services_index = {"svc1": "value1"}
+    memo._private_index = {"should": "not appear"}  # Should be ignored (starts with _)
+    memo.not_an_index = "string value"  # Should be ignored (no items method)
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_indices()
+
+    # _serialize_indices returns the indices dict directly
+    assert "pods_index" in result
+    assert "services_index" in result
+    assert "_private_index" not in result
+    assert "not_an_index" not in result
+    assert result["pods_index"] == {"key1": "value1", "key2": "value2"}
+
+
+def test_state_serializer_serialize_indices_empty():
+    """Test _serialize_indices method with no indices."""
+    memo = MagicMock()
+
+    # Only add non-index attributes
+    memo.some_attr = "value"
+    memo._private_attr = "private"
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_indices()
+
+    # _serialize_indices returns the indices dict directly
+    assert result == {}
+
+
+def test_state_serializer_serialize_exception_handling():
+    """Test StateSerializer.serialize method exception handling."""
+    memo = MagicMock()
+
+    # Mock memo to raise exception during serialization
+    def failing_config():
+        raise RuntimeError("Simulated serialization error")
+
+    serializer = StateSerializer(memo)
+    serializer._serialize_config = failing_config
+
+    result = serializer.serialize()
+    assert "error" in result
+    assert "Failed to serialize state" in result["error"]
+    assert "metadata" in result
+
+
+# =============================================================================
+# Enhanced Command Processing Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_process_command_dump_config():
+    """Test dump config command specifically."""
+    memo = MagicMock()
+    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context.rendered_maps = {
+        "/test/map": RenderedMap(
+            path="/test/map",
+            content="test content",
+            map_config=MapConfig(path="/test/map", template=Template("test")),
+        )
+    }
+    logger = MagicMock()
+
+    server = ManagementSocketServer(memo, logger)
+    result = await server._process_command("dump config")
+
+    assert "haproxy_config_context" in result
+    assert "/test/map" in result["haproxy_config_context"]["rendered_maps"]
+
+
+@pytest.mark.asyncio
+async def test_process_command_dump_config_empty():
+    """Test dump config command with no config context."""
+    memo = MagicMock()
+    memo.haproxy_config_context = None
+    logger = MagicMock()
+
+    server = ManagementSocketServer(memo, logger)
+    result = await server._process_command("dump config")
+
+    assert result == {"haproxy_config_context": {"rendered_maps": {}}}
+
+
+@pytest.mark.asyncio
+async def test_process_command_dump_unknown_subcommand():
+    """Test dump command with unknown subcommand."""
+    memo = MagicMock()
+    logger = MagicMock()
+
+    server = ManagementSocketServer(memo, logger)
+    result = await server._process_command("dump unknown")
+
+    assert "error" in result
+    assert "Unknown dump command: unknown" in result["error"]
+    assert "Available: all, indices, config" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_dump_indices_basic():
+    """Test _dump_indices method with normal indices."""
+    memo = MagicMock()
+
+    # Add actual index attributes
+    memo.pods_index = {"key": "value"}
+    memo.services_index = {"svc": "data"}
+    memo._private_index = {"private": "data"}  # Should be ignored
+    memo.not_index = "string"  # Should be ignored
+
+    logger = MagicMock()
+
+    server = ManagementSocketServer(memo, logger)
+    result = server._dump_indices()
+
+    assert "indices" in result
+    assert "pods_index" in result["indices"]
+    assert "services_index" in result["indices"]
+    assert "_private_index" not in result["indices"]
+    assert "not_index" not in result["indices"]
+
+
+# =============================================================================
+# Socket Server Error Handling Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_management_socket_server_handle_client_empty_command():
+    """Test client handler with empty command data."""
+    from haproxy_template_ic.__main__ import CliOptions
+
+    memo = MagicMock()
+    # Provide actual config to avoid JSON serialization issues
+    memo.config = Config(pod_selector="app=test")
+    memo.cli_options = CliOptions(
+        configmap_name="test-config",
+        healthz_port=8080,
+        verbose=1,
+        socket_path="/tmp/test.sock",
+    )
+    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.config_reload_flag = MagicMock()
+    memo.stop_flag = MagicMock()
+
+    logger = MagicMock()
+    server = ManagementSocketServer(memo, logger)
+
+    # Mock reader/writer
+    reader = MagicMock()
+    writer = MagicMock()
+
+    # Mock empty read
+    reader.read = AsyncMock(return_value=b"")
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+    writer.close = MagicMock()
+    writer.wait_closed = AsyncMock()
+
+    await server._handle_client(reader, writer)
+
+    # Should use default "dump all" command
+    writer.write.assert_called()
+    written_data = writer.write.call_args[0][0]
+    response = json.loads(written_data.decode("utf-8"))
+    assert "config" in response  # dump all response
+
+
+@pytest.mark.asyncio
+async def test_management_socket_server_handle_client_exception():
+    """Test client handler with exception during processing."""
+    memo = MagicMock()
+    logger = MagicMock()
+    server = ManagementSocketServer(memo, logger)
+
+    # Mock reader/writer
+    reader = MagicMock()
+    writer = MagicMock()
+
+    # Mock reader to raise exception
+    reader.read = AsyncMock(side_effect=RuntimeError("Simulated error"))
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+    writer.close = MagicMock()
+    writer.wait_closed = AsyncMock()
+
+    await server._handle_client(reader, writer)
+
+    # Should write error response
+    writer.write.assert_called()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_management_socket_server_handle_client_write_exception():
+    """Test client handler with exception during response writing."""
+    memo = MagicMock()
+    logger = MagicMock()
+    server = ManagementSocketServer(memo, logger)
+
+    # Mock reader/writer
+    reader = MagicMock()
+    writer = MagicMock()
+
+    reader.read = AsyncMock(return_value=b"dump all")
+    writer.write = MagicMock(side_effect=RuntimeError("Write error"))
+    writer.drain = AsyncMock(side_effect=RuntimeError("Drain error"))
+    writer.close = MagicMock()
+    writer.wait_closed = AsyncMock()
+
+    await server._handle_client(reader, writer)
+
+    # Should handle exception gracefully
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_management_socket_server_cleanup():
+    """Test server cleanup method."""
+    memo = MagicMock()
+    logger = MagicMock()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        socket_path = os.path.join(tmpdir, "test.sock")
+        server = ManagementSocketServer(memo, logger, socket_path)
+
+        # Create a mock server
+        mock_server = MagicMock()
+        server.server = mock_server
+
+        # Create socket file
+        Path(socket_path).touch()
+        assert Path(socket_path).exists()
+
+        # Test cleanup
+        server._cleanup()
+
+        mock_server.close.assert_called_once()
+        assert not Path(socket_path).exists()
+        logger.info.assert_called_with("🔌 Management socket server stopped")
+
+
+@pytest.mark.asyncio
+async def test_run_management_socket_server_exception():
+    """Test run_management_socket_server function exception handling."""
+    memo = MagicMock()
+    logger = MagicMock()
+
+    # Mock ManagementSocketServer.run to raise exception
+    with tempfile.TemporaryDirectory() as tmpdir:
+        socket_path = os.path.join(tmpdir, "test.sock")
+
+        # Create server that will fail
+        server = ManagementSocketServer(memo, logger, socket_path)
+
+        async def failing_run():
+            raise RuntimeError("Simulated server error")
+
+        server.run = failing_run
+
+        # Patch ManagementSocketServer constructor
+        import haproxy_template_ic.management_socket as ms
+
+        original_constructor = ms.ManagementSocketServer
+
+        def mock_constructor(*args, **kwargs):
+            return server
+
+        ms.ManagementSocketServer = mock_constructor
+
+        try:
+            await run_management_socket_server(memo, logger, socket_path)
+            # Should not raise exception but log error
+            logger.error.assert_called()
+        finally:
+            ms.ManagementSocketServer = original_constructor
+
+
+# =============================================================================
+# Async Mock Helper
+# =============================================================================
+
+
+class AsyncMock:
+    """Helper class for async mocking."""
+
+    def __init__(self, return_value=None, side_effect=None):
+        self.return_value = return_value
+        self.side_effect = side_effect
+        self.call_count = 0
+        self.call_args_list = []
+
+    async def __call__(self, *args, **kwargs):
+        self.call_count += 1
+        self.call_args_list.append((args, kwargs))
+
+        if self.side_effect:
+            if isinstance(self.side_effect, Exception):
+                raise self.side_effect
+            return self.side_effect(*args, **kwargs)
+
+        return self.return_value
+
+
+# =============================================================================
+# Additional Coverage Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_management_socket_server_handle_client_unicode_command():
+    """Test client handler with unicode command data."""
+    from haproxy_template_ic.__main__ import CliOptions
+
+    memo = MagicMock()
+    memo.config = Config(pod_selector="app=test")
+    memo.cli_options = CliOptions(
+        configmap_name="unicode-test",
+        healthz_port=8080,
+        verbose=1,
+        socket_path="/tmp/test.sock",
+    )
+    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.config_reload_flag = MagicMock()
+    memo.stop_flag = MagicMock()
+
+    logger = MagicMock()
+    server = ManagementSocketServer(memo, logger)
+
+    # Mock reader/writer
+    reader = MagicMock()
+    writer = MagicMock()
+
+    # Unicode command
+    reader.read = AsyncMock(return_value="dump all ❄️".encode("utf-8"))
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+    writer.close = MagicMock()
+    writer.wait_closed = AsyncMock()
+
+    await server._handle_client(reader, writer)
+
+    # Should handle unicode gracefully and return dump all response
+    writer.write.assert_called()
+    written_data = writer.write.call_args[0][0]
+    response = json.loads(written_data.decode("utf-8"))
+    assert "config" in response
+
+
+def test_state_serializer_serialize_metadata():
+    """Test _serialize_metadata method with different memo states."""
+    from haproxy_template_ic.__main__ import CliOptions
+
+    memo = MagicMock()
+    memo.cli_options = CliOptions(
+        configmap_name="metadata-test",
+        healthz_port=8080,
+        verbose=1,
+        socket_path="/tmp/test.sock",
+    )
+    memo.config_reload_flag = MagicMock()
+    memo.stop_flag = MagicMock()
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_metadata()
+
+    assert result["configmap_name"] == "metadata-test"
+    assert result["has_config_reload_flag"] is True
+    assert result["has_stop_flag"] is True
+
+    # Test with missing flags
+    delattr(memo, "config_reload_flag")
+    delattr(memo, "stop_flag")
+
+    result = serializer._serialize_metadata()
+    assert result["has_config_reload_flag"] is False
+    assert result["has_stop_flag"] is False
+
+
+@pytest.mark.asyncio
+async def test_management_socket_server_run_cancellation():
+    """Test server run method handles cancellation properly."""
+    memo = MagicMock()
+    logger = MagicMock()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        socket_path = os.path.join(tmpdir, "test.sock")
+        server = ManagementSocketServer(memo, logger, socket_path)
+
+        # Mock start_unix_server to return a server that raises CancelledError
+        mock_server = MagicMock()
+
+        async def mock_serve_forever():
+            # Simulate some work before cancellation
+            await asyncio.sleep(0.01)
+            raise asyncio.CancelledError("Test cancellation")
+
+        mock_server.serve_forever = mock_serve_forever
+        mock_server.__aenter__ = AsyncMock(return_value=mock_server)
+        mock_server.__aexit__ = AsyncMock()
+
+        async def mock_start_unix_server(*args, **kwargs):
+            return mock_server
+
+        with patch("asyncio.start_unix_server", side_effect=mock_start_unix_server):
+            with pytest.raises(asyncio.CancelledError):
+                await server.run()
+
+        # Should log cancellation message
+        logger.info.assert_any_call(
+            "🔌 Management socket server received cancellation signal"
+        )
+
+
+def test_state_serializer_serialize_config_without_maps():
+    """Test _serialize_config method with config that has no maps."""
+    memo = MagicMock()
+    memo.config = Config(
+        pod_selector="app=test",
+        watch_resources={
+            "pods": WatchResourceConfig(kind="Pod", group="", version="v1")
+        },
+        maps={},  # Empty maps
+    )
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_config()
+
+    assert result["pod_selector"] == "app=test"
+    assert "pods" in result["watch_resources"]
+    assert result["maps"] == {}
+
+
+@pytest.mark.asyncio
+async def test_process_command_with_extra_spaces():
+    """Test command processing with extra whitespace."""
+    memo = MagicMock()
+    memo.config = Config(pod_selector="app=test")
+    logger = MagicMock()
+
+    server = ManagementSocketServer(memo, logger)
+
+    # Test command with extra spaces
+    result = await server._process_command("  dump   all  ")
+    assert "config" in result
+
+    # Test command with tabs and newlines
+    result = await server._process_command("\t\ndump\tall\n\t")
+    assert "config" in result
