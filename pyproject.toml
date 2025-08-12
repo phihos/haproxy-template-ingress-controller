@@ -17,7 +17,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "bandit[toml]>=1.7.0",
     "black>=25.1.0",
+    "deptry>=0.12.0",
     "docker>=7.1.0",
     "lint>=1.2.1",
     "mypy>=1.8.0",
@@ -148,3 +150,9 @@ warn_return_any = false
 disallow_any_expr = false
 disallow_any_decorated = false
 disallow_any_explicit = false
+
+[tool.bandit]
+exclude_dirs = ["haproxy_template_ic/test"]
+
+[tool.deptry]
+extend_exclude = ["haproxy_template_ic/test", "coverage_wrapper.py"]  # Test files can use dev dependencies
