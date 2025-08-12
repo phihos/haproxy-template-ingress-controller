@@ -45,6 +45,24 @@ uv run mypy haproxy_template_ic/__main__.py haproxy_template_ic/config.py haprox
 - ⚠️ **Selective ignoring** only for libraries genuinely lacking type support (`kopf`, `kr8s`, etc.)
 - 🚫 **No global `--ignore-missing-imports`** - we handle each library specifically
 
+### Security Scanning
+
+The project includes comprehensive security scanning tools that run automatically in CI and can be used during development:
+
+```bash
+# Security linting for code patterns
+uv run bandit -c pyproject.toml -r haproxy_template_ic/ --quiet
+
+# Dependency analysis (unused/missing dependencies)
+uv run deptry .
+```
+
+**Security Tools:**
+- 🔍 **Bandit**: Detects common security issues in Python code
+- 📦 **Deptry**: Ensures dependency hygiene (no unused/missing dependencies)
+
+**Note**: Security checks are automatically run in CI/CD and pre-commit hooks. Test files are excluded from security scans to focus on production code.
+
 ## Testing
 
 The project has two types of tests:

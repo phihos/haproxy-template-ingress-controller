@@ -33,7 +33,7 @@ from haproxy_template_ic.management_socket import run_management_socket_server
 
 async def load_config_from_configmap(configmap: Dict[str, Any]) -> Any:
     """Load configuration from a Kubernetes ConfigMap."""
-    return config_from_dict(yaml.load(configmap["data"]["config"], Loader=yaml.CLoader))
+    return config_from_dict(yaml.safe_load(configmap["data"]["config"]))
 
 
 async def fetch_configmap(name: str, namespace: str) -> Any:

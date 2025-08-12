@@ -2,11 +2,11 @@ import sys
 import os
 import atexit
 import signal
-import coverage
+from coverage import Coverage
 
 # Initialize coverage with explicit data file location
 data_file = "/app/.coverage"
-cov = coverage.Coverage(source=["haproxy_template_ic"], data_file=data_file)
+cov = Coverage(source=["haproxy_template_ic"], data_file=data_file)
 cov.start()
 
 

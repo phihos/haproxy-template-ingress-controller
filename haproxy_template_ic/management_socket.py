@@ -293,8 +293,9 @@ class ManagementSocketServer:
             try:
                 writer.write(error_response)
                 await writer.drain()
-            except Exception:
-                pass
+            except Exception as send_error:
+                # Client may have disconnected, log but don't crash
+                self.logger.debug(f"Failed to send error response: {send_error}")
         finally:
             writer.close()
             await writer.wait_closed()

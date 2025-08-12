@@ -27,6 +27,11 @@ jobs:
           uv run --frozen mypy haproxy_template_ic/
           uv run --frozen pytest haproxy_template_ic/test -m "not slow" --cov=haproxy_template_ic --cov-report=term-missing -s
 
+      - name: Run security and dependency checks
+        run: |
+          uv run bandit -c pyproject.toml -r haproxy_template_ic/ --quiet
+          uv run --frozen deptry .
+
       - name: Run slow tests with coverage
         run: |
           uv run --frozen pytest haproxy_template_ic/test -m "slow" --cluster-name haproxy-template-ic-test --coverage --cov=haproxy_template_ic --cov-report=term-missing --cov-append -s
