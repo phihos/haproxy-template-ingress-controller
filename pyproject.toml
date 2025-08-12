@@ -54,6 +54,10 @@ python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
     "--strict-config",
+    "--cluster-name=haproxy-template-ic-test",
+    "--kubeconfig=.pytest-kind/haproxy-template-ic-test/kubeconfig",
+    "-m",
+    "not slow",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
