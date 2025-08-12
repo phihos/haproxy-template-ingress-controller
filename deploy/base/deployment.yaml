@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-template-ic
+  namespace: haproxy-template-ic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: haproxy-template-ic
+  template:
+    metadata:
+      labels:
+        app: haproxy-template-ic
+    spec:
+      serviceAccountName: haproxy-template-ic
+      containers:
+        - name: controller
+          image: ghcr.io/OWNER/REPO:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CONFIGMAP_NAME
+              value: haproxy-template-ic-config
+            - name: VERBOSE
+              value: "1"
+          ports:
+            - name: healthz
+              containerPort: 8080
+          volumeMounts:
+            - name: run
+              mountPath: /run/haproxy-template-ic
+      volumes:
+        - name: run
+          emptyDir: {}
