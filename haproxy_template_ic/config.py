@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from pathlib import Path
 
 from dacite import from_dict, Config as DaciteConfig
@@ -30,9 +30,9 @@ def config_from_dict(config_dict):
 
 @dataclass(frozen=True)
 class WatchResourceConfig:
+    kind: str
     group: Optional[str] = None
     version: Optional[str] = None
-    kind: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -46,3 +46,28 @@ class Config:
     pod_selector: str
     watch_resources: Dict[str, WatchResourceConfig] = field(default_factory=dict)
     maps: Dict[str, MapConfig] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RenderedMap:
+    """Represents a rendered HAProxy map file."""
+
+    path: str
+    content: str
+    map_config: "MapConfig"
+
+
+@dataclass(frozen=True)
+class TemplateContext:
+    """Template context data for rendering HAProxy configuration."""
+
+    resources: Dict[str, Any] = field(default_factory=dict)
+    # Example of future field that will be automatically available in templates
+    cluster_name: str = "default"
+
+
+@dataclass
+class HAProxyConfigContext:
+    """Container for all rendered HAProxy configuration files."""
+
+    rendered_maps: Dict[str, RenderedMap] = field(default_factory=dict)

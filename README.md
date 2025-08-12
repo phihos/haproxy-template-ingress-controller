@@ -145,3 +145,153 @@ docker build --target coverage -t haproxy-template-ic:coverage .
 # Build with custom Python version
 docker build --build-arg PYTHON_VERSION=3.12 --target production -t haproxy-template-ic:latest .
 ```
+
+## State Inspection
+
+The operator exposes its internal state via a management socket for debugging and monitoring purposes.
+
+### Management Socket Interface
+
+By default, the operator creates a management socket at `/run/haproxy-template-ic/management.sock`. You can customize this path using the `--socket-path` option or `SOCKET_PATH` environment variable.
+
+```bash
+# Run with custom socket path
+python -m haproxy_template_ic --socket-path /tmp/custom-management.sock
+
+# Or using environment variable
+export SOCKET_PATH=/tmp/custom-management.sock
+python -m haproxy_template_ic
+```
+
+### Management Commands
+
+The management socket accepts commands to query different aspects of the operator's state. Use `socat` as the primary tool for interaction:
+
+#### Dump All State
+```bash
+echo "dump all" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+```
+Returns the complete internal state including configuration, rendered maps, metadata, and all indices.
+
+#### Dump All Indices
+```bash
+echo "dump indices" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+```
+Returns all Kopf resource indices currently tracked by the operator.
+
+#### Dump Single Index
+```bash
+echo "dump index pods" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+```
+Returns a specific index by ID (e.g., "pods" for "pods_index").
+
+#### Dump Config Context
+```bash
+echo "dump config" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+```
+Returns the HAProxy configuration context with all rendered map files.
+
+### Alternative Tools
+
+You can also use netcat (nc) as an alternative to socat:
+
+```bash
+# Using nc (netcat)
+echo "dump all" | nc -U /var/run/haproxy-ic.sock
+```
+
+### Response Examples
+
+#### dump all
+Returns the complete state with all sections:
+
+- **config**: Current operator configuration (pod selector, watched resources, template maps)
+- **haproxy_config_context**: Rendered templates and their content  
+- **metadata**: Operator runtime information (ConfigMap name, flags status)
+- **indices**: Current state of Kubernetes resource indices
+
+Example response:
+
+```json
+{
+  "config": {
+    "pod_selector": "app=haproxy",
+    "watch_resources": {
+      "pods": {"kind": "Pod", "group": "", "version": "v1"}
+    },
+    "maps": {
+      "/etc/haproxy/maps/backend.map": {
+        "path": "/etc/haproxy/maps/backend.map",
+        "template_source": "server {{ resources.name }} {{ resources.host }}:{{ resources.port }}"
+      }
+    }
+  },
+  "haproxy_config_context": {
+    "rendered_maps": {
+      "/etc/haproxy/maps/backend.map": {
+        "path": "/etc/haproxy/maps/backend.map",
+        "content": "server web-pod 10.0.1.5:80",
+        "map_config_path": "/etc/haproxy/maps/backend.map"
+      }
+    }
+  },
+  "metadata": {
+    "configmap_name": "haproxy-config",
+    "has_config_reload_flag": true,
+    "has_stop_flag": true
+  },
+  "indices": {
+    "pods_index": {
+      "('default', 'web-pod')": {"name": "web-pod", "host": "10.0.1.5", "port": "80"}
+    }
+  }
+}
+```
+
+#### dump indices
+Returns only the indices section:
+
+```json
+{
+  "indices": {
+    "pods_index": {
+      "('default', 'web-pod')": {"name": "web-pod", "host": "10.0.1.5", "port": "80"},
+      "('default', 'api-pod')": {"name": "api-pod", "host": "10.0.1.6", "port": "8080"}
+    },
+    "services_index": {
+      "('default', 'web-service')": {"name": "web-service", "cluster_ip": "10.96.1.5"}
+    }
+  }
+}
+```
+
+#### dump index pods
+Returns a specific index:
+
+```json
+{
+  "index": {
+    "pods_index": {
+      "('default', 'web-pod')": {"name": "web-pod", "host": "10.0.1.5", "port": "80"},
+      "('default', 'api-pod')": {"name": "api-pod", "host": "10.0.1.6", "port": "8080"}
+    }
+  }
+}
+```
+
+#### dump config  
+Returns only the HAProxy configuration context:
+
+```json
+{
+  "haproxy_config_context": {
+    "rendered_maps": {
+      "/etc/haproxy/maps/backend.map": {
+        "path": "/etc/haproxy/maps/backend.map",
+        "content": "server web-pod 10.0.1.5:80\nserver api-pod 10.0.1.6:8080",
+        "map_config_path": "/etc/haproxy/maps/backend.map"
+      }
+    }
+  }
+}
+```
