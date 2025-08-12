@@ -4,8 +4,10 @@ repos:
     hooks:
       # Check YAML files have valid syntax.
       - id: check-yaml
+        exclude: ^charts/.*/templates/.*\.ya?ml$
       # Sort YAML files.
       - id: sort-simple-yaml
+        exclude: ^charts/.*/templates/.*\.ya?ml$
       # Ensure YAML files end with a newline.
       - id: end-of-file-fixer
         types: [yaml]

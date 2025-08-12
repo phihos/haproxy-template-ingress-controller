@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.controller.configmapName }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace }}
+data:
+  config: |
+    pod_selector: "app=haproxy"
+    watch_resources:
+      ingresses:
+        group: networking.k8s.io
+        kind: Ingress
+    maps:
+      /etc/haproxy/maps/backend.map:
+        path: /etc/haproxy/maps/backend.map
+        template: |
+          {% for svc in resources.get('services', []) %}
+          server {{ "{{" }} svc.name {{ "}}" }} {{ "{{" }} svc.ip {{ "}}" }}:{{ "{{" }} svc.port {{ "}}" }}
+          {% endfor %}

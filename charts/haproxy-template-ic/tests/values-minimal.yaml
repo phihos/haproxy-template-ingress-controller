@@ -1,0 +1,9 @@
+image:
+  repository: ghcr.io/phihos/haproxy-template-ingress-controller
+  tag: latest
+controller:
+  configmapName: haproxy-template-ic-config
+  healthzPort: 8080
+service:
+  type: ClusterIP
+  port: 8080
