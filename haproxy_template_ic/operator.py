@@ -6,6 +6,8 @@ resource watchers, configuration management, and the main operator loop.
 """
 
 import asyncio
+import logging
+from typing import Any, Dict, Tuple
 
 import kopf
 import uvloop
@@ -29,12 +31,12 @@ from haproxy_template_ic.management_socket import run_management_socket_server
 # =============================================================================
 
 
-async def load_config_from_configmap(configmap):
+async def load_config_from_configmap(configmap: Dict[str, Any]) -> Any:
     """Load configuration from a Kubernetes ConfigMap."""
     return config_from_dict(yaml.load(configmap["data"]["config"], Loader=yaml.CLoader))
 
 
-async def fetch_configmap(name, namespace):
+async def fetch_configmap(name: str, namespace: str) -> Any:
     """Fetch ConfigMap from Kubernetes cluster."""
     try:
         return await ConfigMap.get(name, namespace=namespace)
@@ -47,13 +49,20 @@ async def fetch_configmap(name, namespace):
 # =============================================================================
 
 
-def trigger_reload(memo):
+def trigger_reload(memo: Any) -> None:
     """Signal the operator to reload with updated configuration."""
     memo.config_reload_flag.set_result(None)
     memo.stop_flag.set_result(None)
 
 
-async def handle_configmap_change(memo, event, name, type, logger, **kwargs):
+async def handle_configmap_change(
+    memo: Any,
+    event: Dict[str, Any],
+    name: str,
+    type: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
     """Handle ConfigMap change events."""
     logger.info(f'📋 Configmap "{name}" changed with type {type}.')
 
@@ -64,13 +73,22 @@ async def handle_configmap_change(memo, event, name, type, logger, **kwargs):
         trigger_reload(memo)
 
 
-async def update_resource_index(param, namespace, name, spec, logger, **kwargs_):
+async def update_resource_index(
+    param: str,
+    namespace: str,
+    name: str,
+    spec: Dict[str, Any],
+    logger: logging.Logger,
+    **kwargs_: Any,
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Update resource index for tracking."""
     logger.debug(f"📝 Updating index {param} for {namespace}/{name}...")
     return {(namespace, name): spec}
 
 
-async def render_haproxy_templates(memo, indices, logger, **kwargs):
+async def render_haproxy_templates(
+    memo: Any, indices: Dict[str, Any], logger: logging.Logger, **kwargs: Any
+) -> None:
     """Render all HAProxy templates with current context data."""
     logger.debug("🎨 Rendering HAProxy templates...")
 
@@ -81,7 +99,8 @@ async def render_haproxy_templates(memo, indices, logger, **kwargs):
     for map_path, map_config in memo.config.maps.items():
         try:
             # Create template variables from all dataclass fields
-            # This ensures all future fields of TemplateContext are automatically available
+            # This ensures all future fields of TemplateContext are automatically
+            # available
             template_vars = asdict(template_context)
             rendered_content = map_config.template.render(**template_vars)
             rendered_map = RenderedMap(
@@ -98,7 +117,9 @@ async def render_haproxy_templates(memo, indices, logger, **kwargs):
 # =============================================================================
 
 
-async def setup_resource_watchers(memo, logger, **kwargs):
+async def setup_resource_watchers(
+    memo: Any, logger: logging.Logger, **kwargs: Any
+) -> None:
     """Set up watchers for Kubernetes resources."""
     for index_name, watch_config in memo.config.watch_resources.items():
         resource_type = watch_config.kind.lower()
@@ -115,8 +136,8 @@ async def setup_resource_watchers(memo, logger, **kwargs):
                 {"group": watch_config.group, "version": watch_config.version}
             )
 
-        kopf.index(resource_type, **kwargs)(update_resource_index)
-        kopf.on.event(resource_type, **event_kwargs)(render_haproxy_templates)
+        kopf.index(resource_type, **kwargs)(update_resource_index)  # type: ignore[arg-type]
+        kopf.on.event(resource_type, **event_kwargs)(render_haproxy_templates)  # type: ignore[arg-type]
 
 
 # =============================================================================
@@ -124,17 +145,19 @@ async def setup_resource_watchers(memo, logger, **kwargs):
 # =============================================================================
 
 
-async def initialize_configuration(memo, logger, **kwargs):
+async def initialize_configuration(
+    memo: Any, logger: logging.Logger, **kwargs: Any
+) -> None:
     """Initialize operator configuration from ConfigMap."""
     configmap_name = memo.cli_options.configmap_name
     logger.info(f"⚙️ Initializing config from configmap {configmap_name}.")
 
-    namespace = get_current_namespace()
+    namespace = get_current_namespace() or "default"
     configmap = await fetch_configmap(configmap_name, namespace)
     memo.config = await load_config_from_configmap(configmap)
 
     # Set up event handlers
-    kopf.on.startup()(setup_resource_watchers)
+    kopf.on.startup()(setup_resource_watchers)  # type: ignore[arg-type]
     kopf.on.event(
         "configmap",
         when=lambda name, namespace, type, **_: (
@@ -142,7 +165,7 @@ async def initialize_configuration(memo, logger, **kwargs):
             and namespace == get_current_namespace()
             and type  # Skip initial invocation
         ),
-    )(handle_configmap_change)
+    )(handle_configmap_change)  # type: ignore[arg-type]
 
     # Start management socket server for state inspection
     socket_path = memo.cli_options.socket_path
@@ -158,11 +181,11 @@ async def initialize_configuration(memo, logger, **kwargs):
 # =============================================================================
 
 
-def create_operator_memo(cli_options):
+def create_operator_memo(cli_options: Any) -> Any:
     """Create memo object for operator state."""
     loop = uvloop.EventLoopPolicy().new_event_loop()
-    stop_flag = asyncio.Future(loop=loop)
-    config_reload_flag = asyncio.Future(loop=loop)
+    stop_flag: asyncio.Future[None] = asyncio.Future(loop=loop)
+    config_reload_flag: asyncio.Future[None] = asyncio.Future(loop=loop)
 
     return (
         kopf.Memo(
@@ -181,11 +204,11 @@ def create_operator_memo(cli_options):
 # =============================================================================
 
 
-def run_operator_loop(cli_options, logger):
+def run_operator_loop(cli_options: Any, logger: logging.Logger) -> None:
     """Run the main operator loop with config reload capability."""
     while True:
         # Set up operator
-        kopf.on.startup()(initialize_configuration)
+        kopf.on.startup()(initialize_configuration)  # type: ignore[arg-type]
         memo, loop, stop_flag = create_operator_memo(cli_options)
 
         # Run operator

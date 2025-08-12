@@ -7,21 +7,23 @@ external tools to query the operator's internal state via Unix socket commands.
 
 import asyncio
 import json
+import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 class StateSerializer:
     """Handles serialization of operator state for management socket responses."""
 
-    def __init__(self, memo):
+    def __init__(self, memo: Any) -> None:
         """Initialize serializer with memo object."""
         self.memo = memo
 
-    def _get_configmap_name(self) -> str:
+    def _get_configmap_name(self) -> Optional[str]:
         """Extract configmap name from memo's CLI options."""
         if hasattr(self.memo, "cli_options") and self.memo.cli_options:
-            return self.memo.cli_options.configmap_name
+            configmap_name = self.memo.cli_options.configmap_name
+            return configmap_name if isinstance(configmap_name, str) else None
         return None
 
     def _serialize_cli_options(self) -> Dict[str, Any]:
@@ -38,7 +40,7 @@ class StateSerializer:
 
     def _serialize_config(self) -> Dict[str, Any]:
         """Serialize configuration from memo."""
-        config = {
+        config: Dict[str, Any] = {
             "pod_selector": None,
             "watch_resources": {},
             "maps": {},
@@ -73,7 +75,7 @@ class StateSerializer:
 
     def _serialize_haproxy_config_context(self) -> Dict[str, Any]:
         """Serialize HAProxy configuration context from memo."""
-        context = {"rendered_maps": {}}
+        context: Dict[str, Any] = {"rendered_maps": {}}
 
         if (
             not hasattr(self.memo, "haproxy_config_context")
@@ -95,7 +97,7 @@ class StateSerializer:
 
     def _serialize_indices(self) -> Dict[str, Any]:
         """Serialize indices from memo."""
-        indices = {}
+        indices: Dict[str, Any] = {}
 
         for attr_name in dir(self.memo):
             if not attr_name.endswith("_index") or attr_name.startswith("_"):
@@ -119,7 +121,8 @@ class StateSerializer:
         }
 
     def serialize(self) -> Dict[str, Any]:
-        """Serialize the application's internal state to a JSON-serializable dictionary."""
+        """Serialize the application's internal state to a JSON-serializable
+        dictionary."""
         try:
             state = {
                 "config": self._serialize_config(),
@@ -138,7 +141,7 @@ class StateSerializer:
             }
 
 
-def serialize_state(memo) -> Dict[str, Any]:
+def serialize_state(memo: Any) -> Dict[str, Any]:
     """Serialize the application's internal state to a JSON-serializable dictionary."""
     serializer = StateSerializer(memo)
     return serializer.serialize()
@@ -149,14 +152,14 @@ class ManagementSocketServer:
 
     def __init__(
         self,
-        memo,
-        logger,
+        memo: Any,
+        logger: logging.Logger,
         socket_path: str = "/run/haproxy-template-ic/management.sock",
-    ):
+    ) -> None:
         self.memo = memo
         self.logger = logger
         self.socket_path = Path(socket_path)
-        self.server = None
+        self.server: Optional[asyncio.Server] = None
 
     async def _process_command(self, command: str) -> Dict[str, Any]:
         """Process a management socket command and return response data."""
@@ -182,7 +185,8 @@ class ManagementSocketServer:
 
             else:
                 return {
-                    "error": f"Unknown dump command: {parts[1]}. Available: all, indices, config"
+                    "error": f"Unknown dump command: {parts[1]}. "
+                    f"Available: all, indices, config"
                 }
 
         else:
@@ -190,7 +194,7 @@ class ManagementSocketServer:
 
     def _dump_indices(self) -> Dict[str, Any]:
         """Dump all indices from memo."""
-        indices = {}
+        indices: Dict[str, Any] = {}
         for attr_name in dir(self.memo):
             if attr_name.endswith("_index") and not attr_name.startswith("_"):
                 try:
@@ -207,7 +211,7 @@ class ManagementSocketServer:
             hasattr(self.memo, "haproxy_config_context")
             and self.memo.haproxy_config_context
         ):
-            rendered_maps = {}
+            rendered_maps: Dict[str, Any] = {}
             for (
                 path,
                 rendered_map,
@@ -221,7 +225,7 @@ class ManagementSocketServer:
         else:
             return {"haproxy_config_context": {"rendered_maps": {}}}
 
-    async def run(self):
+    async def run(self) -> None:
         """Run the management socket server."""
         try:
             # Remove existing socket file if it exists
@@ -260,7 +264,7 @@ class ManagementSocketServer:
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ):
+    ) -> None:
         """Handle a client connection."""
         try:
             self.logger.debug("🔌 New management socket client connected")
@@ -295,7 +299,7 @@ class ManagementSocketServer:
             writer.close()
             await writer.wait_closed()
 
-    def _cleanup(self):
+    def _cleanup(self) -> None:
         """Clean up server resources."""
         if self.server:
             self.server.close()
@@ -305,8 +309,10 @@ class ManagementSocketServer:
 
 
 async def run_management_socket_server(
-    memo, logger, socket_path="/run/haproxy-template-ic/management.sock"
-):
+    memo: Any,
+    logger: logging.Logger,
+    socket_path: str = "/run/haproxy-template-ic/management.sock",
+) -> None:
     """Run the management socket server to expose internal state via commands."""
     server = ManagementSocketServer(memo, logger, socket_path)
     try:

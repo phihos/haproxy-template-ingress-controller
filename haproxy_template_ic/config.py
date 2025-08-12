@@ -6,7 +6,7 @@ from dacite import from_dict, Config as DaciteConfig
 from jinja2 import Template, TemplateSyntaxError
 
 
-def config_from_dict(config_dict):
+def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
     # Custom type hook to compile Jinja2 templates
     def compile_template(template_str: str) -> Template:
         try:

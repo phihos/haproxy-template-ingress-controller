@@ -32,7 +32,7 @@ class CliOptions:
 # =============================================================================
 
 
-def setup_logging(verbose_level):
+def setup_logging(verbose_level: int) -> None:
     """Configure logging based on verbosity level."""
     log_levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     logging.basicConfig(level=log_levels.get(verbose_level, logging.DEBUG))
@@ -63,7 +63,8 @@ def setup_logging(verbose_level):
     "--verbose",
     envvar="VERBOSE",
     count=True,
-    help="Set log level to INFO via -v and DEBUG via -vv. Use numbers when using the env var.",
+    help="Set log level to INFO via -v and DEBUG via -vv. "
+    "Use numbers when using the env var.",
 )
 @click.option(
     "-s",
@@ -72,8 +73,11 @@ def setup_logging(verbose_level):
     default="/run/haproxy-template-ic/management.sock",
     help="Path for management socket to expose internal state.",
 )
-def main(configmap_name, healthz_port, verbose, socket_path):
-    """HAProxy Template IC Operator - Kubernetes operator for HAProxy configuration management."""
+def main(
+    configmap_name: str, healthz_port: int, verbose: int, socket_path: str
+) -> None:
+    """HAProxy Template IC Operator - Kubernetes operator for HAProxy configuration
+    management."""
     setup_logging(verbose)
     logger = logging.getLogger(__name__)
 
