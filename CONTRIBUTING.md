@@ -279,7 +279,7 @@ The project employs a **dual-layer testing strategy** for comprehensive quality 
 uv run pytest
 
 # Run specific test file
-uv run pytest haproxy_template_ic/test/test_config.py
+uv run pytest tests/unit/test_config.py
 
 # Run with parallel execution (faster)
 uv run pytest -n auto
@@ -311,7 +311,7 @@ uv run pytest -m "slow" --keep-cluster --keep-namespaces
 uv run pytest -m "slow" --coverage
 
 # Run specific acceptance test
-uv run pytest haproxy_template_ic/test/test_acceptance.py::test_configmap_update_triggers_reload -m "slow"
+uv run pytest tests/e2e/test_acceptance.py::test_configmap_update_triggers_reload -m "slow"
 ```
 
 #### 🔍 Debugging Failed Tests
@@ -594,7 +594,7 @@ kubectl describe pod haproxy-template-ic
 #### **Test Debugging**
 ```bash
 # Run single test with maximum verbosity
-uv run pytest haproxy_template_ic/test/test_config.py::test_specific_function -vvv -s
+uv run pytest tests/unit/test_config.py::test_specific_function -vvv -s
 
 # Debug acceptance test cluster
 export KUBECONFIG=".pytest-kind/haproxy-template-ic-test/kubeconfig"
