@@ -19,7 +19,7 @@ Thank you for your interest in contributing to this project! This guide helps yo
 
 ### Prerequisites
 
-- **Python 3.11+** with type hints support
+- **Python 3.13+** with type hints support
 - **[uv](https://docs.astral.sh/uv/)** package manager (modern, fast Python package management)
 - **Docker** (for building container images)
 - **kubectl** and **kind** (required - application only runs in Kubernetes)
@@ -141,120 +141,9 @@ kubectl exec -it haproxy-template-ic -- socat - UNIX-CONNECT:/run/haproxy-templa
 
 ## Code Quality
 
-Our code quality standards ensure maintainable, secure, and robust code. All tools run automatically in CI and pre-commit hooks.
+For formatting, linting, typing, security scanning, and dependency hygiene, follow the repository Style Guide. It defines the authoritative rules and commands (Ruff formatter/linter, mypy, Bandit, Deptry) and how they’re enforced in CI and pre-commit.
 
-### 🎨 Code Formatting
-
-**Primary Tool**: `ruff` (fast, modern Python formatter)
-
-```bash
-# Format all Python files
-uv run ruff format
-
-# Check formatting without applying changes
-uv run ruff format --check
-
-# Format specific files
-uv run ruff format haproxy_template_ic/operator.py
-```
-
-**Configuration**: Defined in `pyproject.toml` with 88-character line length, following Black's style.
-
-### 🔍 Linting & Code Analysis
-
-**Primary Tool**: `ruff` (replaces flake8, isort, and more)
-
-```bash
-# Lint and auto-fix issues
-uv run ruff check --fix
-
-# Check without fixes (CI mode)
-uv run ruff check
-
-# Lint specific rules
-uv run ruff check --select E,W  # Only errors and warnings
-```
-
-**Ruff Features**:
-- ✅ Import sorting (replaces isort)
-- ✅ Code complexity analysis  
-- ✅ Best practice enforcement
-- ✅ Dead code detection
-- ✅ Performance anti-patterns
-
-### 🏷️ Type Checking
-
-**Primary Tool**: `mypy` (static type analysis)
-
-```bash
-# Check all production code (recommended)
-uv run mypy haproxy_template_ic/
-
-# Check specific modules
-uv run mypy haproxy_template_ic/operator.py haproxy_template_ic/config.py
-```
-
-**🎯 Type Checking Strategy**:
-- ✅ **Strict checking** for all production code
-- ✅ **Type stubs** for supported libraries (`click`, `PyYAML`, `requests`)  
-- ⚠️ **Selective ignoring** for libraries lacking type support (`kopf`, `kr8s`, `kubernetes`)
-- 🚫 **No global `--ignore-missing-imports`** - each library handled specifically
-- 📝 **100% type coverage** for production modules
-- 🚫 **Test files excluded** to focus on production code quality
-
-**Type Annotation Requirements**:
-- All functions must have return type annotations
-- All function parameters must have type annotations  
-- Use `typing.Optional` for nullable values
-- Prefer specific types over `Any` when possible
-
-### 🛡️ Security Scanning
-
-**Comprehensive security toolchain** runs automatically in CI:
-
-```bash
-# Security anti-pattern detection  
-uv run bandit -c pyproject.toml -r haproxy_template_ic/ --quiet
-
-# Dependency hygiene analysis
-uv run deptry .
-```
-
-**🔒 Security Tools**:
-
-| Tool | Purpose | What it catches |
-|------|---------|-----------------|
-| **Bandit** | Code security issues | SQL injection, hardcoded secrets, unsafe YAML loading |
-| **Deptry** | Dependency hygiene | Unused dependencies, missing imports |
-
-**Security Configuration**:
-- Test files excluded from security scans
-- Custom configuration in `pyproject.toml`
-- False positives handled with inline comments (`# nosec`)
-
-### ⚡ Development Commands
-
-**One-command quality check**:
-```bash
-# Run all quality checks (same as CI)
-uv run ruff format && \
-uv run ruff check --fix && \
-uv run mypy haproxy_template_ic/ && \
-uv run bandit -c pyproject.toml -r haproxy_template_ic/ --quiet && \
-uv run deptry .
-```
-
-**Pre-commit hooks** (automatic on commit):
-```bash
-# Install hooks (one-time setup)
-pre-commit install
-
-# Run hooks manually
-pre-commit run --all-files
-
-# Update hook versions
-pre-commit autoupdate
-```
+- See: [STYLEGUIDE.md](./STYLEGUIDE.md)
 
 ## Testing
 
@@ -505,14 +394,7 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, etc.
 
 ## Code Guidelines
 
-### 🎯 Code Quality Standards
-
-#### **Requirements**
-- ✅ PEP 8 compliance (enforced by ruff)
-- ✅ Type hints for all functions
-- ✅ Docstrings for public APIs  
-- ✅ Unit tests for new functions
-- ✅ Descriptive test names
+Please follow the conventions in [STYLEGUIDE.md](./STYLEGUIDE.md) for naming, typing, control flow, logging, async, documentation, tests, security, dependencies, and git/PR practices.
 
 ## Troubleshooting
 
