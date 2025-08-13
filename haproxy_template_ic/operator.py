@@ -12,7 +12,7 @@ from typing import Any, Dict, Tuple
 import kopf
 import uvloop
 import yaml
-from dataclasses import asdict
+
 from deepdiff import DeepDiff
 from kr8s.objects import ConfigMap
 
@@ -92,24 +92,31 @@ async def render_haproxy_templates(
     """Render all HAProxy templates with current context data."""
     logger.debug("🎨 Rendering HAProxy templates...")
 
-    # Create a new template context instance each time
-    template_context = TemplateContext(resources=indices)
+    # Create a new template context instance each time with config access
+    template_context = TemplateContext(resources=indices, config=memo.config)
 
     # Render each map template
-    for map_path, map_config in memo.config.maps.items():
+    for map_config in memo.config.maps:
         try:
-            # Create template variables from all dataclass fields
-            # This ensures all future fields of TemplateContext are automatically
-            # available
-            template_vars = asdict(template_context)
+            # Create template variables from dataclass fields, excluding config reference
+            template_vars = {
+                "resources": template_context.resources,
+                "environment": template_context.environment,
+                "cluster_name": template_context.cluster_name,
+                "config_values": template_context.config_values,
+                "get_template_snippet": template_context.get_template_snippet,
+                "get_map_config": template_context.get_map_config,
+                "get_certificate_config": template_context.get_certificate_config,
+                "register_error": template_context.register_error,
+            }
             rendered_content = map_config.template.render(**template_vars)
             rendered_map = RenderedMap(
-                path=map_path, content=rendered_content, map_config=map_config
+                path=map_config.path, content=rendered_content, map_config=map_config
             )
-            memo.haproxy_config_context.rendered_maps[map_path] = rendered_map
-            logger.debug(f"✅ Rendered template for {map_path}")
+            memo.haproxy_config_context.rendered_maps.append(rendered_map)
+            logger.debug(f"✅ Rendered template for {map_config.path}")
         except Exception as e:
-            logger.error(f"❌ Failed to render template for {map_path}: {e}")
+            logger.error(f"❌ Failed to render template for {map_config.path}: {e}")
 
 
 # =============================================================================
@@ -121,12 +128,12 @@ async def setup_resource_watchers(
     memo: Any, logger: logging.Logger, **kwargs: Any
 ) -> None:
     """Set up watchers for Kubernetes resources."""
-    for index_name, watch_config in memo.config.watch_resources.items():
+    for watch_config in memo.config.watch_resources:
         resource_type = watch_config.kind.lower()
 
         # Set up index and event handler with group/version if specified
-        kwargs = {"id": index_name, "param": index_name}
-        event_kwargs = {"id": f"{index_name}_event"}
+        kwargs = {"id": watch_config.id, "param": watch_config.id}
+        event_kwargs = {"id": f"{watch_config.id}_event"}
 
         if watch_config.group and watch_config.version:
             kwargs.update(

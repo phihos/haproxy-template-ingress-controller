@@ -23,6 +23,7 @@ from haproxy_template_ic.operator import (
 from haproxy_template_ic.config import (
     Config,
     MapConfig,
+    PodSelector,
     HAProxyConfigContext,
     RenderedMap,
 )
@@ -37,13 +38,16 @@ from jinja2 import Template
 @pytest.mark.asyncio
 async def test_load_config_from_configmap_success():
     """Test successful config loading from ConfigMap."""
-    config_data = {"pod_selector": "app=test"}
+    config_data = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": "global\n    daemon",
+    }
     configmap = {"data": {"config": yaml.dump(config_data, Dumper=yaml.CDumper)}}
 
     result = await load_config_from_configmap(configmap)
 
     assert isinstance(result, Config)
-    assert result.pod_selector == "app=test"
+    assert result.pod_selector.match_labels == {"app": "test"}
 
 
 @pytest.mark.asyncio
@@ -102,11 +106,20 @@ def test_trigger_reload():
 async def test_handle_configmap_change_with_change():
     """Test ConfigMap change handler when change is detected."""
     memo = MagicMock()
-    memo.config = Config(pod_selector="app=old")
+    memo.config = Config(
+        pod_selector=PodSelector(match_labels={"app": "old"}),
+        haproxy_config=Template("global\n    daemon"),
+    )
     event = {
         "object": {
             "data": {
-                "config": yaml.dump({"pod_selector": "app=new"}, Dumper=yaml.CDumper)
+                "config": yaml.dump(
+                    {
+                        "pod_selector": {"match_labels": {"app": "new"}},
+                        "haproxy_config": "global\n    daemon",
+                    },
+                    Dumper=yaml.CDumper,
+                )
             }
         }
     }
@@ -114,7 +127,10 @@ async def test_handle_configmap_change_with_change():
 
     with patch("haproxy_template_ic.operator.load_config_from_configmap") as mock_load:
         with patch("haproxy_template_ic.operator.trigger_reload") as mock_trigger:
-            mock_load.return_value = Config(pod_selector="app=new")
+            mock_load.return_value = Config(
+                pod_selector=PodSelector(match_labels={"app": "new"}),
+                haproxy_config=Template("global\n    daemon"),
+            )
 
             await handle_configmap_change(
                 memo, event, "test-config", "MODIFIED", logger
@@ -150,15 +166,18 @@ async def test_update_resource_index():
 async def test_render_haproxy_templates_success():
     """Test successful template rendering."""
     memo = MagicMock()
-    memo.config = MagicMock()
-    memo.config.maps = {
-        "/etc/haproxy/maps/backend.map": MapConfig(
-            path="/etc/haproxy/maps/backend.map",
-            template=Template(
-                "server {{ resources.name }} {{ resources.host }}:{{ resources.port }}"
-            ),
-        )
-    }
+    memo.config = Config(
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=Template("global\n    daemon"),
+        maps=[
+            MapConfig(
+                template=Template(
+                    "server {{ resources.name }} {{ resources.host }}:{{ resources.port }}"
+                ),
+                path="/etc/haproxy/maps/backend.map",
+            )
+        ],
+    )
     memo.haproxy_config_context = HAProxyConfigContext()
     indices = {"name": "server1", "host": "10.0.1.5", "port": "80"}
     logger = MagicMock()
@@ -166,11 +185,10 @@ async def test_render_haproxy_templates_success():
     await render_haproxy_templates(memo, indices, logger)
 
     # Check that rendered map was added
-    assert "/etc/haproxy/maps/backend.map" in memo.haproxy_config_context.rendered_maps
-    rendered_map = memo.haproxy_config_context.rendered_maps[
-        "/etc/haproxy/maps/backend.map"
-    ]
+    assert len(memo.haproxy_config_context.rendered_maps) == 1
+    rendered_map = memo.haproxy_config_context.rendered_maps[0]
     assert isinstance(rendered_map, RenderedMap)
+    assert rendered_map.path == "/etc/haproxy/maps/backend.map"
     assert "server server1 10.0.1.5:80" in rendered_map.content
 
 
@@ -178,13 +196,16 @@ async def test_render_haproxy_templates_success():
 async def test_render_haproxy_templates_jinja_error():
     """Test template rendering with Jinja error."""
     memo = MagicMock()
-    memo.config = MagicMock()
-    memo.config.maps = {
-        "/etc/haproxy/maps/backend.map": MapConfig(
-            path="/etc/haproxy/maps/backend.map",
-            template=Template("server {{ undefined_variable.invalid_attr }}"),
-        )
-    }
+    memo.config = Config(
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=Template("global\n    daemon"),
+        maps=[
+            MapConfig(
+                template=Template("server {{ undefined_variable.invalid_attr }}"),
+                path="/etc/haproxy/maps/backend.map",
+            )
+        ],
+    )
     memo.haproxy_config_context = HAProxyConfigContext()
     indices = {"name": "server1"}
     logger = MagicMock()

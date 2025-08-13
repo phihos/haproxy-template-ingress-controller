@@ -16,18 +16,32 @@ from jinja2 import Template
     "config_dict,expected_pod_selector,expected_watch_resources_count,expected_maps_count",
     [
         # Basic config with only required fields
-        ({"pod_selector": "app=myapp"}, "app=myapp", 0, 0),
+        (
+            {
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
+            },
+            {"app": "myapp"},
+            0,
+            0,
+        ),
         # Config with empty optional fields
         (
-            {"pod_selector": "app=myapp", "watch_resources": {}, "maps": {}},
-            "app=myapp",
+            {
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
+                "watch_resources": {},
+                "maps": {},
+            },
+            {"app": "myapp"},
             0,
             0,
         ),
         # Config with watch_resources
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "watch_resources": {
                     "ingresses": {
                         "group": "networking.k8s.io",
@@ -37,44 +51,43 @@ from jinja2 import Template
                     "services": {"group": "", "version": "v1", "kind": "Service"},
                 },
             },
-            "app=myapp",
+            {"app": "myapp"},
             2,
             0,
         ),
         # Config with maps
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "maps": {
                     "/etc/haproxy/maps/path-prefix.map": {
-                        "path": "/etc/haproxy/maps/path-prefix.map",
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     },
                     "/etc/haproxy/maps/backend-servers.map": {
-                        "path": "/etc/haproxy/maps/backend-servers.map",
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     },
                 },
             },
-            "app=myapp",
+            {"app": "myapp"},
             0,
             2,
         ),
         # Config with all fields
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "watch_resources": {
                     "ingresses": {"group": "networking.k8s.io", "kind": "Ingress"}
                 },
                 "maps": {
                     "/etc/haproxy/maps/path-prefix.map": {
-                        "path": "/etc/haproxy/maps/path-prefix.map",
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     }
                 },
             },
-            "app=myapp",
+            {"app": "myapp"},
             1,
             1,
         ),
@@ -90,7 +103,7 @@ def test_valid_configs(
     config = config_from_dict(config_dict)
 
     assert isinstance(config, Config)
-    assert config.pod_selector == expected_pod_selector
+    assert config.pod_selector.match_labels == expected_pod_selector
     assert len(config.watch_resources) == expected_watch_resources_count
     assert len(config.maps) == expected_maps_count
 
@@ -100,7 +113,8 @@ def test_valid_configs(
     [
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "watch_resources": {
                     "ingresses": {
                         "group": "networking.k8s.io",
@@ -118,7 +132,8 @@ def test_valid_configs(
         ),
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "watch_resources": {
                     "services": {"group": "", "version": "v1", "kind": "Service"}
                 },
@@ -127,7 +142,8 @@ def test_valid_configs(
         ),
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "watch_resources": {
                     "pods": {"group": None, "version": None, "kind": "Pod"}
                 },
@@ -140,8 +156,17 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
     """Test that watch_resources are properly structured as WatchResourceConfig objects."""
     config = config_from_dict(config_dict)
 
-    watch_resource = config.watch_resources[expected_watch_resource["name"]]
+    # Find the watch resource by id in the list
+    target_id = expected_watch_resource["name"]
+    watch_resource = None
+    for wr in config.watch_resources:
+        if wr.id == target_id:
+            watch_resource = wr
+            break
+
+    assert watch_resource is not None, f"Watch resource with id {target_id} not found"
     assert isinstance(watch_resource, WatchResourceConfig)
+    assert watch_resource.id == expected_watch_resource["name"]
     assert watch_resource.group == expected_watch_resource["group"]
     assert watch_resource.version == expected_watch_resource["version"]
     assert watch_resource.kind == expected_watch_resource["kind"]
@@ -152,10 +177,10 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
     [
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "maps": {
                     "/etc/haproxy/maps/path-prefix.map": {
-                        "path": "/etc/haproxy/maps/path-prefix.map",
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     }
                 },
@@ -169,10 +194,10 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
         ),
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "maps": {
                     "/etc/haproxy/maps/backend-servers.map": {
-                        "path": "/etc/haproxy/maps/backend-servers.map",
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     }
                 },
@@ -186,10 +211,10 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
         ),
         (
             {
-                "pod_selector": "app=myapp",
+                "pod_selector": {"match_labels": {"app": "myapp"}},
+                "haproxy_config": "global\n    daemon",
                 "maps": {
                     "/var/log/app.log": {
-                        "path": "/var/log/app.log",
                         "template": "log_format {{ format }};",
                     }
                 },
@@ -207,8 +232,17 @@ def test_maps_structure(config_dict, expected_map):
     """Test that maps are properly structured as MapConfig objects."""
     config = config_from_dict(config_dict)
 
-    map_config = config.maps[expected_map["name"]]
+    # Find the map config by path in the list
+    target_path = expected_map["name"]
+    map_config = None
+    for map_cfg in config.maps:
+        if map_cfg.path == target_path:
+            map_config = map_cfg
+            break
+
+    assert map_config is not None, f"Map with path {target_path} not found"
     assert isinstance(map_config, MapConfig)
+    # Path is now stored in the MapConfig object
     assert map_config.path == expected_map["path"]
     assert isinstance(map_config.template, Template)
     # Test that the template renders correctly with sample data
@@ -229,67 +263,65 @@ def test_maps_structure(config_dict, expected_map):
         {"pod_selector": 123},  # Should be string
         {"pod_selector": None},  # Should be string
         # Extra fields should raise exceptions
-        {"pod_selector": "app=myapp", "extra_field": "should_raise_exception"},
-        {"pod_selector": "app=myapp", "unknown_field": {"nested": "data"}},
         {
-            "pod_selector": "app=myapp",
+            "pod_selector": {"match_labels": {"app": "myapp"}},
+            "extra_field": "should_raise_exception",
+        },
+        {
+            "pod_selector": {"match_labels": {"app": "myapp"}},
+            "unknown_field": {"nested": "data"},
+        },
+        {
+            "pod_selector": {"match_labels": {"app": "myapp"}},
             "watch_resources": {},
             "maps": {},
             "extra_field": "should_raise_exception",
         },
         # Invalid relative paths in maps
         {
-            "pod_selector": "app=myapp",
+            "pod_selector": {"match_labels": {"app": "myapp"}},
             "maps": {
                 "relative/path.conf": {
-                    "path": "/etc/app/config.conf",
                     "template": "config",
                 }
             },
         },
         {
-            "pod_selector": "app=myapp",
-            "maps": {
-                "config.conf": {"path": "/etc/app/config.conf", "template": "config"}
-            },
+            "pod_selector": {"match_labels": {"app": "myapp"}},
+            "maps": {"config.conf": {"template": "config"}},
         },
         {
-            "pod_selector": "app=myapp",
-            "maps": {
-                "./config.conf": {"path": "/etc/app/config.conf", "template": "config"}
-            },
+            "pod_selector": {"match_labels": {"app": "myapp"}},
+            "maps": {"./config.conf": {"template": "config"}},
         },
         # Invalid Jinja2 templates
         {
-            "pod_selector": "app=myapp",
+            "pod_selector": {"match_labels": {"app": "myapp"}},
             "maps": {
                 "/etc/haproxy/maps/test.map": {
-                    "path": "/etc/haproxy/maps/test.map",
-                    "template": "server {{ name }",
+                    "template": "server {{ name",
                 }
             },
         },
         {
-            "pod_selector": "app=myapp",
+            "pod_selector": {"match_labels": {"app": "myapp"}},
             "maps": {
                 "/etc/haproxy/maps/test.map": {
-                    "path": "/etc/haproxy/maps/test.map",
-                    "template": "server {{ name }",
+                    "template": "server {{ unknown_var }",
                 }
             },
         },
         {
-            "pod_selector": "app=myapp",
+            "pod_selector": {"match_labels": {"app": "myapp"}},
             "maps": {
                 "/etc/haproxy/maps/test.map": {
-                    "path": "/etc/haproxy/maps/test.map",
                     "template": "server {% if name %}",
                 }
             },
         },
         # Missing mandatory kind field in WatchResourceConfig
         {
-            "pod_selector": "app=myapp",
+            "pod_selector": {"match_labels": {"app": "myapp"}},
             "watch_resources": {"pods": {"group": "v1", "version": "v1"}},
         },
     ],
@@ -303,7 +335,7 @@ def test_invalid_configs(config_dict):
 # RenderedMap Tests
 def test_rendered_map_creation():
     """Test RenderedMap dataclass creation."""
-    map_config = MapConfig(path="/test/path", template=Template("test {{ name }}"))
+    map_config = MapConfig(template=Template("test {{ name }}"))
     rendered_map = RenderedMap(
         path="/etc/haproxy/maps/test.map", content="test content", map_config=map_config
     )
@@ -315,7 +347,7 @@ def test_rendered_map_creation():
 
 def test_rendered_map_is_frozen():
     """Test that RenderedMap is immutable."""
-    map_config = MapConfig(path="/test/path", template=Template("test"))
+    map_config = MapConfig(template=Template("test"))
     rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
 
     with pytest.raises(AttributeError):
@@ -356,14 +388,14 @@ def test_haproxy_config_context_creation():
     """Test HAProxyConfigContext dataclass creation."""
     context = HAProxyConfigContext()
 
-    assert context.rendered_maps == {}
+    assert context.rendered_maps == []
 
 
 def test_haproxy_config_context_with_custom_data():
     """Test HAProxyConfigContext with custom rendered maps."""
-    map_config = MapConfig(path="/test", template=Template("test"))
+    map_config = MapConfig(template=Template("test"), path="/test")
     rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
-    rendered_maps = {"/test": rendered_map}
+    rendered_maps = [rendered_map]
 
     context = HAProxyConfigContext(rendered_maps=rendered_maps)
 
@@ -373,9 +405,10 @@ def test_haproxy_config_context_with_custom_data():
 def test_haproxy_config_context_mutable():
     """Test that HAProxyConfigContext is mutable (not frozen)."""
     context = HAProxyConfigContext()
-    map_config = MapConfig(path="/test", template=Template("test"))
+    map_config = MapConfig(template=Template("test"), path="/test")
     rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
 
     # Should be able to modify rendered_maps
-    context.rendered_maps["/test"] = rendered_map
-    assert "/test" in context.rendered_maps
+    context.rendered_maps.append(rendered_map)
+    assert len(context.rendered_maps) == 1
+    assert context.rendered_maps[0] == rendered_map
