@@ -75,6 +75,22 @@ jobs:
         run: |
           bash ./scripts/start-dev-en.sh
 
+      - name: Verify resources created by script
+        run: |
+          set -euo pipefail
+          echo "Checking cluster info and namespaces..."
+          kubectl cluster-info
+          kubectl get ns haproxy-template-ic
+          kubectl get ns echo
+          echo "Checking controller deployment and service..."
+          kubectl -n haproxy-template-ic get deploy/haproxy-template-ic
+          kubectl -n haproxy-template-ic get svc haproxy-template-ic || true
+          echo "Checking echo app resources..."
+          kubectl -n echo get deploy/echo-server
+          kubectl -n echo rollout status deploy/echo-server --timeout=120s
+          kubectl -n echo get svc/echo-server
+          kubectl -n echo get ingress/echo-server -o yaml | head -n 50
+
       - name: Cleanup kind cluster
         if: always()
         run: |
