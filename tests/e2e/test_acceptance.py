@@ -219,7 +219,7 @@ def test_config_reload(ingress_controller, configmap, config_dict, collect_cover
     assert_config_structure(initial_response["config"])
 
     # Change configuration
-    config_dict["pod_selector"] = "baz=bar"
+    config_dict["pod_selector"] = {"match_labels": {"baz": "bar"}}
     configmap.patch({"data": {"config": yaml.dump(config_dict, Dumper=yaml.CDumper)}})
 
     # Verify change detection and reload
@@ -232,7 +232,9 @@ def test_config_reload(ingress_controller, configmap, config_dict, collect_cover
 
     # Verify new configuration is applied via socket
     updated_response = send_socket_command(ingress_controller, "dump all")
-    assert updated_response["config"]["pod_selector"] == "baz=bar"
+    assert updated_response["config"]["pod_selector"] == {
+        "match_labels": {"baz": "bar"}
+    }
 
 
 @pytest.mark.slow
