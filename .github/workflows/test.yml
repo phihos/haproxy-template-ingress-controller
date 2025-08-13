@@ -1,21 +1,15 @@
 name: Tests
 on: [push]
 jobs:
-  test:
+  qa:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        target: [qa, script]
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Required for Coveralls
 
-      # Tooling for QA jobs
       - name: Install uv
-        if: matrix.target == 'qa'
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.8.x"
@@ -23,12 +17,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        if: matrix.target == 'qa'
         run: |
           uv sync --group dev
 
       - name: Run linting and fast tests
-        if: matrix.target == 'qa'
         run: |
           uv run --frozen ruff format --check
           uv run --frozen ruff check
@@ -36,34 +28,35 @@ jobs:
           uv run --frozen pytest tests -m "not slow" --cov=haproxy_template_ic --cov-report=term-missing -s
 
       - name: Run security and dependency checks
-        if: matrix.target == 'qa'
         run: |
           uv run bandit -c pyproject.toml -r haproxy_template_ic/ --quiet
           uv run --frozen deptry .
 
       - name: Run slow tests with coverage
-        if: matrix.target == 'qa'
         run: |
           uv run --frozen pytest tests -m "slow" --cluster-name haproxy-template-ic-test --coverage --cov=haproxy_template_ic --cov-report=term-missing --cov-append -s
 
       - name: Combine coverage data and create XML
-        if: matrix.target == 'qa'
         run: |
           find . -name '.coverage*' -type f -exec uv run coverage combine {} + || true
           uv run coverage xml
           find . -name '.coverage*' -type f -delete || true
 
       - name: Upload coverage to Coveralls
-        if: matrix.target == 'qa'
         uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
-      # Script validation job
+  dev-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Install kubectl
-        if: matrix.target == 'script'
         run: |
           curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl
@@ -71,7 +64,6 @@ jobs:
           kubectl version --client --short
 
       - name: Install kind
-        if: matrix.target == 'script'
         run: |
           KIND_VERSION=v0.24.0
           curl -Lo kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
@@ -80,11 +72,10 @@ jobs:
           kind version
 
       - name: Run dev environment script
-        if: matrix.target == 'script'
         run: |
           bash ./scripts/start-dev-en.sh
 
       - name: Cleanup kind cluster
-        if: matrix.target == 'script'
+        if: always()
         run: |
           kind delete cluster --name haproxy-template-ic-dev || true
