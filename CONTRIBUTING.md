@@ -98,6 +98,7 @@ What it does:
 Notes:
 - The created `Ingress` uses `kubernetes.io/ingress.class: nginx`. If you want external access, install an ingress controller (e.g., ingress-nginx) or integrate a data plane. See Echo-Server docs: [Kubernetes Quick Start](https://ealenn.github.io/Echo-Server/pages/quick-start/kubernetes.html).
 - If your environment cannot pull the controller image from GHCR, the script prints tips to build locally and `kind load docker-image`.
+- The script is idempotent. Rerunning it will rebuild and reload the local image `haproxy-template-ic:dev`, ensure the dev overlay is applied, set the deployment to that image, and force a rollout restart so your latest changes are picked up.
 
 Useful follow-ups:
 ```bash

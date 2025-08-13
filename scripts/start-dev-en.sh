@@ -13,6 +13,7 @@ CTRL_NAMESPACE="haproxy-template-ic"
 ECHO_NAMESPACE="echo"
 ECHO_APP_NAME="echo-server"
 ECHO_IMAGE="ealen/echo-server:latest"
+LOCAL_IMAGE="haproxy-template-ic:dev"
 
 RED="\033[0;31m"
 GREEN="\033[0;32m"
@@ -89,11 +90,24 @@ ensure_cluster() {
 	ok "Using kubectl context '$ctx'."
 }
 
+build_and_load_local_image() {
+	log INFO "Building local controller image '${LOCAL_IMAGE}' (this can take a while)..."
+	docker build --target production -t "${LOCAL_IMAGE}" .
+	log INFO "Loading image into kind cluster '${CLUSTER_NAME}'..."
+	kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
+}
+
 deploy_controller() {
+	# Always build and load the local image first, then deploy and point to it
+	build_and_load_local_image
 	log INFO "Deploying haproxy-template-ic to namespace '${CTRL_NAMESPACE}' using kustomize overlay..."
 	kubectl apply -k deploy/overlays/dev > /dev/null
+	log INFO "Pointing deployment to local image '${LOCAL_IMAGE}'..."
+	kubectl -n "${CTRL_NAMESPACE}" set image deployment/haproxy-template-ic controller="${LOCAL_IMAGE}" --record >/dev/null || true
+	log INFO "Forcing controller rollout restart..."
+	kubectl -n "${CTRL_NAMESPACE}" rollout restart deployment/haproxy-template-ic >/dev/null || true
 	log INFO "Waiting for controller deployment to become ready..."
-	if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-template-ic --timeout=120s; then
+	if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-template-ic --timeout=180s; then
 		err "Controller rollout did not complete in time."
 		troubleshooting "rollout-timeout"
 		exit 1
@@ -146,9 +160,8 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ${ECHO_APP_NAME}
-  annotations:
-    kubernetes.io/ingress.class: "nginx"
 spec:
+  ingressClassName: nginx
   rules:
     - host: echo.localdev.me
       http:
