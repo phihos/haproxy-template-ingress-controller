@@ -81,6 +81,36 @@ haproxy_template_ic/
 
 ## Development Environment
 
+### One-command local dev environment
+
+For a quick end-to-end sandbox with a kind cluster, the controller, and a demo Echo Server + Ingress, use the helper script:
+
+```bash
+# From repository root
+bash ./scripts/start-dev-en.sh
+```
+
+What it does:
+- Creates a kind cluster named `haproxy-template-ic-dev`
+- Deploys the controller via `deploy/overlays/dev`
+- Deploys an echo server (`ealen/echo-server`) and a corresponding `Ingress` in namespace `echo`
+
+Notes:
+- The created `Ingress` uses `kubernetes.io/ingress.class: nginx`. If you want external access, install an ingress controller (e.g., ingress-nginx) or integrate a data plane. See Echo-Server docs: [Kubernetes Quick Start](https://ealenn.github.io/Echo-Server/pages/quick-start/kubernetes.html).
+- If your environment cannot pull the controller image from GHCR, the script prints tips to build locally and `kind load docker-image`.
+
+Useful follow-ups:
+```bash
+kubectl get pods -A -w
+kubectl -n haproxy-template-ic logs deploy/haproxy-template-ic -f
+kubectl -n echo get svc,ingress -o wide
+```
+
+Cleanup:
+```bash
+kind delete cluster --name haproxy-template-ic-dev
+```
+
 ### Environment Configuration
 
 The application supports environment variables for all CLI options:
