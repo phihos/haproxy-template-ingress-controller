@@ -154,7 +154,7 @@ def wait_for_operator_ready(pod):
 
 def assert_config_structure(config):
     """Assert that config has the expected structure and values."""
-    assert config["pod_selector"] == "foo=bar"
+    assert config["pod_selector"] == {"match_labels": {"foo": "bar"}}
     assert "watch_resources" in config
     assert "maps" in config
     assert "ingresses" in config["watch_resources"]
