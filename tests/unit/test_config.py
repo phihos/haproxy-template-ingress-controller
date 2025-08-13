@@ -412,3 +412,562 @@ def test_haproxy_config_context_mutable():
     context.rendered_maps.append(rendered_map)
     assert len(context.rendered_maps) == 1
     assert context.rendered_maps[0] == rendered_map
+
+
+# =============================================================================
+# Collection Classes Tests
+# =============================================================================
+
+
+def test_watch_resource_collection_by_id():
+    """Test WatchResourceCollection.by_id method."""
+    from haproxy_template_ic.config import WatchResourceCollection, WatchResourceConfig
+
+    resources = WatchResourceCollection(
+        [
+            WatchResourceConfig(kind="Pod", group="", version="v1", id="pods"),
+            WatchResourceConfig(kind="Service", group="", version="v1", id="services"),
+            WatchResourceConfig(
+                kind="Ingress", group="networking.k8s.io", version="v1", id="ingresses"
+            ),
+        ]
+    )
+
+    # Test successful lookup
+    found = resources.by_id("services")
+    assert found is not None
+    assert found.kind == "Service"
+    assert found.id == "services"
+
+    # Test not found
+    not_found = resources.by_id("nonexistent")
+    assert not_found is None
+
+    # Test empty collection
+    empty_collection = WatchResourceCollection([])
+    assert empty_collection.by_id("anything") is None
+
+
+def test_map_collection_by_path():
+    """Test MapCollection.by_path method."""
+    from haproxy_template_ic.config import MapCollection, MapConfig
+    from jinja2 import Template
+
+    maps = MapCollection(
+        [
+            MapConfig(
+                path="/etc/haproxy/maps/backend.map", template=Template("backend map")
+            ),
+            MapConfig(path="/etc/haproxy/maps/path.map", template=Template("path map")),
+            MapConfig(path="/etc/haproxy/maps/host.map", template=Template("host map")),
+        ]
+    )
+
+    # Test successful lookup
+    found = maps.by_path("/etc/haproxy/maps/path.map")
+    assert found is not None
+    assert found.path == "/etc/haproxy/maps/path.map"
+
+    # Test not found
+    not_found = maps.by_path("/nonexistent.map")
+    assert not_found is None
+
+    # Test empty collection
+    empty_collection = MapCollection([])
+    assert empty_collection.by_path("/anything") is None
+
+
+def test_template_snippet_collection_by_name():
+    """Test TemplateSnippetCollection.by_name method."""
+    from haproxy_template_ic.config import TemplateSnippetCollection, TemplateSnippet
+    from jinja2 import Template
+
+    snippets = TemplateSnippetCollection(
+        [
+            TemplateSnippet(
+                name="backend-servers", template=Template("backend servers")
+            ),
+            TemplateSnippet(name="health-check", template=Template("health check")),
+            TemplateSnippet(name="logging", template=Template("logging config")),
+        ]
+    )
+
+    # Test successful lookup
+    found = snippets.by_name("health-check")
+    assert found is not None
+    assert found.name == "health-check"
+
+    # Test not found
+    not_found = snippets.by_name("nonexistent")
+    assert not_found is None
+
+    # Test empty collection
+    empty_collection = TemplateSnippetCollection([])
+    assert empty_collection.by_name("anything") is None
+
+
+def test_certificate_collection_by_name():
+    """Test CertificateCollection.by_name method."""
+    from haproxy_template_ic.config import CertificateCollection, CertificateConfig
+    from jinja2 import Template
+
+    certificates = CertificateCollection(
+        [
+            CertificateConfig(name="tls.pem", template=Template("tls cert")),
+            CertificateConfig(name="ca.pem", template=Template("ca cert")),
+            CertificateConfig(name="server.pem", template=Template("server cert")),
+        ]
+    )
+
+    # Test successful lookup
+    found = certificates.by_name("ca.pem")
+    assert found is not None
+    assert found.name == "ca.pem"
+
+    # Test not found
+    not_found = certificates.by_name("nonexistent.pem")
+    assert not_found is None
+
+    # Test empty collection
+    empty_collection = CertificateCollection([])
+    assert empty_collection.by_name("anything") is None
+
+
+def test_template_context_get_methods():
+    """Test TemplateContext get_* methods."""
+    from haproxy_template_ic.config import (
+        TemplateContext,
+        Config,
+        WatchResourceCollection,
+        MapCollection,
+        TemplateSnippetCollection,
+        CertificateCollection,
+        MapConfig,
+        TemplateSnippet,
+        CertificateConfig,
+        PodSelector,
+    )
+    from jinja2 import Template
+
+    # Create config with collections
+    maps = MapCollection([MapConfig(path="/test.map", template=Template("test"))])
+    snippets = TemplateSnippetCollection(
+        [TemplateSnippet(name="test-snippet", template=Template("snippet"))]
+    )
+    certificates = CertificateCollection(
+        [CertificateConfig(name="test.pem", template=Template("cert"))]
+    )
+
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=Template("global\n    daemon"),
+        maps=maps,
+        template_snippets=snippets,
+        certificates=certificates,
+        watch_resources=WatchResourceCollection([]),
+    )
+
+    context = TemplateContext(config=config)
+
+    # Test successful lookups
+    assert context.get_template_snippet("test-snippet") is not None
+    assert context.get_template_snippet("test-snippet").name == "test-snippet"
+
+    assert context.get_map_config("/test.map") is not None
+    assert context.get_map_config("/test.map").path == "/test.map"
+
+    assert context.get_certificate_config("test.pem") is not None
+    assert context.get_certificate_config("test.pem").name == "test.pem"
+
+    # Test not found
+    assert context.get_template_snippet("nonexistent") is None
+    assert context.get_map_config("/nonexistent.map") is None
+    assert context.get_certificate_config("nonexistent.pem") is None
+
+    # Test with no config
+    context_no_config = TemplateContext()
+    assert context_no_config.get_template_snippet("anything") is None
+    assert context_no_config.get_map_config("anything") is None
+    assert context_no_config.get_certificate_config("anything") is None
+
+
+# =============================================================================
+# Parser Error Testing
+# =============================================================================
+
+
+def test_config_from_dict_error_conditions():
+    """Test error conditions in config_from_dict."""
+    # Test non-dict input
+    with pytest.raises(ValueError, match="Configuration must be a dictionary"):
+        config_from_dict("not a dict")
+
+    with pytest.raises(ValueError, match="Configuration must be a dictionary"):
+        config_from_dict(["list", "not", "dict"])
+
+    # Test missing required fields
+    with pytest.raises(ValueError, match="Missing required field: pod_selector"):
+        config_from_dict({})
+
+    with pytest.raises(ValueError, match="Missing required field: haproxy_config"):
+        config_from_dict({"pod_selector": {"match_labels": {"app": "test"}}})
+
+
+def test_parse_pod_selector_errors():
+    """Test parse_pod_selector error conditions."""
+    from haproxy_template_ic.config import config_from_dict
+
+    # Test invalid pod_selector type
+    with pytest.raises(ValueError, match="pod_selector must be a dict"):
+        config_from_dict(
+            {"pod_selector": "invalid_string", "haproxy_config": "global\n    daemon"}
+        )
+
+    with pytest.raises(ValueError, match="pod_selector must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": ["invalid", "list"],
+                "haproxy_config": "global\n    daemon",
+            }
+        )
+
+
+def test_parse_maps_errors():
+    """Test parse_maps error conditions."""
+    # Test invalid map config (not dict)
+    with pytest.raises(ValueError, match="Map config for '/test' must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "maps": {"/test": "invalid_string"},
+            }
+        )
+
+    # Test missing template
+    with pytest.raises(ValueError, match="Map '/test' missing required 'template'"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "maps": {"/test": {}},
+            }
+        )
+
+    # Test invalid maps type
+    with pytest.raises(ValueError, match="maps must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "maps": "invalid_string",
+            }
+        )
+
+
+def test_parse_watch_resources_errors():
+    """Test parse_watch_resources error conditions."""
+    # Test invalid watch resource (not dict)
+    with pytest.raises(ValueError, match="Watch resource 'test' must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "watch_resources": {"test": "invalid_string"},
+            }
+        )
+
+    # Test missing kind
+    with pytest.raises(
+        ValueError, match="Watch resource 'test' missing required 'kind'"
+    ):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "watch_resources": {"test": {}},
+            }
+        )
+
+    # Test invalid watch_resources type
+    with pytest.raises(ValueError, match="watch_resources must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "watch_resources": "invalid_string",
+            }
+        )
+
+
+def test_parse_template_snippets_errors():
+    """Test parse_template_snippets error conditions."""
+    # Test dict format errors
+    with pytest.raises(ValueError, match="Template snippet 'test' must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "template_snippets": {"test": "invalid_string"},
+            }
+        )
+
+    # Test missing template in dict format
+    with pytest.raises(
+        ValueError, match="Template snippet 'test' missing required 'template'"
+    ):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "template_snippets": {"test": {}},
+            }
+        )
+
+    # Test list format errors
+    with pytest.raises(ValueError, match="Template snippet must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "template_snippets": ["invalid_string"],
+            }
+        )
+
+    # Test missing name in list format
+    with pytest.raises(ValueError, match="Template snippet missing required 'name'"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "template_snippets": [{"template": "test"}],
+            }
+        )
+
+    # Test missing template in list format
+    with pytest.raises(
+        ValueError, match="Template snippet missing required 'template'"
+    ):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "template_snippets": [{"name": "test"}],
+            }
+        )
+
+    # Test invalid type
+    with pytest.raises(ValueError, match="template_snippets must be a dict or list"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "template_snippets": "invalid_string",
+            }
+        )
+
+
+def test_parse_certificates_errors():
+    """Test parse_certificates error conditions."""
+    # Test dict format errors
+    with pytest.raises(ValueError, match="Certificate 'test' must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "certificates": {"test": "invalid_string"},
+            }
+        )
+
+    # Test missing template in dict format
+    with pytest.raises(
+        ValueError, match="Certificate 'test' missing required 'template'"
+    ):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "certificates": {"test": {}},
+            }
+        )
+
+    # Test list format errors
+    with pytest.raises(ValueError, match="Certificate must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "certificates": ["invalid_string"],
+            }
+        )
+
+    # Test missing name in list format
+    with pytest.raises(ValueError, match="Certificate missing required 'name'"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "certificates": [{"template": "test"}],
+            }
+        )
+
+    # Test missing template in list format
+    with pytest.raises(ValueError, match="Certificate missing required 'template'"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "certificates": [{"name": "test"}],
+            }
+        )
+
+    # Test invalid type
+    with pytest.raises(ValueError, match="certificates must be a dict or list"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "certificates": "invalid_string",
+            }
+        )
+
+
+def test_parse_resource_filter_errors():
+    """Test parse_resource_filter error conditions."""
+    # Test invalid filter type - this should cause an AttributeError when trying to call .get()
+    with pytest.raises(AttributeError, match="'str' object has no attribute 'get'"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "watch_resources": {
+                    "test": {"kind": "Pod", "filter": "invalid_string"}
+                },
+            }
+        )
+
+
+def test_list_format_parsing():
+    """Test parsing list format for maps, template_snippets, and certificates."""
+    # Test maps list format
+    config = config_from_dict(
+        {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": "global\n    daemon",
+            "maps": [
+                {"path": "/test1.map", "template": "test1"},
+                {"path": "/test2.map", "template": "test2"},
+            ],
+        }
+    )
+
+    assert len(config.maps) == 2
+    assert config.maps.by_path("/test1.map") is not None
+    assert config.maps.by_path("/test2.map") is not None
+
+    # Test template_snippets list format
+    config = config_from_dict(
+        {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": "global\n    daemon",
+            "template_snippets": [
+                {"name": "snippet1", "template": "test1"},
+                {"name": "snippet2", "template": "test2"},
+            ],
+        }
+    )
+
+    assert len(config.template_snippets) == 2
+    assert config.template_snippets.by_name("snippet1") is not None
+    assert config.template_snippets.by_name("snippet2") is not None
+
+    # Test certificates list format
+    config = config_from_dict(
+        {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": "global\n    daemon",
+            "certificates": [
+                {"name": "cert1.pem", "template": "test1"},
+                {"name": "cert2.pem", "template": "test2"},
+            ],
+        }
+    )
+
+    assert len(config.certificates) == 2
+    assert config.certificates.by_name("cert1.pem") is not None
+    assert config.certificates.by_name("cert2.pem") is not None
+
+    # Test watch_resources list format
+    config = config_from_dict(
+        {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": "global\n    daemon",
+            "watch_resources": [
+                {"id": "pods", "kind": "Pod"},
+                {"id": "services", "kind": "Service", "group": "", "version": "v1"},
+            ],
+        }
+    )
+
+    assert len(config.watch_resources) == 2
+    assert config.watch_resources.by_id("pods") is not None
+    assert config.watch_resources.by_id("services") is not None
+
+
+def test_list_format_errors():
+    """Test error conditions for list format parsing."""
+    # Test maps list format errors
+    with pytest.raises(ValueError, match="Map config must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "maps": ["invalid_string"],
+            }
+        )
+
+    with pytest.raises(ValueError, match="Map missing required 'path'"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "maps": [{"template": "test"}],
+            }
+        )
+
+    with pytest.raises(ValueError, match="Map missing required 'template'"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "maps": [{"path": "/test.map"}],
+            }
+        )
+
+    with pytest.raises(ValueError, match="Map path 'relative' must be absolute"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "maps": [{"path": "relative", "template": "test"}],
+            }
+        )
+
+    # Test watch_resources list format errors
+    with pytest.raises(ValueError, match="Watch resource must be a dict"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "watch_resources": ["invalid_string"],
+            }
+        )
+
+    with pytest.raises(ValueError, match="Watch resource missing required 'kind'"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": "global\n    daemon",
+                "watch_resources": [{"id": "test"}],
+            }
+        )
