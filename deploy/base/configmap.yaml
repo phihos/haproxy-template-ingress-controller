@@ -5,14 +5,40 @@ metadata:
   namespace: haproxy-template-ic
 data:
   config: |
-    pod_selector: "app=haproxy"
+    pod_selector:
+      match_labels:
+        app: haproxy
+    haproxy_config: |
+      global
+          daemon
+          user haproxy
+          group haproxy
+      
+      defaults
+          mode http
+          timeout connect 5000
+          timeout client 50000
+          timeout server 50000
+          
+      frontend main
+          bind *:80
+          default_backend servers
+          
+      backend servers
+          balance roundrobin
+          {% for _, endpoint in resources.get('endpoints', {}).items() %}
+          {% for ep in endpoint.endpoints %}
+          {% for address in ep.addresses %}
+          server {{ endpoint.metadata.name }}_{{ loop.index }} {{ address }}:80 check
+          {% endfor %}
+          {% endfor %}
+          {% endfor %}
     watch_resources:
       ingresses:
         group: networking.k8s.io
         kind: Ingress
     maps:
       /etc/haproxy/maps/backend.map:
-        path: /etc/haproxy/maps/backend.map
         template: |
           {% for svc in resources.get('services', []) %}
           server {{ svc.name }} {{ svc.ip }}:{{ svc.port }}

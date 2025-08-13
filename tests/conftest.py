@@ -125,7 +125,26 @@ def k8s_namespace(request, k8s_client):
 @pytest.fixture
 def config_dict():
     return {
-        "pod_selector": "foo=bar",
+        "pod_selector": {"match_labels": {"foo": "bar"}},
+        "haproxy_config": """
+global
+    daemon
+    user haproxy
+    group haproxy
+
+defaults
+    mode http
+    timeout connect 5000
+    timeout client 50000
+    timeout server 50000
+
+frontend main
+    bind *:80
+    default_backend servers
+
+backend servers
+    balance roundrobin
+""",
         "watch_resources": {
             "ingresses": {
                 "group": "networking.k8s.io",

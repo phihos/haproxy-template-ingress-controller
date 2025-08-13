@@ -8,8 +8,18 @@ external tools to query the operator's internal state via Unix socket commands.
 import asyncio
 import json
 import logging
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+
+class DataclassJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles dataclasses."""
+
+    def default(self, obj):
+        if is_dataclass(obj):
+            return asdict(obj)
+        return super().default(obj)
 
 
 class StateSerializer:
@@ -49,24 +59,27 @@ class StateSerializer:
         if not hasattr(self.memo, "config") or not self.memo.config:
             return config
 
-        # Serialize pod selector
-        config["pod_selector"] = self.memo.config.pod_selector
+        # Serialize pod selector - convert dataclass to dict if needed
+        pod_selector = self.memo.config.pod_selector
+        if is_dataclass(pod_selector) and not isinstance(pod_selector, type):
+            pod_selector = asdict(pod_selector)
+        config["pod_selector"] = pod_selector
 
         # Serialize watch resources
-        for name, watch_config in self.memo.config.watch_resources.items():
-            config["watch_resources"][name] = {
+        for watch_config in self.memo.config.watch_resources:
+            config["watch_resources"][watch_config.id] = {
                 "kind": watch_config.kind,
                 "group": watch_config.group,
                 "version": watch_config.version,
             }
 
         # Serialize maps
-        for path, map_config in self.memo.config.maps.items():
+        for map_config in self.memo.config.maps:
             template_source = "unavailable"
             if hasattr(map_config.template, "source"):
                 template_source = str(map_config.template.source)
 
-            config["maps"][path] = {
+            config["maps"][map_config.path] = {
                 "path": map_config.path,
                 "template_source": template_source,
             }
@@ -83,11 +96,8 @@ class StateSerializer:
         ):
             return context
 
-        for (
-            path,
-            rendered_map,
-        ) in self.memo.haproxy_config_context.rendered_maps.items():
-            context["rendered_maps"][path] = {
+        for rendered_map in self.memo.haproxy_config_context.rendered_maps:
+            context["rendered_maps"][rendered_map.path] = {
                 "path": rendered_map.path,
                 "content": rendered_map.content,
                 "map_config_path": rendered_map.map_config.path,
@@ -189,8 +199,75 @@ class ManagementSocketServer:
                     f"Available: all, indices, config"
                 }
 
+        elif parts[0] == "get":
+            if len(parts) < 3:
+                return {
+                    "error": "Missing arguments. Usage: get <maps|watch_resources|template_snippets|certificates> <identifier>"
+                }
+
+            collection_type = parts[1]
+            identifier = parts[2]
+
+            if collection_type == "maps":
+                map_config = self.memo.config.maps.by_path(identifier)
+                if map_config:
+                    return {
+                        "result": {
+                            "path": map_config.path,
+                            "template_source": getattr(
+                                map_config.template, "source", "unavailable"
+                            ),
+                        }
+                    }
+                return {"error": f"Map not found: {identifier}"}
+
+            elif collection_type == "watch_resources":
+                watch_config = self.memo.config.watch_resources.by_id(identifier)
+                if watch_config:
+                    return {
+                        "result": {
+                            "id": watch_config.id,
+                            "kind": watch_config.kind,
+                            "group": watch_config.group,
+                            "version": watch_config.version,
+                        }
+                    }
+                return {"error": f"Watch resource not found: {identifier}"}
+
+            elif collection_type == "template_snippets":
+                snippet = self.memo.config.template_snippets.by_name(identifier)
+                if snippet:
+                    return {
+                        "result": {
+                            "name": snippet.name,
+                            "template_source": getattr(
+                                snippet.template, "source", "unavailable"
+                            ),
+                        }
+                    }
+                return {"error": f"Template snippet not found: {identifier}"}
+
+            elif collection_type == "certificates":
+                cert_config = self.memo.config.certificates.by_name(identifier)
+                if cert_config:
+                    return {
+                        "result": {
+                            "name": cert_config.name,
+                            "template_source": getattr(
+                                cert_config.template, "source", "unavailable"
+                            ),
+                        }
+                    }
+                return {"error": f"Certificate not found: {identifier}"}
+
+            else:
+                return {
+                    "error": f"Unknown collection type: {collection_type}. "
+                    f"Available: maps, watch_resources, template_snippets, certificates"
+                }
+
         else:
-            return {"error": f"Unknown command: {parts[0]}. Available: dump"}
+            return {"error": f"Unknown command: {parts[0]}. Available: dump, get"}
 
     def _dump_indices(self) -> Dict[str, Any]:
         """Dump all indices from memo."""
@@ -212,11 +289,8 @@ class ManagementSocketServer:
             and self.memo.haproxy_config_context
         ):
             rendered_maps: Dict[str, Any] = {}
-            for (
-                path,
-                rendered_map,
-            ) in self.memo.haproxy_config_context.rendered_maps.items():
-                rendered_maps[path] = {
+            for rendered_map in self.memo.haproxy_config_context.rendered_maps:
+                rendered_maps[rendered_map.path] = {
                     "path": rendered_map.path,
                     "content": rendered_map.content,
                     "map_config_path": rendered_map.map_config.path,
@@ -281,7 +355,9 @@ class ManagementSocketServer:
             response_data = await self._process_command(command_str)
 
             # Send response
-            response = json.dumps(response_data, indent=2).encode("utf-8")
+            response = json.dumps(
+                response_data, indent=2, cls=DataclassJSONEncoder
+            ).encode("utf-8")
             writer.write(response)
             await writer.drain()
 
@@ -289,7 +365,9 @@ class ManagementSocketServer:
 
         except Exception as e:
             self.logger.error(f"❌ Error handling management socket client: {e}")
-            error_response = json.dumps({"error": str(e)}).encode("utf-8")
+            error_response = json.dumps(
+                {"error": str(e)}, cls=DataclassJSONEncoder
+            ).encode("utf-8")
             try:
                 writer.write(error_response)
                 await writer.drain()
