@@ -1,0 +1,46 @@
+# Codecov configuration for HAProxy Template IC
+# https://docs.codecov.com/docs/codecov-yaml
+
+coverage:
+  # Global coverage targets
+  status:
+    project:
+      default:
+        target: 85%              # Require 85% overall coverage
+        threshold: 2%            # Allow 2% drop from base
+        base: auto               # Compare against base branch
+    patch:
+      default:
+        target: 90%              # Require 90% coverage for new code
+        threshold: 0%            # No drop allowed for new code
+
+  # Ignore paths
+  ignore:
+    - "tests/*"                  # Test files
+    - "coverage_wrapper.py"      # Coverage helper
+    - "examples/*"               # Example configurations
+    - "scripts/*"                # Development scripts
+    - "**/test_*.py"             # All test files
+    - "**/__pycache__"           # Python cache
+
+# PR commenting
+comment:
+  layout: "header,diff,flags,files"
+  behavior: default
+  require_changes: false         # Always comment on PRs
+
+# GitHub status checks
+github_checks:
+  annotations: true
+
+# Flags for different test types
+flags:
+  unit:
+    paths:
+      - haproxy_template_ic/
+    carryforward: true
+  
+  integration:
+    paths:
+      - haproxy_template_ic/
+    carryforward: true

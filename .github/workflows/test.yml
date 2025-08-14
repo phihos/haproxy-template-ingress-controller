@@ -7,7 +7,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Required for Coveralls
+          fetch-depth: 0 # Required for coverage reporting
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -42,13 +42,14 @@ jobs:
           uv run coverage xml
           find . -name '.coverage*' -type f -delete || true
 
-      - name: Upload coverage to Coveralls
-        uses: coverallsapp/github-action@v2
-        continue-on-error: true
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./coverage.xml
+          flags: full
+          name: full-test-suite
+          fail_ci_if_error: true
 
   dev-script:
     runs-on: ubuntu-latest
