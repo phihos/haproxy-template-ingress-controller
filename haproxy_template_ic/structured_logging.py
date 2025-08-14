@@ -44,9 +44,8 @@ class StructuredFormatter(logging.Formatter):
         """Format log record as structured JSON with context."""
         # Build base log entry
         log_entry = {
-            "timestamp": time.strftime(
-                "%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime(record.created)
-            ),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
+            + f".{int((record.created % 1) * 1000000):06d}Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
