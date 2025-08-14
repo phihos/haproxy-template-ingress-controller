@@ -5,8 +5,8 @@ resources:
   - ../../base
 images:
   - name: ghcr.io/OWNER/REPO
-    newName: ghcr.io/phihos/haproxy-template-ingress-controller
-    newTag: latest
+    newName: haproxy-template-ic
+    newTag: dev
 patches:
   - target:
       kind: Deployment

@@ -67,7 +67,7 @@ haproxy_template_ic/
 |--------|---------|------------------|
 | `__main__.py` | CLI interface, argument parsing, application startup | `click`, `logging` |
 | `operator.py` | Kubernetes event handling, resource watching, template rendering | `kopf`, `kr8s`, `jinja2`, `uvloop` |
-| `config.py` | Configuration validation, Jinja2 template compilation | `dacite`, `jinja2`, `dataclasses` |
+| `config.py` | Configuration validation, Jinja2 template compilation, template snippet system | `jinja2`, `dataclasses`, custom `SnippetLoader` |
 | `management_socket.py` | State serialization, Unix socket server, debugging interface | `asyncio`, `json`, `pathlib` |
 | `utils.py` | Kubernetes utilities, namespace detection | `kubernetes` |
 
@@ -80,6 +80,37 @@ haproxy_template_ic/
 **Architecture**: Production deployments require HAProxy pods with Dataplane API servers and validation sidecars. The controller watches arbitrary Kubernetes resources and renders templates, pushing validated configurations to production HAProxy instances via Dataplane API.
 
 ## Development Environment
+
+### One-command local dev environment
+
+For a quick end-to-end sandbox with a kind cluster, the controller, and a demo Echo Server + Ingress, use the helper script:
+
+```bash
+# From repository root
+bash ./scripts/start-dev-en.sh
+```
+
+What it does:
+- Creates a kind cluster named `haproxy-template-ic-dev`
+- Deploys the controller via `deploy/overlays/dev`
+- Deploys an echo server (`ealen/echo-server`) and a corresponding `Ingress` in namespace `echo`
+
+Notes:
+- The created `Ingress` uses `kubernetes.io/ingress.class: nginx`. If you want external access, install an ingress controller (e.g., ingress-nginx) or integrate a data plane. See Echo-Server docs: [Kubernetes Quick Start](https://ealenn.github.io/Echo-Server/pages/quick-start/kubernetes.html).
+- If your environment cannot pull the controller image from GHCR, the script prints tips to build locally and `kind load docker-image`.
+- The script is idempotent. Rerunning it will rebuild and reload the local image `haproxy-template-ic:dev`, ensure the dev overlay is applied, set the deployment to that image, and force a rollout restart so your latest changes are picked up.
+
+Useful follow-ups:
+```bash
+kubectl get pods -A -w
+kubectl -n haproxy-template-ic logs deploy/haproxy-template-ic -f
+kubectl -n echo get svc,ingress -o wide
+```
+
+Cleanup:
+```bash
+kind delete cluster --name haproxy-template-ic-dev
+```
 
 ### Environment Configuration
 
@@ -158,7 +189,7 @@ The project employs a **dual-layer testing strategy** for comprehensive quality 
 
 ### 🏗️ Current Implementation Status
 
-**Working**: Resource watching, map file templating, management socket, state inspection
+**Working**: Resource watching, map file templating, template snippet system with `{% include %}` support, management socket, state inspection
 **Planned**: `haproxy.cfg` templating, certificate templating, Dataplane API synchronization, validation webhooks
 
 ### ⚡ Unit Tests
@@ -471,6 +502,11 @@ kubectl logs -f haproxy-template-ic
 
 # Inspect pod state
 kubectl describe pod haproxy-template-ic
+
+# Common template snippet errors
+# - "TemplateNotFound: snippet-name" means the snippet is not defined in template_snippets
+# - Templates can't access undefined resource indices - check watch_resources configuration
+# - Template rendering errors appear in logs with full context
 ```
 
 #### **Test Debugging**

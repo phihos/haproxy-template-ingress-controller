@@ -7,39 +7,192 @@ data:
   config: |
     pod_selector:
       match_labels:
-        app: haproxy
-    haproxy_config: |
-      global
-          daemon
-          user haproxy
-          group haproxy
-      
-      defaults
-          mode http
-          timeout connect 5000
-          timeout client 50000
-          timeout server 50000
-          
-      frontend main
-          bind *:80
-          default_backend servers
-          
-      backend servers
-          balance roundrobin
-          {% for _, endpoint in resources.get('endpoints', {}).items() %}
-          {% for ep in endpoint.endpoints %}
-          {% for address in ep.addresses %}
-          server {{ endpoint.metadata.name }}_{{ loop.index }} {{ address }}:80 check
-          {% endfor %}
-          {% endfor %}
-          {% endfor %}
+        app: haproxy-template-ic
+        release: haproxy-template-ic
     watch_resources:
       ingresses:
         group: networking.k8s.io
+        version: v1
         kind: Ingress
-    maps:
-      /etc/haproxy/maps/backend.map:
-        template: |
-          {% for svc in resources.get('services', []) %}
-          server {{ svc.name }} {{ svc.ip }}:{{ svc.port }}
+        filter:
+          field_selector:
+            "spec.ingressClassName": "haproxy-template-ic"
+      endpoints:
+        group: discovery.k8s.io
+        version: v1
+        kind: EndpointSlice
+        filter:
+          label_selector:
+            "kubernetes.io/service-name": "*"
+      secrets:
+        group: ""
+        version: v1
+        kind: Secret
+        filter:
+          field_selector:
+            "type": "kubernetes.io/tls"
+          label_selector:
+            "haproxy-template-ic/tls": "true"
+    template_snippets:
+      backend-name: |
+        ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+      
+      path-map-entry: |
+        {# Generate map entries for paths matching specified pathTypes #}
+        {# Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
+        {% for _, ingress in resources.get('ingresses', {}).items() %}
+        {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
+        {% for path in (rule.http.get('paths', []) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
+        {{ rule.host }}{{ path.path }} {% include "backend-name" %}{{ suffix }}
+        {% endfor %}
+        {% endfor %}
+        {% endfor %}
+      
+      validate-ingress: |
+        {# Validation snippet for ingress resources #}
+        {% if not ingress.spec %}
+          {% do register_error('ingresses', ingress.metadata.uid, 'Ingress missing spec') %}
+        {% endif %}
+        {% if ingress.spec.rules %}
+          {% for rule in ingress.spec.rules %}
+            {% if not rule.host %}
+              {% do register_error('ingresses', ingress.metadata.uid, 'Ingress rule missing host') %}
+            {% endif %}
           {% endfor %}
+        {% endif %}
+      
+      backend-servers: |
+        {# Generate backend server entries from EndpointSlice #}
+        {% for _, endpoint_slice in resources.get('endpoints', {}).items() %}
+          {% if endpoint_slice.metadata.labels.get('kubernetes.io/service-name') == service_name %}
+            {% for endpoint in endpoint_slice.endpoints %}
+              {% for address in endpoint.addresses %}
+        server {{ service_name }}_{{ loop.index }} {{ address }}:{{ port }}
+              {% endfor %}
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+      
+      ingress-backends: |
+        {# Generate all backend definitions from ingress resources #}
+        {# Usage: {% include "ingress-backends" %} #}
+        {% for _, ingress in resources.get('ingresses', {}).items() %}
+        {% include "validate-ingress" %}
+        {% if ingress.spec and ingress.spec.rules %}
+        {% for rule in ingress.spec.rules %}
+        {% if rule.http and rule.http.paths %}
+        {% for path in rule.http.paths %}
+        {% if path.backend and path.backend.service %}
+        {% set service_name = path.backend.service.name %}
+        {% set port = path.backend.service.port.number | default(80) %}
+        backend {% include "backend-name" %}
+            balance roundrobin
+            option httpchk GET {{ path.path | default('/') }}
+        {% include "backend-servers" %}
+        {% endif %}
+        {% endfor %}
+        {% endif %}
+        {% endfor %}
+        {% endif %}
+        {% endfor %}
+    maps:
+      /etc/haproxy/maps/path-exact.map:
+        template: |
+          # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
+          # It should be used with the equality string matcher. Example:
+          #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map(/etc/haproxy/maps/path-exact.map)
+          {% set path_types = ["Exact"] %}
+          {% set suffix = "" %}
+          {% include "path-map-entry" %}
+
+      /etc/haproxy/maps/path-prefix-exact.map:
+        template: |
+          # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
+          {% set path_types = ["Prefix", "ImplementationSpecific"] %}
+          {% set suffix = "" %}
+          {% include "path-map-entry" %}
+
+      /etc/haproxy/maps/path-prefix.map:
+        template: |
+          # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
+          # It should be used with the prefix string matcher. Example:
+          #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg(/etc/haproxy/maps/path-prefix.map)
+          {% set path_types = ["Prefix", "ImplementationSpecific"] %}
+          {% set suffix = "/" %}
+          {% include "path-map-entry" %}
+      
+      
+    
+    certificates:
+      /etc/haproxy/certs/tls.pem:
+        template: |
+          {# Generate combined cert+key file for HAProxy from TLS secrets #}
+          {% for _, secret in resources.get('secrets', {}).items() %}
+          {% if secret.type == "kubernetes.io/tls" and secret.metadata.labels.get('haproxy-template-ic/tls') == 'true' %}
+          # Certificate for {{ secret.metadata.name }} in {{ secret.metadata.namespace }}
+          {{ secret.data.get('tls.crt') | b64decode }}
+          {{ secret.data.get('tls.key') | b64decode }}
+          
+          {% endif %}
+          {% endfor %}
+
+    haproxy_config:
+      template: |
+        global
+            log stdout len 65536 local0 info
+            chroot /var/lib/haproxy
+            stats socket /run/haproxy/admin.sock mode 660 level admin
+            stats timeout 30s
+            user haproxy
+            group haproxy
+            daemon
+            ca-base /etc/ssl/certs
+            crt-base /etc/haproxy/certs
+            tune.ssl.default-dh-param 2048
+
+        defaults
+            mode http
+            log global
+            option httplog
+            option dontlognull
+            option log-health-checks
+            option forwardfor
+            option httpchk GET /
+            timeout connect 5000
+            timeout client 50000
+            timeout server 50000
+            errorfile 400 /etc/haproxy/errors/400.http
+            errorfile 403 /etc/haproxy/errors/403.http
+            errorfile 408 /etc/haproxy/errors/408.http
+            errorfile 500 /etc/haproxy/errors/500.http
+            errorfile 502 /etc/haproxy/errors/502.http
+            errorfile 503 /etc/haproxy/errors/503.http
+            errorfile 504 /etc/haproxy/errors/504.http
+
+        frontend http_frontend
+            bind *:80
+            redirect scheme https code 301 if !{ ssl_fc }
+
+        frontend https_frontend
+            bind *:443 ssl crt /etc/haproxy/certs/tls.pem
+
+            # Set a few variables
+            http-request set-var(txn.base) base
+            http-request set-var(txn.path) path
+            http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
+            http-request set-var(txn.host_match) var(txn.host),map(/etc/haproxy/maps/host.map)
+            http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map(/etc/haproxy/maps/host.map,'') if !{ var(txn.host_match) -m found }
+            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map(/etc/haproxy/maps/path-exact.map)
+            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map(/etc/haproxy/maps/path-prefix-exact.map) if !{ var(txn.path_match) -m found }
+            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg(/etc/haproxy/maps/path-prefix.map) if !{ var(txn.path_match) -m found }
+            
+            # Use path maps for routing
+            use_backend %[var(txn.path_match)]
+            
+            # Default backend
+            default_backend default_backend
+
+        {% include "ingress-backends" %}
+
+        backend default_backend
+            http-request return status 404

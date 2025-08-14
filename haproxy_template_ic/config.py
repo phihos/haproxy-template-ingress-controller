@@ -1,8 +1,105 @@
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Any, List
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+from functools import lru_cache
 
-from jinja2 import Template, TemplateSyntaxError
+from jinja2 import (
+    BaseLoader,
+    Environment,
+    Template,
+    TemplateSyntaxError,
+    TemplateNotFound,
+)
+
+# -----------------------------------------------------------------------------
+# Jinja2 setup
+# -----------------------------------------------------------------------------
+
+
+class SnippetLoader(BaseLoader):
+    """Custom Jinja2 loader that can resolve template snippets by name."""
+
+    def __init__(self, snippets: Optional["TemplateSnippetCollection"] = None):
+        self.snippets = snippets if snippets is not None else []
+
+    def get_source(
+        self, environment: Environment, template: str
+    ) -> tuple[str, Optional[str], Optional[Callable]]:
+        """Get template source for snippet name."""
+        # Handle case where snippets might be a list or TemplateSnippetCollection
+        if hasattr(self.snippets, "by_name"):
+            snippet = self.snippets.by_name(template)
+        else:
+            # Handle list case
+            snippet = None
+            for s in self.snippets:
+                if hasattr(s, "name") and s.name == template:
+                    snippet = s
+                    break
+
+        if snippet is None:
+            raise TemplateNotFound(template)
+
+        # Return (source, name, uptodate_func)
+        # uptodate_func=None means template is always up to date
+        return snippet.source, template, None
+
+
+@lru_cache(maxsize=32)
+def _get_cached_environment(snippets_hash: int) -> Environment:
+    """Get a cached Jinja2 environment.
+
+    Args:
+        snippets_hash: Hash of snippets for cache invalidation
+
+    Returns:
+        Cached Jinja2 environment instance
+    """
+    return Environment(extensions=["jinja2.ext.do"])  # nosec B701
+
+
+def _get_snippets_hash(snippets: Optional["TemplateSnippetCollection"]) -> int:
+    """Get a hash of snippets collection for caching purposes."""
+    if not snippets:
+        return 0
+
+    # Create hash based on snippet names and sources
+    snippet_data = []
+    for snippet in snippets:
+        snippet_data.append((snippet.name, snippet.source))
+
+    return hash(tuple(sorted(snippet_data)))
+
+
+def _make_jinja_template(
+    template_str: str,
+    snippets: Optional["TemplateSnippetCollection"] = None,
+    context_name: Optional[str] = None,
+) -> Template:
+    """Compile a Jinja2 template string with a consistent environment.
+
+    Args:
+        template_str: The template string to compile
+        snippets: Optional collection of template snippets
+        context_name: Optional name for better error reporting (e.g., snippet name, config path)
+
+    Raises a ValueError with a clear message if the template is invalid.
+    """
+    try:
+        # Use cached environment for better performance during config reloads
+        snippets_hash = _get_snippets_hash(snippets)
+        env = _get_cached_environment(snippets_hash)
+
+        # Set the snippet loader for this specific compilation
+        snippet_loader = SnippetLoader(snippets) if snippets else SnippetLoader()
+        env.loader = snippet_loader
+
+        return env.from_string(template_str)
+    except (
+        TemplateSyntaxError
+    ) as exc:  # pragma: no cover - exercised indirectly in tests
+        context = f"in {context_name}" if context_name else "in main config"
+        raise ValueError(f"Invalid template {context}: {exc}")
 
 
 class WatchResourceCollection(list):
@@ -52,17 +149,14 @@ class CertificateCollection(list):
 def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
     """Convert dictionary configuration to Config object."""
 
-    def make_template(template_str: str) -> Template:
-        """Convert string to Jinja2 template with validation."""
-        try:
-            return Template(template_str)
-        except TemplateSyntaxError as e:
-            raise ValueError(f"Invalid template: {e}")
+    # ------------------------------------------------------------------
+    # Small parsing helpers (kept local to avoid polluting public API)
+    # ------------------------------------------------------------------
 
     def parse_pod_selector(data: Any) -> PodSelector:
         """Parse pod_selector field."""
         if not isinstance(data, dict):
-            raise ValueError(f"pod_selector must be a dict, got {type(data)}")
+            raise ValueError(f"pod_selector must be a dict, got {type(data).__name__}")
         match_labels = data.get("match_labels", {})
         if not isinstance(match_labels, dict):
             raise ValueError("pod_selector.match_labels must be a dict")
@@ -93,6 +187,11 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError(
                         f"Watch resource '{resource_id}' missing required 'kind'"
                     )
+                # Additional type safety: ensure kind is a string
+                if not isinstance(config["kind"], str):
+                    raise ValueError(
+                        f"Watch resource '{resource_id}' kind must be a string"
+                    )
 
                 items.append(
                     WatchResourceConfig(
@@ -110,6 +209,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError("Watch resource must be a dict")
                 if "kind" not in config:
                     raise ValueError("Watch resource missing required 'kind'")
+                # Additional type safety: ensure kind is a string
+                if not isinstance(config["kind"], str):
+                    raise ValueError("Watch resource kind must be a string")
 
                 items.append(
                     WatchResourceConfig(
@@ -125,7 +227,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
 
         return WatchResourceCollection(items)
 
-    def parse_maps(data: Any) -> MapCollection:
+    def parse_maps(
+        data: Any, snippets: Optional["TemplateSnippetCollection"] = None
+    ) -> MapCollection:
         """Parse maps from dict or list."""
         if not data:
             return MapCollection()
@@ -140,11 +244,16 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError(f"Map config for '{path}' must be a dict")
                 if "template" not in config:
                     raise ValueError(f"Map '{path}' missing required 'template'")
+                # Additional type safety: ensure template is a string
+                if not isinstance(config["template"], str):
+                    raise ValueError(f"Map '{path}' template must be a string")
 
                 items.append(
                     MapConfig(
                         path=path,
-                        template=make_template(config["template"]),
+                        template=_make_jinja_template(
+                            config["template"], snippets, f"map '{path}'"
+                        ),
                     )
                 )
         elif isinstance(data, list):
@@ -156,6 +265,11 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError("Map missing required 'path'")
                 if "template" not in config:
                     raise ValueError("Map missing required 'template'")
+                # Additional type safety: ensure path and template are strings
+                if not isinstance(config["path"], str):
+                    raise ValueError("Map path must be a string")
+                if not isinstance(config["template"], str):
+                    raise ValueError("Map template must be a string")
 
                 path = config["path"]
                 if not Path(path).is_absolute():
@@ -164,7 +278,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                 items.append(
                     MapConfig(
                         path=path,
-                        template=make_template(config["template"]),
+                        template=_make_jinja_template(
+                            config["template"], snippets, f"map '{path}'"
+                        ),
                     )
                 )
         else:
@@ -173,49 +289,33 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
         return MapCollection(items)
 
     def parse_template_snippets(data: Any) -> TemplateSnippetCollection:
-        """Parse template_snippets from dict or list."""
+        """Parse template_snippets; expects a dict of name -> string template."""
         if not data:
             return TemplateSnippetCollection()
 
         items = []
         if isinstance(data, dict):
-            # Convert dict format: {name: {template: ...}}
+            # Dict format: {name: "..."}
             for name, config in data.items():
-                if not isinstance(config, dict):
-                    raise ValueError(f"Template snippet '{name}' must be a dict")
-                if "template" not in config:
-                    raise ValueError(
-                        f"Template snippet '{name}' missing required 'template'"
-                    )
-
+                if not isinstance(config, str):
+                    raise ValueError(f"Template snippet '{name}' must be a string")
                 items.append(
                     TemplateSnippet(
                         name=name,
-                        template=make_template(config["template"]),
-                    )
-                )
-        elif isinstance(data, list):
-            # List format: [{name: ..., template: ...}, ...]
-            for config in data:
-                if not isinstance(config, dict):
-                    raise ValueError("Template snippet must be a dict")
-                if "name" not in config:
-                    raise ValueError("Template snippet missing required 'name'")
-                if "template" not in config:
-                    raise ValueError("Template snippet missing required 'template'")
-
-                items.append(
-                    TemplateSnippet(
-                        name=config["name"],
-                        template=make_template(config["template"]),
+                        template=_make_jinja_template(
+                            config, context_name=f"snippet '{name}'"
+                        ),
+                        source=config,
                     )
                 )
         else:
-            raise ValueError("template_snippets must be a dict or list")
+            raise ValueError("template_snippets must be a dict")
 
         return TemplateSnippetCollection(items)
 
-    def parse_certificates(data: Any) -> CertificateCollection:
+    def parse_certificates(
+        data: Any, snippets: Optional["TemplateSnippetCollection"] = None
+    ) -> CertificateCollection:
         """Parse certificates from dict or list."""
         if not data:
             return CertificateCollection()
@@ -230,11 +330,16 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError(
                         f"Certificate '{name}' missing required 'template'"
                     )
+                # Additional type safety: ensure template is a string
+                if not isinstance(config["template"], str):
+                    raise ValueError(f"Certificate '{name}' template must be a string")
 
                 items.append(
                     CertificateConfig(
                         name=name,
-                        template=make_template(config["template"]),
+                        template=_make_jinja_template(
+                            config["template"], context_name=f"certificate '{name}'"
+                        ),
                     )
                 )
         elif isinstance(data, list):
@@ -246,11 +351,20 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError("Certificate missing required 'name'")
                 if "template" not in config:
                     raise ValueError("Certificate missing required 'template'")
+                # Additional type safety: ensure name and template are strings
+                if not isinstance(config["name"], str):
+                    raise ValueError("Certificate name must be a string")
+                if not isinstance(config["template"], str):
+                    raise ValueError("Certificate template must be a string")
 
                 items.append(
                     CertificateConfig(
                         name=config["name"],
-                        template=make_template(config["template"]),
+                        template=_make_jinja_template(
+                            config["template"],
+                            snippets,
+                            f"certificate '{config['name']}'",
+                        ),
                     )
                 )
         else:
@@ -269,15 +383,30 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
         raise ValueError("Missing required field: haproxy_config")
 
     pod_selector = parse_pod_selector(config_dict["pod_selector"])
-    haproxy_config = make_template(config_dict["haproxy_config"])
 
-    # Parse optional collections
+    # Parse optional collections first
     watch_resources = parse_watch_resources(config_dict.get("watch_resources"))
-    maps = parse_maps(config_dict.get("maps"))
     template_snippets = parse_template_snippets(config_dict.get("template_snippets"))
-    certificates = parse_certificates(config_dict.get("certificates"))
+
+    # Parse haproxy_config with access to snippets
+    raw_haproxy_config = config_dict["haproxy_config"]
+    if not isinstance(raw_haproxy_config, dict):
+        raise ValueError("haproxy_config must be an object with a 'template' field")
+    template_value = raw_haproxy_config.get("template")
+    if not isinstance(template_value, str):
+        raise ValueError("haproxy_config.template must be a string")
+    haproxy_config = _make_jinja_template(
+        template_value, template_snippets, "haproxy_config"
+    )
+
+    # Parse maps and certificates with access to snippets so they can use includes
+    maps = parse_maps(config_dict.get("maps"), template_snippets)
+    certificates = parse_certificates(
+        config_dict.get("certificates"), template_snippets
+    )
 
     return Config(
+        raw=config_dict,
         pod_selector=pod_selector,
         haproxy_config=haproxy_config,
         watch_resources=watch_resources,
@@ -313,6 +442,7 @@ class MapConfig:
 class TemplateSnippet:
     template: Template
     name: str = ""
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -328,6 +458,7 @@ class PodSelector:
 
 @dataclass(frozen=True)
 class Config:
+    raw: Dict[str, Any]
     pod_selector: PodSelector
     haproxy_config: Template
     watch_resources: WatchResourceCollection = field(
@@ -375,6 +506,22 @@ class TemplateContext:
         if self.config:
             return self.config.certificates.by_name(name)
         return None
+
+    def get_resources(self, resource_type: str) -> Dict[str, Any]:
+        """Get resources of a specific type with safe fallback."""
+        return self.resources.get(resource_type, {})
+
+    def iterate_resources(self, resource_type: str):
+        """Iterate over resources of a specific type safely."""
+        return self.get_resources(resource_type).items()
+
+    def count_resources(self, resource_type: str) -> int:
+        """Count resources of a specific type."""
+        return len(self.get_resources(resource_type))
+
+    def has_resources(self, resource_type: str) -> bool:
+        """Check if any resources of a specific type exist."""
+        return len(self.get_resources(resource_type)) > 0
 
 
 @dataclass

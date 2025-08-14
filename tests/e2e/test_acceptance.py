@@ -145,7 +145,7 @@ def send_socket_command(pod, command):
 
 def wait_for_operator_ready(pod):
     """Wait for the operator to be fully initialized and ready."""
-    assert_log_line(pod, "✅ Configuration initialized successfully.")
+    assert_log_line(pod, "✅ Configuration loaded successfully.")
     assert_log_line(
         pod,
         "🔌 Management socket server listening on /run/haproxy-template-ic/management.sock",
@@ -228,7 +228,7 @@ def test_config_reload(ingress_controller, configmap, config_dict, collect_cover
     assert_log_line(
         ingress_controller, "🔄 Configuration changed. Reinitializing...", timeout=10
     )
-    assert_log_line(ingress_controller, "✅ Configuration initialized successfully.")
+    assert_log_line(ingress_controller, "✅ Configuration loaded successfully.")
 
     # Verify new configuration is applied via socket
     updated_response = send_socket_command(ingress_controller, "dump all")

@@ -19,7 +19,7 @@ from jinja2 import Template
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
             },
             {"app": "myapp"},
             0,
@@ -29,7 +29,7 @@ from jinja2 import Template
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {},
                 "maps": {},
             },
@@ -41,7 +41,7 @@ from jinja2 import Template
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {
                     "ingresses": {
                         "group": "networking.k8s.io",
@@ -59,7 +59,7 @@ from jinja2 import Template
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
                     "/etc/haproxy/maps/path-prefix.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
@@ -77,7 +77,7 @@ from jinja2 import Template
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {
                     "ingresses": {"group": "networking.k8s.io", "kind": "Ingress"}
                 },
@@ -114,7 +114,7 @@ def test_valid_configs(
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {
                     "ingresses": {
                         "group": "networking.k8s.io",
@@ -133,7 +133,7 @@ def test_valid_configs(
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {
                     "services": {"group": "", "version": "v1", "kind": "Service"}
                 },
@@ -143,7 +143,7 @@ def test_valid_configs(
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {
                     "pods": {"group": None, "version": None, "kind": "Pod"}
                 },
@@ -178,7 +178,7 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
                     "/etc/haproxy/maps/path-prefix.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
@@ -195,7 +195,7 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
                     "/etc/haproxy/maps/backend-servers.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
@@ -212,7 +212,7 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
         (
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
                     "/var/log/app.log": {
                         "template": "log_format {{ format }};",
@@ -485,10 +485,20 @@ def test_template_snippet_collection_by_name():
     snippets = TemplateSnippetCollection(
         [
             TemplateSnippet(
-                name="backend-servers", template=Template("backend servers")
+                name="backend-servers",
+                template=Template("backend servers"),
+                source="backend servers",
             ),
-            TemplateSnippet(name="health-check", template=Template("health check")),
-            TemplateSnippet(name="logging", template=Template("logging config")),
+            TemplateSnippet(
+                name="health-check",
+                template=Template("health check"),
+                source="health check",
+            ),
+            TemplateSnippet(
+                name="logging",
+                template=Template("logging config"),
+                source="logging config",
+            ),
         ]
     )
 
@@ -552,13 +562,18 @@ def test_template_context_get_methods():
     # Create config with collections
     maps = MapCollection([MapConfig(path="/test.map", template=Template("test"))])
     snippets = TemplateSnippetCollection(
-        [TemplateSnippet(name="test-snippet", template=Template("snippet"))]
+        [
+            TemplateSnippet(
+                name="test-snippet", template=Template("snippet"), source="snippet"
+            )
+        ]
     )
     certificates = CertificateCollection(
         [CertificateConfig(name="test.pem", template=Template("cert"))]
     )
 
     config = Config(
+        raw={"test": "config"},
         pod_selector=PodSelector(match_labels={"app": "test"}),
         haproxy_config=Template("global\n    daemon"),
         maps=maps,
@@ -620,14 +635,17 @@ def test_parse_pod_selector_errors():
     # Test invalid pod_selector type
     with pytest.raises(ValueError, match="pod_selector must be a dict"):
         config_from_dict(
-            {"pod_selector": "invalid_string", "haproxy_config": "global\n    daemon"}
+            {
+                "pod_selector": "invalid_string",
+                "haproxy_config": {"template": "global\n    daemon"},
+            }
         )
 
     with pytest.raises(ValueError, match="pod_selector must be a dict"):
         config_from_dict(
             {
                 "pod_selector": ["invalid", "list"],
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
             }
         )
 
@@ -639,7 +657,7 @@ def test_parse_maps_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {"/test": "invalid_string"},
             }
         )
@@ -649,7 +667,7 @@ def test_parse_maps_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {"/test": {}},
             }
         )
@@ -659,7 +677,7 @@ def test_parse_maps_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": "invalid_string",
             }
         )
@@ -672,7 +690,7 @@ def test_parse_watch_resources_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {"test": "invalid_string"},
             }
         )
@@ -684,7 +702,7 @@ def test_parse_watch_resources_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {"test": {}},
             }
         )
@@ -694,7 +712,7 @@ def test_parse_watch_resources_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": "invalid_string",
             }
         )
@@ -703,65 +721,42 @@ def test_parse_watch_resources_errors():
 def test_parse_template_snippets_errors():
     """Test parse_template_snippets error conditions."""
     # Test dict format errors
-    with pytest.raises(ValueError, match="Template snippet 'test' must be a dict"):
+    with pytest.raises(ValueError, match="Template snippet 'test' must be a string"):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
-                "template_snippets": {"test": "invalid_string"},
+                "haproxy_config": {"template": "global\n    daemon"},
+                # Using a dict for a snippet should be invalid now
+                "template_snippets": {"test": {"template": "invalid"}},
             }
         )
 
-    # Test missing template in dict format
-    with pytest.raises(
-        ValueError, match="Template snippet 'test' missing required 'template'"
-    ):
+    # Dict value must be a string, any non-string is invalid
+    with pytest.raises(ValueError, match="Template snippet 'test' must be a string"):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
-                "template_snippets": {"test": {}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "template_snippets": {"test": 123},
             }
         )
 
     # Test list format errors
-    with pytest.raises(ValueError, match="Template snippet must be a dict"):
+    with pytest.raises(ValueError, match="template_snippets must be a dict"):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "template_snippets": ["invalid_string"],
             }
         )
 
-    # Test missing name in list format
-    with pytest.raises(ValueError, match="Template snippet missing required 'name'"):
-        config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
-                "template_snippets": [{"template": "test"}],
-            }
-        )
-
-    # Test missing template in list format
-    with pytest.raises(
-        ValueError, match="Template snippet missing required 'template'"
-    ):
-        config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
-                "template_snippets": [{"name": "test"}],
-            }
-        )
-
     # Test invalid type
-    with pytest.raises(ValueError, match="template_snippets must be a dict or list"):
+    with pytest.raises(ValueError, match="template_snippets must be a dict"):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "template_snippets": "invalid_string",
             }
         )
@@ -774,7 +769,7 @@ def test_parse_certificates_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "certificates": {"test": "invalid_string"},
             }
         )
@@ -786,7 +781,7 @@ def test_parse_certificates_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "certificates": {"test": {}},
             }
         )
@@ -796,7 +791,7 @@ def test_parse_certificates_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "certificates": ["invalid_string"],
             }
         )
@@ -806,7 +801,7 @@ def test_parse_certificates_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "certificates": [{"template": "test"}],
             }
         )
@@ -816,7 +811,7 @@ def test_parse_certificates_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "certificates": [{"name": "test"}],
             }
         )
@@ -826,7 +821,7 @@ def test_parse_certificates_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "certificates": "invalid_string",
             }
         )
@@ -839,7 +834,7 @@ def test_parse_resource_filter_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": {
                     "test": {"kind": "Pod", "filter": "invalid_string"}
                 },
@@ -853,7 +848,7 @@ def test_list_format_parsing():
     config = config_from_dict(
         {
             "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": "global\n    daemon",
+            "haproxy_config": {"template": "global\n    daemon"},
             "maps": [
                 {"path": "/test1.map", "template": "test1"},
                 {"path": "/test2.map", "template": "test2"},
@@ -865,15 +860,15 @@ def test_list_format_parsing():
     assert config.maps.by_path("/test1.map") is not None
     assert config.maps.by_path("/test2.map") is not None
 
-    # Test template_snippets list format
+    # Test template_snippets dict format
     config = config_from_dict(
         {
             "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": "global\n    daemon",
-            "template_snippets": [
-                {"name": "snippet1", "template": "test1"},
-                {"name": "snippet2", "template": "test2"},
-            ],
+            "haproxy_config": {"template": "global\n    daemon"},
+            "template_snippets": {
+                "snippet1": "test1",
+                "snippet2": "test2",
+            },
         }
     )
 
@@ -885,7 +880,7 @@ def test_list_format_parsing():
     config = config_from_dict(
         {
             "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": "global\n    daemon",
+            "haproxy_config": {"template": "global\n    daemon"},
             "certificates": [
                 {"name": "cert1.pem", "template": "test1"},
                 {"name": "cert2.pem", "template": "test2"},
@@ -901,7 +896,7 @@ def test_list_format_parsing():
     config = config_from_dict(
         {
             "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": "global\n    daemon",
+            "haproxy_config": {"template": "global\n    daemon"},
             "watch_resources": [
                 {"id": "pods", "kind": "Pod"},
                 {"id": "services", "kind": "Service", "group": "", "version": "v1"},
@@ -921,7 +916,7 @@ def test_list_format_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": ["invalid_string"],
             }
         )
@@ -930,7 +925,7 @@ def test_list_format_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": [{"template": "test"}],
             }
         )
@@ -939,7 +934,7 @@ def test_list_format_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": [{"path": "/test.map"}],
             }
         )
@@ -948,7 +943,7 @@ def test_list_format_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "maps": [{"path": "relative", "template": "test"}],
             }
         )
@@ -958,7 +953,7 @@ def test_list_format_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": ["invalid_string"],
             }
         )
@@ -967,7 +962,455 @@ def test_list_format_errors():
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": "global\n    daemon",
+                "haproxy_config": {"template": "global\n    daemon"},
                 "watch_resources": [{"id": "test"}],
+            }
+        )
+
+
+# =============================================================================
+# Template Snippet Include Tests
+# =============================================================================
+
+
+def test_template_snippet_basic_include():
+    """Test basic template snippet inclusion using {% include %}."""
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {
+            "ingress-backends": "server {{ name }} {{ ip }}:{{ port }} check"
+        },
+        "maps": {
+            "/etc/haproxy/maps/backends.map": {
+                "template": "{% include 'ingress-backends' %}"
+            }
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    # Test that snippet was parsed correctly
+    assert len(config.template_snippets) == 1
+    snippet = config.template_snippets.by_name("ingress-backends")
+    assert snippet is not None
+    assert snippet.name == "ingress-backends"
+
+    # Test that map template can include the snippet
+    map_config = config.maps.by_path("/etc/haproxy/maps/backends.map")
+    assert map_config is not None
+
+    # Render the template with snippet inclusion
+    rendered = map_config.template.render(
+        name="web-server", ip="192.168.1.10", port="80"
+    )
+    assert rendered == "server web-server 192.168.1.10:80 check"
+
+
+def test_template_snippet_multiple_includes():
+    """Test multiple template snippets included in one template."""
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {
+            "backend-header": "backend {{ backend_name }}",
+            "server-entry": "    server {{ name }} {{ ip }}:{{ port }} check",
+            "backend-footer": "    option httpchk GET /health",
+        },
+        "maps": {
+            "/etc/haproxy/maps/backend.map": {
+                "template": "{% include 'backend-header' %}\n{% include 'server-entry' %}\n{% include 'backend-footer' %}"
+            }
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    # Test all snippets were parsed
+    assert len(config.template_snippets) == 3
+
+    # Render the template with multiple snippet inclusions
+    map_config = config.maps.by_path("/etc/haproxy/maps/backend.map")
+    rendered = map_config.template.render(
+        backend_name="web-servers", name="web-1", ip="192.168.1.10", port="80"
+    )
+
+    expected = "backend web-servers\n    server web-1 192.168.1.10:80 check\n    option httpchk GET /health"
+    assert rendered == expected
+
+
+def test_template_snippet_with_variables():
+    """Test template snippets that contain variables."""
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {
+            "server-with-weight": "server {{ name }} {{ ip }}:{{ port }} weight {{ weight | default(100) }} check"
+        },
+        "maps": {
+            "/etc/haproxy/maps/weighted.map": {
+                "template": "{% for server in servers %}{% with name=server.name, ip=server.ip, port=server.port, weight=server.weight %}{% include 'server-with-weight' %}{% endwith %}\n{% endfor %}"
+            }
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    map_config = config.maps.by_path("/etc/haproxy/maps/weighted.map")
+    servers = [
+        {"name": "web-1", "ip": "192.168.1.10", "port": "80", "weight": 150},
+        {"name": "web-2", "ip": "192.168.1.11", "port": "80"},
+    ]
+
+    rendered = map_config.template.render(servers=servers)
+    expected = "server web-1 192.168.1.10:80 weight 150 check\nserver web-2 192.168.1.11:80 weight 100 check\n"
+    assert rendered == expected
+
+
+def test_template_snippet_nested_includes():
+    """Test template snippets that include other snippets."""
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {
+            "health-check": "check inter 5s",
+            "server-base": "server {{ name }} {{ ip }}:{{ port }}",
+            "server-full": "{% include 'server-base' %} {% include 'health-check' %}",
+        },
+        "maps": {
+            "/etc/haproxy/maps/servers.map": {"template": "{% include 'server-full' %}"}
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    map_config = config.maps.by_path("/etc/haproxy/maps/servers.map")
+    rendered = map_config.template.render(name="api-server", ip="10.0.1.5", port="8080")
+
+    expected = "server api-server 10.0.1.5:8080 check inter 5s"
+    assert rendered == expected
+
+
+def test_template_snippet_not_found_error():
+    """Test error when trying to include a non-existent snippet."""
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {"existing-snippet": "some content"},
+        "maps": {
+            "/etc/haproxy/maps/error.map": {
+                "template": "{% include 'non-existent-snippet' %}"
+            }
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    map_config = config.maps.by_path("/etc/haproxy/maps/error.map")
+
+    # Should raise TemplateNotFound when trying to render
+    from jinja2 import TemplateNotFound
+
+    with pytest.raises(TemplateNotFound, match="non-existent-snippet"):
+        map_config.template.render()
+
+
+def test_template_snippet_empty_collection():
+    """Test behavior when no template snippets are defined."""
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "maps": {
+            "/etc/haproxy/maps/no-snippets.map": {
+                "template": "plain template without includes"
+            }
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    # Should have empty snippet collection
+    assert len(config.template_snippets) == 0
+
+    # Template without includes should still work
+    map_config = config.maps.by_path("/etc/haproxy/maps/no-snippets.map")
+    rendered = map_config.template.render()
+    assert rendered == "plain template without includes"
+
+
+def test_template_snippet_complex_example():
+    """Test a complex real-world example with multiple snippets."""
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {
+            "path-map-entry": "{% if resource.spec.rules %}{% for rule in resource.spec.rules %}{% for path in rule.http.paths %}{{ path.path }} {{ rule.host }}_{{ path.backend.service.name }}\n{% endfor %}{% endfor %}{% endif %}",
+            "backend-config": "backend {{ backend_name }}\n    balance roundrobin\n    option httpchk GET {{ health_path | default('/health') }}",
+            "server-entry": "    server {{ name }} {{ ip }}:{{ port }} check",
+        },
+        "maps": {
+            "/etc/haproxy/maps/path-exact.map": {
+                "template": "{% for resource_key, resource in resources.ingresses.items() %}{% include 'path-map-entry' %}{% endfor %}"
+            }
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    # Test that all snippets were created
+    assert len(config.template_snippets) == 3
+    assert config.template_snippets.by_name("path-map-entry") is not None
+    assert config.template_snippets.by_name("backend-config") is not None
+    assert config.template_snippets.by_name("server-entry") is not None
+
+    # Test the complex template rendering
+    map_config = config.maps.by_path("/etc/haproxy/maps/path-exact.map")
+    assert map_config is not None
+
+    # Mock ingress data
+    mock_resources = {
+        "ingresses": {
+            ("default", "example-ingress"): {
+                "spec": {
+                    "rules": [
+                        {
+                            "host": "example.com",
+                            "http": {
+                                "paths": [
+                                    {
+                                        "path": "/api",
+                                        "backend": {"service": {"name": "api-service"}},
+                                    },
+                                    {
+                                        "path": "/web",
+                                        "backend": {"service": {"name": "web-service"}},
+                                    },
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    rendered = map_config.template.render(resources=mock_resources)
+    expected_lines = ["/api example.com_api-service", "/web example.com_web-service"]
+
+    # Check that both paths are in the rendered output
+    for expected_line in expected_lines:
+        assert expected_line in rendered
+
+
+def test_template_snippet_update_during_config_reload():
+    """Test that snippets are properly updated when configuration is reloaded."""
+    # First configuration
+    config_dict_1 = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {"greeting": "Hello {{ name }}"},
+        "maps": {"/test.map": {"template": "{% include 'greeting' %}"}},
+    }
+
+    config_1 = config_from_dict(config_dict_1)
+    map_config_1 = config_1.maps.by_path("/test.map")
+    rendered_1 = map_config_1.template.render(name="World")
+    assert rendered_1 == "Hello World"
+
+    # Second configuration with updated snippet
+    config_dict_2 = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {"greeting": "Hi {{ name }}!"},
+        "maps": {"/test.map": {"template": "{% include 'greeting' %}"}},
+    }
+
+    config_2 = config_from_dict(config_dict_2)
+    map_config_2 = config_2.maps.by_path("/test.map")
+    rendered_2 = map_config_2.template.render(name="World")
+    assert rendered_2 == "Hi World!"
+
+
+def test_template_context_helper_methods():
+    """Test the new helper methods for resource access."""
+    # Create a template context with some test resources
+    test_resources = {
+        "ingresses": {
+            ("default", "ing1"): {"metadata": {"name": "ing1"}},
+            ("default", "ing2"): {"metadata": {"name": "ing2"}},
+        },
+        "services": {
+            ("default", "svc1"): {"metadata": {"name": "svc1"}},
+        },
+        "empty_type": {},
+    }
+
+    context = TemplateContext(resources=test_resources)
+
+    # Test get_resources
+    assert len(context.get_resources("ingresses")) == 2
+    assert len(context.get_resources("services")) == 1
+    assert len(context.get_resources("empty_type")) == 0
+    assert len(context.get_resources("nonexistent")) == 0
+
+    # Test iterate_resources
+    ingress_items = list(context.iterate_resources("ingresses"))
+    assert len(ingress_items) == 2
+    assert ingress_items[0][0] == ("default", "ing1")
+    assert ingress_items[1][0] == ("default", "ing2")
+
+    # Test count_resources
+    assert context.count_resources("ingresses") == 2
+    assert context.count_resources("services") == 1
+    assert context.count_resources("empty_type") == 0
+    assert context.count_resources("nonexistent") == 0
+
+    # Test has_resources
+    assert context.has_resources("ingresses") is True
+    assert context.has_resources("services") is True
+    assert context.has_resources("empty_type") is False
+    assert context.has_resources("nonexistent") is False
+
+
+def test_template_environment_caching():
+    """Test that template environment caching works correctly."""
+    from haproxy_template_ic.config import (
+        _get_cached_environment,
+        _get_snippets_hash,
+        _make_jinja_template,
+        TemplateSnippetCollection,
+        TemplateSnippet,
+    )
+
+    # Test that same snippets hash returns cached environment
+    hash1 = _get_snippets_hash(None)
+    hash2 = _get_snippets_hash(None)
+    assert hash1 == hash2
+
+    env1 = _get_cached_environment(hash1)
+    env2 = _get_cached_environment(hash2)
+    assert env1 is env2  # Should be the same cached instance
+
+    # Test with different snippet collections
+    snippets1 = TemplateSnippetCollection(
+        [
+            TemplateSnippet(
+                name="test1",
+                source="hello",
+                template=_make_jinja_template("hello", context_name="test1"),
+            )
+        ]
+    )
+    snippets2 = TemplateSnippetCollection(
+        [
+            TemplateSnippet(
+                name="test2",
+                source="world",
+                template=_make_jinja_template("world", context_name="test2"),
+            )
+        ]
+    )
+
+    hash_a = _get_snippets_hash(snippets1)
+    hash_b = _get_snippets_hash(snippets2)
+    assert hash_a != hash_b  # Different snippets should have different hashes
+
+
+def test_type_safety_enhancements():
+    """Test the new type safety enhancements for config parsing."""
+
+    # Test watch resources with non-string kind (dict format)
+    with pytest.raises(ValueError, match="kind must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "watch_resources": {
+                    "test": {"kind": 123}  # Non-string kind
+                },
+            }
+        )
+
+    # Test watch resources with non-string kind (list format)
+    with pytest.raises(ValueError, match="kind must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "watch_resources": [
+                    {"kind": ["Pod"]}  # Non-string kind
+                ],
+            }
+        )
+
+    # Test maps with non-string template (dict format)
+    with pytest.raises(ValueError, match="template must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "maps": {
+                    "/test.map": {"template": 123}  # Non-string template
+                },
+            }
+        )
+
+    # Test maps with non-string path (list format)
+    with pytest.raises(ValueError, match="path must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "maps": [
+                    {"path": 123, "template": "test"}  # Non-string path
+                ],
+            }
+        )
+
+    # Test maps with non-string template (list format)
+    with pytest.raises(ValueError, match="template must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "maps": [
+                    {"path": "/test.map", "template": ["test"]}  # Non-string template
+                ],
+            }
+        )
+
+    # Test certificates with non-string template (dict format)
+    with pytest.raises(ValueError, match="template must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "certificates": {
+                    "test.crt": {"template": {"key": "value"}}  # Non-string template
+                },
+            }
+        )
+
+    # Test certificates with non-string name (list format)
+    with pytest.raises(ValueError, match="name must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "certificates": [
+                    {"name": 123, "template": "test"}  # Non-string name
+                ],
+            }
+        )
+
+    # Test certificates with non-string template (list format)
+    with pytest.raises(ValueError, match="template must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "certificates": [
+                    {"name": "test.crt", "template": None}  # Non-string template
+                ],
             }
         )

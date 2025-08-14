@@ -126,7 +126,8 @@ def k8s_namespace(request, k8s_client):
 def config_dict():
     return {
         "pod_selector": {"match_labels": {"foo": "bar"}},
-        "haproxy_config": """
+        "haproxy_config": {
+            "template": """
 global
     daemon
     user haproxy
@@ -144,7 +145,8 @@ frontend main
 
 backend servers
     balance roundrobin
-""",
+"""
+        },
         "watch_resources": {
             "ingresses": {
                 "group": "networking.k8s.io",

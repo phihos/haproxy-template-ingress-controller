@@ -26,13 +26,6 @@ data:
         filter:
           label_selector:
             "kubernetes.io/service-name": "*"
-      services:
-        group: ""
-        version: v1
-        kind: Service
-        filter:
-          namespace_selector:
-            include: ["default", "production", "staging"]
       secrets:
         group: ""
         version: v1
@@ -42,7 +35,7 @@ data:
             "type": "kubernetes.io/tls"
           label_selector:
             "haproxy-template-ic/tls": "true"
-    template-snippets:
+    template_snippets:
       backend-name: |
         ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
       

@@ -12,18 +12,47 @@ from typing import Any, Dict, Tuple
 import kopf
 import uvloop
 import yaml
-
 from deepdiff import DeepDiff
+from kopf import set_default_registry
+from kopf._core.engines.indexing import OperatorIndexers
+from kopf._core.intents.registries import SmartOperatorRegistry
 from kr8s.objects import ConfigMap
 
 from haproxy_template_ic.config import (
-    config_from_dict,
     HAProxyConfigContext,
     RenderedMap,
     TemplateContext,
+    config_from_dict,
 )
-from haproxy_template_ic.utils import get_current_namespace
 from haproxy_template_ic.management_socket import run_management_socket_server
+from haproxy_template_ic.utils import get_current_namespace
+
+logger = logging.getLogger(__name__)
+
+
+def _is_valid_resource(resource: Any) -> bool:
+    """Validate if a resource object is suitable for template rendering.
+
+    Args:
+        resource: The resource object to validate
+
+    Returns:
+        True if the resource is valid for templates, False otherwise
+    """
+    # Dictionary resources are always valid
+    if isinstance(resource, dict):
+        return True
+
+    # List/tuple resources should be non-empty
+    if isinstance(resource, (list, tuple)):
+        return len(resource) > 0
+
+    # Objects with dict-like interface or attributes are valid
+    if hasattr(resource, "__dict__") or hasattr(resource, "get"):
+        return True
+
+    # Primitives and other types are not valid resources
+    return False
 
 
 # =============================================================================
@@ -68,7 +97,7 @@ async def handle_configmap_change(
 
     new_config = await load_config_from_configmap(event["object"])
     if memo.config != new_config:
-        diff = DeepDiff(memo.config, new_config, verbose_level=2)
+        diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
         logger.info(f"🔄 Config has changed: {diff}. Reloading...")
         trigger_reload(memo)
 
@@ -77,20 +106,90 @@ async def update_resource_index(
     param: str,
     namespace: str,
     name: str,
-    spec: Dict[str, Any],
+    body: Dict[str, Any],
     logger: logging.Logger,
     **kwargs_: Any,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Update resource index for tracking."""
     logger.debug(f"📝 Updating index {param} for {namespace}/{name}...")
-    return {(namespace, name): spec}
+    return {(namespace, name): dict(body)}
 
 
-async def render_haproxy_templates(
-    memo: Any, indices: Dict[str, Any], logger: logging.Logger, **kwargs: Any
-) -> None:
+async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     """Render all HAProxy templates with current context data."""
     logger.debug("🎨 Rendering HAProxy templates...")
+
+    # Collect all indices from registered watch resources
+    indices: Dict[str, Dict[str, Any]] = {}
+    for watch_config in memo.config.watch_resources:
+        try:
+            # Get the index for this resource type
+            index_data = memo.indices.get(watch_config.id)
+
+            # Convert kopf index store to a dictionary with resource objects
+            # The index_data contains kopf store objects, we need the actual resources
+            resource_dict = {}
+            for key, resource in index_data.items():
+                # key is typically (namespace, name), resource is a list of dicts
+                try:
+                    # Validate resource first
+                    if not _is_valid_resource(resource):
+                        logger.warning(
+                            f"⚠️ Invalid resource type {type(resource)} for {key}, skipping"
+                        )
+                        continue
+
+                    # Type safety: handle different resource types appropriately
+                    if isinstance(resource, dict):
+                        # Resource is already a dict (typical case), use as-is
+                        resource_dict[key] = resource
+                    elif isinstance(resource, (list, tuple)):
+                        # Resource is a sequence (like a kopf store), get first element
+                        if resource:
+                            # Index keys with 0 elements will be removed, so we can be sure there is always [0]
+                            # There will not be more than one element since the combination of name + namespace is unique
+                            resource_dict[key] = resource[0]
+                        else:
+                            # This should not happen due to _is_valid_resource check, but handle gracefully
+                            logger.warning(f"⚠️ Empty resource list for {key}, skipping")
+                            continue
+                    else:
+                        # Resource is some other type (like a mock object or single resource)
+                        # Already validated by _is_valid_resource, so safe to use as-is
+                        resource_dict[key] = resource
+                except Exception as e:
+                    logger.warning(
+                        f"⚠️ Failed to process resource {key} -> {resource}: {e}"
+                    )
+                    # Fallback: try to use resource as-is only if it's valid
+                    if _is_valid_resource(resource):
+                        try:
+                            if isinstance(resource, dict):
+                                resource_dict[key] = resource
+                            elif isinstance(resource, list) and resource:
+                                resource_dict[key] = resource[0]
+                            else:
+                                # For other valid types, use as-is
+                                resource_dict[key] = resource
+                        except Exception as fallback_error:
+                            logger.warning(
+                                f"⚠️ Fallback processing failed for {key}: {fallback_error}"
+                            )
+                    else:
+                        logger.warning(
+                            f"⚠️ Skipping invalid resource {key} due to type {type(resource)}"
+                        )
+
+            indices[watch_config.id] = resource_dict
+            logger.debug(
+                f"📊 Retrieved index '{watch_config.id}' with {len(resource_dict)} items"
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Could not retrieve index '{watch_config.id}': {e}")
+            indices[watch_config.id] = {}
+
+    # Clear previous renders
+    memo.haproxy_config_context.rendered_maps.clear()
 
     # Create a new template context instance each time with config access
     template_context = TemplateContext(resources=indices, config=memo.config)
@@ -108,6 +207,10 @@ async def render_haproxy_templates(
                 "get_map_config": template_context.get_map_config,
                 "get_certificate_config": template_context.get_certificate_config,
                 "register_error": template_context.register_error,
+                "get_resources": template_context.get_resources,
+                "iterate_resources": template_context.iterate_resources,
+                "count_resources": template_context.count_resources,
+                "has_resources": template_context.has_resources,
             }
             rendered_content = map_config.template.render(**template_vars)
             rendered_map = RenderedMap(
@@ -124,10 +227,11 @@ async def render_haproxy_templates(
 # =============================================================================
 
 
-async def setup_resource_watchers(
-    memo: Any, logger: logging.Logger, **kwargs: Any
-) -> None:
+def setup_resource_watchers(memo: Any) -> None:
     """Set up watchers for Kubernetes resources."""
+    resource_count = len(memo.config.watch_resources)
+    logger.info(f"👀 Setting up {resource_count} resource watchers...")
+
     for watch_config in memo.config.watch_resources:
         resource_type = watch_config.kind.lower()
 
@@ -143,8 +247,19 @@ async def setup_resource_watchers(
                 {"group": watch_config.group, "version": watch_config.version}
             )
 
+            api_version = f"{watch_config.group}/{watch_config.version}"
+            logger.info(
+                f"🔍 Watching {resource_type} ({api_version}) with id '{watch_config.id}'"
+            )
+        else:
+            logger.info(
+                f"🔍 Watching {resource_type} (core/v1) with id '{watch_config.id}'"
+            )
+
         kopf.index(resource_type, **kwargs)(update_resource_index)  # type: ignore[arg-type]
         kopf.on.event(resource_type, **event_kwargs)(render_haproxy_templates)  # type: ignore[arg-type]
+
+    logger.info("✅ All resource watchers configured successfully")
 
 
 # =============================================================================
@@ -152,9 +267,7 @@ async def setup_resource_watchers(
 # =============================================================================
 
 
-async def initialize_configuration(
-    memo: Any, logger: logging.Logger, **kwargs: Any
-) -> None:
+async def initialize_configuration(memo: Any) -> None:
     """Initialize operator configuration from ConfigMap."""
     configmap_name = memo.cli_options.configmap_name
     logger.info(f"⚙️ Initializing config from configmap {configmap_name}.")
@@ -163,8 +276,13 @@ async def initialize_configuration(
     configmap = await fetch_configmap(configmap_name, namespace)
     memo.config = await load_config_from_configmap(configmap)
 
-    # Set up event handlers
-    kopf.on.startup()(setup_resource_watchers)  # type: ignore[arg-type]
+    logger.info("✅ Configuration loaded successfully.")
+
+
+async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
+    """Set up startup handlers after configuration is loaded."""
+
+    configmap_name = memo.cli_options.configmap_name
     kopf.on.event(
         "configmap",
         when=lambda name, namespace, type, **_: (
@@ -174,13 +292,13 @@ async def initialize_configuration(
         ),
     )(handle_configmap_change)  # type: ignore[arg-type]
 
+
+async def init_management_socket(memo: Any, **kwargs: Any) -> None:
     # Start management socket server for state inspection
     socket_path = memo.cli_options.socket_path
     memo.socket_server_task = asyncio.create_task(
-        run_management_socket_server(memo, logger, socket_path)
+        run_management_socket_server(memo, socket_path)
     )
-
-    logger.info("✅ Configuration initialized successfully.")
 
 
 # =============================================================================
@@ -211,12 +329,49 @@ def create_operator_memo(cli_options: Any) -> Any:
 # =============================================================================
 
 
-def run_operator_loop(cli_options: Any, logger: logging.Logger) -> None:
+def run_operator_loop(cli_options: Any) -> None:
     """Run the main operator loop with config reload capability."""
     while True:
         # Set up operator
-        kopf.on.startup()(initialize_configuration)  # type: ignore[arg-type]
-        memo, loop, stop_flag = create_operator_memo(cli_options)
+        # Explicitly set registry to prevent persistence of handlers across reloads
+        registry = SmartOperatorRegistry()
+        set_default_registry(registry)
+
+        # Explicitly set up the index containers to be able to retrieve all indices via memo
+        indexers = OperatorIndexers()
+
+        # Explicitly create the asyncio event loop to be able to run some tasks manually before passing it to kopf.run
+        loop = uvloop.EventLoopPolicy().new_event_loop()
+
+        # Explicitly create the stop_flag to be able to stop the operator from within
+        stop_flag: asyncio.Future[None] = asyncio.Future(loop=loop)
+
+        # This flag is not required by the operator, but we use it together with stop_flag to stop and reload the operator
+        # When the stop flag is set, but this flag is not then the application will terminate
+        # When both are set the operator will be reinitialized with a fresh config
+        config_reload_flag: asyncio.Future[None] = asyncio.Future(loop=loop)
+
+        # Explicitly create and prepopulate the memo object, that contains most oif the shared state
+        memo = kopf.Memo(
+            stop_flag=stop_flag,
+            cli_options=cli_options,
+            config_reload_flag=config_reload_flag,
+            haproxy_config_context=HAProxyConfigContext(),
+            indices=indexers.indices,
+        )
+
+        asyncio.set_event_loop(loop)
+        # Fetch config from configmap, validate it and attach it to the memo
+        loop.run_until_complete(initialize_configuration(memo))
+
+        # Set up kopf indices
+        # They must be set up before kopf.run or else they will not be initialized properly
+        setup_resource_watchers(memo)
+
+        # Watch the configmap for any changes to reload when necessary
+        kopf.on.startup()(init_watch_configmap)
+        # Start the management socket server to retrieve internal information and trigger actions
+        kopf.on.startup()(init_management_socket)
 
         # Run operator
         kopf.run(
@@ -225,6 +380,8 @@ def run_operator_loop(cli_options: Any, logger: logging.Logger) -> None:
             liveness_endpoint=f"http://0.0.0.0:{cli_options.healthz_port}/healthz",
             stop_flag=stop_flag,
             memo=memo,
+            registry=registry,
+            indexers=indexers,
         )
 
         # Check if we should exit or reload

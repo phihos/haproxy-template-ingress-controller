@@ -12,6 +12,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+logger = logging.getLogger(__name__)
+
 
 class DataclassJSONEncoder(json.JSONEncoder):
     """Custom JSON encoder that handles dataclasses."""
@@ -163,7 +165,6 @@ class ManagementSocketServer:
     def __init__(
         self,
         memo: Any,
-        logger: logging.Logger,
         socket_path: str = "/run/haproxy-template-ic/management.sock",
     ) -> None:
         self.memo = memo
@@ -389,11 +390,10 @@ class ManagementSocketServer:
 
 async def run_management_socket_server(
     memo: Any,
-    logger: logging.Logger,
     socket_path: str = "/run/haproxy-template-ic/management.sock",
 ) -> None:
     """Run the management socket server to expose internal state via commands."""
-    server = ManagementSocketServer(memo, logger, socket_path)
+    server = ManagementSocketServer(memo, socket_path)
     try:
         await server.run()
     except Exception as e:

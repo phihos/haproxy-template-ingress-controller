@@ -1,7 +1,7 @@
 name: Tests
 on: [push]
 jobs:
-  test:
+  qa:
     runs-on: ubuntu-latest
 
     steps:
@@ -44,7 +44,55 @@ jobs:
 
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@v2
+        continue-on-error: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
+  dev-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Install kind
+        run: |
+          KIND_VERSION=v0.24.0
+          curl -Lo kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x kind
+          sudo mv kind /usr/local/bin/kind
+          kind version
+
+      - name: Run dev environment script
+        run: |
+          bash ./scripts/start-dev-en.sh
+
+      - name: Verify resources created by script
+        run: |
+          set -euo pipefail
+          echo "Checking cluster info and namespaces..."
+          kubectl cluster-info
+          kubectl get ns haproxy-template-ic
+          kubectl get ns echo
+          echo "Checking controller deployment and service..."
+          kubectl -n haproxy-template-ic get deploy/haproxy-template-ic
+          kubectl -n haproxy-template-ic get svc haproxy-template-ic || true
+          echo "Checking echo app resources..."
+          kubectl -n echo get deploy/echo-server
+          kubectl -n echo rollout status deploy/echo-server --timeout=120s
+          kubectl -n echo get svc/echo-server
+          kubectl -n echo get ingress/echo-server -o yaml | head -n 50
+
+      - name: Cleanup kind cluster
+        if: always()
+        run: |
+          kind delete cluster --name haproxy-template-ic-dev || true
