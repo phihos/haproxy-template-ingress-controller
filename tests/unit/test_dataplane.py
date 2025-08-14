@@ -586,3 +586,133 @@ async def test_config_synchronizer_deploy_to_instance_failure():
     assert result.instance == instance
     assert result.config_version is None
     assert result.error == "Deploy failed"
+
+
+@pytest.mark.asyncio
+async def test_synchronize_configuration_no_validation_sidecars():
+    """Test synchronization when no validation sidecars are found."""
+    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
+
+    production_instance = HAProxyInstance(
+        pod=MagicMock(spec=Pod),
+        dataplane_url="http://production:8080",
+        is_validation_sidecar=False,
+    )
+
+    mock_discovery.discover_instances.return_value = [production_instance]
+
+    synchronizer = ConfigSynchronizer(mock_discovery)
+
+    config_context = HAProxyConfigContext()
+    config_context.rendered_config = RenderedConfig(
+        content="global\n    daemon", config=MagicMock()
+    )
+
+    # Mock successful deployment to production
+    with patch.object(synchronizer, "_deploy_to_production") as mock_deploy:
+        mock_deploy.return_value = [SyncResult(production_instance, True)]
+
+        results = await synchronizer.synchronize_configuration(config_context)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        # Should log warning about no validation sidecars
+
+
+@pytest.mark.asyncio
+async def test_validate_with_sidecars_logging():
+    """Test that _validate_with_sidecars logs the number of sidecars."""
+    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
+    synchronizer = ConfigSynchronizer(mock_discovery)
+
+    validation_instances = [
+        HAProxyInstance(
+            pod=MagicMock(spec=Pod),
+            dataplane_url="http://validator1:8080",
+            is_validation_sidecar=True,
+        ),
+        HAProxyInstance(
+            pod=MagicMock(spec=Pod),
+            dataplane_url="http://validator2:8080",
+            is_validation_sidecar=True,
+        ),
+    ]
+
+    config = "global\n    daemon"
+
+    # Mock both _validate_instance calls to succeed
+    with patch.object(
+        synchronizer, "_validate_instance", new_callable=AsyncMock
+    ) as mock_validate:
+        mock_validate.return_value = None
+
+        # This should complete successfully and log about 2 sidecars
+        await synchronizer._validate_with_sidecars(validation_instances, config)
+
+        # Verify _validate_instance was called for both instances
+        assert mock_validate.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_validate_instance_dataplane_error():
+    """Test instance validation with DataplaneAPIError."""
+    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
+    synchronizer = ConfigSynchronizer(mock_discovery)
+
+    mock_client = MagicMock()
+    mock_client.validate_configuration = AsyncMock(
+        side_effect=DataplaneAPIError("Invalid config")
+    )
+
+    mock_pod = MagicMock(spec=Pod)
+    mock_pod.namespace = "test-ns"
+    mock_pod.name = "test-pod"
+
+    instance = HAProxyInstance(
+        pod=mock_pod, dataplane_url="http://validator:8080", is_validation_sidecar=True
+    )
+    config = "global\n    daemon"
+
+    with pytest.raises(ValidationError) as exc_info:
+        await synchronizer._validate_instance(mock_client, instance, config)
+    assert "Failed to validate configuration" in str(exc_info.value)
+    assert "test-ns/test-pod" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_deploy_to_production_error_handling():
+    """Test production deployment with error handling."""
+    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
+    synchronizer = ConfigSynchronizer(mock_discovery)
+
+    production_instances = [
+        HAProxyInstance(
+            pod=MagicMock(spec=Pod),
+            dataplane_url="http://prod1:8080",
+            is_validation_sidecar=False,
+        ),
+        HAProxyInstance(
+            pod=MagicMock(spec=Pod),
+            dataplane_url="http://prod2:8080",
+            is_validation_sidecar=False,
+        ),
+    ]
+
+    config = "global\n    daemon"
+
+    # Mock one success and one failure
+    with patch.object(synchronizer, "_deploy_to_instance") as mock_deploy:
+
+        async def side_effect(client, instance, config):
+            if instance == production_instances[0]:
+                return SyncResult(instance, True, "v123")
+            else:
+                return SyncResult(instance, False, error="Deploy failed")
+
+        mock_deploy.side_effect = side_effect
+
+        results = await synchronizer._deploy_to_production(production_instances, config)
+
+        assert len(results) == 2
+        assert results[0].success is True
+        assert results[1].success is False

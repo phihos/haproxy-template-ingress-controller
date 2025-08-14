@@ -261,9 +261,22 @@ class ConfigMapValidator:
         """Validate that referenced Kubernetes resources are valid."""
         warnings = []
 
-        watch_resources = config_dict.get("watch_resources", {})
+        watch_resources = config_dict.get("watch_resources", [])
 
-        for resource_name, resource_config in watch_resources.items():
+        # Handle both list and dict formats
+        if isinstance(watch_resources, dict):
+            # Dict format: resource_name -> resource_config
+            resource_items = list(watch_resources.items())
+        elif isinstance(watch_resources, list):
+            # List format: enumerate for resource names
+            resource_items = [
+                (f"resource_{i}", res) for i, res in enumerate(watch_resources)
+            ]
+        else:
+            warnings.append("watch_resources must be a list or dictionary")
+            return warnings
+
+        for resource_name, resource_config in resource_items:
             if not isinstance(resource_config, dict):
                 warnings.append(
                     f"Invalid watch_resource '{resource_name}': should be a dictionary"
@@ -390,6 +403,8 @@ class WebhookRegistry:
             await self._validate_ingress_specific(spec, warnings)
         elif kind.lower() == "service":
             await self._validate_service_specific(spec, warnings)
+        elif kind.lower() == "secret":
+            await self._validate_secret_specific(spec, warnings)
 
     async def _validate_ingress_specific(
         self, spec: Dict[str, Any], warnings: List[str]
@@ -416,6 +431,14 @@ class WebhookRegistry:
         for i, port in enumerate(ports):
             if not port.get("port"):
                 raise kopf.AdmissionError(f"Service port {i} is missing 'port' field")
+
+    async def _validate_secret_specific(
+        self, spec: Dict[str, Any], warnings: List[str]
+    ) -> None:
+        """Validate Secret-specific fields."""
+        data = spec.get("data", {})
+        if not data:
+            warnings.append("Secret has no data entries defined")
 
 
 # Global webhook registry
