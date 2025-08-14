@@ -114,6 +114,7 @@ def test_serialize_state_with_full_config():
         socket_path="/run/haproxy-template-ic/management.sock",
         metrics_port=9090,
         structured_logging=False,
+        tracing_enabled=False,
     )
     memo.config_reload_flag = MagicMock()
     memo.stop_flag = MagicMock()
@@ -274,6 +275,7 @@ def test_state_serializer_get_configmap_name():
         socket_path="/tmp/test.sock",
         metrics_port=9090,
         structured_logging=False,
+        tracing_enabled=False,
     )
 
     serializer = StateSerializer(memo)
@@ -667,6 +669,7 @@ async def test_management_socket_server_handle_client_empty_command():
         socket_path="/tmp/test.sock",
         metrics_port=9090,
         structured_logging=False,
+        tracing_enabled=False,
     )
     memo.haproxy_config_context = HAProxyConfigContext()
     memo.config_reload_flag = MagicMock()
@@ -848,6 +851,7 @@ async def test_management_socket_server_handle_client_unicode_command():
         socket_path="/tmp/test.sock",
         metrics_port=9090,
         structured_logging=False,
+        tracing_enabled=False,
     )
     memo.haproxy_config_context = HAProxyConfigContext()
     memo.config_reload_flag = MagicMock()
@@ -887,6 +891,7 @@ def test_state_serializer_serialize_metadata():
         socket_path="/tmp/test.sock",
         metrics_port=9090,
         structured_logging=False,
+        tracing_enabled=False,
     )
     memo.config_reload_flag = MagicMock()
     memo.stop_flag = MagicMock()
