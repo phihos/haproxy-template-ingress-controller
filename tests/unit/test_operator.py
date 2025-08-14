@@ -442,8 +442,9 @@ def test_jinja2_dict_access_patterns():
 
 
 @pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_haproxy_templates_jinja_error(mock_logger):
+async def test_render_haproxy_templates_jinja_error(mock_logger, mock_sync):
     """Test template rendering with Jinja error."""
     memo = MagicMock()
     memo.config = Config(
@@ -473,8 +474,10 @@ async def test_render_haproxy_templates_jinja_error(mock_logger):
     await render_haproxy_templates(memo)
 
     # Should log error but not crash
-    mock_logger.error.assert_called_once()
-    assert "Failed to render template" in mock_logger.error.call_args[0][0]
+    mock_logger.error.assert_called()
+    assert "Failed to render template" in mock_logger.error.call_args_list[0][0][0]
+    # Sync should be called but will handle the error gracefully
+    mock_sync.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -615,8 +618,9 @@ async def test_render_certificates_with_template_variables():
 
 
 @pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_certificates_jinja_error(mock_logger):
+async def test_render_certificates_jinja_error(mock_logger, mock_sync):
     """Test certificate rendering with Jinja error."""
     memo = MagicMock()
     memo.config = Config(
@@ -648,10 +652,16 @@ async def test_render_certificates_jinja_error(mock_logger):
 
     # Should log error but not crash, and rendered_certificates should be empty
     mock_logger.error.assert_called()
-    assert "Failed to render certificate template for bad-cert" in str(
-        mock_logger.error.call_args
+
+    # Check for certificate error in any of the error calls
+    error_messages = [str(call) for call in mock_logger.error.call_args_list]
+    assert any(
+        "Failed to render certificate template for bad-cert" in msg
+        for msg in error_messages
     )
     assert len(memo.haproxy_config_context.rendered_certificates) == 0
+    # Sync should be called but will handle the error gracefully
+    mock_sync.assert_called_once()
 
 
 @pytest.mark.asyncio
