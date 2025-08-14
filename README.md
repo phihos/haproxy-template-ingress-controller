@@ -24,12 +24,14 @@ This controller enables full Jinja2 templating of HAProxy configurations, map fi
 - ✅ Template certificate files from Kubernetes Secrets
 - ✅ Template snippet system with `{% include %}` support for reusable components
 - ✅ Access watched resources, environment variables, and CLI arguments from templates
+- ✅ Access target pod metadata (memory limits, labels, annotations, etc.) from templates
 - ✅ Management socket for runtime state inspection
+- ✅ Synchronize rendered templates with running HAProxy instances via Dataplane API
+- ✅ Comprehensive observability with Prometheus metrics and OpenTelemetry tracing
+- ✅ Resilient operations with retry logic, circuit breakers, and adaptive timeouts
 
 ### Planned
-- ⏳ Synchronize rendered templates with running HAProxy instances via Dataplane API
 - ⏳ Validating webhook for config changes
-- ⏳ Access target pod metadata (memory limits, etc.) from templates
 
 ## Architecture
 
