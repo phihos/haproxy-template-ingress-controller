@@ -107,7 +107,14 @@ async def load_config_from_configmap(configmap) -> Any:
         )
         config_data = configmap["data"]["config"]
 
-    return config_from_dict(yaml.safe_load(config_data))
+    config = config_from_dict(yaml.safe_load(config_data))
+
+    # Register validation webhooks based on configuration
+    from haproxy_template_ic.webhook import register_validation_webhooks_from_config
+
+    register_validation_webhooks_from_config(config)
+
+    return config
 
 
 @trace_async_function(

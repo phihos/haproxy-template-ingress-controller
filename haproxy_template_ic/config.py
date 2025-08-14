@@ -442,6 +442,8 @@ class WatchResourceConfig:
     group: Optional[str] = None
     version: Optional[str] = None
     filter: Optional[ResourceFilter] = None
+    # Webhook validation settings
+    enable_validation_webhook: bool = False
 
 
 @dataclass(frozen=True)

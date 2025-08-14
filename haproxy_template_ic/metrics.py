@@ -79,6 +79,19 @@ haproxy_instances_total = Gauge(
     ["instance_type"],
 )
 
+# Webhook validation metrics
+webhook_requests_total = Counter(
+    "haproxy_template_ic_webhook_requests_total",
+    "Total number of webhook validation requests",
+    ["status"],
+)
+
+webhook_request_duration_seconds = Histogram(
+    "haproxy_template_ic_webhook_request_duration_seconds",
+    "Time spent processing webhook validation requests",
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+)
+
 # Errors and failures
 errors_total = Counter(
     "haproxy_template_ic_errors_total",
@@ -238,6 +251,22 @@ class MetricsCollector:
         finally:
             duration = time.time() - start_time
             dataplane_api_duration_seconds.labels(operation=operation).observe(duration)
+
+    @contextmanager
+    def time_webhook_request(self) -> Iterator[None]:
+        """Context manager to time webhook validation requests."""
+        start_time = time.time()
+        try:
+            yield
+            # Record success
+            webhook_requests_total.labels(status="success").inc()
+        except Exception:
+            # Record failure
+            webhook_requests_total.labels(status="failure").inc()
+            raise
+        finally:
+            duration = time.time() - start_time
+            webhook_request_duration_seconds.observe(duration)
 
 
 # =============================================================================

@@ -131,6 +131,9 @@ def main(
             tracing_enabled=tracing_enabled,
         )
 
+        # Import webhook handlers to register them with kopf
+        import haproxy_template_ic.webhook  # noqa: F401
+
         run_operator_loop(cli_options)
     finally:
         # Ensure tracing is properly shutdown

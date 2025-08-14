@@ -29,9 +29,7 @@ This controller enables full Jinja2 templating of HAProxy configurations, map fi
 - ✅ Synchronize rendered templates with running HAProxy instances via Dataplane API
 - ✅ Comprehensive observability with Prometheus metrics and OpenTelemetry tracing
 - ✅ Resilient operations with retry logic, circuit breakers, and adaptive timeouts
-
-### Planned
-- ⏳ Validating webhook for config changes
+- ✅ Validating admission webhooks for ConfigMaps and watched resources
 
 ## Architecture
 
@@ -98,6 +96,58 @@ maps:
 - **Validation**: All snippets are validated at configuration load time
 
 See [example-configmap.yaml](example-configmap.yaml) for a comprehensive example using template snippets to generate HAProxy configurations from Kubernetes Ingress resources.
+
+## Validating Admission Webhooks
+
+The controller includes validating admission webhooks that can prevent faulty resources from being applied to your cluster. This feature provides immediate feedback on configuration errors and helps maintain system stability.
+
+### Webhook Types
+
+**1. ConfigMap Validation (Always Enabled)**
+- Automatically validates HAProxy Template IC ConfigMaps
+- Checks YAML syntax, template structure, and resource references  
+- Validates Jinja2 template syntax including snippet includes
+- Provides warnings for potential issues
+
+**2. Watched Resource Validation (Configurable)**  
+- Optional validation for resources you're watching (Ingress, Service, etc.)
+- Prevents broken resources from disrupting your HAProxy configuration
+- Safe-by-default: disabled for critical resources like EndpointSlices
+- Per-resource configuration via `enable_validation_webhook` flag
+
+### Configuration
+
+Enable webhook validation for specific watched resources:
+
+```yaml
+watch_resources:
+  ingresses:
+    group: networking.k8s.io
+    version: v1
+    kind: Ingress
+    # Enable validation to prevent faulty Ingress configs
+    enable_validation_webhook: true
+    filter:
+      field_selector:
+        "spec.ingressClassName": "haproxy-template-ic"
+  
+  endpoints:
+    group: discovery.k8s.io  
+    version: v1
+    kind: EndpointSlice
+    # Keep disabled for critical resources
+    enable_validation_webhook: false
+    filter:
+      label_selector:
+        "kubernetes.io/service-name": "*"
+```
+
+### Benefits
+
+- **Early Error Detection**: Catch configuration errors before they affect your load balancer
+- **Template Validation**: Ensure Jinja2 templates are syntactically correct and all snippets exist
+- **Resource Safety**: Prevent critical resources from being accidentally blocked
+- **Immediate Feedback**: Get validation results instantly when applying resources with `kubectl`
 
 ## Quickstart
 
