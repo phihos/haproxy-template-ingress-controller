@@ -40,6 +40,7 @@ class TimeoutConfig:
 
     initial_timeout: float = 30.0  # Initial timeout in seconds
     max_timeout: float = 300.0  # Maximum timeout in seconds
+    absolute_max_timeout: float = 600.0  # Absolute maximum timeout as safety net
     timeout_multiplier: float = 1.5  # Timeout increase factor on failure
     success_timeout_reduction: float = 0.9  # Timeout reduction on success
 
@@ -120,6 +121,7 @@ class AdaptiveTimeoutManager:
         """Adjust timeout upward after failed operation."""
         self.current_timeout = min(
             self.config.max_timeout,
+            self.config.absolute_max_timeout,  # Enforce absolute safety limit
             self.current_timeout * self.config.timeout_multiplier,
         )
 
@@ -395,6 +397,8 @@ class ResilientOperator:
                     # Add random jitter to avoid thundering herd
                     import random
 
+                    # Using non-cryptographic random for jitter is acceptable here as it's used
+                    # for timing variation to prevent thundering herd effects, not for security
                     jitter = (
                         delay * retry_policy.jitter_factor * (random.random() - 0.5)  # nosec B311
                     )

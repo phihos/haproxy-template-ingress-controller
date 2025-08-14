@@ -1,0 +1,65 @@
+groups:
+- name: haproxy-template-ic
+  rules:
+  - alert: HAProxyTemplateICDown
+    expr: up{job="haproxy-template-ic"} == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "HAProxy Template IC is down"
+      description: "HAProxy Template IC has been down for more than 1 minute."
+
+  - alert: HighTemplateRenderLatency
+    expr: histogram_quantile(0.95, rate(haproxy_template_ic_template_render_duration_seconds_bucket[5m])) > 10
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High template render latency"
+      description: "95th percentile template render latency is {{ $value }}s, which is above 10s threshold."
+
+  - alert: FrequentConfigReloads
+    expr: rate(haproxy_template_ic_config_reloads_total[5m]) > 0.1
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Frequent configuration reloads"
+      description: "Configuration is being reloaded {{ $value }} times per second, which may indicate instability."
+
+  - alert: CircuitBreakerOpen
+    expr: haproxy_template_ic_circuit_breaker_state{state="open"} == 1
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Circuit breaker {{ $labels.circuit_name }} is open"
+      description: "Circuit breaker {{ $labels.circuit_name }} has been open for more than 2 minutes."
+
+  - alert: HighErrorRate
+    expr: rate(haproxy_template_ic_errors_total[5m]) > 0.01
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High error rate detected"
+      description: "Error rate is {{ $value }} errors per second for error type: {{ $labels.error_type }}"
+
+  - alert: TemplateRenderFailures
+    expr: rate(haproxy_template_ic_template_renders_total{status="error"}[5m]) > 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Template render failures detected"
+      description: "Template rendering is failing at {{ $value }} failures per second."
+
+  - alert: DataplaneAPIErrors
+    expr: rate(haproxy_template_ic_dataplane_api_requests_total{status="error"}[5m]) > 0.05
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "HAProxy Dataplane API errors"
+      description: "Dataplane API {{ $labels.operation }} operation is failing at {{ $value }} errors per second."
