@@ -1,6 +1,6 @@
 # HAProxy Template Ingress Controller
 
-[![build](https://img.shields.io/github/actions/workflow/status/phihos/haproxy-template-ingress-controller/test.yml?branch=main&logo=github)](https://github.com/phihos/haproxy-template-ingress-controller/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/phihos/haproxy-template-ingress-controller/badge.svg)](https://coveralls.io/github/phihos/haproxy-template-ingress-controller)
+[![build](https://img.shields.io/github/actions/workflow/status/phihos/haproxy-template-ingress-controller/test.yml?branch=main&logo=github)](https://github.com/phihos/haproxy-template-ingress-controller/actions/workflows/test.yml) [![codecov](https://codecov.io/gh/phihos/haproxy-template-ingress-controller/graph/badge.svg?token=YOUR_UPLOAD_TOKEN)](https://codecov.io/gh/phihos/haproxy-template-ingress-controller)
 
 Proof-of-concept ingress controller for users who need direct control over [HAProxy](http://www.haproxy.org/) configuration beyond what existing ingress controllers provide.
 
