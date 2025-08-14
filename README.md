@@ -20,13 +20,13 @@ This controller enables full Jinja2 templating of HAProxy configurations, map fi
 ### Current Implementation
 - ✅ Watch arbitrary Kubernetes resources  
 - ✅ Template HAProxy map files
+- ✅ Template `haproxy.cfg` configuration files
+- ✅ Template certificate files from Kubernetes Secrets
 - ✅ Template snippet system with `{% include %}` support for reusable components
 - ✅ Access watched resources, environment variables, and CLI arguments from templates
 - ✅ Management socket for runtime state inspection
 
 ### Planned
-- ⏳ Template `haproxy.cfg`
-- ⏳ Template certificate files  
 - ⏳ Synchronize rendered templates with running HAProxy instances via Dataplane API
 - ⏳ Validating webhook for config changes
 - ⏳ Access target pod metadata (memory limits, etc.) from templates
@@ -207,7 +207,7 @@ kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
 
 **`dump all`** returns complete state with sections:
 - **config**: Operator configuration (pod selector, watched resources, templates)
-- **haproxy_config_context**: Rendered templates and content  
+- **haproxy_config_context**: Rendered HAProxy config, map templates, and certificates
 - **metadata**: Runtime information (ConfigMap name, flags)
 - **indices**: Current Kubernetes resource state
 
@@ -215,7 +215,7 @@ kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
 
 **`dump index <name>`** returns specific index (e.g., `pods_index`).
 
-**`dump config`** returns HAProxy configuration context only.
+**`dump config`** returns HAProxy configuration context only, including rendered maps, HAProxy config, and certificates.
 
 Example output:
 ```json

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: haproxy-template-ic-prod
+  labels:
+    name: haproxy-template-ic-prod
+    app.kubernetes.io/name: haproxy-template-ic
+    app.kubernetes.io/instance: production

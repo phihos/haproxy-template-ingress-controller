@@ -112,6 +112,8 @@ def test_serialize_state_with_full_config():
         healthz_port=8080,
         verbose=1,
         socket_path="/run/haproxy-template-ic/management.sock",
+        metrics_port=9090,
+        structured_logging=False,
     )
     memo.config_reload_flag = MagicMock()
     memo.stop_flag = MagicMock()
@@ -270,6 +272,8 @@ def test_state_serializer_get_configmap_name():
         healthz_port=8080,
         verbose=1,
         socket_path="/tmp/test.sock",
+        metrics_port=9090,
+        structured_logging=False,
     )
 
     serializer = StateSerializer(memo)
@@ -344,12 +348,91 @@ def test_state_serializer_serialize_haproxy_config_context():
 
     serializer = StateSerializer(memo)
     result = serializer._serialize_haproxy_config_context()
-    assert result == {"rendered_maps": {}}
+    assert result == {
+        "rendered_maps": {},
+        "rendered_config": None,
+        "rendered_certificates": {},
+    }
 
     # Test with None haproxy_config_context
     memo.haproxy_config_context = None
     result = serializer._serialize_haproxy_config_context()
-    assert result == {"rendered_maps": {}}
+    assert result == {
+        "rendered_maps": {},
+        "rendered_config": None,
+        "rendered_certificates": {},
+    }
+
+
+def test_state_serializer_serialize_haproxy_config_context_with_rendered_config():
+    """Test _serialize_haproxy_config_context method with rendered config."""
+    from haproxy_template_ic.config import HAProxyConfigContext, RenderedConfig, Config
+    from jinja2 import Template
+
+    memo = MagicMock()
+
+    # Create a real config and rendered config
+    config = Config(
+        raw={},
+        pod_selector={"match_labels": {}},
+        haproxy_config=Template("global\n    daemon"),
+    )
+
+    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
+
+    # Create HAProxyConfigContext with rendered config
+    memo.haproxy_config_context = HAProxyConfigContext(
+        rendered_maps=[], rendered_config=rendered_config
+    )
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_haproxy_config_context()
+
+    assert result["rendered_maps"] == {}
+    assert result["rendered_config"] is not None
+    assert result["rendered_config"]["content"] == "global\n    daemon"
+
+
+def test_state_serializer_serialize_haproxy_config_context_with_rendered_certificates():
+    """Test _serialize_haproxy_config_context method with rendered certificates."""
+    from haproxy_template_ic.config import (
+        HAProxyConfigContext,
+        RenderedCertificate,
+        CertificateConfig,
+    )
+    from jinja2 import Template
+
+    memo = MagicMock()
+
+    # Create a real certificate config and rendered certificate
+    certificate_config = CertificateConfig(
+        template=Template("cert content"), name="test-cert"
+    )
+
+    rendered_certificate = RenderedCertificate(
+        name="test-cert", content="cert content", certificate_config=certificate_config
+    )
+
+    # Create HAProxyConfigContext with rendered certificate
+    memo.haproxy_config_context = HAProxyConfigContext(
+        rendered_maps=[],
+        rendered_config=None,
+        rendered_certificates=[rendered_certificate],
+    )
+
+    serializer = StateSerializer(memo)
+    result = serializer._serialize_haproxy_config_context()
+
+    assert result["rendered_maps"] == {}
+    assert result["rendered_config"] is None
+    assert result["rendered_certificates"] is not None
+    assert "test-cert" in result["rendered_certificates"]
+    assert result["rendered_certificates"]["test-cert"]["name"] == "test-cert"
+    assert result["rendered_certificates"]["test-cert"]["content"] == "cert content"
+    assert (
+        result["rendered_certificates"]["test-cert"]["certificate_config_name"]
+        == "test-cert"
+    )
 
 
 def test_state_serializer_serialize_indices_with_actual_indices():
@@ -439,7 +522,88 @@ async def test_process_command_dump_config_empty():
     server = ManagementSocketServer(memo)
     result = await server._process_command("dump config")
 
-    assert result == {"haproxy_config_context": {"rendered_maps": {}}}
+    assert result == {
+        "haproxy_config_context": {
+            "rendered_maps": {},
+            "rendered_config": None,
+            "rendered_certificates": {},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_process_command_dump_config_with_rendered_config():
+    """Test dump config command with rendered HAProxy config."""
+    from haproxy_template_ic.config import RenderedConfig, Config
+    from jinja2 import Template
+
+    memo = MagicMock()
+
+    # Create a real config and rendered config
+    config = Config(
+        raw={},
+        pod_selector={"match_labels": {}},
+        haproxy_config=Template("global\n    daemon"),
+    )
+
+    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
+
+    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context.rendered_config = rendered_config
+    memo.haproxy_config_context.rendered_maps = []
+
+    server = ManagementSocketServer(memo)
+    result = await server._process_command("dump config")
+
+    assert "haproxy_config_context" in result
+    assert result["haproxy_config_context"]["rendered_maps"] == {}
+    assert result["haproxy_config_context"]["rendered_config"] is not None
+    assert (
+        result["haproxy_config_context"]["rendered_config"]["content"]
+        == "global\n    daemon"
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_command_dump_config_with_rendered_certificates():
+    """Test dump config command with rendered certificates."""
+    from haproxy_template_ic.config import RenderedCertificate, CertificateConfig
+    from jinja2 import Template
+
+    memo = MagicMock()
+
+    # Create a real certificate config and rendered certificate
+    certificate_config = CertificateConfig(
+        template=Template("cert content"), name="test-cert"
+    )
+
+    rendered_certificate = RenderedCertificate(
+        name="test-cert", content="cert content", certificate_config=certificate_config
+    )
+
+    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context.rendered_certificates = [rendered_certificate]
+    memo.haproxy_config_context.rendered_maps = []
+    memo.haproxy_config_context.rendered_config = None
+
+    server = ManagementSocketServer(memo)
+    result = await server._process_command("dump config")
+
+    assert "haproxy_config_context" in result
+    assert result["haproxy_config_context"]["rendered_maps"] == {}
+    assert result["haproxy_config_context"]["rendered_config"] is None
+    assert result["haproxy_config_context"]["rendered_certificates"] is not None
+    assert "test-cert" in result["haproxy_config_context"]["rendered_certificates"]
+    assert (
+        result["haproxy_config_context"]["rendered_certificates"]["test-cert"]["name"]
+        == "test-cert"
+    )
+    assert (
+        result["haproxy_config_context"]["rendered_certificates"]["test-cert"][
+            "content"
+        ]
+        == "cert content"
+    )
 
 
 @pytest.mark.asyncio
@@ -501,6 +665,8 @@ async def test_management_socket_server_handle_client_empty_command():
         healthz_port=8080,
         verbose=1,
         socket_path="/tmp/test.sock",
+        metrics_port=9090,
+        structured_logging=False,
     )
     memo.haproxy_config_context = HAProxyConfigContext()
     memo.config_reload_flag = MagicMock()
@@ -680,6 +846,8 @@ async def test_management_socket_server_handle_client_unicode_command():
         healthz_port=8080,
         verbose=1,
         socket_path="/tmp/test.sock",
+        metrics_port=9090,
+        structured_logging=False,
     )
     memo.haproxy_config_context = HAProxyConfigContext()
     memo.config_reload_flag = MagicMock()
@@ -717,6 +885,8 @@ def test_state_serializer_serialize_metadata():
         healthz_port=8080,
         verbose=1,
         socket_path="/tmp/test.sock",
+        metrics_port=9090,
+        structured_logging=False,
     )
     memo.config_reload_flag = MagicMock()
     memo.stop_flag = MagicMock()

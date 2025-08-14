@@ -12,6 +12,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from haproxy_template_ic.metrics import get_metrics_collector
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,7 +92,11 @@ class StateSerializer:
 
     def _serialize_haproxy_config_context(self) -> Dict[str, Any]:
         """Serialize HAProxy configuration context from memo."""
-        context: Dict[str, Any] = {"rendered_maps": {}}
+        context: Dict[str, Any] = {
+            "rendered_maps": {},
+            "rendered_config": None,
+            "rendered_certificates": {},
+        }
 
         if (
             not hasattr(self.memo, "haproxy_config_context")
@@ -98,11 +104,28 @@ class StateSerializer:
         ):
             return context
 
+        # Serialize rendered maps
         for rendered_map in self.memo.haproxy_config_context.rendered_maps:
             context["rendered_maps"][rendered_map.path] = {
                 "path": rendered_map.path,
                 "content": rendered_map.content,
                 "map_config_path": rendered_map.map_config.path,
+            }
+
+        # Serialize rendered HAProxy config
+        if self.memo.haproxy_config_context.rendered_config:
+            context["rendered_config"] = {
+                "content": self.memo.haproxy_config_context.rendered_config.content,
+            }
+
+        # Serialize rendered certificates
+        for (
+            rendered_certificate
+        ) in self.memo.haproxy_config_context.rendered_certificates:
+            context["rendered_certificates"][rendered_certificate.name] = {
+                "name": rendered_certificate.name,
+                "content": rendered_certificate.content,
+                "certificate_config_name": rendered_certificate.certificate_config.name,
             }
 
         return context
@@ -174,9 +197,11 @@ class ManagementSocketServer:
 
     async def _process_command(self, command: str) -> Dict[str, Any]:
         """Process a management socket command and return response data."""
+        metrics = get_metrics_collector()
         parts = command.strip().split()
 
         if not parts:
+            metrics.record_management_socket_command("empty", "error")
             return {"error": "Empty command"}
 
         if parts[0] == "dump":
@@ -186,15 +211,19 @@ class ManagementSocketServer:
                 }
 
             if parts[1] == "all":
+                metrics.record_management_socket_command("dump_all", "success")
                 return serialize_state(self.memo)
 
             elif parts[1] == "indices":
+                metrics.record_management_socket_command("dump_indices", "success")
                 return self._dump_indices()
 
             elif parts[1] == "config":
+                metrics.record_management_socket_command("dump_config", "success")
                 return self._dump_config()
 
             else:
+                metrics.record_management_socket_command("dump_unknown", "error")
                 return {
                     "error": f"Unknown dump command: {parts[1]}. "
                     f"Available: all, indices, config"
@@ -296,9 +325,38 @@ class ManagementSocketServer:
                     "content": rendered_map.content,
                     "map_config_path": rendered_map.map_config.path,
                 }
-            return {"haproxy_config_context": {"rendered_maps": rendered_maps}}
+
+            rendered_certificates: Dict[str, Any] = {}
+            for (
+                rendered_certificate
+            ) in self.memo.haproxy_config_context.rendered_certificates:
+                rendered_certificates[rendered_certificate.name] = {
+                    "name": rendered_certificate.name,
+                    "content": rendered_certificate.content,
+                    "certificate_config_name": rendered_certificate.certificate_config.name,
+                }
+
+            context = {
+                "rendered_maps": rendered_maps,
+                "rendered_config": None,
+                "rendered_certificates": rendered_certificates,
+            }
+
+            # Include rendered HAProxy config if available
+            if self.memo.haproxy_config_context.rendered_config:
+                context["rendered_config"] = {
+                    "content": self.memo.haproxy_config_context.rendered_config.content,
+                }
+
+            return {"haproxy_config_context": context}
         else:
-            return {"haproxy_config_context": {"rendered_maps": {}}}
+            return {
+                "haproxy_config_context": {
+                    "rendered_maps": {},
+                    "rendered_config": None,
+                    "rendered_certificates": {},
+                }
+            }
 
     async def run(self) -> None:
         """Run the management socket server."""
@@ -341,7 +399,10 @@ class ManagementSocketServer:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         """Handle a client connection."""
+        metrics = get_metrics_collector()
+
         try:
+            metrics.record_management_socket_connection()
             self.logger.debug("🔌 New management socket client connected")
 
             # Read command from client

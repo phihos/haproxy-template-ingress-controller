@@ -9,3 +9,7 @@ resources:
   - configmap.yaml
   - deployment.yaml
   - service.yaml
+  - service-metrics.yaml
+  - servicemonitor.yaml
+  - networkpolicy.yaml
+  - poddisruptionbudget.yaml

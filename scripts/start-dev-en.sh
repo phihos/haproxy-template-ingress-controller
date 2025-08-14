@@ -190,11 +190,26 @@ post_deploy_tips() {
 	echo "  - Echo service: kubectl -n ${ECHO_NAMESPACE} get svc ${ECHO_APP_NAME}"
 	echo "  - Ingress: kubectl -n ${ECHO_NAMESPACE} get ingress ${ECHO_APP_NAME} -o wide"
 	echo
+	ok "Monitoring & Observability:"
+	echo "  - Metrics (Prometheus): kubectl -n ${CTRL_NAMESPACE} port-forward svc/haproxy-template-ic-metrics 9090:9090"
+	echo "    Access at: http://localhost:9090/metrics"
+	echo "  - Health check: kubectl -n ${CTRL_NAMESPACE} port-forward deploy/haproxy-template-ic 8080:8080"
+	echo "    Access at: http://localhost:8080/healthz"
+	echo "  - ServiceMonitor: kubectl -n ${CTRL_NAMESPACE} get servicemonitor haproxy-template-ic -o yaml"
+	echo
+	ok "Advanced Features (disabled by default in dev):"
+	echo "  - Structured JSON logging: Set STRUCTURED_LOGGING=true environment variable"
+	echo "  - Distributed tracing: Set TRACING_ENABLED=true and configure Jaeger endpoint"
+	echo "  - Resilience patterns: Configured with adaptive timeouts and retry logic"
+	echo "  - Template snippet system: Define reusable Jinja2 snippets in ConfigMap"
+	echo
 	warn "Troubleshooting hints:"
 	echo "  - Image pull issues: see notes above to build locally and 'kind load docker-image'"
 	echo "  - Inspect events: kubectl get events --all-namespaces --sort-by=.lastTimestamp | tail -n 50"
 	echo "  - Describe resources: kubectl -n ${CTRL_NAMESPACE} describe deploy/haproxy-template-ic"
-	echo "  - Socket debug (if enabled): kubectl -n ${CTRL_NAMESPACE} exec -it deploy/haproxy-template-ic -- sh -c 'socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock'"
+	echo "  - Socket debug: kubectl -n ${CTRL_NAMESPACE} exec -it deploy/haproxy-template-ic -- sh -c 'socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock'"
+	echo "  - Check metrics: kubectl -n ${CTRL_NAMESPACE} get pods -l app=haproxy-template-ic --show-labels"
+	echo "  - Network policies: kubectl -n ${CTRL_NAMESPACE} get networkpolicy"
 	echo
 }
 

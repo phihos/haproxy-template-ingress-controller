@@ -19,7 +19,19 @@ controller:
   healthzPort: 8080
   verbose: 1
   socketPath: /run/haproxy-template-ic/management.sock
-  config: |
+  # Metrics configuration
+  metricsPort: 9090
+  # Structured logging configuration
+  structuredLogging: false
+  # Distributed tracing configuration
+  tracing:
+    enabled: false
+    serviceName: haproxy-template-ic
+    serviceVersion: ""  # Uses chart version if empty
+    jaegerEndpoint: ""  # e.g., "jaeger-collector:14268"
+    sampleRate: 1.0
+    consoleExport: false
+  config:
     pod_selector:
       match_labels:
         app: haproxy-template-ic
@@ -60,7 +72,6 @@ controller:
     template_snippets:
       backend-name: |
         ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
-      
       path-map-entry: |
         {# Generate map entries for paths matching specified pathTypes #}
         {# Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
@@ -71,7 +82,6 @@ controller:
         {% endfor %}
         {% endfor %}
         {% endfor %}
-      
       validate-ingress: |
         {# Validation snippet for ingress resources #}
         {% if not ingress.spec %}
@@ -84,7 +94,6 @@ controller:
             {% endif %}
           {% endfor %}
         {% endif %}
-      
       backend-servers: |
         {# Generate backend server entries from EndpointSlice #}
         {% for _, endpoint_slice in resources.get('endpoints', {}).items() %}
@@ -96,7 +105,6 @@ controller:
             {% endfor %}
           {% endif %}
         {% endfor %}
-      
       ingress-backends: |
         {# Generate all backend definitions from ingress resources #}
         {# Usage: {% include "ingress-backends" %} #}
@@ -120,7 +128,20 @@ controller:
         {% endif %}
         {% endfor %}
     maps:
-      /etc/haproxy/maps/path-exact.map:
+      "/etc/haproxy/maps/host.map":
+        template: |
+          # This map is used to match the host header (without ":port") to a normalized host identifier for path routing.
+          # Example: www.example.com -> example.com
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% if ingress.spec and ingress.spec.rules %}
+          {% for rule in ingress.spec.rules %}
+          {% if rule.host %}
+          {{ rule.host }} {{ rule.host }}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+      "/etc/haproxy/maps/path-exact.map":
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           # It should be used with the equality string matcher. Example:
@@ -128,15 +149,13 @@ controller:
           {% set path_types = ["Exact"] %}
           {% set suffix = "" %}
           {% include "path-map-entry" %}
-
-      /etc/haproxy/maps/path-prefix-exact.map:
+      "/etc/haproxy/maps/path-prefix-exact.map":
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           {% set path_types = ["Prefix", "ImplementationSpecific"] %}
           {% set suffix = "" %}
           {% include "path-map-entry" %}
-
-      /etc/haproxy/maps/path-prefix.map:
+      "/etc/haproxy/maps/path-prefix.map":
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           # It should be used with the prefix string matcher. Example:
@@ -144,11 +163,8 @@ controller:
           {% set path_types = ["Prefix", "ImplementationSpecific"] %}
           {% set suffix = "/" %}
           {% include "path-map-entry" %}
-      
-      
-    
     certificates:
-      /etc/haproxy/certs/tls.pem:
+      "/etc/haproxy/certs/tls.pem":
         template: |
           {# Generate combined cert+key file for HAProxy from TLS secrets #}
           {% for _, secret in resources.get('secrets', {}).items() %}
@@ -159,7 +175,6 @@ controller:
           
           {% endif %}
           {% endfor %}
-
     haproxy_config:
       template: |
         global
@@ -334,3 +349,50 @@ affinity: {}
 # RBAC
 rbac:
   create: true
+
+# Monitoring configuration
+monitoring:
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    # Additional labels for ServiceMonitor
+    labels: {}
+    # Additional annotations for ServiceMonitor
+    annotations: {}
+    # Scrape interval
+    interval: 30s
+    # Scrape timeout
+    scrapeTimeout: 10s
+    # Relabeling configurations
+    relabelings: []
+    # Metric relabeling configurations
+    metricRelabelings: []
+
+# Network Policy configuration
+networkPolicy:
+  enabled: false
+  # Monitoring access configuration
+  monitoring:
+    # Pod selector for monitoring systems (e.g., Prometheus)
+    podSelector: {}
+    # Namespace selector for monitoring systems
+    namespaceSelector: {}
+  # Kubernetes API access configuration
+  kubernetesApi:
+    # Usually the cluster CIDR or specific API server IPs
+    - ipBlock:
+        cidr: 10.0.0.0/8
+  # HAProxy pods access configuration
+  haproxy:
+    podSelector:
+      matchLabels:
+        app: haproxy
+  # Additional egress rules
+  additionalEgress: []
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: false
+  # Only one of minAvailable or maxUnavailable should be set
+  minAvailable: 1
+  # maxUnavailable: 1

@@ -1,0 +1,72 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "haproxy-template-ic.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow health check traffic
+    - from: []
+      ports:
+        - protocol: TCP
+          port: {{ .Values.controller.healthzPort }}
+    {{- if .Values.controller.metricsPort }}
+    # Allow metrics scraping
+    - from:
+        {{- with .Values.networkPolicy.monitoring.podSelector }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.networkPolicy.monitoring.namespaceSelector }}
+        - namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.controller.metricsPort }}
+    {{- end }}
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow Kubernetes API access
+    - to:
+        {{- with .Values.networkPolicy.kubernetesApi }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow HAProxy Dataplane API access
+    - to:
+        {{- with .Values.networkPolicy.haproxy.podSelector }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5555
+    {{- if .Values.controller.tracing.enabled }}
+    # Allow tracing export
+    {{- if .Values.controller.tracing.jaegerEndpoint }}
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 14268
+    {{- end }}
+    {{- end }}
+    {{- with .Values.networkPolicy.additionalEgress }}
+    # Additional egress rules
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

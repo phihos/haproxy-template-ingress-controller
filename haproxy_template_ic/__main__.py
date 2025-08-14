@@ -10,6 +10,12 @@ from dataclasses import dataclass
 import click
 
 from haproxy_template_ic.operator import run_operator_loop
+from haproxy_template_ic.structured_logging import setup_structured_logging
+from haproxy_template_ic.tracing import (
+    initialize_tracing,
+    create_tracing_config_from_env,
+    shutdown_tracing,
+)
 
 
 # =============================================================================
@@ -25,6 +31,9 @@ class CliOptions:
     healthz_port: int
     verbose: int
     socket_path: str
+    metrics_port: int
+    structured_logging: bool
+    tracing_enabled: bool
 
 
 # =============================================================================
@@ -73,22 +82,59 @@ def setup_logging(verbose_level: int) -> None:
     default="/run/haproxy-template-ic/management.sock",
     help="Path for management socket to expose internal state.",
 )
+@click.option(
+    "-m",
+    "--metrics-port",
+    envvar="METRICS_PORT",
+    default=9090,
+    help="Port for Prometheus metrics endpoint.",
+)
+@click.option(
+    "--structured-logging",
+    envvar="STRUCTURED_LOGGING",
+    is_flag=True,
+    help="Enable structured JSON logging output.",
+)
+@click.option(
+    "--tracing-enabled",
+    envvar="TRACING_ENABLED",
+    is_flag=True,
+    help="Enable distributed tracing with OpenTelemetry.",
+)
 def main(
-    configmap_name: str, healthz_port: int, verbose: int, socket_path: str
+    configmap_name: str,
+    healthz_port: int,
+    verbose: int,
+    socket_path: str,
+    metrics_port: int,
+    structured_logging: bool,
+    tracing_enabled: bool,
 ) -> None:
     """HAProxy Template IC Operator - Kubernetes operator for HAProxy configuration
     management."""
-    setup_logging(verbose)
+    setup_structured_logging(verbose, use_json=structured_logging)
 
-    # Create CLI options object
-    cli_options = CliOptions(
-        configmap_name=configmap_name,
-        healthz_port=healthz_port,
-        verbose=verbose,
-        socket_path=socket_path,
-    )
+    # Initialize distributed tracing
+    tracing_config = create_tracing_config_from_env()
+    tracing_config.enabled = tracing_enabled or tracing_config.enabled
+    initialize_tracing(tracing_config)
 
-    run_operator_loop(cli_options)
+    try:
+        # Create CLI options object
+        cli_options = CliOptions(
+            configmap_name=configmap_name,
+            healthz_port=healthz_port,
+            verbose=verbose,
+            socket_path=socket_path,
+            metrics_port=metrics_port,
+            structured_logging=structured_logging,
+            tracing_enabled=tracing_enabled,
+        )
+
+        run_operator_loop(cli_options)
+    finally:
+        # Ensure tracing is properly shutdown
+        shutdown_tracing()
 
 
 if __name__ == "__main__":
