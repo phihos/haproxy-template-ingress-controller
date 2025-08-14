@@ -1,0 +1,36 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionWebhook
+metadata:
+  name: haproxy-template-ic-webhook
+  labels:
+    app.kubernetes.io/name: haproxy-template-ic
+    app.kubernetes.io/component: webhook
+webhooks:
+- name: configmaps.v1.haproxy-template-ic.io
+  clientConfig:
+    service:
+      name: haproxy-template-ic-webhook
+      namespace: haproxy-template-ic
+      path: /validate
+      port: 8443
+    # caBundle will be injected by cert-manager or webhook cert job
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["configmaps"]
+  failurePolicy: Fail
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  objectSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values: ["haproxy-template-ic"]
+    - key: haproxy-template-ic/config
+      operator: In
+      values: ["true"]
+
+# Dynamic webhooks for watched resources will be created by the operator
+# based on the configuration with enable_validation_webhook: true

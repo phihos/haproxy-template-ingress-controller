@@ -1,0 +1,76 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionWebhook
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-webhook
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+  annotations:
+    {{- if eq .Values.webhook.tls.certProvider "cert-manager" }}
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "haproxy-template-ic.fullname" . }}-webhook-tls
+    {{- end }}
+webhooks:
+- name: configmaps.v1.haproxy-template-ic.io
+  clientConfig:
+    service:
+      name: {{ include "haproxy-template-ic.fullname" . }}-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /validate
+      port: {{ .Values.webhook.service.port }}
+    {{- if eq .Values.webhook.tls.certProvider "self-signed" }}
+    caBundle: {{ include "haproxy-template-ic.webhook.caBundle" . }}
+    {{- end }}
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["configmaps"]
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  objectSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values: ["haproxy-template-ic"]
+    - key: haproxy-template-ic/config
+      operator: In
+      values: ["true"]
+
+{{- range $resourceId, $resourceConfig := .Values.controller.config.watch_resources }}
+{{- if $resourceConfig.enable_validation_webhook }}
+- name: {{ $resourceConfig.kind | lower }}.{{ $resourceConfig.version }}.{{ $resourceConfig.group | default "core" }}.haproxy-template-ic.io
+  clientConfig:
+    service:
+      name: {{ include "haproxy-template-ic.fullname" $ }}-webhook
+      namespace: {{ $.Release.Namespace }}
+      path: /validate
+      port: {{ $.Values.webhook.service.port }}
+    {{- if eq $.Values.webhook.tls.certProvider "self-signed" }}
+    caBundle: {{ include "haproxy-template-ic.webhook.caBundle" $ }}
+    {{- end }}
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: ["{{ $resourceConfig.group | default "" }}"]
+    apiVersions: ["{{ $resourceConfig.version }}"]
+    resources: ["{{ $resourceConfig.kind | lower }}{{ if eq $resourceConfig.kind "Ingress" }}es{{ else if eq $resourceConfig.kind "EndpointSlice" }}s{{ else if eq $resourceConfig.kind "Service" }}s{{ else if eq $resourceConfig.kind "Secret" }}s{{ else }}s{{ end }}"]
+  failurePolicy: {{ $.Values.webhook.failurePolicy }}
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  {{- if $resourceConfig.filter.namespace_selector }}
+  namespaceSelector:
+    {{- if $resourceConfig.filter.namespace_selector.include }}
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: In
+      values:
+      {{- range $resourceConfig.filter.namespace_selector.include }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

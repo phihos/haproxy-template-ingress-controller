@@ -87,7 +87,7 @@ For a quick end-to-end sandbox with a kind cluster, the controller, and a demo E
 
 ```bash
 # From repository root
-bash ./scripts/start-dev-en.sh
+bash ./scripts/start-dev-env.sh
 ```
 
 What it does:

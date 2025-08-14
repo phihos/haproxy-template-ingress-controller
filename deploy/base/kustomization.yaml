@@ -13,3 +13,7 @@ resources:
   - servicemonitor.yaml
   - networkpolicy.yaml
   - poddisruptionbudget.yaml
+  # Webhook resources
+  - service-webhook.yaml
+  - validatingadmissionwebhook.yaml
+  - webhook-cert-job.yaml

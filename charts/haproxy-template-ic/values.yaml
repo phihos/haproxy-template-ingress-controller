@@ -31,6 +31,40 @@ controller:
     jaegerEndpoint: ""  # e.g., "jaeger-collector:14268"
     sampleRate: 1.0
     consoleExport: false
+
+# Validating Admission Webhook configuration
+webhook:
+  enabled: true
+  failurePolicy: Fail
+  # TLS configuration for webhook server
+  tls:
+    # Certificate generation method: "cert-manager" or "self-signed"
+    certProvider: "self-signed"
+    # For cert-manager, specify issuer
+    certManager:
+      issuerRef:
+        name: ""
+        kind: ClusterIssuer
+    # For self-signed certs, they will be generated automatically
+    selfSigned:
+      # Certificate validity duration
+      duration: "8760h"  # 1 year
+  # Service configuration for webhook
+  service:
+    port: 8443
+    type: ClusterIP
+  # Webhook-specific pod settings
+  pod:
+    port: 8443
+    annotations: {}
+  # Resource limits and requests for webhook
+  resources: {}
+  # Node selector for webhook pods
+  nodeSelector: {}
+  # Tolerations for webhook pods  
+  tolerations: []
+  # Affinity rules for webhook pods
+  affinity: {}
   config:
     pod_selector:
       match_labels:
@@ -41,6 +75,8 @@ controller:
         group: networking.k8s.io
         version: v1
         kind: Ingress
+        # Enable validation webhook for Ingress resources to prevent faulty configs
+        enable_validation_webhook: true
         filter:
           field_selector:
             "spec.ingressClassName": "haproxy-template-ic"
@@ -50,6 +86,8 @@ controller:
         group: discovery.k8s.io
         version: v1
         kind: EndpointSlice
+        # Leave validation disabled for critical resources like EndpointSlices
+        enable_validation_webhook: false
         filter:
           label_selector:
             "kubernetes.io/service-name": "*"
@@ -57,6 +95,8 @@ controller:
         group: ""
         version: v1
         kind: Service
+        # Enable validation for Services to catch port/selector issues
+        enable_validation_webhook: true
         filter:
           namespace_selector:
             include: ["default", "production", "staging"]
@@ -64,6 +104,8 @@ controller:
         group: ""
         version: v1
         kind: Secret
+        # Enable validation for TLS secrets to catch certificate issues early
+        enable_validation_webhook: true
         filter:
           field_selector:
             "type": "kubernetes.io/tls"

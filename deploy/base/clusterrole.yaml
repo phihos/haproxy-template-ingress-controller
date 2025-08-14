@@ -15,3 +15,11 @@ rules:
   - apiGroups: [ "apiextensions.k8s.io" ]
     resources: [ "customresourcedefinitions" ]
     verbs: [ "get", "list", "watch" ]
+  # Webhook permissions
+  - apiGroups: [ "admissionregistration.k8s.io" ]
+    resources: [ "validatingadmissionwebhooks" ]
+    verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]
+  # Certificate management permissions for webhook TLS
+  - apiGroups: [ "" ]
+    resources: [ "secrets" ]
+    verbs: [ "create", "update", "patch", "delete" ]

@@ -13,4 +13,16 @@ rules:
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["get", "list", "watch"]
+  {{- if .Values.webhook.enabled }}
+  # Webhook permissions
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingadmissionwebhooks"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Certificate management permissions for self-signed certs
+  {{- if eq .Values.webhook.tls.certProvider "self-signed" }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update", "patch", "delete"]
+  {{- end }}
+  {{- end }}
 {{- end }}
