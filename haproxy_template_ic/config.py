@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from functools import lru_cache
 
 from jinja2 import (
     BaseLoader,
@@ -44,6 +45,32 @@ class SnippetLoader(BaseLoader):
         return snippet.source, template, None
 
 
+@lru_cache(maxsize=32)
+def _get_cached_environment(snippets_hash: int) -> Environment:
+    """Get a cached Jinja2 environment.
+
+    Args:
+        snippets_hash: Hash of snippets for cache invalidation
+
+    Returns:
+        Cached Jinja2 environment instance
+    """
+    return Environment(extensions=["jinja2.ext.do"])  # nosec B701
+
+
+def _get_snippets_hash(snippets: Optional["TemplateSnippetCollection"]) -> int:
+    """Get a hash of snippets collection for caching purposes."""
+    if not snippets:
+        return 0
+
+    # Create hash based on snippet names and sources
+    snippet_data = []
+    for snippet in snippets:
+        snippet_data.append((snippet.name, snippet.source))
+
+    return hash(tuple(sorted(snippet_data)))
+
+
 def _make_jinja_template(
     template_str: str,
     snippets: Optional["TemplateSnippetCollection"] = None,
@@ -59,14 +86,19 @@ def _make_jinja_template(
     Raises a ValueError with a clear message if the template is invalid.
     """
     try:
-        # Create environment with snippet loader
+        # Use cached environment for better performance during config reloads
+        snippets_hash = _get_snippets_hash(snippets)
+        env = _get_cached_environment(snippets_hash)
+
+        # Set the snippet loader for this specific compilation
         snippet_loader = SnippetLoader(snippets) if snippets else SnippetLoader()
-        env = Environment(loader=snippet_loader, extensions=["jinja2.ext.do"])  # nosec B701
+        env.loader = snippet_loader
+
         return env.from_string(template_str)
     except (
         TemplateSyntaxError
     ) as exc:  # pragma: no cover - exercised indirectly in tests
-        context = f"in {context_name}" if context_name else ""
+        context = f"in {context_name}" if context_name else "in main config"
         raise ValueError(f"Invalid template {context}: {exc}")
 
 
@@ -155,6 +187,11 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError(
                         f"Watch resource '{resource_id}' missing required 'kind'"
                     )
+                # Additional type safety: ensure kind is a string
+                if not isinstance(config["kind"], str):
+                    raise ValueError(
+                        f"Watch resource '{resource_id}' kind must be a string"
+                    )
 
                 items.append(
                     WatchResourceConfig(
@@ -172,6 +209,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError("Watch resource must be a dict")
                 if "kind" not in config:
                     raise ValueError("Watch resource missing required 'kind'")
+                # Additional type safety: ensure kind is a string
+                if not isinstance(config["kind"], str):
+                    raise ValueError("Watch resource kind must be a string")
 
                 items.append(
                     WatchResourceConfig(
@@ -204,6 +244,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError(f"Map config for '{path}' must be a dict")
                 if "template" not in config:
                     raise ValueError(f"Map '{path}' missing required 'template'")
+                # Additional type safety: ensure template is a string
+                if not isinstance(config["template"], str):
+                    raise ValueError(f"Map '{path}' template must be a string")
 
                 items.append(
                     MapConfig(
@@ -222,6 +265,11 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError("Map missing required 'path'")
                 if "template" not in config:
                     raise ValueError("Map missing required 'template'")
+                # Additional type safety: ensure path and template are strings
+                if not isinstance(config["path"], str):
+                    raise ValueError("Map path must be a string")
+                if not isinstance(config["template"], str):
+                    raise ValueError("Map template must be a string")
 
                 path = config["path"]
                 if not Path(path).is_absolute():
@@ -282,6 +330,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError(
                         f"Certificate '{name}' missing required 'template'"
                     )
+                # Additional type safety: ensure template is a string
+                if not isinstance(config["template"], str):
+                    raise ValueError(f"Certificate '{name}' template must be a string")
 
                 items.append(
                     CertificateConfig(
@@ -300,6 +351,11 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError("Certificate missing required 'name'")
                 if "template" not in config:
                     raise ValueError("Certificate missing required 'template'")
+                # Additional type safety: ensure name and template are strings
+                if not isinstance(config["name"], str):
+                    raise ValueError("Certificate name must be a string")
+                if not isinstance(config["template"], str):
+                    raise ValueError("Certificate template must be a string")
 
                 items.append(
                     CertificateConfig(
@@ -450,6 +506,22 @@ class TemplateContext:
         if self.config:
             return self.config.certificates.by_name(name)
         return None
+
+    def get_resources(self, resource_type: str) -> Dict[str, Any]:
+        """Get resources of a specific type with safe fallback."""
+        return self.resources.get(resource_type, {})
+
+    def iterate_resources(self, resource_type: str):
+        """Iterate over resources of a specific type safely."""
+        return self.get_resources(resource_type).items()
+
+    def count_resources(self, resource_type: str) -> int:
+        """Count resources of a specific type."""
+        return len(self.get_resources(resource_type))
+
+    def has_resources(self, resource_type: str) -> bool:
+        """Check if any resources of a specific type exist."""
+        return len(self.get_resources(resource_type)) > 0
 
 
 @dataclass

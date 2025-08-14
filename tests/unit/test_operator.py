@@ -21,6 +21,7 @@ from haproxy_template_ic.operator import (
     render_haproxy_templates,
     setup_resource_watchers,
     initialize_configuration,
+    _is_valid_resource,
 )
 from haproxy_template_ic.config import (
     Config,
@@ -724,3 +725,32 @@ def test_run_operator_loop_with_reload():
 #             pytest.fail("Custom operator failed to prevent loader error")
 #         else:
 #             raise
+
+
+def test_resource_validation():
+    """Test the _is_valid_resource function for type safety."""
+    # Valid resources
+    assert _is_valid_resource({"metadata": {"name": "test"}}) is True  # dict
+    assert (
+        _is_valid_resource([{"metadata": {"name": "test"}}]) is True
+    )  # non-empty list
+    assert _is_valid_resource(("item1", "item2")) is True  # non-empty tuple
+
+    # Mock objects should be valid (they have __dict__)
+    mock_obj = MagicMock()
+    assert _is_valid_resource(mock_obj) is True
+
+    # Objects with dict-like interface
+    class DictLike:
+        def get(self, key, default=None):
+            return default
+
+    assert _is_valid_resource(DictLike()) is True
+
+    # Invalid resources
+    assert _is_valid_resource([]) is False  # empty list
+    assert _is_valid_resource(()) is False  # empty tuple
+    assert _is_valid_resource("string") is False  # string primitive
+    assert _is_valid_resource(123) is False  # number primitive
+    assert _is_valid_resource(None) is False  # None
+    assert _is_valid_resource(True) is False  # boolean primitive

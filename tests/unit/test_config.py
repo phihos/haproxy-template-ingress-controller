@@ -1229,3 +1229,188 @@ def test_template_snippet_update_during_config_reload():
     map_config_2 = config_2.maps.by_path("/test.map")
     rendered_2 = map_config_2.template.render(name="World")
     assert rendered_2 == "Hi World!"
+
+
+def test_template_context_helper_methods():
+    """Test the new helper methods for resource access."""
+    # Create a template context with some test resources
+    test_resources = {
+        "ingresses": {
+            ("default", "ing1"): {"metadata": {"name": "ing1"}},
+            ("default", "ing2"): {"metadata": {"name": "ing2"}},
+        },
+        "services": {
+            ("default", "svc1"): {"metadata": {"name": "svc1"}},
+        },
+        "empty_type": {},
+    }
+
+    context = TemplateContext(resources=test_resources)
+
+    # Test get_resources
+    assert len(context.get_resources("ingresses")) == 2
+    assert len(context.get_resources("services")) == 1
+    assert len(context.get_resources("empty_type")) == 0
+    assert len(context.get_resources("nonexistent")) == 0
+
+    # Test iterate_resources
+    ingress_items = list(context.iterate_resources("ingresses"))
+    assert len(ingress_items) == 2
+    assert ingress_items[0][0] == ("default", "ing1")
+    assert ingress_items[1][0] == ("default", "ing2")
+
+    # Test count_resources
+    assert context.count_resources("ingresses") == 2
+    assert context.count_resources("services") == 1
+    assert context.count_resources("empty_type") == 0
+    assert context.count_resources("nonexistent") == 0
+
+    # Test has_resources
+    assert context.has_resources("ingresses") is True
+    assert context.has_resources("services") is True
+    assert context.has_resources("empty_type") is False
+    assert context.has_resources("nonexistent") is False
+
+
+def test_template_environment_caching():
+    """Test that template environment caching works correctly."""
+    from haproxy_template_ic.config import (
+        _get_cached_environment,
+        _get_snippets_hash,
+        _make_jinja_template,
+        TemplateSnippetCollection,
+        TemplateSnippet,
+    )
+
+    # Test that same snippets hash returns cached environment
+    hash1 = _get_snippets_hash(None)
+    hash2 = _get_snippets_hash(None)
+    assert hash1 == hash2
+
+    env1 = _get_cached_environment(hash1)
+    env2 = _get_cached_environment(hash2)
+    assert env1 is env2  # Should be the same cached instance
+
+    # Test with different snippet collections
+    snippets1 = TemplateSnippetCollection(
+        [
+            TemplateSnippet(
+                name="test1",
+                source="hello",
+                template=_make_jinja_template("hello", context_name="test1"),
+            )
+        ]
+    )
+    snippets2 = TemplateSnippetCollection(
+        [
+            TemplateSnippet(
+                name="test2",
+                source="world",
+                template=_make_jinja_template("world", context_name="test2"),
+            )
+        ]
+    )
+
+    hash_a = _get_snippets_hash(snippets1)
+    hash_b = _get_snippets_hash(snippets2)
+    assert hash_a != hash_b  # Different snippets should have different hashes
+
+
+def test_type_safety_enhancements():
+    """Test the new type safety enhancements for config parsing."""
+
+    # Test watch resources with non-string kind (dict format)
+    with pytest.raises(ValueError, match="kind must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "watch_resources": {
+                    "test": {"kind": 123}  # Non-string kind
+                },
+            }
+        )
+
+    # Test watch resources with non-string kind (list format)
+    with pytest.raises(ValueError, match="kind must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "watch_resources": [
+                    {"kind": ["Pod"]}  # Non-string kind
+                ],
+            }
+        )
+
+    # Test maps with non-string template (dict format)
+    with pytest.raises(ValueError, match="template must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "maps": {
+                    "/test.map": {"template": 123}  # Non-string template
+                },
+            }
+        )
+
+    # Test maps with non-string path (list format)
+    with pytest.raises(ValueError, match="path must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "maps": [
+                    {"path": 123, "template": "test"}  # Non-string path
+                ],
+            }
+        )
+
+    # Test maps with non-string template (list format)
+    with pytest.raises(ValueError, match="template must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "maps": [
+                    {"path": "/test.map", "template": ["test"]}  # Non-string template
+                ],
+            }
+        )
+
+    # Test certificates with non-string template (dict format)
+    with pytest.raises(ValueError, match="template must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "certificates": {
+                    "test.crt": {"template": {"key": "value"}}  # Non-string template
+                },
+            }
+        )
+
+    # Test certificates with non-string name (list format)
+    with pytest.raises(ValueError, match="name must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "certificates": [
+                    {"name": 123, "template": "test"}  # Non-string name
+                ],
+            }
+        )
+
+    # Test certificates with non-string template (list format)
+    with pytest.raises(ValueError, match="template must be a string"):
+        config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+                "certificates": [
+                    {"name": "test.crt", "template": None}  # Non-string template
+                ],
+            }
+        )

@@ -30,6 +30,31 @@ from haproxy_template_ic.utils import get_current_namespace
 logger = logging.getLogger(__name__)
 
 
+def _is_valid_resource(resource: Any) -> bool:
+    """Validate if a resource object is suitable for template rendering.
+
+    Args:
+        resource: The resource object to validate
+
+    Returns:
+        True if the resource is valid for templates, False otherwise
+    """
+    # Dictionary resources are always valid
+    if isinstance(resource, dict):
+        return True
+
+    # List/tuple resources should be non-empty
+    if isinstance(resource, (list, tuple)):
+        return len(resource) > 0
+
+    # Objects with dict-like interface or attributes are valid
+    if hasattr(resource, "__dict__") or hasattr(resource, "get"):
+        return True
+
+    # Primitives and other types are not valid resources
+    return False
+
+
 # =============================================================================
 # Configuration Management
 # =============================================================================
@@ -107,6 +132,13 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             for key, resource in index_data.items():
                 # key is typically (namespace, name), resource is a list of dicts
                 try:
+                    # Validate resource first
+                    if not _is_valid_resource(resource):
+                        logger.warning(
+                            f"⚠️ Invalid resource type {type(resource)} for {key}, skipping"
+                        )
+                        continue
+
                     # Type safety: handle different resource types appropriately
                     if isinstance(resource, dict):
                         # Resource is already a dict (typical case), use as-is
@@ -118,21 +150,31 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
                             # There will not be more than one element since the combination of name + namespace is unique
                             resource_dict[key] = resource[0]
                         else:
+                            # This should not happen due to _is_valid_resource check, but handle gracefully
                             logger.warning(f"⚠️ Empty resource list for {key}, skipping")
                             continue
                     else:
-                        # Resource is some other type (like a mock object or single resource), use as-is
-                        # This handles test mocks, direct resource objects, and other edge cases
+                        # Resource is some other type (like a mock object or single resource)
+                        # Already validated by _is_valid_resource, so safe to use as-is
                         resource_dict[key] = resource
                 except Exception as e:
                     logger.warning(
                         f"⚠️ Failed to process resource {key} -> {resource}: {e}"
                     )
-                    # Fallback: try to use resource as-is only if it looks like a valid resource
-                    if isinstance(resource, dict):
-                        resource_dict[key] = resource
-                    elif isinstance(resource, list) and resource:
-                        resource_dict[key] = resource[0]
+                    # Fallback: try to use resource as-is only if it's valid
+                    if _is_valid_resource(resource):
+                        try:
+                            if isinstance(resource, dict):
+                                resource_dict[key] = resource
+                            elif isinstance(resource, list) and resource:
+                                resource_dict[key] = resource[0]
+                            else:
+                                # For other valid types, use as-is
+                                resource_dict[key] = resource
+                        except Exception as fallback_error:
+                            logger.warning(
+                                f"⚠️ Fallback processing failed for {key}: {fallback_error}"
+                            )
                     else:
                         logger.warning(
                             f"⚠️ Skipping invalid resource {key} due to type {type(resource)}"
@@ -165,6 +207,10 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
                 "get_map_config": template_context.get_map_config,
                 "get_certificate_config": template_context.get_certificate_config,
                 "register_error": template_context.register_error,
+                "get_resources": template_context.get_resources,
+                "iterate_resources": template_context.iterate_resources,
+                "count_resources": template_context.count_resources,
+                "has_resources": template_context.has_resources,
             }
             rendered_content = map_config.template.render(**template_vars)
             rendered_map = RenderedMap(
