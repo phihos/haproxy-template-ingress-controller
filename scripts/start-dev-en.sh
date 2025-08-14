@@ -92,7 +92,7 @@ ensure_cluster() {
 
 build_and_load_local_image() {
 	log INFO "Building local controller image '${LOCAL_IMAGE}' (this can take a while)..."
-	docker build --target production -t "${LOCAL_IMAGE}" .
+	docker build --no-cache --target production -t "${LOCAL_IMAGE}" .
 	log INFO "Loading image into kind cluster '${CLUSTER_NAME}'..."
 	kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
 }
@@ -161,7 +161,7 @@ kind: Ingress
 metadata:
   name: ${ECHO_APP_NAME}
 spec:
-  ingressClassName: nginx
+  ingressClassName: haproxy-template-ic
   rules:
     - host: echo.localdev.me
       http:

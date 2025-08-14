@@ -79,7 +79,6 @@ def main(
     """HAProxy Template IC Operator - Kubernetes operator for HAProxy configuration
     management."""
     setup_logging(verbose)
-    logger = logging.getLogger(__name__)
 
     # Create CLI options object
     cli_options = CliOptions(
@@ -89,7 +88,7 @@ def main(
         socket_path=socket_path,
     )
 
-    run_operator_loop(cli_options, logger)
+    run_operator_loop(cli_options)
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ spec:
             - name: CONFIGMAP_NAME
               value: haproxy-template-ic-config
             - name: VERBOSE
-              value: "1"
+              value: "2"
           ports:
             - name: healthz
               containerPort: 8080

@@ -67,7 +67,7 @@ haproxy_template_ic/
 |--------|---------|------------------|
 | `__main__.py` | CLI interface, argument parsing, application startup | `click`, `logging` |
 | `operator.py` | Kubernetes event handling, resource watching, template rendering | `kopf`, `kr8s`, `jinja2`, `uvloop` |
-| `config.py` | Configuration validation, Jinja2 template compilation | `dacite`, `jinja2`, `dataclasses` |
+| `config.py` | Configuration validation, Jinja2 template compilation, template snippet system | `jinja2`, `dataclasses`, custom `SnippetLoader` |
 | `management_socket.py` | State serialization, Unix socket server, debugging interface | `asyncio`, `json`, `pathlib` |
 | `utils.py` | Kubernetes utilities, namespace detection | `kubernetes` |
 
@@ -189,7 +189,7 @@ The project employs a **dual-layer testing strategy** for comprehensive quality 
 
 ### 🏗️ Current Implementation Status
 
-**Working**: Resource watching, map file templating, management socket, state inspection
+**Working**: Resource watching, map file templating, template snippet system with `{% include %}` support, management socket, state inspection
 **Planned**: `haproxy.cfg` templating, certificate templating, Dataplane API synchronization, validation webhooks
 
 ### ⚡ Unit Tests
@@ -502,6 +502,11 @@ kubectl logs -f haproxy-template-ic
 
 # Inspect pod state
 kubectl describe pod haproxy-template-ic
+
+# Common template snippet errors
+# - "TemplateNotFound: snippet-name" means the snippet is not defined in template_snippets
+# - Templates can't access undefined resource indices - check watch_resources configuration
+# - Template rendering errors appear in logs with full context
 ```
 
 #### **Test Debugging**

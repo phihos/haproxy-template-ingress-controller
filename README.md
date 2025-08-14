@@ -20,6 +20,7 @@ This controller enables full Jinja2 templating of HAProxy configurations, map fi
 ### Current Implementation
 - ✅ Watch arbitrary Kubernetes resources  
 - ✅ Template HAProxy map files
+- ✅ Template snippet system with `{% include %}` support for reusable components
 - ✅ Access watched resources, environment variables, and CLI arguments from templates
 - ✅ Management socket for runtime state inspection
 
@@ -59,6 +60,42 @@ This controller enables full Jinja2 templating of HAProxy configurations, map fi
 
 Timer-based reconciliation prevents config drift during resource stability.
 
+## Template Snippets
+
+The controller supports reusable template snippets that can be included in any template (maps, configs, or certificates). This enables modular, maintainable configurations.
+
+### Basic Usage
+
+Define snippets in the `template_snippets` section of your ConfigMap:
+
+```yaml
+template_snippets:
+  backend-name: |
+    backend_{{ service_name }}_{{ port }}
+  
+  server-entry: |
+    server {{ name }} {{ ip }}:{{ port }} check
+```
+
+Include snippets in templates using Jinja2's `{% include %}` syntax:
+
+```yaml
+maps:
+  /etc/haproxy/maps/backends.map:
+    template: |
+      {% for service in services %}
+      {% include "backend-name" %} {% include "server-entry" %}
+      {% endfor %}
+```
+
+### Advanced Features
+
+- **Nested includes**: Snippets can include other snippets
+- **Template variables**: Use `{% set %}` to pass context between snippets
+- **Error handling**: Missing snippets raise clear `TemplateNotFound` errors
+- **Validation**: All snippets are validated at configuration load time
+
+See [example-configmap.yaml](example-configmap.yaml) for a comprehensive example using template snippets to generate HAProxy configurations from Kubernetes Ingress resources.
 
 ## Quickstart
 
@@ -81,8 +118,29 @@ kind create cluster --name haproxy-template-ic-dev
 docker build --target production -t haproxy-template-ic:dev .
 kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev
 
-# Deploy with minimal config
-kubectl create configmap haproxy-template-ic-config --from-literal=config="pod_selector: app=test"
+# Deploy with template snippet example
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-template-ic-config
+data:
+  config: |
+    pod_selector:
+      match_labels:
+        app: test
+    template_snippets:
+      backend-entry: |
+        server {{ name }} {{ ip }}:{{ port }} check
+    maps:
+      /etc/haproxy/maps/backends.map:
+        template: |
+          # Generated backend entries
+          {% for backend in resources.get('pods', {}).values() %}
+          {% include "backend-entry" %}
+          {% endfor %}
+EOF
+
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-template-ic-config" \
   --env="VERBOSE=1"

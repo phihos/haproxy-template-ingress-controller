@@ -41,6 +41,9 @@ This repository uses modern Python tooling and enforces a consistent, readable c
 ## Configuration and templates
 - Keep config parsing strict (see `config_from_dict`). Validate user input.
 - Jinja templates should be small and pure; keep logic minimal.
+- Template snippets should be focused and reusable; avoid complex logic in snippets.
+- Use descriptive snippet names that clearly indicate their purpose (e.g., `backend-name`, `server-entry`).
+- Document snippet parameters and expected context in template comments.
 
 ## Tests
 - Layout: `tests/` with `unit/`, `integration/`, `e2e/`.
