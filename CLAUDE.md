@@ -518,3 +518,4 @@ Follow the style guide in `STYLEGUIDE.md`:
 - **"Configuration deployment failed"**: Check HAProxy logs for configuration errors and network connectivity
 
 Always fix failing tests and checks without asking for confirmation.
+- Always run tests and linters after code changes. Run acceptance tests after major code changes and after completing a task.

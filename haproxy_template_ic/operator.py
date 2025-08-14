@@ -210,58 +210,39 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             index_data = memo.indices.get(watch_config.id)
 
             # Convert kopf index store to a dictionary with resource objects
-            # The index_data contains kopf store objects, we need the actual resources
+            # The index_data is a kopf Store object containing resource data
             resource_dict = {}
-            for key, resource in index_data.items():
-                # key is typically (namespace, name), resource is a list of dicts
-                try:
-                    # Validate resource first
-                    if not _is_valid_resource(resource):
-                        logger.warning(
-                            f"⚠️ Invalid resource type {type(resource)} for {key}, skipping"
-                        )
-                        continue
 
-                    # Type safety: handle different resource types appropriately
-                    if isinstance(resource, dict):
-                        # Resource is already a dict (typical case), use as-is
-                        resource_dict[key] = resource
-                    elif isinstance(resource, (list, tuple)):
-                        # Resource is a sequence (like a kopf store), get first element
-                        if resource:
-                            # Index keys with 0 elements will be removed, so we can be sure there is always [0]
-                            # There will not be more than one element since the combination of name + namespace is unique
-                            resource_dict[key] = resource[0]
+            # Handle case where index_data is a Store object
+            if hasattr(index_data, "items"):
+                # kopf Store objects behave like dictionaries
+                for key, resource_data in index_data.items():
+                    try:
+                        # kopf stores resource data directly as the body/dict
+                        # resource_data should be the actual Kubernetes resource dict
+                        if isinstance(resource_data, dict):
+                            # Accept all dict-like objects (including test mocks)
+                            resource_dict[key] = resource_data
+                        elif hasattr(resource_data, "__dict__") or hasattr(
+                            resource_data, "metadata"
+                        ):
+                            # Object with attributes (mock objects, k8s objects)
+                            resource_dict[key] = resource_data
+                        elif isinstance(resource_data, (list, tuple)) and resource_data:
+                            # Some cases might return lists, take first item
+                            resource_dict[key] = resource_data[0]
                         else:
-                            # This should not happen due to _is_valid_resource check, but handle gracefully
-                            logger.warning(f"⚠️ Empty resource list for {key}, skipping")
-                            continue
-                    else:
-                        # Resource is some other type (like a mock object or single resource)
-                        # Already validated by _is_valid_resource, so safe to use as-is
-                        resource_dict[key] = resource
-                except Exception as e:
-                    logger.warning(
-                        f"⚠️ Failed to process resource {key} -> {resource}: {e}"
-                    )
-                    # Fallback: try to use resource as-is only if it's valid
-                    if _is_valid_resource(resource):
-                        try:
-                            if isinstance(resource, dict):
-                                resource_dict[key] = resource
-                            elif isinstance(resource, list) and resource:
-                                resource_dict[key] = resource[0]
-                            else:
-                                # For other valid types, use as-is
-                                resource_dict[key] = resource
-                        except Exception as fallback_error:
                             logger.warning(
-                                f"⚠️ Fallback processing failed for {key}: {fallback_error}"
+                                f"⚠️ Unexpected resource type {type(resource_data)} for {key}, skipping"
                             )
-                    else:
+                    except Exception as e:
                         logger.warning(
-                            f"⚠️ Skipping invalid resource {key} due to type {type(resource)}"
+                            f"⚠️ Failed to process resource {key}: {e}, type: {type(resource_data)}"
                         )
+            else:
+                logger.warning(
+                    f"⚠️ Index data for '{watch_config.id}' is not iterable: {type(index_data)}"
+                )
 
             indices[watch_config.id] = resource_dict
             logger.debug(

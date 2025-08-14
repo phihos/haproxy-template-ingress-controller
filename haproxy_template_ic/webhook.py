@@ -327,17 +327,24 @@ class WebhookRegistry:
             return
 
         # Create the validation handler function
-        async def resource_validation_handler(
-            spec: Dict[str, Any],
-            meta: Dict[str, Any],
-            warnings: List[str],
-            **kwargs: Any,
-        ) -> None:
+        async def resource_validation_handler(**kwargs: Any) -> None:
             """Dynamically created validation handler."""
             metrics = get_metrics_collector()
 
             try:
                 with metrics.time_webhook_request():
+                    # Extract kopf parameters
+                    warnings = kwargs.get("warnings", [])
+                    spec = kwargs.get("spec", {})
+                    meta = kwargs.get("meta", {})
+
+                    # Handle None values from kopf
+                    if spec is None or meta is None:
+                        logger.debug(
+                            f"Skipping validation - missing spec or meta for {kind}"
+                        )
+                        return
+
                     # Add resource-specific validation logic here
                     logger.info(
                         f"Validating {kind} resource: {meta.get('name', 'unknown')}"
@@ -416,40 +423,12 @@ _webhook_registry = WebhookRegistry()
 
 
 # =============================================================================
-# Built-in ConfigMap Validation (Always Enabled)
+# Resource-Specific Validation (Configuration-Based Only)
 # =============================================================================
 
-
-@kopf.on.validate("v1", "configmaps")
-async def validate_haproxy_template_ic_configmap(
-    spec: Dict[str, Any], meta: Dict[str, Any], warnings: List[str], **_: Any
-) -> None:
-    """
-    Validate HAProxy Template IC ConfigMaps using kopf admission webhook.
-
-    This handler is always enabled and validates HAProxy Template IC specific
-    ConfigMaps, providing immediate feedback on configuration errors.
-    """
-    # Reconstruct the full ConfigMap object from kopf parameters
-    configmap_data = {
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": meta,
-        "data": spec,
-    }
-
-    try:
-        # Use the validator to check the ConfigMap
-        await _validator.validate_configmap(configmap_data, warnings)
-
-    except kopf.AdmissionError as e:
-        # Re-raise admission errors (kopf will handle the response)
-        logger.warning(f"ConfigMap validation failed: {e}")
-        raise
-    except Exception as e:
-        # Convert unexpected errors to admission errors
-        logger.error(f"Unexpected error in webhook validation: {e}")
-        raise kopf.AdmissionError(f"Internal validation error: {e}")
+# Note: We intentionally do NOT register a blanket ConfigMap webhook as that
+# would make all ConfigMap operations in the cluster dependent on this service.
+# Instead, we only validate specific resources as configured in watch_resources.
 
 
 # =============================================================================
