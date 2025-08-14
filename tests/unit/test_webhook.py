@@ -437,6 +437,7 @@ class TestWebhookRegistry:
         await registry._validate_ingress_specific(spec, warnings)
         assert len(warnings) == 1
         assert "no rules defined" in warnings[0]
+        assert "Add at least one rule with host or path configuration" in warnings[0]
 
     @pytest.mark.asyncio
     async def test_validate_service_specific_no_ports(self, registry):
@@ -447,6 +448,7 @@ class TestWebhookRegistry:
         await registry._validate_service_specific(spec, warnings)
         assert len(warnings) == 1
         assert "no ports defined" in warnings[0]
+        assert "Add at least one port configuration" in warnings[0]
 
 
 class TestWebhookRegistrationFunction:
@@ -690,7 +692,8 @@ class TestWebhookErrorHandling:
         spec = {"data": {}}
         await registry._validate_secret_specific(spec, warnings)
         assert len(warnings) == 1
-        assert "no data entries" in warnings[0]
+        assert "no data entries defined" in warnings[0]
+        assert "Add key-value pairs to the 'data' field" in warnings[0]
 
         # Test valid secret
         warnings = []

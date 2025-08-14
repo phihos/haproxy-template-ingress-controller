@@ -426,7 +426,9 @@ class WebhookRegistry:
         """Validate Ingress-specific fields."""
         rules = spec.get("rules", [])
         if not rules:
-            warnings.append("Ingress has no rules defined")
+            warnings.append(
+                "Ingress has no rules defined. Add at least one rule with host or path configuration."
+            )
 
         for i, rule in enumerate(rules):
             if not rule.get("host") and not rule.get("http"):
@@ -440,7 +442,9 @@ class WebhookRegistry:
         """Validate Service-specific fields."""
         ports = spec.get("ports", [])
         if not ports:
-            warnings.append("Service has no ports defined")
+            warnings.append(
+                "Service has no ports defined. Add at least one port configuration with 'port' and 'targetPort'."
+            )
 
         for i, port in enumerate(ports):
             if not port.get("port"):
@@ -452,7 +456,9 @@ class WebhookRegistry:
         """Validate Secret-specific fields."""
         data = spec.get("data", {})
         if not data:
-            warnings.append("Secret has no data entries defined")
+            warnings.append(
+                "Secret has no data entries defined. Add key-value pairs to the 'data' field."
+            )
 
 
 # Global webhook registry
