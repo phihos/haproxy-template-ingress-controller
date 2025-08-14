@@ -11,12 +11,12 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Optional
 from functools import wraps
 
+from prometheus_async import aio
 from prometheus_client import (
     Counter,
     Gauge,
     Histogram,
     Info,
-    start_http_server,
     generate_latest,
 )
 
@@ -123,14 +123,14 @@ class MetricsCollector:
         self.start_time = time.time()
         self._server_started = False
 
-    def start_metrics_server(self, port: int = 9090) -> None:
-        """Start the Prometheus metrics HTTP server."""
+    async def start_metrics_server(self, port: int = 9090) -> None:
+        """Start the Prometheus metrics HTTP server using asyncio."""
         if self._server_started:
             logger.warning("Metrics server already started")
             return
 
         try:
-            start_http_server(port)
+            await aio.web.start_http_server(port=port)
             self._server_started = True
             logger.info(f"📊 Metrics server started on port {port}")
         except Exception as e:

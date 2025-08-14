@@ -87,13 +87,27 @@ def _is_valid_resource(resource: Any) -> bool:
     span_name="load_config_from_configmap",
     attributes={"operation.category": "configuration"},
 )
-async def load_config_from_configmap(configmap: Dict[str, Any]) -> Any:
+async def load_config_from_configmap(configmap) -> Any:
     """Load configuration from a Kubernetes ConfigMap."""
-    add_span_attributes(
-        configmap_namespace=configmap.get("metadata", {}).get("namespace", "unknown"),
-        configmap_name=configmap.get("metadata", {}).get("name", "unknown"),
-    )
-    return config_from_dict(yaml.safe_load(configmap["data"]["config"]))
+    # Handle both kr8s ConfigMap objects and dictionary representations
+    if hasattr(configmap, "namespace"):
+        # kr8s ConfigMap object
+        add_span_attributes(
+            configmap_namespace=configmap.namespace or "unknown",
+            configmap_name=configmap.name or "unknown",
+        )
+        config_data = configmap.data["config"]
+    else:
+        # Dictionary representation (from kopf event)
+        add_span_attributes(
+            configmap_namespace=configmap.get("metadata", {}).get(
+                "namespace", "unknown"
+            ),
+            configmap_name=configmap.get("metadata", {}).get("name", "unknown"),
+        )
+        config_data = configmap["data"]["config"]
+
+    return config_from_dict(yaml.safe_load(config_data))
 
 
 @trace_async_function(
@@ -152,7 +166,7 @@ async def handle_configmap_change(
                 if memo.config != new_config:
                     diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
                     structured_logger.info(
-                        "Config has changed, reloading", config_diff=str(diff)[:500]
+                        "🔄 Config has changed: reloading", config_diff=str(diff)[:500]
                     )
                     trigger_reload(memo)
 
@@ -521,6 +535,16 @@ async def init_management_socket(memo: Any, **kwargs: Any) -> None:
     )
 
 
+async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
+    """Initialize and start the Prometheus metrics server."""
+    metrics = get_metrics_collector()
+    metrics_port = getattr(memo.cli_options, "metrics_port", 9090)
+    # Start metrics server as a background task
+    memo.metrics_server_task = asyncio.create_task(
+        metrics.start_metrics_server(metrics_port)
+    )
+
+
 # =============================================================================
 # Operator State Management
 # =============================================================================
@@ -554,10 +578,6 @@ def run_operator_loop(cli_options: Any) -> None:
     # Initialize metrics on first run
     metrics = get_metrics_collector()
     metrics.set_app_info()
-
-    # Start metrics server
-    metrics_port = getattr(cli_options, "metrics_port", 9090)
-    metrics.start_metrics_server(metrics_port)
 
     while True:
         # Set up operator
@@ -600,6 +620,8 @@ def run_operator_loop(cli_options: Any) -> None:
         kopf.on.startup()(init_watch_configmap)
         # Start the management socket server to retrieve internal information and trigger actions
         kopf.on.startup()(init_management_socket)
+        # Start the metrics server for Prometheus monitoring
+        kopf.on.startup()(init_metrics_server)
 
         # Run operator
         kopf.run(

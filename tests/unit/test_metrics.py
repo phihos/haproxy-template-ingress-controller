@@ -148,35 +148,39 @@ class TestMetricsCollector:
         # Should not raise any exceptions
         assert True
 
-    @patch("haproxy_template_ic.metrics.start_http_server")
-    def test_start_metrics_server_success(self, mock_start_server):
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.metrics.aio.web.start_http_server")
+    async def test_start_metrics_server_success(self, mock_start_server):
         """Test successful metrics server startup."""
         collector = MetricsCollector()
+        mock_start_server.return_value = None  # async function returns None
 
-        collector.start_metrics_server(9090)
+        await collector.start_metrics_server(9090)
 
-        mock_start_server.assert_called_once_with(9090)
+        mock_start_server.assert_called_once_with(port=9090)
         assert collector._server_started
 
-    @patch("haproxy_template_ic.metrics.start_http_server")
-    def test_start_metrics_server_already_started(self, mock_start_server):
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.metrics.aio.web.start_http_server")
+    async def test_start_metrics_server_already_started(self, mock_start_server):
         """Test starting metrics server when already started."""
         collector = MetricsCollector()
         collector._server_started = True
 
-        collector.start_metrics_server(9090)
+        await collector.start_metrics_server(9090)
 
         mock_start_server.assert_not_called()
 
-    @patch("haproxy_template_ic.metrics.start_http_server")
-    def test_start_metrics_server_failure(self, mock_start_server):
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.metrics.aio.web.start_http_server")
+    async def test_start_metrics_server_failure(self, mock_start_server):
         """Test metrics server startup failure."""
         collector = MetricsCollector()
         mock_start_server.side_effect = Exception("Port already in use")
 
-        collector.start_metrics_server(9090)
+        await collector.start_metrics_server(9090)
 
-        mock_start_server.assert_called_once_with(9090)
+        mock_start_server.assert_called_once_with(port=9090)
         assert not collector._server_started
 
 
