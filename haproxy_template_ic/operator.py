@@ -533,6 +533,74 @@ async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
     )
 
 
+def configure_webhook_server(
+    settings: kopf.OperatorSettings, memo: Any, **kwargs: Any
+) -> None:
+    """Configure webhook server for admission control."""
+    import os
+    import tempfile
+
+    # Check if any resources have webhook validation enabled
+    has_webhooks = any(
+        getattr(watch_config, "enable_validation_webhook", False)
+        for watch_config in memo.config.watch_resources
+    )
+
+    if not has_webhooks:
+        logger.info(
+            "⏭️ No validation webhooks configured - skipping webhook server setup"
+        )
+        return
+
+    logger.info("🔌 Configuring webhook server for admission control...")
+
+    cert_dir = "/tmp/webhook-certs"  # nosec B108 - Standard K8s volume mount path
+    cert_file = f"{cert_dir}/webhook-cert.pem"
+    key_file = f"{cert_dir}/webhook-key.pem"
+    ca_file = f"{cert_dir}/webhook-ca.pem"
+
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        # Create a writable temporary directory for kopf's CA dump
+        temp_dir = tempfile.mkdtemp(prefix="webhook-ca-")
+        temp_ca_file = f"{temp_dir}/webhook-ca.pem"
+
+        # Copy the CA file to writable location if it exists
+        if os.path.exists(ca_file):
+            import shutil
+
+            shutil.copy2(ca_file, temp_ca_file)
+            ca_dump_file = temp_ca_file
+        else:
+            # Fall back to using certificate file as CA
+            ca_dump_file = temp_ca_file
+
+        settings.admission.server = kopf.WebhookServer(
+            addr="0.0.0.0",  # nosec B104 - Kubernetes webhook must bind all interfaces
+            port=9443,
+            certfile=cert_file,
+            pkeyfile=key_file,
+            cadump=ca_dump_file,
+        )
+        logger.info(
+            "✅ Webhook server configured on port 9443 with mounted TLS certificates"
+        )
+    else:
+        # Create a writable temporary directory for self-signed certificates
+        temp_dir = tempfile.mkdtemp(prefix="webhook-ca-")
+        temp_ca_file = f"{temp_dir}/webhook-ca.pem"
+
+        settings.admission.server = kopf.WebhookServer(
+            addr="0.0.0.0",  # nosec B104 - Kubernetes webhook must bind all interfaces
+            port=9443,
+            cadump=temp_ca_file,
+        )
+        logger.info(
+            "✅ Webhook server configured on port 9443 with self-signed certificates"
+        )
+
+    settings.admission.managed = "haproxy-template-ic.io"
+
+
 # =============================================================================
 # Operator State Management
 # =============================================================================
@@ -610,6 +678,8 @@ def run_operator_loop(cli_options: Any) -> None:
         kopf.on.startup()(init_management_socket)
         # Start the metrics server for Prometheus monitoring
         kopf.on.startup()(init_metrics_server)
+        # Configure webhook server for admission control
+        kopf.on.startup()(configure_webhook_server)
 
         # Run operator
         kopf.run(

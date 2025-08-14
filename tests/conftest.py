@@ -4,7 +4,15 @@ from typing import Dict
 import kr8s
 import pytest
 import yaml
-from kr8s.objects import ClusterRoleBinding, ConfigMap, Namespace, Pod, ServiceAccount
+from kr8s.objects import (
+    ClusterRoleBinding,
+    ConfigMap,
+    Namespace,
+    Pod,
+    ServiceAccount,
+    Service,
+    Secret,
+)
 from pytest import CollectReport, StashKey
 from python_on_whales import DockerClient
 
@@ -99,8 +107,14 @@ def k8s_client(kind_cluster):
 
 @pytest.fixture
 def k8s_namespace(request, k8s_client):
-    # generate a unique but human-recognizable namespace name for each test
-    ns_name = f"{time.strftime('%Y-%m-%d-%H-%M-%S')}-{''.join(char for char in request.node.name if char.isalnum())}"
+    # Generate a unique but short namespace name for each test (max 64 chars)
+    import hashlib
+
+    test_name = request.node.name
+    # Create a short hash of the test name for uniqueness
+    test_hash = hashlib.sha256(test_name.encode()).hexdigest()[:8]
+    timestamp = time.strftime("%m%d-%H%M%S")  # Short timestamp format
+    ns_name = f"test-{timestamp}-{test_hash}"
     ns = Namespace(
         {
             "apiVersion": "v1",
@@ -150,10 +164,95 @@ backend servers
         "watch_resources": {
             "ingresses": {
                 "group": "networking.k8s.io",
+                "version": "v1",
                 "kind": "Ingress",
-            }
+                "enable_validation_webhook": False,
+            },
+            "secrets": {
+                "group": "",
+                "version": "v1",
+                "kind": "Secret",
+                "enable_validation_webhook": False,
+            },
+            "endpoints": {
+                "group": "discovery.k8s.io",
+                "version": "v1",
+                "kind": "EndpointSlice",
+                "enable_validation_webhook": False,
+            },
         },
     }
+
+
+@pytest.fixture
+def webhook_config_dict():
+    """Configuration with webhooks enabled for webhook functionality tests."""
+    return {
+        "pod_selector": {"match_labels": {"foo": "bar"}},
+        "haproxy_config": {
+            "template": """
+global
+    daemon
+    user haproxy
+    group haproxy
+
+defaults
+    mode http
+    timeout connect 5000
+    timeout client 50000
+    timeout server 50000
+
+frontend main
+    bind *:80
+    default_backend servers
+
+backend servers
+    balance roundrobin
+"""
+        },
+        "watch_resources": {
+            "ingresses": {
+                "group": "networking.k8s.io",
+                "version": "v1",
+                "kind": "Ingress",
+                "enable_validation_webhook": True,
+            },
+            "secrets": {
+                "group": "",
+                "version": "v1",
+                "kind": "Secret",
+                "enable_validation_webhook": True,
+            },
+            "endpoints": {
+                "group": "discovery.k8s.io",
+                "version": "v1",
+                "kind": "EndpointSlice",
+                "enable_validation_webhook": False,
+            },
+        },
+    }
+
+
+@pytest.fixture
+def webhook_configmap(webhook_config_dict, k8s_client, k8s_namespace):
+    """ConfigMap with webhook validation enabled for webhook functionality tests."""
+    cm = ConfigMap(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "haproxy-template-ic-webhook-config",
+                "namespace": k8s_namespace,
+            },
+            "data": {
+                "config": yaml.dump(webhook_config_dict, Dumper=yaml.CDumper),
+            },
+        },
+        namespace=k8s_namespace,
+        api=k8s_client,
+    )
+    cm.create()
+    return cm
 
 
 @pytest.fixture
@@ -178,7 +277,53 @@ def configmap(config_dict, k8s_client, k8s_namespace):
 
 
 @pytest.fixture
-def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
+def webhook_certificates(k8s_namespace):
+    """Generate webhook certificates for the test namespace."""
+    from tests.webhook_certs import generate_webhook_certificates
+
+    return generate_webhook_certificates("haproxy-template-ic-webhook", k8s_namespace)
+
+
+@pytest.fixture
+def webhook_secret(webhook_certificates, k8s_client, k8s_namespace):
+    """Create Kubernetes Secret with webhook certificates."""
+    from tests.webhook_certs import create_cert_secret_manifest
+
+    manifest = create_cert_secret_manifest(
+        webhook_certificates, "haproxy-template-ic-webhook-certs", k8s_namespace
+    )
+    secret = Secret(manifest, namespace=k8s_namespace, api=k8s_client)
+    secret.create()
+    return secret
+
+
+@pytest.fixture
+def validating_webhook_config(webhook_certificates, k8s_namespace, k8s_client):
+    """Create ValidatingAdmissionWebhook configuration."""
+    from tests.webhook_certs import create_validating_webhook_config
+    from kr8s.objects import APIObject
+
+    manifest = create_validating_webhook_config(
+        webhook_name=f"haproxy-template-ic-webhook-{k8s_namespace}",
+        service_name="haproxy-template-ic-webhook",
+        service_namespace=k8s_namespace,
+        ca_bundle=webhook_certificates.ca_bundle,
+        target_namespace=k8s_namespace,
+    )
+
+    webhook = APIObject(manifest, api=k8s_client)
+    webhook.create()
+
+    yield webhook
+
+    try:
+        webhook.delete()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def ingress_controller(k8s_client, k8s_namespace, container_image, configmap, request):
     # Wait for the default serviceaccount before proceeding
     wait_for_default_serviceaccount(k8s_client, k8s_namespace)
 
@@ -204,6 +349,57 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
         },
         api=k8s_client,
     ).create()
+
+    # Check if test needs webhook functionality
+    needs_webhook = "webhook" in request.node.name
+
+    # Conditionally create webhook secret if needed
+    volume_mounts = []
+    volumes = []
+
+    if needs_webhook:
+        try:
+            # Try to create webhook secret
+            from tests.webhook_certs import (
+                generate_webhook_certificates,
+                create_cert_secret_manifest,
+            )
+
+            webhook_certificates = generate_webhook_certificates(
+                "haproxy-template-ic-webhook", k8s_namespace
+            )
+            manifest = create_cert_secret_manifest(
+                webhook_certificates, "haproxy-template-ic-webhook-certs", k8s_namespace
+            )
+            secret = Secret(manifest, namespace=k8s_namespace, api=k8s_client)
+            secret.create()
+
+            # Add volume mount and volume for webhook certificates
+            volume_mounts.append(
+                {
+                    "name": "webhook-certs",
+                    "mountPath": "/tmp/webhook-certs",
+                    "readOnly": True,
+                }
+            )
+            volumes.append(
+                {
+                    "name": "webhook-certs",
+                    "secret": {
+                        "secretName": "haproxy-template-ic-webhook-certs",
+                        "items": [
+                            {"key": "tls.crt", "path": "webhook-cert.pem"},
+                            {"key": "tls.key", "path": "webhook-key.pem"},
+                            {"key": "ca.crt", "path": "webhook-ca.pem"},
+                        ],
+                    },
+                }
+            )
+        except Exception as e:
+            # If webhook secret creation fails, continue without it
+            print(f"Warning: Failed to create webhook certificates: {e}")
+            needs_webhook = False
+
     pod = Pod(
         {
             "apiVersion": "v1",
@@ -211,12 +407,20 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
             "metadata": {
                 "name": "haproxy-template-ic",
                 "namespace": k8s_namespace,
+                "labels": {
+                    "app.kubernetes.io/name": "haproxy-template-ic",
+                    "app.kubernetes.io/instance": "acceptance-test",
+                },
             },
             "spec": {
                 "containers": [
                     {
                         "name": "haproxy-template-ic",
                         "image": container_image.repo_tags[0],
+                        "ports": [
+                            {"containerPort": 8080, "name": "healthz"},
+                            {"containerPort": 9443, "name": "webhook"},
+                        ],
                         "env": [
                             {"name": "CONFIGMAP_NAME", "value": configmap.name},
                             {"name": "VERBOSE", "value": "2"},
@@ -227,8 +431,10 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
                                 "port": 8080,
                             }
                         },
+                        "volumeMounts": volume_mounts,
                     }
-                ]
+                ],
+                "volumes": volumes,
             },
         },
         namespace=k8s_namespace,
@@ -236,6 +442,45 @@ def ingress_controller(k8s_client, k8s_namespace, container_image, configmap):
     )
     pod.create()
     pod.wait("condition=Ready")
+
+    if needs_webhook:
+        # Create webhook service
+        webhook_service = Service(
+            {
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {
+                    "name": "haproxy-template-ic-webhook",
+                    "namespace": k8s_namespace,
+                    "labels": {
+                        "app.kubernetes.io/name": "haproxy-template-ic",
+                        "app.kubernetes.io/component": "webhook",
+                    },
+                },
+                "spec": {
+                    "type": "ClusterIP",
+                    "ports": [
+                        {
+                            "port": 9443,
+                            "targetPort": "webhook",
+                            "protocol": "TCP",
+                            "name": "webhook",
+                        }
+                    ],
+                    "selector": {
+                        "app.kubernetes.io/name": "haproxy-template-ic",
+                        "app.kubernetes.io/instance": "acceptance-test",
+                    },
+                },
+            },
+            namespace=k8s_namespace,
+            api=k8s_client,
+        )
+        webhook_service.create()
+
+    # Note: ValidatingAdmissionWebhook is automatically managed by kopf
+    # when settings.admission.managed is configured in the operator startup
+
     return pod
 
 

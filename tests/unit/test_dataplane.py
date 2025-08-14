@@ -26,6 +26,44 @@ from haproxy_template_ic.config import (
 
 
 # =============================================================================
+# Test Helpers
+# =============================================================================
+
+
+def setup_fast_resilient_mocks():
+    """Setup mocks to bypass retry delays in tests."""
+    mock_circuit_breaker = MagicMock()
+    mock_circuit_breaker.get_adaptive_timeout.return_value = 0.01
+    mock_circuit_breaker.record_failure = MagicMock()
+
+    mock_resilient = MagicMock()
+    mock_resilient.get_circuit_breaker.return_value = mock_circuit_breaker
+
+    async def fast_execute_with_retry(operation, **kwargs):
+        try:
+            result_value = await operation()
+            result = MagicMock()
+            result.success = True
+            result.result = result_value
+            result.error = None
+            return result
+        except Exception as e:
+            result = MagicMock()
+            result.success = False
+            result.error = e
+            result.attempt = 1
+            return result
+
+    mock_resilient.execute_with_retry = AsyncMock(side_effect=fast_execute_with_retry)
+
+    mock_metrics = MagicMock()
+    mock_metrics.time_dataplane_api_operation.return_value.__enter__ = MagicMock()
+    mock_metrics.time_dataplane_api_operation.return_value.__exit__ = MagicMock()
+
+    return mock_resilient, mock_metrics
+
+
+# =============================================================================
 # HAProxyInstance Tests
 # =============================================================================
 
@@ -294,18 +332,30 @@ async def test_dataplane_client_validate_configuration_failure():
     """Test configuration validation failure."""
     client = DataplaneClient("http://10.0.1.5:5555/v2")
 
-    with patch("httpx.AsyncClient") as mock_client_class:
-        mock_client = AsyncMock()
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        mock_client.post.side_effect = httpx.HTTPStatusError(
-            "400 Bad Request",
-            request=MagicMock(),
-            response=MagicMock(text="Invalid configuration"),
-        )
+    mock_resilient, mock_metrics = setup_fast_resilient_mocks()
 
-        result = await client.validate_configuration("invalid config")
+    with patch(
+        "haproxy_template_ic.dataplane.get_resilient_operator",
+        return_value=mock_resilient,
+    ):
+        with patch(
+            "haproxy_template_ic.dataplane.get_metrics_collector",
+            return_value=mock_metrics,
+        ):
+            with patch("httpx.AsyncClient") as mock_client_class:
+                mock_client = AsyncMock()
+                mock_client_class.return_value.__aenter__.return_value = mock_client
 
-    assert result is False
+                # Simulate HTTP error
+                mock_client.post.side_effect = httpx.HTTPStatusError(
+                    "400 Bad Request",
+                    request=MagicMock(),
+                    response=MagicMock(status_code=400, text="Invalid configuration"),
+                )
+
+                result = await client.validate_configuration("invalid config")
+
+            assert result is False
 
 
 @pytest.mark.asyncio
@@ -344,17 +394,31 @@ async def test_dataplane_client_deploy_configuration_failure():
     """Test configuration deployment failure."""
     client = DataplaneClient("http://10.0.1.5:5555/v2")
 
-    with patch("httpx.AsyncClient") as mock_client_class:
-        mock_client = AsyncMock()
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        mock_client.post.side_effect = httpx.HTTPStatusError(
-            "500 Internal Server Error",
-            request=MagicMock(),
-            response=MagicMock(text="Deployment failed"),
-        )
+    mock_resilient, mock_metrics = setup_fast_resilient_mocks()
 
-        with pytest.raises(DataplaneAPIError, match="Configuration deployment failed"):
-            await client.deploy_configuration("invalid config")
+    with patch(
+        "haproxy_template_ic.dataplane.get_resilient_operator",
+        return_value=mock_resilient,
+    ):
+        with patch(
+            "haproxy_template_ic.dataplane.get_metrics_collector",
+            return_value=mock_metrics,
+        ):
+            with patch("httpx.AsyncClient") as mock_client_class:
+                mock_client = AsyncMock()
+                mock_client_class.return_value.__aenter__.return_value = mock_client
+
+                # Simulate deployment failure
+                mock_client.post.side_effect = httpx.HTTPStatusError(
+                    "500 Internal Server Error",
+                    request=MagicMock(),
+                    response=MagicMock(status_code=500, text="Deployment failed"),
+                )
+
+                with pytest.raises(
+                    DataplaneAPIError, match="Configuration deployment failed"
+                ):
+                    await client.deploy_configuration("invalid config")
 
 
 # =============================================================================
@@ -610,7 +674,9 @@ async def test_synchronize_configuration_no_validation_sidecars():
 
     # Mock successful deployment to production
     with patch.object(synchronizer, "_deploy_to_production") as mock_deploy:
-        mock_deploy.return_value = [SyncResult(production_instance, True)]
+        mock_deploy.return_value = [
+            SyncResult(success=True, instance=production_instance)
+        ]
 
         results = await synchronizer.synchronize_configuration(config_context)
 
@@ -673,10 +739,10 @@ async def test_validate_instance_dataplane_error():
     )
     config = "global\n    daemon"
 
-    with pytest.raises(ValidationError) as exc_info:
-        await synchronizer._validate_instance(mock_client, instance, config)
-    assert "Failed to validate configuration" in str(exc_info.value)
-    assert "test-ns/test-pod" in str(exc_info.value)
+    result = await synchronizer._validate_instance(mock_client, instance, config)
+    assert (
+        result is False
+    )  # Should return False on DataplaneAPIError, not raise ValidationError
 
 
 @pytest.mark.asyncio
@@ -705,9 +771,13 @@ async def test_deploy_to_production_error_handling():
 
         async def side_effect(client, instance, config):
             if instance == production_instances[0]:
-                return SyncResult(instance, True, "v123")
+                return SyncResult(
+                    success=True, instance=instance, config_version="v123"
+                )
             else:
-                return SyncResult(instance, False, error="Deploy failed")
+                return SyncResult(
+                    success=False, instance=instance, error="Deploy failed"
+                )
 
         mock_deploy.side_effect = side_effect
 

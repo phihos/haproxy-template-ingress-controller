@@ -332,8 +332,13 @@ class TestWebhookRegistry:
             resource_id="ingresses",
         )
 
-        # Verify kopf.on.validate was called with correct parameters
-        mock_kopf_validate.assert_called_once_with("networking.k8s.io", "v1", "Ingress")
+        # Verify kopf.on.validate was called with correct parameters including the id
+        mock_kopf_validate.assert_called_once_with(
+            "networking.k8s.io",
+            "v1",
+            "Ingress",
+            id="validate-ingresses-networking-k8s-io-v1",
+        )
         # Verify the decorator was called with the handler function
         mock_decorator.assert_called_once()
 
@@ -524,8 +529,13 @@ class TestWebhookIntegration:
         # Register webhooks
         register_validation_webhooks_from_config(config)
 
-        # Verify webhook was registered
-        mock_kopf_validate.assert_called_with("networking.k8s.io", "v1", "Ingress")
+        # Verify webhook was registered (resource_id defaults to kind.lower())
+        mock_kopf_validate.assert_called_with(
+            "networking.k8s.io",
+            "v1",
+            "Ingress",
+            id="validate-ingress-networking-k8s-io-v1",
+        )
 
     @patch("haproxy_template_ic.webhook.get_metrics_collector")
     def test_webhook_handler_with_metrics(self, mock_get_metrics):

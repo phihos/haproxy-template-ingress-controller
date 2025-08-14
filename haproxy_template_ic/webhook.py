@@ -376,8 +376,22 @@ class WebhookRegistry:
                 logger.error(f"Unexpected error in {kind} webhook validation: {e}")
                 raise kopf.AdmissionError(f"Internal validation error: {e}")
 
-        # Register the handler with kopf
-        kopf.on.validate(group, version, kind)(resource_validation_handler)
+        # Build a DNS-1123 compliant handler id for webhook naming
+        safe_group = (group or "core").replace("/", ".").replace("_", "-")
+        safe_version = (version or "v1").replace("_", "-")
+        base_id = resource_id or kind.lower()
+        # only allow lowercase alnum and hyphen in id
+        import re
+
+        safe_base = re.sub(r"[^a-z0-9-]", "-", base_id.lower())
+        handler_id = (
+            f"validate-{safe_base}-{safe_group.replace('.', '-')}-{safe_version}"
+        )
+
+        # Register the handler with kopf using a stable, valid id
+        kopf.on.validate(group, version, kind, id=handler_id)(
+            resource_validation_handler
+        )
 
         self.registered_handlers[handler_key] = resource_validation_handler
         logger.info(f"Registered validation webhook for {handler_key}")
