@@ -45,9 +45,16 @@ class SnippetLoader(BaseLoader):
 
 
 def _make_jinja_template(
-    template_str: str, snippets: Optional["TemplateSnippetCollection"] = None
+    template_str: str,
+    snippets: Optional["TemplateSnippetCollection"] = None,
+    context_name: Optional[str] = None,
 ) -> Template:
     """Compile a Jinja2 template string with a consistent environment.
+
+    Args:
+        template_str: The template string to compile
+        snippets: Optional collection of template snippets
+        context_name: Optional name for better error reporting (e.g., snippet name, config path)
 
     Raises a ValueError with a clear message if the template is invalid.
     """
@@ -59,7 +66,8 @@ def _make_jinja_template(
     except (
         TemplateSyntaxError
     ) as exc:  # pragma: no cover - exercised indirectly in tests
-        raise ValueError(f"Invalid template: {exc}")
+        context = f"in {context_name}" if context_name else ""
+        raise ValueError(f"Invalid template {context}: {exc}")
 
 
 class WatchResourceCollection(list):
@@ -200,7 +208,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                 items.append(
                     MapConfig(
                         path=path,
-                        template=_make_jinja_template(config["template"], snippets),
+                        template=_make_jinja_template(
+                            config["template"], snippets, f"map '{path}'"
+                        ),
                     )
                 )
         elif isinstance(data, list):
@@ -220,7 +230,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                 items.append(
                     MapConfig(
                         path=path,
-                        template=_make_jinja_template(config["template"], snippets),
+                        template=_make_jinja_template(
+                            config["template"], snippets, f"map '{path}'"
+                        ),
                     )
                 )
         else:
@@ -241,7 +253,11 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                     raise ValueError(f"Template snippet '{name}' must be a string")
                 items.append(
                     TemplateSnippet(
-                        name=name, template=_make_jinja_template(config), source=config
+                        name=name,
+                        template=_make_jinja_template(
+                            config, context_name=f"snippet '{name}'"
+                        ),
+                        source=config,
                     )
                 )
         else:
@@ -269,7 +285,10 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
 
                 items.append(
                     CertificateConfig(
-                        name=name, template=_make_jinja_template(config["template"])
+                        name=name,
+                        template=_make_jinja_template(
+                            config["template"], context_name=f"certificate '{name}'"
+                        ),
                     )
                 )
         elif isinstance(data, list):
@@ -285,7 +304,11 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                 items.append(
                     CertificateConfig(
                         name=config["name"],
-                        template=_make_jinja_template(config["template"], snippets),
+                        template=_make_jinja_template(
+                            config["template"],
+                            snippets,
+                            f"certificate '{config['name']}'",
+                        ),
                     )
                 )
         else:
@@ -316,7 +339,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
     template_value = raw_haproxy_config.get("template")
     if not isinstance(template_value, str):
         raise ValueError("haproxy_config.template must be a string")
-    haproxy_config = _make_jinja_template(template_value, template_snippets)
+    haproxy_config = _make_jinja_template(
+        template_value, template_snippets, "haproxy_config"
+    )
 
     # Parse maps and certificates with access to snippets so they can use includes
     maps = parse_maps(config_dict.get("maps"), template_snippets)

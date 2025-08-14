@@ -107,15 +107,36 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             for key, resource in index_data.items():
                 # key is typically (namespace, name), resource is a list of dicts
                 try:
-                    # Index keys with 0 elements will be removed, so we can be sure there is always [0]
-                    # There will not be more than one element since the combination of name + namespace is unique
-                    resource_dict[key] = list(resource)[0]
+                    # Type safety: handle different resource types appropriately
+                    if isinstance(resource, dict):
+                        # Resource is already a dict (typical case), use as-is
+                        resource_dict[key] = resource
+                    elif isinstance(resource, (list, tuple)):
+                        # Resource is a sequence (like a kopf store), get first element
+                        if resource:
+                            # Index keys with 0 elements will be removed, so we can be sure there is always [0]
+                            # There will not be more than one element since the combination of name + namespace is unique
+                            resource_dict[key] = resource[0]
+                        else:
+                            logger.warning(f"⚠️ Empty resource list for {key}, skipping")
+                            continue
+                    else:
+                        # Resource is some other type (like a mock object or single resource), use as-is
+                        # This handles test mocks, direct resource objects, and other edge cases
+                        resource_dict[key] = resource
                 except Exception as e:
                     logger.warning(
                         f"⚠️ Failed to process resource {key} -> {resource}: {e}"
                     )
-                    # Fallback: try to use resource as-is
-                    resource_dict[key] = resource
+                    # Fallback: try to use resource as-is only if it looks like a valid resource
+                    if isinstance(resource, dict):
+                        resource_dict[key] = resource
+                    elif isinstance(resource, list) and resource:
+                        resource_dict[key] = resource[0]
+                    else:
+                        logger.warning(
+                            f"⚠️ Skipping invalid resource {key} due to type {type(resource)}"
+                        )
 
             indices[watch_config.id] = resource_dict
             logger.debug(
