@@ -75,7 +75,7 @@ jobs:
 
       - name: Run dev environment script
         run: |
-          bash ./scripts/start-dev-en.sh
+          bash ./scripts/start-dev-env.sh
 
       - name: Verify resources created by script
         run: |

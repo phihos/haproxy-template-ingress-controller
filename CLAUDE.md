@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Dependency hygiene: `uv run deptry .`
 
 ### Development Environment
-- Setup dev environment: `bash ./scripts/start-dev-en.sh`
+- Setup dev environment: `bash ./scripts/start-dev-env.sh`
   - Creates kind cluster and deploys controller with metrics, monitoring, and observability features
   - Sets up echo server for testing Ingress functionality
   - Provides comprehensive troubleshooting tips and monitoring access instructions
