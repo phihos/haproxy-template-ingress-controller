@@ -8,8 +8,11 @@ namePrefix: prod-
 resources:
   - ../../base
 
-patchesStrategicMerge:
-  - deployment.yaml
+patches:
+  - path: deployment.yaml
+    target:
+      kind: Deployment
+      name: haproxy-template-ic
 
 images:
   - name: ghcr.io/phihos/haproxy-template-ingress-controller
