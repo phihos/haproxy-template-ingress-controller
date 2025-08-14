@@ -18,16 +18,39 @@ from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
 from kr8s.objects import ConfigMap
 
+from haproxy_template_ic.structured_logging import (
+    get_structured_logger,
+    operation_context,
+    component_context_manager,
+    resource_context_manager,
+    log_kubernetes_event,
+)
+from haproxy_template_ic.tracing import (
+    trace_async_function,
+    trace_template_render,
+    add_span_attributes,
+    record_span_event,
+)
+
 from haproxy_template_ic.config import (
     HAProxyConfigContext,
+    RenderedCertificate,
+    RenderedConfig,
     RenderedMap,
     TemplateContext,
     config_from_dict,
 )
+from haproxy_template_ic.dataplane import (
+    ConfigSynchronizer,
+    HAProxyPodDiscovery,
+    DataplaneAPIError,
+    ValidationError,
+)
 from haproxy_template_ic.management_socket import run_management_socket_server
+from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.utils import get_current_namespace
 
-logger = logging.getLogger(__name__)
+logger = get_structured_logger(__name__)
 
 
 def _is_valid_resource(resource: Any) -> bool:
@@ -60,16 +83,45 @@ def _is_valid_resource(resource: Any) -> bool:
 # =============================================================================
 
 
-async def load_config_from_configmap(configmap: Dict[str, Any]) -> Any:
+@trace_async_function(
+    span_name="load_config_from_configmap",
+    attributes={"operation.category": "configuration"},
+)
+async def load_config_from_configmap(configmap) -> Any:
     """Load configuration from a Kubernetes ConfigMap."""
-    return config_from_dict(yaml.safe_load(configmap["data"]["config"]))
+    # Handle both kr8s ConfigMap objects and dictionary representations
+    if hasattr(configmap, "namespace"):
+        # kr8s ConfigMap object
+        add_span_attributes(
+            configmap_namespace=configmap.namespace or "unknown",
+            configmap_name=configmap.name or "unknown",
+        )
+        config_data = configmap.data["config"]
+    else:
+        # Dictionary representation (from kopf event)
+        add_span_attributes(
+            configmap_namespace=configmap.get("metadata", {}).get(
+                "namespace", "unknown"
+            ),
+            configmap_name=configmap.get("metadata", {}).get("name", "unknown"),
+        )
+        config_data = configmap["data"]["config"]
+
+    return config_from_dict(yaml.safe_load(config_data))
 
 
+@trace_async_function(
+    span_name="fetch_configmap", attributes={"operation.category": "kubernetes"}
+)
 async def fetch_configmap(name: str, namespace: str) -> Any:
     """Fetch ConfigMap from Kubernetes cluster."""
+    add_span_attributes(configmap_name=name, configmap_namespace=namespace)
     try:
-        return await ConfigMap.get(name, namespace=namespace)
+        result = await ConfigMap.get(name, namespace=namespace)
+        record_span_event("configmap_fetched")
+        return result
     except Exception as e:
+        record_span_event("configmap_fetch_failed", {"error": str(e)})
         raise kopf.TemporaryError(f'Failed to retrieve ConfigMap "{name}": {e}') from e
 
 
@@ -93,13 +145,30 @@ async def handle_configmap_change(
     **kwargs: Any,
 ) -> None:
     """Handle ConfigMap change events."""
-    logger.info(f'📋 Configmap "{name}" changed with type {type}.')
+    with operation_context() as operation_id:
+        with component_context_manager("operator"):
+            with resource_context_manager(
+                resource_type="ConfigMap",
+                resource_namespace=event["object"].get("metadata", {}).get("namespace"),
+                resource_name=name,
+            ):
+                structured_logger = get_structured_logger(__name__)
+                log_kubernetes_event(
+                    structured_logger,
+                    type,
+                    "ConfigMap",
+                    event["object"].get("metadata", {}).get("namespace", "unknown"),
+                    name,
+                    operation_id=operation_id,
+                )
 
-    new_config = await load_config_from_configmap(event["object"])
-    if memo.config != new_config:
-        diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
-        logger.info(f"🔄 Config has changed: {diff}. Reloading...")
-        trigger_reload(memo)
+                new_config = await load_config_from_configmap(event["object"])
+                if memo.config != new_config:
+                    diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
+                    structured_logger.info(
+                        "🔄 Config has changed: reloading", config_diff=str(diff)[:500]
+                    )
+                    trigger_reload(memo)
 
 
 async def update_resource_index(
@@ -115,11 +184,18 @@ async def update_resource_index(
     return {(namespace, name): dict(body)}
 
 
+@trace_async_function(
+    span_name="render_haproxy_templates",
+    attributes={"operation.category": "template_rendering"},
+)
 async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     """Render all HAProxy templates with current context data."""
-    logger.debug("🎨 Rendering HAProxy templates...")
+    with operation_context() as operation_id:
+        with component_context_manager("operator"):
+            logger.debug("Rendering HAProxy templates", operation_id=operation_id)
+            metrics = get_metrics_collector()
 
-    # Collect all indices from registered watch resources
+            # Collect all indices from registered watch resources
     indices: Dict[str, Dict[str, Any]] = {}
     for watch_config in memo.config.watch_resources:
         try:
@@ -188,38 +264,186 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             logger.warning(f"⚠️ Could not retrieve index '{watch_config.id}': {e}")
             indices[watch_config.id] = {}
 
+    # Record watched resource metrics
+    metrics.record_watched_resources(indices)
+
     # Clear previous renders
     memo.haproxy_config_context.rendered_maps.clear()
+    memo.haproxy_config_context.rendered_config = None
+    memo.haproxy_config_context.rendered_certificates.clear()
 
     # Create a new template context instance each time with config access
     template_context = TemplateContext(resources=indices, config=memo.config)
 
+    # Create template variables from dataclass fields, excluding config reference
+    template_vars = {
+        "resources": template_context.resources,
+        "environment": template_context.environment,
+        "cluster_name": template_context.cluster_name,
+        "config_values": template_context.config_values,
+        "get_template_snippet": template_context.get_template_snippet,
+        "get_map_config": template_context.get_map_config,
+        "get_certificate_config": template_context.get_certificate_config,
+        "register_error": template_context.register_error,
+        "get_resources": template_context.get_resources,
+        "iterate_resources": template_context.iterate_resources,
+        "count_resources": template_context.count_resources,
+        "has_resources": template_context.has_resources,
+    }
+
+    # Render the HAProxy config template
+    try:
+        with trace_template_render("haproxy_config"):
+            with metrics.time_template_render("haproxy_config"):
+                rendered_content = memo.config.haproxy_config.render(**template_vars)
+        rendered_config = RenderedConfig(content=rendered_content, config=memo.config)
+        memo.haproxy_config_context.rendered_config = rendered_config
+        metrics.record_template_render("haproxy_config", "success")
+        add_span_attributes(
+            template_size=len(rendered_content), template_vars_count=len(template_vars)
+        )
+        record_span_event("haproxy_config_rendered")
+        logger.debug("✅ Rendered HAProxy configuration template")
+    except Exception as e:
+        metrics.record_template_render("haproxy_config", "error")
+        metrics.record_error("template_render_failed", "operator")
+        record_span_event("haproxy_config_render_failed", {"error": str(e)})
+        logger.error(f"❌ Failed to render HAProxy configuration template: {e}")
+
     # Render each map template
     for map_config in memo.config.maps:
         try:
-            # Create template variables from dataclass fields, excluding config reference
-            template_vars = {
-                "resources": template_context.resources,
-                "environment": template_context.environment,
-                "cluster_name": template_context.cluster_name,
-                "config_values": template_context.config_values,
-                "get_template_snippet": template_context.get_template_snippet,
-                "get_map_config": template_context.get_map_config,
-                "get_certificate_config": template_context.get_certificate_config,
-                "register_error": template_context.register_error,
-                "get_resources": template_context.get_resources,
-                "iterate_resources": template_context.iterate_resources,
-                "count_resources": template_context.count_resources,
-                "has_resources": template_context.has_resources,
-            }
-            rendered_content = map_config.template.render(**template_vars)
+            with trace_template_render("map", map_config.path):
+                with metrics.time_template_render("map"):
+                    rendered_content = map_config.template.render(**template_vars)
             rendered_map = RenderedMap(
                 path=map_config.path, content=rendered_content, map_config=map_config
             )
             memo.haproxy_config_context.rendered_maps.append(rendered_map)
+            metrics.record_template_render("map", "success")
+            add_span_attributes(
+                map_path=map_config.path, map_size=len(rendered_content)
+            )
+            record_span_event("map_rendered", {"path": map_config.path})
             logger.debug(f"✅ Rendered template for {map_config.path}")
         except Exception as e:
+            metrics.record_template_render("map", "error")
+            metrics.record_error("template_render_failed", "operator")
+            record_span_event(
+                "map_render_failed", {"path": map_config.path, "error": str(e)}
+            )
             logger.error(f"❌ Failed to render template for {map_config.path}: {e}")
+
+    # Render each certificate template
+    for certificate_config in memo.config.certificates:
+        try:
+            with trace_template_render("certificate", certificate_config.name):
+                with metrics.time_template_render("certificate"):
+                    rendered_content = certificate_config.template.render(
+                        **template_vars
+                    )
+            rendered_certificate = RenderedCertificate(
+                name=certificate_config.name,
+                content=rendered_content,
+                certificate_config=certificate_config,
+            )
+            memo.haproxy_config_context.rendered_certificates.append(
+                rendered_certificate
+            )
+            metrics.record_template_render("certificate", "success")
+            add_span_attributes(
+                certificate_name=certificate_config.name,
+                certificate_size=len(rendered_content),
+            )
+            record_span_event("certificate_rendered", {"name": certificate_config.name})
+            logger.debug(
+                f"✅ Rendered certificate template for {certificate_config.name}"
+            )
+        except Exception as e:
+            metrics.record_template_render("certificate", "error")
+            metrics.record_error("template_render_failed", "operator")
+            record_span_event(
+                "certificate_render_failed",
+                {"name": certificate_config.name, "error": str(e)},
+            )
+            logger.error(
+                f"❌ Failed to render certificate template for {certificate_config.name}: {e}"
+            )
+
+    # Synchronize rendered configuration with HAProxy instances
+    await synchronize_with_haproxy_instances(memo)
+
+
+async def synchronize_with_haproxy_instances(memo: Any) -> None:
+    """Synchronize rendered configuration with HAProxy instances via Dataplane API."""
+    metrics = get_metrics_collector()
+
+    if not memo.config.pod_selector:
+        logger.warning(
+            "⚠️ No pod selector configured - skipping HAProxy synchronization"
+        )
+        return
+
+    if not memo.haproxy_config_context.rendered_config:
+        logger.warning(
+            "⚠️ No rendered HAProxy config available - skipping synchronization"
+        )
+        return
+
+    try:
+        # Create pod discovery service
+        current_namespace = get_current_namespace()
+        pod_discovery = HAProxyPodDiscovery(
+            pod_selector=memo.config.pod_selector, namespace=current_namespace
+        )
+
+        # Create synchronizer and perform sync
+        synchronizer = ConfigSynchronizer(pod_discovery)
+        results = await synchronizer.synchronize_configuration(
+            memo.haproxy_config_context
+        )
+
+        # Log results and record metrics
+        successful = [r for r in results if r.success]
+        failed = [r for r in results if not r.success]
+
+        # Record HAProxy instance counts and sync results
+        production_instances = [
+            r.instance for r in results if not r.instance.is_validation_sidecar
+        ]
+        validation_instances = [
+            r.instance for r in results if r.instance.is_validation_sidecar
+        ]
+        metrics.record_haproxy_instances(
+            len(production_instances), len(validation_instances)
+        )
+
+        if successful:
+            for result in successful:
+                metrics.record_dataplane_api_request("deploy", "success")
+            logger.info(
+                f"🚀 Successfully synchronized configuration to {len(successful)} HAProxy instances"
+            )
+
+        if failed:
+            for result in failed:
+                metrics.record_dataplane_api_request("deploy", "error")
+                metrics.record_error("dataplane_deploy_failed", "dataplane")
+            logger.error(
+                f"❌ Failed to synchronize configuration to {len(failed)} HAProxy instances"
+            )
+            for result in failed:
+                logger.error(f"   - {result.instance.name}: {result.error}")
+
+    except ValidationError as e:
+        metrics.record_error("validation_failed", "dataplane")
+        logger.error(f"❌ Configuration validation failed: {e}")
+    except DataplaneAPIError as e:
+        metrics.record_error("dataplane_api_failed", "dataplane")
+        logger.error(f"❌ Dataplane API error: {e}")
+    except Exception as e:
+        metrics.record_error("sync_unexpected_error", "dataplane")
+        logger.error(f"❌ Unexpected error during synchronization: {e}")
 
 
 # =============================================================================
@@ -269,14 +493,24 @@ def setup_resource_watchers(memo: Any) -> None:
 
 async def initialize_configuration(memo: Any) -> None:
     """Initialize operator configuration from ConfigMap."""
+    metrics = get_metrics_collector()
+
     configmap_name = memo.cli_options.configmap_name
     logger.info(f"⚙️ Initializing config from configmap {configmap_name}.")
 
-    namespace = get_current_namespace() or "default"
-    configmap = await fetch_configmap(configmap_name, namespace)
-    memo.config = await load_config_from_configmap(configmap)
+    try:
+        with metrics.time_config_reload():
+            namespace = get_current_namespace() or "default"
+            configmap = await fetch_configmap(configmap_name, namespace)
+            memo.config = await load_config_from_configmap(configmap)
 
-    logger.info("✅ Configuration loaded successfully.")
+        metrics.record_config_reload(success=True)
+        logger.info("✅ Configuration loaded successfully.")
+    except Exception as e:
+        metrics.record_config_reload(success=False)
+        metrics.record_error("config_load_failed", "operator")
+        logger.error(f"❌ Failed to load configuration: {e}")
+        raise
 
 
 async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
@@ -298,6 +532,16 @@ async def init_management_socket(memo: Any, **kwargs: Any) -> None:
     socket_path = memo.cli_options.socket_path
     memo.socket_server_task = asyncio.create_task(
         run_management_socket_server(memo, socket_path)
+    )
+
+
+async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
+    """Initialize and start the Prometheus metrics server."""
+    metrics = get_metrics_collector()
+    metrics_port = getattr(memo.cli_options, "metrics_port", 9090)
+    # Start metrics server as a background task
+    memo.metrics_server_task = asyncio.create_task(
+        metrics.start_metrics_server(metrics_port)
     )
 
 
@@ -331,6 +575,10 @@ def create_operator_memo(cli_options: Any) -> Any:
 
 def run_operator_loop(cli_options: Any) -> None:
     """Run the main operator loop with config reload capability."""
+    # Initialize metrics on first run
+    metrics = get_metrics_collector()
+    metrics.set_app_info()
+
     while True:
         # Set up operator
         # Explicitly set registry to prevent persistence of handlers across reloads
@@ -372,6 +620,8 @@ def run_operator_loop(cli_options: Any) -> None:
         kopf.on.startup()(init_watch_configmap)
         # Start the management socket server to retrieve internal information and trigger actions
         kopf.on.startup()(init_management_socket)
+        # Start the metrics server for Prometheus monitoring
+        kopf.on.startup()(init_metrics_server)
 
         # Run operator
         kopf.run(

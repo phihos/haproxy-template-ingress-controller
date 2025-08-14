@@ -19,6 +19,7 @@ from haproxy_template_ic.operator import (
     update_resource_index,
     create_operator_memo,
     render_haproxy_templates,
+    synchronize_with_haproxy_instances,
     setup_resource_watchers,
     initialize_configuration,
     _is_valid_resource,
@@ -27,9 +28,13 @@ from haproxy_template_ic.config import (
     Config,
     MapConfig,
     MapCollection,
+    CertificateConfig,
+    CertificateCollection,
     PodSelector,
     HAProxyConfigContext,
     RenderedMap,
+    RenderedConfig,
+    RenderedCertificate,
     WatchResourceCollection,
     WatchResourceConfig,
 )
@@ -258,12 +263,22 @@ async def test_render_haproxy_templates_success():
 
     await render_haproxy_templates(memo, logger=logger)
 
+    # Check that rendered HAProxy config was added
+    assert memo.haproxy_config_context.rendered_config is not None
+    rendered_config = memo.haproxy_config_context.rendered_config
+    assert isinstance(rendered_config, RenderedConfig)
+    assert rendered_config.content == "global\n    daemon"
+    assert rendered_config.config == memo.config
+
     # Check that rendered map was added
     assert len(memo.haproxy_config_context.rendered_maps) == 1
     rendered_map = memo.haproxy_config_context.rendered_maps[0]
     assert isinstance(rendered_map, RenderedMap)
     assert rendered_map.path == "/etc/haproxy/maps/backend.map"
     assert "server test-pod 10.0.1.5:80" in rendered_map.content
+
+    # Check that no certificates were rendered (none configured)
+    assert len(memo.haproxy_config_context.rendered_certificates) == 0
 
 
 @pytest.mark.asyncio
@@ -427,8 +442,9 @@ def test_jinja2_dict_access_patterns():
 
 
 @pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_haproxy_templates_jinja_error(mock_logger):
+async def test_render_haproxy_templates_jinja_error(mock_logger, mock_sync):
     """Test template rendering with Jinja error."""
     memo = MagicMock()
     memo.config = Config(
@@ -458,8 +474,342 @@ async def test_render_haproxy_templates_jinja_error(mock_logger):
     await render_haproxy_templates(memo)
 
     # Should log error but not crash
-    mock_logger.error.assert_called_once()
-    assert "Failed to render template" in mock_logger.error.call_args[0][0]
+    mock_logger.error.assert_called()
+    assert "Failed to render template" in mock_logger.error.call_args_list[0][0][0]
+    # Sync should be called but will handle the error gracefully
+    mock_sync.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_render_haproxy_config_with_template_variables():
+    """Test HAProxy config rendering with template variables from resources."""
+    memo = MagicMock()
+    memo.config = Config(
+        raw={
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": {
+                "template": "global\n{% for _, pod in resources.get('pods', {}).items() %}    # Pod: {{ pod.metadata.name }}\n{% endfor %}    daemon"
+            },
+        },
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=Template(
+            "global\n{% for _, pod in resources.get('pods', {}).items() %}    # Pod: {{ pod.metadata.name }}\n{% endfor %}    daemon"
+        ),
+        watch_resources=WatchResourceCollection(
+            [WatchResourceConfig(kind="Pod", id="pods")]
+        ),
+        maps=MapCollection([]),
+    )
+    memo.haproxy_config_context = HAProxyConfigContext()
+
+    # Mock the indices with test data
+    mock_indices = MagicMock()
+
+    # Create a mock Kubernetes Pod object
+    mock_pod = MagicMock()
+    mock_pod.metadata.name = "test-pod"
+
+    mock_indices.get.return_value = {("default", "test-pod"): mock_pod}
+    memo.indices = mock_indices
+
+    logger = MagicMock()
+
+    await render_haproxy_templates(memo, logger=logger)
+
+    # Check that rendered HAProxy config was added with template variables
+    assert memo.haproxy_config_context.rendered_config is not None
+    rendered_config = memo.haproxy_config_context.rendered_config
+    assert isinstance(rendered_config, RenderedConfig)
+    assert "global\n" in rendered_config.content
+    assert "# Pod: test-pod" in rendered_config.content
+    assert "daemon" in rendered_config.content
+    assert rendered_config.config == memo.config
+
+
+@pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.logger")
+async def test_render_haproxy_config_jinja_error(mock_logger):
+    """Test HAProxy config rendering with Jinja error."""
+    memo = MagicMock()
+    memo.config = Config(
+        raw={
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": {
+                "template": "global\n    {{ undefined_variable.invalid_attr }}"
+            },
+        },
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=Template("global\n    {{ undefined_variable.invalid_attr }}"),
+        watch_resources=WatchResourceCollection([]),
+        maps=MapCollection([]),
+    )
+    memo.haproxy_config_context = HAProxyConfigContext()
+
+    # Mock the indices
+    mock_indices = MagicMock()
+    mock_indices.get.return_value = {}
+    memo.indices = mock_indices
+
+    await render_haproxy_templates(memo)
+
+    # Should log error but not crash, and rendered_config should be None
+    mock_logger.error.assert_called()
+    assert "Failed to render HAProxy configuration template" in str(
+        mock_logger.error.call_args
+    )
+    assert memo.haproxy_config_context.rendered_config is None
+
+
+@pytest.mark.asyncio
+async def test_render_certificates_with_template_variables():
+    """Test certificate rendering with template variables from resources."""
+    memo = MagicMock()
+    memo.config = Config(
+        raw={
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+        },
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=Template("global\n    daemon"),
+        watch_resources=WatchResourceCollection(
+            [WatchResourceConfig(kind="Secret", id="secrets")]
+        ),
+        maps=MapCollection([]),
+        certificates=CertificateCollection(
+            [
+                CertificateConfig(
+                    template=Template(
+                        "{% for _, secret in resources.get('secrets', {}).items() %}"
+                        "# Certificate for {{ secret.metadata.name }}\n"
+                        "{{ secret.data.get('tls.crt', 'MISSING') }}\n"
+                        "{{ secret.data.get('tls.key', 'MISSING') }}\n"
+                        "{% endfor %}"
+                    ),
+                    name="tls.pem",
+                )
+            ]
+        ),
+    )
+    memo.haproxy_config_context = HAProxyConfigContext()
+
+    # Mock the indices with test secret data
+    mock_indices = MagicMock()
+
+    # Create a mock Kubernetes Secret object
+    mock_secret = MagicMock()
+    mock_secret.metadata.name = "test-secret"
+    mock_secret.data = {"tls.crt": "certificate data", "tls.key": "key data"}
+
+    mock_indices.get.return_value = {("default", "test-secret"): mock_secret}
+    memo.indices = mock_indices
+
+    logger = MagicMock()
+
+    await render_haproxy_templates(memo, logger=logger)
+
+    # Check that rendered certificate was added
+    assert len(memo.haproxy_config_context.rendered_certificates) == 1
+    rendered_certificate = memo.haproxy_config_context.rendered_certificates[0]
+    assert isinstance(rendered_certificate, RenderedCertificate)
+    assert rendered_certificate.name == "tls.pem"
+    assert "# Certificate for test-secret" in rendered_certificate.content
+    assert "certificate data" in rendered_certificate.content
+    assert "key data" in rendered_certificate.content
+
+
+@pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.logger")
+async def test_render_certificates_jinja_error(mock_logger, mock_sync):
+    """Test certificate rendering with Jinja error."""
+    memo = MagicMock()
+    memo.config = Config(
+        raw={
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+        },
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=Template("global\n    daemon"),
+        watch_resources=WatchResourceCollection([]),
+        maps=MapCollection([]),
+        certificates=CertificateCollection(
+            [
+                CertificateConfig(
+                    template=Template("{{ undefined_variable.invalid_attr }}"),
+                    name="bad-cert",
+                )
+            ]
+        ),
+    )
+    memo.haproxy_config_context = HAProxyConfigContext()
+
+    # Mock the indices
+    mock_indices = MagicMock()
+    mock_indices.get.return_value = {}
+    memo.indices = mock_indices
+
+    await render_haproxy_templates(memo)
+
+    # Should log error but not crash, and rendered_certificates should be empty
+    mock_logger.error.assert_called()
+
+    # Check for certificate error in any of the error calls
+    error_messages = [str(call) for call in mock_logger.error.call_args_list]
+    assert any(
+        "Failed to render certificate template for bad-cert" in msg
+        for msg in error_messages
+    )
+    assert len(memo.haproxy_config_context.rendered_certificates) == 0
+    # Sync should be called but will handle the error gracefully
+    mock_sync.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.HAProxyPodDiscovery")
+@patch("haproxy_template_ic.operator.ConfigSynchronizer")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_synchronize_with_haproxy_instances_success(
+    mock_get_namespace, mock_synchronizer_class, mock_discovery_class
+):
+    """Test successful HAProxy instance synchronization."""
+    memo = MagicMock()
+    memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
+    memo.haproxy_config_context.rendered_config = RenderedConfig(
+        content="global\n    daemon", config=memo.config
+    )
+
+    # Mock dependencies
+    mock_get_namespace.return_value = "default"
+    mock_discovery = MagicMock()
+    mock_discovery_class.return_value = mock_discovery
+
+    mock_synchronizer = MagicMock()
+    mock_synchronizer_class.return_value = mock_synchronizer
+
+    # Mock successful sync results
+    from haproxy_template_ic.dataplane import SyncResult
+
+    mock_instance = MagicMock()
+    mock_instance.name = "default/haproxy-1"
+
+    success_result = SyncResult(
+        success=True, instance=mock_instance, config_version="123"
+    )
+    mock_synchronizer.synchronize_configuration.return_value = [success_result]
+
+    # Call the function
+    await synchronize_with_haproxy_instances(memo)
+
+    # Verify calls
+    mock_discovery_class.assert_called_once_with(
+        pod_selector=memo.config.pod_selector, namespace="default"
+    )
+    mock_synchronizer_class.assert_called_once_with(mock_discovery)
+    mock_synchronizer.synchronize_configuration.assert_called_once_with(
+        memo.haproxy_config_context
+    )
+
+
+@pytest.mark.asyncio
+async def test_synchronize_with_haproxy_instances_no_pod_selector():
+    """Test synchronization with no pod selector configured."""
+    memo = MagicMock()
+    memo.config.pod_selector = None
+
+    # Should return early without attempting synchronization
+    await synchronize_with_haproxy_instances(memo)
+
+    # No assertions needed - function should just log and return
+
+
+@pytest.mark.asyncio
+async def test_synchronize_with_haproxy_instances_no_rendered_config():
+    """Test synchronization with no rendered HAProxy config."""
+    memo = MagicMock()
+    memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
+    memo.haproxy_config_context.rendered_config = None
+
+    # Should return early without attempting synchronization
+    await synchronize_with_haproxy_instances(memo)
+
+    # No assertions needed - function should just log and return
+
+
+@pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.HAProxyPodDiscovery")
+@patch("haproxy_template_ic.operator.ConfigSynchronizer")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_synchronize_with_haproxy_instances_validation_error(
+    mock_get_namespace, mock_synchronizer_class, mock_discovery_class
+):
+    """Test synchronization handling validation errors."""
+    from haproxy_template_ic.dataplane import ValidationError
+
+    memo = MagicMock()
+    memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
+    memo.haproxy_config_context.rendered_config = RenderedConfig(
+        content="global\n    daemon", config=memo.config
+    )
+
+    # Mock validation error
+    mock_get_namespace.return_value = "default"
+    mock_discovery = MagicMock()
+    mock_discovery_class.return_value = mock_discovery
+
+    mock_synchronizer = MagicMock()
+    mock_synchronizer_class.return_value = mock_synchronizer
+    mock_synchronizer.synchronize_configuration.side_effect = ValidationError(
+        "Config invalid"
+    )
+
+    # Should not raise exception, just log error
+    await synchronize_with_haproxy_instances(memo)
+
+
+@pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.HAProxyPodDiscovery")
+@patch("haproxy_template_ic.operator.ConfigSynchronizer")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_synchronize_with_haproxy_instances_with_failures(
+    mock_get_namespace, mock_synchronizer_class, mock_discovery_class
+):
+    """Test synchronization with some instance failures."""
+    memo = MagicMock()
+    memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
+    memo.haproxy_config_context.rendered_config = RenderedConfig(
+        content="global\n    daemon", config=memo.config
+    )
+
+    # Mock dependencies
+    mock_get_namespace.return_value = "default"
+    mock_discovery = MagicMock()
+    mock_discovery_class.return_value = mock_discovery
+
+    mock_synchronizer = MagicMock()
+    mock_synchronizer_class.return_value = mock_synchronizer
+
+    # Mock mixed results
+    from haproxy_template_ic.dataplane import SyncResult
+
+    mock_success_instance = MagicMock()
+    mock_success_instance.name = "default/haproxy-1"
+    mock_failed_instance = MagicMock()
+    mock_failed_instance.name = "default/haproxy-2"
+
+    success_result = SyncResult(
+        success=True, instance=mock_success_instance, config_version="123"
+    )
+    failed_result = SyncResult(
+        success=False, instance=mock_failed_instance, error="Connection timeout"
+    )
+
+    mock_synchronizer.synchronize_configuration.return_value = [
+        success_result,
+        failed_result,
+    ]
+
+    # Should handle mixed results gracefully
+    await synchronize_with_haproxy_instances(memo)
 
 
 # =============================================================================
@@ -476,6 +826,9 @@ def test_create_operator_memo():
         healthz_port=8080,
         verbose=1,
         socket_path="/run/haproxy-template-ic/management.sock",
+        metrics_port=9090,
+        structured_logging=False,
+        tracing_enabled=False,
     )
 
     memo, loop, stop_flag = create_operator_memo(cli_options)
@@ -567,6 +920,9 @@ async def test_initialize_configuration(
         healthz_port=8080,
         verbose=1,
         socket_path="/test/socket",
+        metrics_port=9090,
+        structured_logging=False,
+        tracing_enabled=False,
     )
     memo.cli_options = cli_options
 

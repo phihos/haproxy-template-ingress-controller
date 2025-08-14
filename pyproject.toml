@@ -6,10 +6,19 @@ requires-python = ">=3.13"
 dependencies = [
     "click>=8.2.1",
     "deepdiff>=8.6.0",
+    "deprecated>=1.2.18",
+    "httpx>=0.28.1",
     "jinja2>=3.1.0",
     "kopf>=1.38.0",
     "kr8s>=0.20.9",
     "kubernetes>=33.1.0",
+    "opentelemetry-api>=1.36.0",
+    "opentelemetry-exporter-jaeger>=1.21.0",
+    "opentelemetry-instrumentation-asyncio>=0.57b0",
+    "opentelemetry-instrumentation-httpx>=0.57b0",
+    "opentelemetry-sdk>=1.36.0",
+    "prometheus-async>=25.1.0",
+    "prometheus-client>=0.22.1",
     "pyyaml>=6.0.2",
     "uvloop>=0.21.0",
 ]
@@ -152,3 +161,4 @@ exclude_dirs = ["tests"]
 
 [tool.deptry]
 extend_exclude = ["tests", "coverage_wrapper.py"]  # Test files can use dev dependencies
+per_rule_ignores = { "DEP002" = "deprecated" }  # Required by opentelemetry-exporter-jaeger transitive dependency

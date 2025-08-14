@@ -1,0 +1,22 @@
+{{- if .Values.controller.metricsPort }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-metrics
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.controller.metricsPort | quote }}
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.controller.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "haproxy-template-ic.selectorLabels" . | nindent 4 }}
+{{- end }}

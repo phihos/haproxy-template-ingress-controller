@@ -98,6 +98,20 @@ data:
         {% endif %}
         {% endfor %}
     maps:
+      /etc/haproxy/maps/host.map:
+        template: |
+          # This map is used to match the host header (without ":port") to a normalized host identifier for path routing.
+          # Example: www.example.com -> example.com
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% if ingress.spec and ingress.spec.rules %}
+          {% for rule in ingress.spec.rules %}
+          {% if rule.host %}
+          {{ rule.host }} {{ rule.host }}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+
       /etc/haproxy/maps/path-exact.map:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.

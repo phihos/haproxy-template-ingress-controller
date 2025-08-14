@@ -7,4 +7,4 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   config: |
-{{- .Values.controller.config | nindent 4 }}
+{{- .Values.controller.config | toYaml | nindent 4 }}

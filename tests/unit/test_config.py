@@ -4,8 +4,11 @@ from haproxy_template_ic.config import (
     Config,
     WatchResourceConfig,
     MapConfig,
+    CertificateConfig,
     config_from_dict,
     RenderedMap,
+    RenderedConfig,
+    RenderedCertificate,
     TemplateContext,
     HAProxyConfigContext,
 )
@@ -412,6 +415,123 @@ def test_haproxy_config_context_mutable():
     context.rendered_maps.append(rendered_map)
     assert len(context.rendered_maps) == 1
     assert context.rendered_maps[0] == rendered_map
+
+
+# RenderedConfig Tests
+def test_rendered_config_creation():
+    """Test RenderedConfig dataclass creation."""
+    config = Config(
+        raw={},
+        pod_selector={"match_labels": {}},
+        haproxy_config=Template("global\n    daemon"),
+    )
+
+    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
+
+    assert rendered_config.content == "global\n    daemon"
+    assert rendered_config.config == config
+
+
+def test_rendered_config_frozen():
+    """Test that RenderedConfig is frozen (immutable)."""
+    config = Config(
+        raw={},
+        pod_selector={"match_labels": {}},
+        haproxy_config=Template("global\n    daemon"),
+    )
+
+    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
+
+    # Should not be able to modify fields
+    with pytest.raises(AttributeError):
+        rendered_config.content = "new content"
+
+    with pytest.raises(AttributeError):
+        rendered_config.config = config
+
+
+def test_haproxy_config_context_with_rendered_config():
+    """Test HAProxyConfigContext with rendered config."""
+    config = Config(
+        raw={},
+        pod_selector={"match_labels": {}},
+        haproxy_config=Template("global\n    daemon"),
+    )
+
+    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
+    context = HAProxyConfigContext(rendered_config=rendered_config)
+
+    assert context.rendered_config == rendered_config
+    assert context.rendered_config.content == "global\n    daemon"
+
+
+def test_haproxy_config_context_default_rendered_config():
+    """Test HAProxyConfigContext default rendered_config is None."""
+    context = HAProxyConfigContext()
+
+    assert context.rendered_config is None
+    assert context.rendered_maps == []
+
+
+# RenderedCertificate Tests
+def test_rendered_certificate_creation():
+    """Test RenderedCertificate dataclass creation."""
+    certificate_config = CertificateConfig(
+        template=Template("cert content"), name="test-cert"
+    )
+
+    rendered_certificate = RenderedCertificate(
+        name="test-cert", content="cert content", certificate_config=certificate_config
+    )
+
+    assert rendered_certificate.name == "test-cert"
+    assert rendered_certificate.content == "cert content"
+    assert rendered_certificate.certificate_config == certificate_config
+
+
+def test_rendered_certificate_frozen():
+    """Test that RenderedCertificate is frozen (immutable)."""
+    certificate_config = CertificateConfig(
+        template=Template("cert content"), name="test-cert"
+    )
+
+    rendered_certificate = RenderedCertificate(
+        name="test-cert", content="cert content", certificate_config=certificate_config
+    )
+
+    # Should not be able to modify fields
+    with pytest.raises(AttributeError):
+        rendered_certificate.name = "new-name"
+
+    with pytest.raises(AttributeError):
+        rendered_certificate.content = "new content"
+
+    with pytest.raises(AttributeError):
+        rendered_certificate.certificate_config = certificate_config
+
+
+def test_haproxy_config_context_with_rendered_certificates():
+    """Test HAProxyConfigContext with rendered certificates."""
+    certificate_config = CertificateConfig(
+        template=Template("cert content"), name="test-cert"
+    )
+
+    rendered_certificate = RenderedCertificate(
+        name="test-cert", content="cert content", certificate_config=certificate_config
+    )
+
+    context = HAProxyConfigContext(rendered_certificates=[rendered_certificate])
+
+    assert len(context.rendered_certificates) == 1
+    assert context.rendered_certificates[0] == rendered_certificate
+    assert context.rendered_certificates[0].name == "test-cert"
+
+
+def test_haproxy_config_context_default_rendered_certificates():
+    """Test HAProxyConfigContext default rendered_certificates is empty list."""
+    context = HAProxyConfigContext()
+
+    assert context.rendered_certificates == []
 
 
 # =============================================================================
@@ -1316,6 +1436,41 @@ def test_template_environment_caching():
     assert hash_a != hash_b  # Different snippets should have different hashes
 
 
+def test_b64decode_filter():
+    """Test the custom base64 decode filter."""
+    import base64
+    from haproxy_template_ic.config import _make_jinja_template
+
+    # Test valid base64 string
+    test_string = "Hello, World!"
+    encoded = base64.b64encode(test_string.encode("utf-8")).decode("ascii")
+
+    template_str = f"{{{{ '{encoded}' | b64decode }}}}"
+    template = _make_jinja_template(template_str, context_name="test_b64decode")
+    result = template.render()
+
+    assert result == test_string
+
+    # Test another string with special characters
+    test_string2 = "Special chars: ñáéíóú!@#$%^&*()"
+    encoded2 = base64.b64encode(test_string2.encode("utf-8")).decode("ascii")
+
+    template_str2 = f"{{{{ '{encoded2}' | b64decode }}}}"
+    template2 = _make_jinja_template(template_str2, context_name="test_b64decode2")
+    result2 = template2.render()
+
+    assert result2 == test_string2
+
+    # Test invalid base64 should raise error
+    template_str_invalid = "{{ 'invalid_base64!' | b64decode }}"
+    template_invalid = _make_jinja_template(
+        template_str_invalid, context_name="test_b64decode_invalid"
+    )
+
+    with pytest.raises(ValueError, match="Failed to decode base64 value"):
+        template_invalid.render()
+
+
 def test_type_safety_enhancements():
     """Test the new type safety enhancements for config parsing."""
 
@@ -1414,3 +1569,135 @@ def test_type_safety_enhancements():
                 ],
             }
         )
+
+
+def test_host_map_template_rendering():
+    """Test that host map template renders correctly with ingress resources."""
+    # Create a config with host map template
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "maps": {
+            "/etc/haproxy/maps/host.map": {
+                "template": """{% for _, ingress in resources.get('ingresses', {}).items() %}
+{% if ingress.spec and ingress.spec.rules %}
+{% for rule in ingress.spec.rules %}
+{% if rule.host %}
+{{ rule.host }} {{ rule.host }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}"""
+            }
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    # Create mock ingress resources
+    mock_resources = {
+        "ingresses": {
+            ("default", "test-ingress"): {
+                "metadata": {"name": "test-ingress", "namespace": "default"},
+                "spec": {
+                    "rules": [
+                        {"host": "example.com"},
+                        {"host": "www.example.com"},
+                        {"host": "api.example.com"},
+                    ]
+                },
+            },
+            ("production", "prod-ingress"): {
+                "metadata": {"name": "prod-ingress", "namespace": "production"},
+                "spec": {"rules": [{"host": "prod.example.com"}]},
+            },
+        }
+    }
+
+    # Create template context
+    context = TemplateContext(resources=mock_resources, config=config)
+
+    # Render the host map
+    host_map_config = config.maps.by_path("/etc/haproxy/maps/host.map")
+    template_vars = {
+        "resources": context.resources,
+        "config": context.config,
+    }
+
+    rendered_content = host_map_config.template.render(**template_vars)
+
+    # Verify the rendered content contains expected hosts
+    assert "example.com example.com" in rendered_content
+    assert "www.example.com www.example.com" in rendered_content
+    assert "api.example.com api.example.com" in rendered_content
+    assert "prod.example.com prod.example.com" in rendered_content
+
+    # Verify it doesn't contain empty entries
+    assert "  " not in rendered_content  # No double spaces from empty hosts
+
+
+def test_complete_ingress_configuration_with_certificates():
+    """Test a complete ingress controller configuration including certificates with b64decode."""
+    import base64
+
+    # Create TLS certificate data
+    cert_data = (
+        "-----BEGIN CERTIFICATE-----\nMIIB...test cert...\n-----END CERTIFICATE-----"
+    )
+    key_data = (
+        "-----BEGIN PRIVATE KEY-----\nMIIE...test key...\n-----END PRIVATE KEY-----"
+    )
+
+    cert_b64 = base64.b64encode(cert_data.encode("utf-8")).decode("ascii")
+    key_b64 = base64.b64encode(key_data.encode("utf-8")).decode("ascii")
+
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "certificates": {
+            "/etc/haproxy/certs/tls.pem": {
+                "template": """{% for _, secret in resources.get('secrets', {}).items() %}
+{% if secret.type == "kubernetes.io/tls" and secret.metadata.labels.get('haproxy-template-ic/tls') == 'true' %}
+# Certificate for {{ secret.metadata.name }} in {{ secret.metadata.namespace }}
+{{ secret.data.get('tls.crt') | b64decode }}
+{{ secret.data.get('tls.key') | b64decode }}
+
+{% endif %}
+{% endfor %}"""
+            }
+        },
+    }
+
+    config = config_from_dict(config_dict)
+
+    # Create mock TLS secret
+    mock_resources = {
+        "secrets": {
+            ("default", "example-tls"): {
+                "metadata": {
+                    "name": "example-tls",
+                    "namespace": "default",
+                    "labels": {"haproxy-template-ic/tls": "true"},
+                },
+                "type": "kubernetes.io/tls",
+                "data": {"tls.crt": cert_b64, "tls.key": key_b64},
+            }
+        }
+    }
+
+    # Create template context
+    context = TemplateContext(resources=mock_resources, config=config)
+
+    # Render the certificate template
+    cert_config = config.certificates.by_name("/etc/haproxy/certs/tls.pem")
+    template_vars = {
+        "resources": context.resources,
+        "config": context.config,
+    }
+
+    rendered_content = cert_config.template.render(**template_vars)
+
+    # Verify the certificate and key were decoded correctly
+    assert cert_data in rendered_content
+    assert key_data in rendered_content
+    assert "# Certificate for example-tls in default" in rendered_content

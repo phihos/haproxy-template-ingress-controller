@@ -1,0 +1,80 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "HAProxy Template IC - Observability Dashboard",
+    "tags": ["haproxy", "ingress", "kubernetes"],
+    "style": "dark",
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Template Renders",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(haproxy_template_ic_template_renders_total[5m])",
+            "legendFormat": "Templates/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Config Reloads",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(haproxy_template_ic_config_reloads_total[5m])",
+            "legendFormat": "Reloads/sec"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Template Render Duration",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(haproxy_template_ic_template_render_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(haproxy_template_ic_template_render_duration_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Error Rates",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(haproxy_template_ic_errors_total[5m])",
+            "legendFormat": "{{error_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 5,
+        "title": "Circuit Breaker Status",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "haproxy_template_ic_circuit_breaker_state",
+            "legendFormat": "{{circuit_name}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "30s"
+  }
+}

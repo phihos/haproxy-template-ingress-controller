@@ -1,3 +1,4 @@
+import base64
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -14,6 +15,14 @@ from jinja2 import (
 # -----------------------------------------------------------------------------
 # Jinja2 setup
 # -----------------------------------------------------------------------------
+
+
+def b64decode_filter(value: str) -> str:
+    """Custom Jinja2 filter to decode base64 strings."""
+    try:
+        return base64.b64decode(value).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Failed to decode base64 value: {e}") from e
 
 
 class SnippetLoader(BaseLoader):
@@ -55,7 +64,10 @@ def _get_cached_environment(snippets_hash: int) -> Environment:
     Returns:
         Cached Jinja2 environment instance
     """
-    return Environment(extensions=["jinja2.ext.do"])  # nosec B701
+    env = Environment(extensions=["jinja2.ext.do"])  # nosec B701
+    # Add custom filters
+    env.filters["b64decode"] = b64decode_filter
+    return env
 
 
 def _get_snippets_hash(snippets: Optional["TemplateSnippetCollection"]) -> int:
@@ -479,6 +491,19 @@ class RenderedMap:
 
 
 @dataclass(frozen=True)
+class RenderedConfig:
+    content: str
+    config: "Config"
+
+
+@dataclass(frozen=True)
+class RenderedCertificate:
+    name: str
+    content: str
+    certificate_config: "CertificateConfig"
+
+
+@dataclass(frozen=True)
 class TemplateContext:
     resources: Dict[str, Any] = field(default_factory=dict)
     environment: Dict[str, str] = field(default_factory=dict)
@@ -527,3 +552,5 @@ class TemplateContext:
 @dataclass
 class HAProxyConfigContext:
     rendered_maps: List[RenderedMap] = field(default_factory=list)
+    rendered_config: Optional[RenderedConfig] = None
+    rendered_certificates: List[RenderedCertificate] = field(default_factory=list)

@@ -47,7 +47,9 @@ def test_main_cli_with_defaults(mock_run_operator_loop):
     """Test main CLI command with default arguments."""
     runner = CliRunner()
 
-    with patch("haproxy_template_ic.__main__.setup_logging") as mock_setup_logging:
+    with patch(
+        "haproxy_template_ic.__main__.setup_structured_logging"
+    ) as mock_setup_logging:
         # Run CLI with minimal required args
         result = runner.invoke(main, ["--configmap-name", "test-config"])
 
@@ -55,7 +57,7 @@ def test_main_cli_with_defaults(mock_run_operator_loop):
         assert result.exit_code == 0
 
         # Verify logging setup was called with default verbose level (0)
-        mock_setup_logging.assert_called_once_with(0)
+        mock_setup_logging.assert_called_once_with(0, use_json=False)
 
         # Verify run_operator_loop was called with correct CLI options
         mock_run_operator_loop.assert_called_once()
@@ -75,7 +77,9 @@ def test_main_cli_with_custom_args(mock_run_operator_loop):
     """Test main CLI command with custom arguments."""
     runner = CliRunner()
 
-    with patch("haproxy_template_ic.__main__.setup_logging") as mock_setup_logging:
+    with patch(
+        "haproxy_template_ic.__main__.setup_structured_logging"
+    ) as mock_setup_logging:
         # Run CLI with custom args
         result = runner.invoke(
             main,
@@ -95,7 +99,7 @@ def test_main_cli_with_custom_args(mock_run_operator_loop):
         assert result.exit_code == 0
 
         # Verify logging setup was called with verbose level 2 (debug)
-        mock_setup_logging.assert_called_once_with(2)
+        mock_setup_logging.assert_called_once_with(2, use_json=False)
 
         # Verify run_operator_loop was called with custom CLI options
         mock_run_operator_loop.assert_called_once()
@@ -115,7 +119,9 @@ def test_main_cli_with_env_vars(mock_run_operator_loop):
 
     env_vars = {"HEALTHZ_PORT": "9999", "VERBOSE": "1", "SOCKET_PATH": "/env/socket"}
 
-    with patch("haproxy_template_ic.__main__.setup_logging") as mock_setup_logging:
+    with patch(
+        "haproxy_template_ic.__main__.setup_structured_logging"
+    ) as mock_setup_logging:
         # Run CLI with env vars
         result = runner.invoke(main, ["--configmap-name", "env-config"], env=env_vars)
 
@@ -123,7 +129,7 @@ def test_main_cli_with_env_vars(mock_run_operator_loop):
         assert result.exit_code == 0
 
         # Verify logging setup was called with env verbose level
-        mock_setup_logging.assert_called_once_with(1)
+        mock_setup_logging.assert_called_once_with(1, use_json=False)
 
         # Verify run_operator_loop was called with env CLI options
         mock_run_operator_loop.assert_called_once()
