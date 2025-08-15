@@ -588,6 +588,38 @@ Follow the style guide in `STYLEGUIDE.md`:
 - **"Connection refused"**: Verify Dataplane API is enabled on port 5555 (or custom port via annotation)
 - **"Configuration deployment failed"**: Check HAProxy logs for configuration errors and network connectivity
 
+## Commit Message Guidelines
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification for all commit messages:
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+**Common types**:
+- `feat:` - New features
+- `fix:` - Bug fixes  
+- `docs:` - Documentation changes
+- `style:` - Code style changes (formatting, missing semicolons, etc.)
+- `refactor:` - Code refactoring without changing functionality
+- `test:` - Adding or updating tests
+- `chore:` - Maintenance tasks, dependency updates
+- `ci:` - CI/CD configuration changes
+- `perf:` - Performance improvements
+
+**Examples**:
+```bash
+feat: add template snippet system with include support
+fix: resolve dataplane API connection timeout issues  
+docs: update deployment architecture documentation
+test: add acceptance tests for webhook validation
+chore: update dependencies to latest versions
+```
+
 ## Misc Memories
 
 - Always fix failing tests and checks without asking for confirmation.
