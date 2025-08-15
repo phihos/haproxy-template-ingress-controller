@@ -420,7 +420,50 @@ git push origin feature/awesome-new-feature
 
 ### 📝 Commit Messages
 
-Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, etc.
+Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification:
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+**Common types**:
+- `feat:` - New features
+- `fix:` - Bug fixes
+- `docs:` - Documentation changes
+- `style:` - Code style changes (formatting, missing semicolons, etc.)
+- `refactor:` - Code refactoring without changing functionality
+- `test:` - Adding or updating tests
+- `chore:` - Maintenance tasks, dependency updates
+- `ci:` - CI/CD configuration changes
+- `perf:` - Performance improvements
+
+**Examples**:
+```bash
+feat: add template snippet system with include support
+fix: resolve dataplane API connection timeout issues
+docs: update deployment architecture documentation
+test: add acceptance tests for webhook validation
+chore: update dependencies to latest versions
+```
+
+**Interactive commit creation**:
+Use commitizen for guided commit message creation:
+```bash
+# Interactive commit creation with guided prompts
+uv run cz commit
+
+# Or use the short form
+uv run cz c
+```
+
+**Enforcement**:
+- Commit messages are validated locally via pre-commit hooks
+- Pull requests are validated in CI using commitizen
+- Non-conforming commits will be rejected
 
 ### 🌿 Branches
 
