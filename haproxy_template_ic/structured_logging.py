@@ -99,6 +99,78 @@ class StructuredFormatter(logging.Formatter):
         return json.dumps(log_entry, default=str)
 
 
+class LogfmtFormatter(logging.Formatter):
+    """Formatter that appends context fields in logfmt format to regular log messages."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format log record with logfmt-formatted context appended."""
+        # Format the base message using parent formatter
+        base_message = super().format(record)
+
+        # Collect context fields from the record
+        context_fields = {}
+
+        # Add operation correlation
+        operation_id = operation_id_context.get()
+        if operation_id:
+            context_fields["operation_id"] = operation_id
+
+        # Add component context
+        component = component_context.get()
+        if component:
+            context_fields["component"] = component
+
+        # Add resource context
+        resource = resource_context.get()
+        if resource:
+            context_fields.update(resource)
+
+        # Add any extra fields from the log record
+        for key, value in record.__dict__.items():
+            if key not in {
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+            }:
+                context_fields[key] = value
+
+        # Format context fields as logfmt and append to base message
+        if context_fields:
+            logfmt_parts = []
+            for key, value in context_fields.items():
+                # Quote values that contain spaces or special characters
+                if isinstance(value, str) and (
+                    " " in value or '"' in value or "=" in value
+                ):
+                    # Escape quotes in the value
+                    escaped_value = value.replace('"', '\\"')
+                    logfmt_parts.append(f'{key}="{escaped_value}"')
+                else:
+                    logfmt_parts.append(f"{key}={value}")
+
+            logfmt_string = " ".join(logfmt_parts)
+            return f"{base_message} {logfmt_string}"
+
+        return base_message
+
+
 class StructuredLogger:
     """Wrapper for enhanced structured logging with context management."""
 
@@ -223,8 +295,8 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
         # Use structured JSON formatter
         formatter: logging.Formatter = StructuredFormatter()
     else:
-        # Use traditional formatter with some structure
-        formatter = logging.Formatter(
+        # Use logfmt formatter that appends context to traditional format
+        formatter = LogfmtFormatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
 

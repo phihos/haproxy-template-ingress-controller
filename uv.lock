@@ -80,6 +80,15 @@ wheels = [
 ]
 
 [[package]]
+name = "asn1crypto"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/cf/d547feed25b5244fcb9392e288ff9fdc3280b10260362fc45d37a798a6ee/asn1crypto-1.5.1.tar.gz", hash = "sha256:13ae38502be632115abf8a24cbe5f4da52e3b5231990aff31123c805306ccb9c", size = 121080, upload-time = "2022-03-15T14:46:52.889Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/7f/09065fd9e27da0eda08b4d6897f1c13535066174cc023af248fc2a8d5e5a/asn1crypto-1.5.1-py2.py3-none-any.whl", hash = "sha256:db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67", size = 105045, upload-time = "2022-03-15T14:46:51.055Z" },
+]
+
+[[package]]
 name = "astroid"
 version = "3.3.11"
 source = { registry = "https://pypi.org/simple" }
@@ -154,12 +163,38 @@ wheels = [
 ]
 
 [[package]]
+name = "certbuilder"
+version = "0.14.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asn1crypto" },
+    { name = "oscrypto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/98/72/3ae0fabde5716b271a1cc773650ccd53c5a5edb3bd00e9b8b8570da59cc1/certbuilder-0.14.2.tar.gz", hash = "sha256:56a8aee8ed31a211678647797dfdcdc85ec25d5d1bb1515e44ebae45cce363f9", size = 7883, upload-time = "2016-07-29T14:58:02.647Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/79/02/fafe5b1fd4a479bcb933fd04156ddb5185a084a5cc8a4a72957e7a4ccba6/certbuilder-0.14.2-py2.py3-none-any.whl", hash = "sha256:feed83d15b20c149debc1b73a7eb74b8e8041c78d3a8deb989e21905b4394a30", size = 8997, upload-time = "2016-07-29T14:58:00.097Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2025.8.3"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/dc/67/960ebe6bf230a96cda2e0abcf73af550ec4f090005363542f0765df162e0/certifi-2025.8.3.tar.gz", hash = "sha256:e564105f78ded564e3ae7c923924435e1daa7463faeab5bb932bc53ffae63407", size = 162386, upload-time = "2025-08-03T03:07:47.08Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/48/1549795ba7742c948d2ad169c1c8cdbae65bc450d6cd753d124b17c8cd32/certifi-2025.8.3-py3-none-any.whl", hash = "sha256:f6c12493cfb1b06ba2ff328595af9350c65d6644968e5d3a2ffd78699af217a5", size = 161216, upload-time = "2025-08-03T03:07:45.777Z" },
+]
+
+[[package]]
+name = "certvalidator"
+version = "0.11.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asn1crypto" },
+    { name = "oscrypto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a2/92/bb5902af005671fe343a55d50db4f1680f8a5551cd1f28f54118c4a61865/certvalidator-0.11.1.tar.gz", hash = "sha256:922d141c94393ab285ca34338e18dd4093e3ae330b1f278e96c837cb62cffaad", size = 25204, upload-time = "2016-07-29T14:57:44.754Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/e5/7f18a038f5951318234215403c396cf078e1bef7700a1a8527149e6bc72a/certvalidator-0.11.1-py2.py3-none-any.whl", hash = "sha256:77520b269f516d4fb0902998d5bd0eb3727fe153b659aa1cb828dcf12ea6b8de", size = 31458, upload-time = "2016-07-29T14:57:42.107Z" },
 ]
 
 [[package]]
@@ -403,6 +438,15 @@ wheels = [
 ]
 
 [[package]]
+name = "filelock"
+version = "3.19.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/40/bb/0ab3e58d22305b6f5440629d20683af28959bf793d98d11950e305c1c326/filelock-3.19.1.tar.gz", hash = "sha256:66eda1888b0171c998b35be2bcc0f6d75c388a7ce20c3f3f37aa8e96c2dddf58", size = 17687, upload-time = "2025-08-14T16:56:03.016Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/42/14/42b2651a2f46b022ccd948bca9f2d5af0fd8929c4eec235b8d6d844fbe67/filelock-3.19.1-py3-none-any.whl", hash = "sha256:d38e30481def20772f5baf097c122c3babc4fcdb7e14e57049eb9d88c6dc017d", size = 15988, upload-time = "2025-08-14T16:56:01.633Z" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -532,7 +576,7 @@ dependencies = [
     { name = "deprecated" },
     { name = "httpx" },
     { name = "jinja2" },
-    { name = "kopf" },
+    { name = "kopf", extra = ["dev"] },
     { name = "kr8s" },
     { name = "kubernetes" },
     { name = "opentelemetry-api" },
@@ -550,16 +594,22 @@ dependencies = [
 dev = [
     { name = "bandit" },
     { name = "black" },
+    { name = "cryptography" },
     { name = "deptry" },
     { name = "docker" },
+    { name = "filelock" },
     { name = "lint" },
     { name = "mypy" },
+    { name = "oscrypto" },
+    { name = "prometheus-client" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-kind" },
+    { name = "pytest-shared-session-scope" },
     { name = "pytest-xdist" },
     { name = "python-on-whales" },
+    { name = "requests" },
     { name = "ruff" },
     { name = "types-click" },
     { name = "types-pyyaml" },
@@ -573,7 +623,7 @@ requires-dist = [
     { name = "deprecated", specifier = ">=1.2.18" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.0" },
-    { name = "kopf", specifier = ">=1.38.0" },
+    { name = "kopf", extras = ["dev"], specifier = ">=1.38.0" },
     { name = "kr8s", specifier = ">=0.20.9" },
     { name = "kubernetes", specifier = ">=33.1.0" },
     { name = "opentelemetry-api", specifier = ">=1.36.0" },
@@ -591,16 +641,22 @@ requires-dist = [
 dev = [
     { name = "bandit", extras = ["toml"], specifier = ">=1.7.0" },
     { name = "black", specifier = ">=25.1.0" },
+    { name = "cryptography", specifier = ">=45.0.6" },
     { name = "deptry", specifier = ">=0.12.0" },
     { name = "docker", specifier = ">=7.1.0" },
+    { name = "filelock", specifier = ">=3.19.1" },
     { name = "lint", specifier = ">=1.2.1" },
     { name = "mypy", specifier = ">=1.8.0" },
+    { name = "oscrypto", git = "https://github.com/wbond/oscrypto.git?rev=d5f3437" },
+    { name = "prometheus-client", specifier = ">=0.22.1" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
     { name = "pytest-cov", specifier = ">=5.0.0" },
     { name = "pytest-kind", specifier = ">=22.11.1" },
+    { name = "pytest-shared-session-scope", specifier = ">=0.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "python-on-whales", specifier = ">=0.78.0" },
+    { name = "requests", specifier = ">=2.32.4" },
     { name = "ruff", specifier = ">=0.12.7" },
     { name = "types-click", specifier = ">=7.1.8" },
     { name = "types-pyyaml", specifier = ">=6.0.0" },
@@ -724,6 +780,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/74/d3/2b8a63a02b3fdf68f91d15b009ad7799c3fdcd6268c3b5e20863453d5215/kopf-1.38.0.tar.gz", hash = "sha256:7b9f83240269636e00e4b11e9c7c8afbfefba3d3326ac2d2aa7904d35c4f89cd", size = 1193277, upload-time = "2025-05-12T11:23:44.442Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b1/df/419544157085b971e1f5e4449b95c7b399f84b3f496e6aaf4ca41e7d6c9f/kopf-1.38.0-py3-none-any.whl", hash = "sha256:2384b8021032d9f87e53a6b46097c47e566d9280c838809483698640e1b36df0", size = 209563, upload-time = "2025-05-12T11:23:42.87Z" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "certbuilder" },
+    { name = "certvalidator" },
+    { name = "oscrypto" },
+    { name = "pyngrok" },
 ]
 
 [[package]]
@@ -1072,6 +1136,14 @@ wheels = [
 ]
 
 [[package]]
+name = "oscrypto"
+version = "1.3.0"
+source = { git = "https://github.com/wbond/oscrypto.git?rev=d5f3437#d5f3437ed24257895ae1edd9e503cfb352e635a8" }
+dependencies = [
+    { name = "asn1crypto" },
+]
+
+[[package]]
 name = "packaging"
 version = "25.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1305,6 +1377,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pyngrok"
+version = "7.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7b/64/e5646daaa4a84ecb368c09d42753f1c6e1a41b38579a36fda8ffe5716d9f/pyngrok-7.3.0.tar.gz", hash = "sha256:f2240e49b9dec9b27eba00f1444cd3cce7ac45d1bcc493a9b76ee63c2da9882c", size = 44266, upload-time = "2025-08-04T16:08:07.015Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/6b/664772910199399db3706243488eb3a986bd8435583caef9cf8359eecfaa/pyngrok-7.3.0-py3-none-any.whl", hash = "sha256:708c48276d3a887d4263f0f4bc8171e22d66df6cfa74a4857625c83160603166", size = 25394, upload-time = "2025-08-04T16:08:05.368Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "8.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1356,6 +1440,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/28/bc/5816716a372636e90251bbf81a2d51c2eb340dc77cb5e7237c1a455fa3f4/pytest-kind-22.11.1.tar.gz", hash = "sha256:ae7a4c753fcbbf9e44a0cc587d5219a0b8b2b1e7bcc9cbe14234f745dd5db681", size = 18014, upload-time = "2022-11-30T17:06:06.734Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7d/f2/c9eda764e0a32b8c14eab539d6dcb409d7b1cabaceb5caa9db89c769b2f0/pytest_kind-22.11.1-py3-none-any.whl", hash = "sha256:35fd99e4f94e0374834b5893ee4a95e33ad5dc1c18080356f01fadf21224e830", size = 18530, upload-time = "2022-11-30T17:06:08.08Z" },
+]
+
+[[package]]
+name = "pytest-shared-session-scope"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "filelock" },
+    { name = "pytest" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/73/ab/54860af6b49a59653dd5d12fa3b42514c410ee708ab8d47b01eee4f1781c/pytest_shared_session_scope-0.4.0.tar.gz", hash = "sha256:30da6ced4c734bb7cdbc10310da754ca9c8ae75c1384ceb3eda82fa76db647d2", size = 24009, upload-time = "2024-09-22T14:06:43.077Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/ca/c13adedbd72debe817a62bdacfeb3cc93ae7dde37b20dda90b543835bfbe/pytest_shared_session_scope-0.4.0-py3-none-any.whl", hash = "sha256:583508332f0ffdf306fb50487893e4bd4f893caf21778b7b0ea9fad6767fecce", size = 10189, upload-time = "2024-09-22T14:06:41.764Z" },
 ]
 
 [[package]]

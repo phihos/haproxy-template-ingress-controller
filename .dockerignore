@@ -57,3 +57,4 @@ build/
 .coverage*
 coverage.xml
 README.md
+tests

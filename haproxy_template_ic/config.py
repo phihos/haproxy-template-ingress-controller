@@ -212,6 +212,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                         group=config.get("group"),
                         version=config.get("version"),
                         filter=parse_resource_filter(config.get("filter", {})),
+                        enable_validation_webhook=bool(
+                            config.get("enable_validation_webhook", False)
+                        ),
                     )
                 )
         elif isinstance(data, list):
@@ -232,6 +235,9 @@ def config_from_dict(config_dict: Dict[str, Any]) -> "Config":
                         group=config.get("group"),
                         version=config.get("version"),
                         filter=parse_resource_filter(config.get("filter", {})),
+                        enable_validation_webhook=bool(
+                            config.get("enable_validation_webhook", False)
+                        ),
                     )
                 )
         else:
@@ -442,6 +448,8 @@ class WatchResourceConfig:
     group: Optional[str] = None
     version: Optional[str] = None
     filter: Optional[ResourceFilter] = None
+    # Webhook validation settings
+    enable_validation_webhook: bool = False
 
 
 @dataclass(frozen=True)

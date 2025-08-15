@@ -88,6 +88,19 @@ class StateSerializer:
                 "template_source": template_source,
             }
 
+        # Serialize haproxy_config
+        if (
+            hasattr(self.memo.config, "haproxy_config")
+            and self.memo.config.haproxy_config
+        ):
+            haproxy_template_source = "unavailable"
+            if hasattr(self.memo.config.haproxy_config, "source"):
+                haproxy_template_source = str(self.memo.config.haproxy_config.source)
+
+            config["haproxy_config"] = {
+                "template_source": haproxy_template_source,
+            }
+
         return config
 
     def _serialize_haproxy_config_context(self) -> Dict[str, Any]:

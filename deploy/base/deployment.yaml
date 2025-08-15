@@ -38,9 +38,18 @@ spec:
               containerPort: 8080
             - name: metrics
               containerPort: 9090
+            - name: webhook
+              containerPort: 8443
           volumeMounts:
             - name: run
               mountPath: /run/haproxy-template-ic
+            - name: webhook-certs
+              mountPath: /etc/certs
+              readOnly: true
       volumes:
         - name: run
           emptyDir: {}
+        - name: webhook-certs
+          secret:
+            secretName: haproxy-template-ic-webhook-tls
+            defaultMode: 420

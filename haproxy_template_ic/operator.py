@@ -107,7 +107,14 @@ async def load_config_from_configmap(configmap) -> Any:
         )
         config_data = configmap["data"]["config"]
 
-    return config_from_dict(yaml.safe_load(config_data))
+    config = config_from_dict(yaml.safe_load(config_data))
+
+    # Register validation webhooks based on configuration
+    from haproxy_template_ic.webhook import register_validation_webhooks_from_config
+
+    register_validation_webhooks_from_config(config)
+
+    return config
 
 
 @trace_async_function(
@@ -163,10 +170,11 @@ async def handle_configmap_change(
                 )
 
                 new_config = await load_config_from_configmap(event["object"])
-                if memo.config != new_config:
+                if memo.config.raw != new_config.raw:
                     diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
+                    diff_str = str(diff)[:500]
                     structured_logger.info(
-                        "🔄 Config has changed: reloading", config_diff=str(diff)[:500]
+                        "🔄 Config has changed: reloading", config_diff=diff_str
                     )
                     trigger_reload(memo)
 
@@ -203,58 +211,39 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             index_data = memo.indices.get(watch_config.id)
 
             # Convert kopf index store to a dictionary with resource objects
-            # The index_data contains kopf store objects, we need the actual resources
+            # The index_data is a kopf Store object containing resource data
             resource_dict = {}
-            for key, resource in index_data.items():
-                # key is typically (namespace, name), resource is a list of dicts
-                try:
-                    # Validate resource first
-                    if not _is_valid_resource(resource):
-                        logger.warning(
-                            f"⚠️ Invalid resource type {type(resource)} for {key}, skipping"
-                        )
-                        continue
 
-                    # Type safety: handle different resource types appropriately
-                    if isinstance(resource, dict):
-                        # Resource is already a dict (typical case), use as-is
-                        resource_dict[key] = resource
-                    elif isinstance(resource, (list, tuple)):
-                        # Resource is a sequence (like a kopf store), get first element
-                        if resource:
-                            # Index keys with 0 elements will be removed, so we can be sure there is always [0]
-                            # There will not be more than one element since the combination of name + namespace is unique
-                            resource_dict[key] = resource[0]
+            # Handle case where index_data is a Store object
+            if hasattr(index_data, "items"):
+                # kopf Store objects behave like dictionaries
+                for key, resource_data in index_data.items():
+                    try:
+                        # kopf stores resource data directly as the body/dict
+                        # resource_data should be the actual Kubernetes resource dict
+                        if isinstance(resource_data, dict):
+                            # Accept all dict-like objects (including test mocks)
+                            resource_dict[key] = resource_data
+                        elif hasattr(resource_data, "__dict__") or hasattr(
+                            resource_data, "metadata"
+                        ):
+                            # Object with attributes (mock objects, k8s objects)
+                            resource_dict[key] = resource_data
+                        elif isinstance(resource_data, (list, tuple)) and resource_data:
+                            # Some cases might return lists, take first item
+                            resource_dict[key] = resource_data[0]
                         else:
-                            # This should not happen due to _is_valid_resource check, but handle gracefully
-                            logger.warning(f"⚠️ Empty resource list for {key}, skipping")
-                            continue
-                    else:
-                        # Resource is some other type (like a mock object or single resource)
-                        # Already validated by _is_valid_resource, so safe to use as-is
-                        resource_dict[key] = resource
-                except Exception as e:
-                    logger.warning(
-                        f"⚠️ Failed to process resource {key} -> {resource}: {e}"
-                    )
-                    # Fallback: try to use resource as-is only if it's valid
-                    if _is_valid_resource(resource):
-                        try:
-                            if isinstance(resource, dict):
-                                resource_dict[key] = resource
-                            elif isinstance(resource, list) and resource:
-                                resource_dict[key] = resource[0]
-                            else:
-                                # For other valid types, use as-is
-                                resource_dict[key] = resource
-                        except Exception as fallback_error:
                             logger.warning(
-                                f"⚠️ Fallback processing failed for {key}: {fallback_error}"
+                                f"⚠️ Unexpected resource type {type(resource_data)} for {key}, skipping"
                             )
-                    else:
+                    except Exception as e:
                         logger.warning(
-                            f"⚠️ Skipping invalid resource {key} due to type {type(resource)}"
+                            f"⚠️ Failed to process resource {key}: {e}, type: {type(resource_data)}"
                         )
+            else:
+                logger.warning(
+                    f"⚠️ Index data for '{watch_config.id}' is not iterable: {type(index_data)}"
+                )
 
             indices[watch_config.id] = resource_dict
             logger.debug(
@@ -520,9 +509,7 @@ async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
     kopf.on.event(
         "configmap",
         when=lambda name, namespace, type, **_: (
-            name == configmap_name
-            and namespace == get_current_namespace()
-            and type  # Skip initial invocation
+            name == configmap_name and namespace == get_current_namespace()
         ),
     )(handle_configmap_change)  # type: ignore[arg-type]
 
@@ -543,6 +530,74 @@ async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
     memo.metrics_server_task = asyncio.create_task(
         metrics.start_metrics_server(metrics_port)
     )
+
+
+def configure_webhook_server(
+    settings: kopf.OperatorSettings, memo: Any, **kwargs: Any
+) -> None:
+    """Configure webhook server for admission control."""
+    import os
+    import tempfile
+
+    # Check if any resources have webhook validation enabled
+    has_webhooks = any(
+        getattr(watch_config, "enable_validation_webhook", False)
+        for watch_config in memo.config.watch_resources
+    )
+
+    if not has_webhooks:
+        logger.info(
+            "⏭️ No validation webhooks configured - skipping webhook server setup"
+        )
+        return
+
+    logger.info("🔌 Configuring webhook server for admission control...")
+
+    cert_dir = "/tmp/webhook-certs"  # nosec B108 - Standard K8s volume mount path
+    cert_file = f"{cert_dir}/webhook-cert.pem"
+    key_file = f"{cert_dir}/webhook-key.pem"
+    ca_file = f"{cert_dir}/webhook-ca.pem"
+
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        # Create a writable temporary directory for kopf's CA dump
+        temp_dir = tempfile.mkdtemp(prefix="webhook-ca-")
+        temp_ca_file = f"{temp_dir}/webhook-ca.pem"
+
+        # Copy the CA file to writable location if it exists
+        if os.path.exists(ca_file):
+            import shutil
+
+            shutil.copy2(ca_file, temp_ca_file)
+            ca_dump_file = temp_ca_file
+        else:
+            # Fall back to using certificate file as CA
+            ca_dump_file = temp_ca_file
+
+        settings.admission.server = kopf.WebhookServer(
+            addr="0.0.0.0",  # nosec B104 - Kubernetes webhook must bind all interfaces
+            port=9443,
+            certfile=cert_file,
+            pkeyfile=key_file,
+            cadump=ca_dump_file,
+        )
+        logger.info(
+            "✅ Webhook server configured on port 9443 with mounted TLS certificates"
+        )
+    else:
+        # Create a writable temporary directory for self-signed certificates
+        temp_dir = tempfile.mkdtemp(prefix="webhook-ca-")
+        temp_ca_file = f"{temp_dir}/webhook-ca.pem"
+
+        settings.admission.server = kopf.WebhookServer(
+            addr="0.0.0.0",  # nosec B104 - Kubernetes webhook must bind all interfaces
+            port=9443,
+            cadump=temp_ca_file,
+        )
+        logger.info(
+            "✅ Webhook server configured on port 9443 with self-signed certificates"
+        )
+
+    settings.admission.managed = "haproxy-template-ic.io"
 
 
 # =============================================================================
@@ -622,6 +677,8 @@ def run_operator_loop(cli_options: Any) -> None:
         kopf.on.startup()(init_management_socket)
         # Start the metrics server for Prometheus monitoring
         kopf.on.startup()(init_metrics_server)
+        # Configure webhook server for admission control
+        kopf.on.startup()(configure_webhook_server)
 
         # Run operator
         kopf.run(

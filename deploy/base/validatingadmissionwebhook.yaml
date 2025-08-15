@@ -1,0 +1,13 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionWebhook
+metadata:
+  name: haproxy-template-ic-webhook
+  labels:
+    app.kubernetes.io/name: haproxy-template-ic
+    app.kubernetes.io/component: webhook
+webhooks: []
+# Note: Webhook configurations are intentionally empty in the static manifest.
+# Dynamic webhooks for watched resources will be created by the operator
+# based on the configuration with enable_validation_webhook: true.
+# We do not register blanket webhooks on core resources like ConfigMaps
+# to avoid making cluster operations dependent on this service.

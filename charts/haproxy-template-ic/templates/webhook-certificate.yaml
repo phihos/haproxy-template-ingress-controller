@@ -1,0 +1,22 @@
+{{- if and .Values.webhook.enabled (eq .Values.webhook.tls.certProvider "cert-manager") }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-webhook-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "haproxy-template-ic.fullname" . }}-webhook-tls
+  duration: {{ .Values.webhook.tls.selfSigned.duration }}
+  dnsNames:
+  - {{ include "haproxy-template-ic.fullname" . }}-webhook
+  - {{ include "haproxy-template-ic.fullname" . }}-webhook.{{ .Release.Namespace }}
+  - {{ include "haproxy-template-ic.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+  - {{ include "haproxy-template-ic.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    {{- with .Values.webhook.tls.certManager.issuerRef }}
+    name: {{ .name }}
+    kind: {{ .kind }}
+    {{- end }}
+{{- end }}

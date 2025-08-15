@@ -124,8 +124,10 @@ class TestTracingManager:
         config = TracingConfig(enabled=True, jaeger_endpoint="localhost:14268")
         manager = TracingManager(config)
 
-        # Mock tracer provider
+        # Mock tracer provider with spec to prevent AsyncMock creation
         mock_tracer_provider = MagicMock()
+        # Explicitly mock methods that will be called to prevent AsyncMock creation
+        mock_tracer_provider.add_span_processor = MagicMock()
         mock_tracer_provider_cls.return_value = mock_tracer_provider
 
         manager.initialize()
@@ -134,6 +136,8 @@ class TestTracingManager:
         mock_jaeger_exporter.assert_called_once_with(
             agent_host_name="localhost", agent_port=14268
         )
+        # Verify the span processor was added
+        mock_tracer_provider.add_span_processor.assert_called_once()
 
     def test_tracing_manager_shutdown(self):
         """Test tracing manager shutdown."""
@@ -297,8 +301,11 @@ class TestTracingDecorators:
     async def test_trace_async_function_decorator(self, mock_trace_operation):
         """Test async function tracing decorator."""
         mock_span = MagicMock()
-        mock_trace_operation.return_value.__enter__ = MagicMock(return_value=mock_span)
-        mock_trace_operation.return_value.__exit__ = MagicMock(return_value=None)
+        # Properly configure the context manager mock
+        mock_context = MagicMock()
+        mock_context.__enter__ = MagicMock(return_value=mock_span)
+        mock_context.__exit__ = MagicMock(return_value=None)
+        mock_trace_operation.return_value = mock_context
 
         @trace_async_function("custom_span_name", {"attr": "value"})
         async def test_function(arg1: str) -> str:
@@ -319,8 +326,11 @@ class TestTracingDecorators:
     def test_trace_function_decorator(self, mock_trace_operation):
         """Test synchronous function tracing decorator."""
         mock_span = MagicMock()
-        mock_trace_operation.return_value.__enter__ = MagicMock(return_value=mock_span)
-        mock_trace_operation.return_value.__exit__ = MagicMock(return_value=None)
+        # Properly configure the context manager mock
+        mock_context = MagicMock()
+        mock_context.__enter__ = MagicMock(return_value=mock_span)
+        mock_context.__exit__ = MagicMock(return_value=None)
+        mock_trace_operation.return_value = mock_context
 
         @trace_function("custom_span_name", {"attr": "value"})
         def test_function(arg1: str) -> str:

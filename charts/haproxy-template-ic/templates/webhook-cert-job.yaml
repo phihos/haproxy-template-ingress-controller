@@ -1,0 +1,56 @@
+{{- if and .Values.webhook.enabled (eq .Values.webhook.tls.certProvider "self-signed") }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-webhook-cert-generator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    component: webhook-cert-generator
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "haproxy-template-ic.labels" . | nindent 8 }}
+        component: webhook-cert-generator
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "haproxy-template-ic.serviceAccountName" . }}
+      containers:
+      - name: cert-generator
+        image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.4.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - create
+        - --host={{ include "haproxy-template-ic.fullname" . }}-webhook,{{ include "haproxy-template-ic.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+        - --namespace={{ .Release.Namespace }}
+        - --secret-name={{ include "haproxy-template-ic.fullname" . }}-webhook-tls
+        - --key-name=tls.key
+        - --cert-name=tls.crt
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 2000
+          seccompProfile:
+            type: RuntimeDefault
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+{{- end }}

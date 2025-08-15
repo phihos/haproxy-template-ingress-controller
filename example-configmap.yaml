@@ -14,6 +14,8 @@ data:
         group: networking.k8s.io
         version: v1
         kind: Ingress
+        # Enable validation webhook for Ingress resources to prevent faulty configs
+        enable_validation_webhook: true
         filter:
           field_selector:
             "spec.ingressClassName": "haproxy-template-ic"
@@ -23,6 +25,8 @@ data:
         group: discovery.k8s.io
         version: v1
         kind: EndpointSlice
+        # Leave validation disabled for critical resources like EndpointSlices
+        enable_validation_webhook: false
         filter:
           label_selector:
             "kubernetes.io/service-name": "*"
@@ -30,6 +34,8 @@ data:
         group: ""
         version: v1
         kind: Secret
+        # Enable validation for TLS secrets to catch certificate issues early
+        enable_validation_webhook: true
         filter:
           field_selector:
             "type": "kubernetes.io/tls"
@@ -188,6 +194,10 @@ data:
         frontend http_frontend
             bind *:80
             redirect scheme https code 301 if !{ ssl_fc }
+
+        frontend health
+            bind *:8404
+            http-request return status 200 content-type text/plain string "OK" if { path /healthz }
 
         frontend https_frontend
             bind *:443 ssl crt /etc/haproxy/certs/tls.pem
