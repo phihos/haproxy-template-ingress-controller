@@ -6,7 +6,7 @@ resource-specific webhook registration functionality.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 import kopf
 
 from haproxy_template_ic.webhook import (
@@ -543,7 +543,10 @@ class TestWebhookIntegration:
     def test_webhook_handler_with_metrics(self, mock_get_metrics):
         """Test webhook handler includes metrics recording."""
         mock_metrics = MagicMock()
+        # Properly configure the context manager mock to prevent AsyncMock issues
         mock_time_context = MagicMock()
+        mock_time_context.__enter__ = MagicMock(return_value=None)
+        mock_time_context.__exit__ = MagicMock(return_value=None)
         mock_metrics.time_webhook_request.return_value = mock_time_context
         mock_get_metrics.return_value = mock_metrics
 
@@ -606,8 +609,17 @@ class TestWebhookErrorHandling:
         assert "Invalid operator configuration" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_webhook_handler_error_paths(self):
+    @patch("haproxy_template_ic.webhook.get_metrics_collector")
+    async def test_webhook_handler_error_paths(self, mock_get_metrics):
         """Test webhook handler error handling."""
+        # Mock the metrics collector to prevent real metrics code execution
+        mock_metrics = MagicMock()
+        mock_time_context = MagicMock()
+        mock_time_context.__enter__ = MagicMock(return_value=None)
+        mock_time_context.__exit__ = MagicMock(return_value=None)
+        mock_metrics.time_webhook_request.return_value = mock_time_context
+        mock_get_metrics.return_value = mock_metrics
+
         registry = WebhookRegistry()
 
         with patch("haproxy_template_ic.webhook.kopf.on.validate") as mock_validate:
@@ -746,3 +758,371 @@ class TestWebhookErrorHandling:
                 await validator.validate_configmap(configmap_data, warnings)
             assert "Internal validation error" in str(exc_info.value)
             assert "Unexpected error" in str(exc_info.value)
+
+
+# =============================================================================
+# Enhanced Coverage Tests
+# =============================================================================
+
+
+class TestTemplateValidationEdgeCases:
+    """Test edge cases for template validation to improve coverage."""
+
+    @pytest.fixture
+    def validator(self):
+        """Create a ConfigMapValidator instance."""
+        return ConfigMapValidator()
+
+    @pytest.mark.asyncio
+    async def test_validate_templates_snippet_generic_exception(self, validator):
+        """Test template snippet validation with generic exception."""
+        # Mock jinja2.Environment.from_string to raise a generic exception
+        with patch(
+            "jinja2.Environment.from_string",
+            side_effect=Exception("Generic template error"),
+        ):
+            config_dict = {"template_snippets": {"error-snippet": "{{ test }}"}}
+            warnings = await validator._validate_templates(config_dict)
+
+            assert len(warnings) > 0
+            assert any(
+                "Error in template snippet 'error-snippet'" in w for w in warnings
+            )
+
+    @pytest.mark.asyncio
+    async def test_validate_templates_map_template_not_found(self, validator):
+        """Test map template validation with missing snippet reference."""
+        config_dict = {
+            "template_snippets": {},  # No snippets defined
+            "maps": {"/etc/haproxy/test.map": {"template": "valid template content"}},
+        }
+
+        # Mock the template environment to raise TemplateNotFound during map validation
+        import jinja2
+
+        original_create_env = validator._create_template_environment
+        call_count = 0
+
+        def mock_create_env(snippets):
+            nonlocal call_count
+            call_count += 1
+            # Skip the first call (for snippets validation), raise TemplateNotFound on second call (maps)
+            if call_count > 1:
+                mock_env = MagicMock()
+                mock_env.from_string.side_effect = jinja2.TemplateNotFound(
+                    "nonexistent-snippet"
+                )
+                return mock_env
+            return original_create_env(snippets)
+
+        with patch.object(
+            validator, "_create_template_environment", side_effect=mock_create_env
+        ):
+            warnings = await validator._validate_templates(config_dict)
+
+            assert len(warnings) > 0
+            assert any("Template snippet not found in map" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_validate_templates_haproxy_config_syntax_error(self, validator):
+        """Test haproxy_config template validation with syntax error."""
+        config_dict = {"haproxy_config": {"template": "{{ invalid syntax %}"}}
+        warnings = await validator._validate_templates(config_dict)
+
+        assert len(warnings) > 0
+        assert any("Invalid template syntax in haproxy_config" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_validate_templates_haproxy_config_template_not_found(
+        self, validator
+    ):
+        """Test haproxy_config template validation with missing snippet reference."""
+        config_dict = {
+            "template_snippets": {},  # No snippets defined
+            "haproxy_config": {"template": "valid template content"},
+        }
+
+        # Mock the template environment to raise TemplateNotFound during haproxy_config validation
+        import jinja2
+
+        original_create_env = validator._create_template_environment
+        call_count = 0
+
+        def mock_create_env(snippets):
+            nonlocal call_count
+            call_count += 1
+            # Skip the first call (for snippets validation), raise TemplateNotFound on subsequent calls
+            if call_count > 1:
+                mock_env = MagicMock()
+                mock_env.from_string.side_effect = jinja2.TemplateNotFound(
+                    "nonexistent-snippet"
+                )
+                return mock_env
+            return original_create_env(snippets)
+
+        with patch.object(
+            validator, "_create_template_environment", side_effect=mock_create_env
+        ):
+            warnings = await validator._validate_templates(config_dict)
+
+            assert len(warnings) > 0
+            assert any(
+                "Template snippet not found in haproxy_config" in w for w in warnings
+            )
+
+    @pytest.mark.asyncio
+    async def test_validate_templates_haproxy_config_generic_exception(self, validator):
+        """Test haproxy_config template validation with generic exception."""
+        # Create a config that will trigger template validation
+        config_dict = {"haproxy_config": {"template": "valid template"}}
+
+        # Mock the template environment creation to raise an exception when processing haproxy_config
+        original_create_env = validator._create_template_environment
+        call_count = 0
+
+        def mock_create_env(snippets):
+            nonlocal call_count
+            call_count += 1
+            # Skip the first call (for snippets validation), raise error on subsequent calls
+            if call_count > 1:
+                mock_env = MagicMock()
+                mock_env.from_string.side_effect = Exception(
+                    "Generic haproxy_config error"
+                )
+                return mock_env
+            return original_create_env(snippets)
+
+        with patch.object(
+            validator, "_create_template_environment", side_effect=mock_create_env
+        ):
+            warnings = await validator._validate_templates(config_dict)
+
+            assert len(warnings) > 0
+            assert any("Error in haproxy_config template" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_validate_templates_certificate_syntax_error(self, validator):
+        """Test certificate template validation with syntax error."""
+        config_dict = {
+            "certificates": {
+                "/etc/ssl/certs/test.crt": {"template": "{{ invalid syntax %}"}
+            }
+        }
+        warnings = await validator._validate_templates(config_dict)
+
+        assert len(warnings) > 0
+        assert any("Invalid template syntax in certificate" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_validate_templates_certificate_template_not_found(self, validator):
+        """Test certificate template validation with missing snippet reference."""
+        config_dict = {
+            "template_snippets": {},  # No snippets defined
+            "certificates": {
+                "/etc/ssl/certs/test.crt": {"template": "valid template content"}
+            },
+        }
+
+        # Mock the template environment to raise TemplateNotFound during certificate validation
+        import jinja2
+
+        original_create_env = validator._create_template_environment
+        call_count = 0
+
+        def mock_create_env(snippets):
+            nonlocal call_count
+            call_count += 1
+            # Skip the first call (for snippets validation), raise TemplateNotFound on subsequent calls
+            if call_count > 1:
+                mock_env = MagicMock()
+                mock_env.from_string.side_effect = jinja2.TemplateNotFound(
+                    "nonexistent-snippet"
+                )
+                return mock_env
+            return original_create_env(snippets)
+
+        with patch.object(
+            validator, "_create_template_environment", side_effect=mock_create_env
+        ):
+            warnings = await validator._validate_templates(config_dict)
+
+            assert len(warnings) > 0
+            assert any(
+                "Template snippet not found in certificate" in w for w in warnings
+            )
+
+    @pytest.mark.asyncio
+    async def test_validate_templates_certificate_generic_exception(self, validator):
+        """Test certificate template validation with generic exception."""
+        # Create a config that will trigger certificate template validation
+        config_dict = {
+            "certificates": {"/etc/ssl/certs/test.crt": {"template": "valid template"}}
+        }
+
+        # Mock the template environment creation to raise an exception when processing certificates
+        original_create_env = validator._create_template_environment
+        call_count = 0
+
+        def mock_create_env(snippets):
+            nonlocal call_count
+            call_count += 1
+            # Skip the first call (for snippets validation), raise error on subsequent calls
+            if call_count > 1:
+                mock_env = MagicMock()
+                mock_env.from_string.side_effect = Exception(
+                    "Generic certificate error"
+                )
+                return mock_env
+            return original_create_env(snippets)
+
+        with patch.object(
+            validator, "_create_template_environment", side_effect=mock_create_env
+        ):
+            warnings = await validator._validate_templates(config_dict)
+
+            assert len(warnings) > 0
+            assert any("Error in certificate template" in w for w in warnings)
+
+
+class TestSnippetLoaderCoverage:
+    """Test SnippetLoader to improve coverage."""
+
+    @pytest.fixture
+    def validator(self):
+        """Create a ConfigMapValidator instance."""
+        return ConfigMapValidator()
+
+    def test_snippet_loader_get_source_success(self, validator):
+        """Test SnippetLoader.get_source success path."""
+        snippets = {"test-snippet": "snippet content"}
+        env = validator._create_template_environment(snippets)
+        loader = env.loader
+
+        # Test successful snippet retrieval
+        source, filename, uptodate = loader.get_source(env, "test-snippet")
+
+        assert source == "snippet content"
+        assert filename is None
+        assert uptodate() is True
+
+    def test_snippet_loader_get_source_not_found(self, validator):
+        """Test SnippetLoader.get_source with nonexistent snippet."""
+        import jinja2
+
+        snippets = {"existing-snippet": "content"}
+        env = validator._create_template_environment(snippets)
+        loader = env.loader
+
+        # Test nonexistent snippet raises TemplateNotFound
+        with pytest.raises(jinja2.TemplateNotFound):
+            loader.get_source(env, "nonexistent-snippet")
+
+
+class TestWatchResourcesEdgeCases:
+    """Test edge cases for watch_resources validation."""
+
+    @pytest.fixture
+    def validator(self):
+        """Create a ConfigMapValidator instance."""
+        return ConfigMapValidator()
+
+    @pytest.mark.asyncio
+    async def test_validate_resource_references_dict_format(self, validator):
+        """Test watch_resources validation with dictionary format."""
+        config_dict = {
+            "watch_resources": {
+                "ingresses": {
+                    "kind": "Ingress",
+                    "group": "networking.k8s.io",
+                    "version": "v1",
+                },
+                "services": {"kind": "Service", "group": "", "version": "v1"},
+            }
+        }
+        warnings = await validator._validate_resource_references(config_dict)
+
+        # Should not produce warnings for valid dict format
+        assert len(warnings) == 0
+
+    @pytest.mark.asyncio
+    async def test_validate_resource_references_list_format(self, validator):
+        """Test watch_resources validation with list format."""
+        config_dict = {
+            "watch_resources": [
+                {"kind": "Ingress", "group": "networking.k8s.io", "version": "v1"},
+                {"kind": "Service", "group": "", "version": "v1"},
+            ]
+        }
+        warnings = await validator._validate_resource_references(config_dict)
+
+        # Should not produce warnings for valid list format
+        assert len(warnings) == 0
+
+
+class TestResourceSpecificValidationPaths:
+    """Test Service and Secret specific validation paths."""
+
+    @pytest.fixture
+    def registry(self):
+        """Create a WebhookRegistry instance."""
+        return WebhookRegistry()
+
+    @pytest.mark.asyncio
+    async def test_validate_resource_structure_service_kind(self, registry):
+        """Test _validate_resource_structure with Service kind."""
+        spec = {"ports": [{"port": 80, "targetPort": 8080}]}
+        meta = {"name": "test-service"}
+        warnings = []
+
+        with patch.object(
+            registry, "_validate_service_specific", new_callable=AsyncMock
+        ) as mock_validate:
+            await registry._validate_resource_structure(spec, meta, "Service", warnings)
+            mock_validate.assert_called_once_with(spec, warnings)
+
+    @pytest.mark.asyncio
+    async def test_validate_resource_structure_secret_kind(self, registry):
+        """Test _validate_resource_structure with Secret kind."""
+        spec = {"data": {"key1": "value1"}}
+        meta = {"name": "test-secret"}
+        warnings = []
+
+        with patch.object(
+            registry, "_validate_secret_specific", new_callable=AsyncMock
+        ) as mock_validate:
+            await registry._validate_resource_structure(spec, meta, "Secret", warnings)
+            mock_validate.assert_called_once_with(spec, warnings)
+
+    @pytest.mark.asyncio
+    async def test_validate_resource_structure_ingress_kind(self, registry):
+        """Test _validate_resource_structure with Ingress kind."""
+        spec = {"rules": [{"host": "example.com"}]}
+        meta = {"name": "test-ingress"}
+        warnings = []
+
+        with patch.object(
+            registry, "_validate_ingress_specific", new_callable=AsyncMock
+        ) as mock_validate:
+            await registry._validate_resource_structure(spec, meta, "Ingress", warnings)
+            mock_validate.assert_called_once_with(spec, warnings)
+
+    @pytest.mark.asyncio
+    async def test_validate_resource_structure_unknown_kind(self, registry):
+        """Test _validate_resource_structure with unknown kind."""
+        spec = {"some": "data"}
+        meta = {"name": "test-resource"}
+        warnings = []
+
+        # Should not call any specific validation methods for unknown kinds
+        with patch.object(registry, "_validate_service_specific") as mock_service:
+            with patch.object(registry, "_validate_secret_specific") as mock_secret:
+                with patch.object(
+                    registry, "_validate_ingress_specific"
+                ) as mock_ingress:
+                    await registry._validate_resource_structure(
+                        spec, meta, "UnknownKind", warnings
+                    )
+
+                    mock_service.assert_not_called()
+                    mock_secret.assert_not_called()
+                    mock_ingress.assert_not_called()

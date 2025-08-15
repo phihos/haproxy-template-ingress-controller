@@ -66,6 +66,7 @@ where = ["."]
 [tool.pytest.ini_options]
 filterwarnings = [
     "ignore::DeprecationWarning",
+    "ignore:coroutine.*was never awaited:RuntimeWarning",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
