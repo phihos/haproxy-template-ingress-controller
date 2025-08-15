@@ -170,10 +170,11 @@ async def handle_configmap_change(
                 )
 
                 new_config = await load_config_from_configmap(event["object"])
-                if memo.config != new_config:
+                if memo.config.raw != new_config.raw:
                     diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
+                    diff_str = str(diff)[:500]
                     structured_logger.info(
-                        "🔄 Config has changed: reloading", config_diff=str(diff)[:500]
+                        "🔄 Config has changed: reloading", config_diff=diff_str
                     )
                     trigger_reload(memo)
 
@@ -508,9 +509,7 @@ async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
     kopf.on.event(
         "configmap",
         when=lambda name, namespace, type, **_: (
-            name == configmap_name
-            and namespace == get_current_namespace()
-            and type  # Skip initial invocation
+            name == configmap_name and namespace == get_current_namespace()
         ),
     )(handle_configmap_change)  # type: ignore[arg-type]
 

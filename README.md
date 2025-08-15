@@ -35,16 +35,25 @@ This controller enables full Jinja2 templating of HAProxy configurations, map fi
 
 ### Components
 
-**Production setup** requires:
-1. **HAProxy pods** with:
-   - HAProxy instance with minimal default config
-   - Dataplane API server with admin socket access
-   - Shared config directories via `EmptyDir` volumes
-2. **Validation sidecars** with identical HAProxy + Dataplane API setup
-3. **ConfigMap** defining:
-   - Pod selector for target HAProxy pods
-   - Kubernetes resources to watch
-   - Jinja2 templates for configs, maps, and certificates
+**Production setup** requires two types of deployments:
+
+#### 1. Controller Pod (Single Pod, 3 Containers)
+- **Main Controller**: Watches resources, renders templates, orchestrates deployment
+- **Validation HAProxy**: Tests configurations before production (port 8081)  
+- **Validation Dataplane API**: Manages validation HAProxy (port 5556)
+
+#### 2. Production HAProxy Pods (Multiple Pods, 2 Containers Each)
+- **HAProxy Container**: Serves production traffic (port 80), health endpoint (port 8404)
+- **Dataplane API Container**: Receives configs from controller (port 5555)
+- **Labels**: Must match `pod_selector.match_labels` in ConfigMap
+- **Initial State**: Pods start NOT ready due to missing health endpoint
+
+#### 3. ConfigMap Configuration
+Defines:
+- Pod selector for target HAProxy pods
+- Kubernetes resources to watch  
+- Jinja2 templates for configs, maps, and certificates
+- **Critical**: HAProxy template MUST include health endpoint on port 8404
 
 ### Reconciliation Process
 
@@ -247,12 +256,35 @@ kubectl exec -it haproxy-template-ic -- \
 
 ### Configuration
 
-Customize socket path via environment variable:
+The controller supports configuration via CLI options or environment variables:
 
+| Environment Variable | CLI Option | Default | Description |
+|---------------------|------------|---------|-------------|
+| `CONFIGMAP_NAME` | `--configmap-name` | *Required* | ConfigMap name containing controller configuration |
+| `VERBOSE` | `--verbose` | `0` | Logging verbosity (0=WARNING, 1=INFO, 2=DEBUG) |
+| `STRUCTURED_LOGGING` | `--structured-logging` | `false` | Enable JSON structured logging output |
+| `HEALTHZ_PORT` | `--healthz-port` | `8080` | Controller health check endpoint port |
+| `METRICS_PORT` | `--metrics-port` | `9090` | Prometheus metrics endpoint port |
+| `SOCKET_PATH` | `--socket-path` | `/run/haproxy-template-ic/management.sock` | Management socket path |
+| `WEBHOOK_ENABLED` | `--webhook-enabled` | `false` | Enable validating admission webhooks |
+| `WEBHOOK_PORT` | `--webhook-port` | `9443` | Webhook server port |
+| `TRACING_ENABLED` | `--tracing-enabled` | `false` | Enable OpenTelemetry distributed tracing |
+
+#### Logging Configuration
+
+**Plain Text Mode** (default): Context fields appended in logfmt format:
 ```bash
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
-  --env="SOCKET_PATH=/tmp/custom.sock" \
-  --env="CONFIGMAP_NAME=haproxy-template-ic-config"
+  --env="CONFIGMAP_NAME=haproxy-config" \
+  --env="VERBOSE=2"
+```
+
+**JSON Mode**: Structured JSON output for log aggregation:
+```bash
+kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
+  --env="CONFIGMAP_NAME=haproxy-config" \
+  --env="STRUCTURED_LOGGING=true" \
+  --env="VERBOSE=1"
 ```
 
 ### Response Structure

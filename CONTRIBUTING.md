@@ -119,9 +119,14 @@ The application supports environment variables for all CLI options:
 | Environment Variable | CLI Option | Default | Description |
 |---------------------|------------|---------|-------------|
 | `CONFIGMAP_NAME` | `--configmap-name` | *Required* | Kubernetes ConfigMap name for configuration |
-| `HEALTHZ_PORT` | `--healthz-port` | `8080` | Health check endpoint port |
 | `VERBOSE` | `--verbose` | `0` | Logging verbosity (0=WARNING, 1=INFO, 2=DEBUG) |
+| `STRUCTURED_LOGGING` | `--structured-logging` | `false` | Enable JSON structured logging output |
+| `HEALTHZ_PORT` | `--healthz-port` | `8080` | Controller health check endpoint port |
+| `METRICS_PORT` | `--metrics-port` | `9090` | Prometheus metrics endpoint port |
 | `SOCKET_PATH` | `--socket-path` | `/run/haproxy-template-ic/management.sock` | Management socket path |
+| `WEBHOOK_ENABLED` | `--webhook-enabled` | `false` | Enable validating admission webhooks |
+| `WEBHOOK_PORT` | `--webhook-port` | `9443` | Webhook server port |
+| `TRACING_ENABLED` | `--tracing-enabled` | `false` | Enable OpenTelemetry distributed tracing |
 
 ### Local Development
 

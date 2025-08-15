@@ -195,6 +195,10 @@ data:
             bind *:80
             redirect scheme https code 301 if !{ ssl_fc }
 
+        frontend health
+            bind *:8404
+            http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+
         frontend https_frontend
             bind *:443 ssl crt /etc/haproxy/certs/tls.pem
 

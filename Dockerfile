@@ -2,8 +2,8 @@ ARG PYTHON_VERSION=3.13
 
 FROM python:${PYTHON_VERSION}-slim-bookworm AS base
 # Install dumb-init for proper signal handling, socat for management socket communication,
-# and OpenSSL libraries for webhook certificate generation
-RUN apt-get update && apt-get install -y dumb-init socat libssl3 libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+# OpenSSL libraries for webhook certificate generation, and git for oscrypto dependency
+RUN apt-get update && apt-get install -y dumb-init socat libssl3 libssl-dev ca-certificates git && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /bin/uv

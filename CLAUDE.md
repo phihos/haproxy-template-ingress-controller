@@ -66,11 +66,61 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 
 ### Deployment Architecture
 
-Production deployments require:
-1. HAProxy pods with Dataplane API servers
-2. Validation sidecars with identical HAProxy setup
-3. ConfigMap defining pod selectors, watched resources, and Jinja2 templates
-4. The controller watches resources and pushes validated configs via Dataplane API
+#### Controller Pod Setup
+
+The controller runs as a single pod with **3 containers**:
+
+1. **Main Controller Container**:
+   - Watches Kubernetes resources and renders templates
+   - Exposes health endpoint on port 8080
+   - Metrics endpoint on port 9090  
+   - Optional webhook endpoint on port 9443
+   - Management socket at `/run/haproxy-template-ic/management.sock`
+
+2. **Validation HAProxy Sidecar**:
+   - HAProxy instance for config validation (port 8081)
+   - Uses minimal working config initially
+   - Validates rendered configs before production deployment
+
+3. **Validation Dataplane API Sidecar**:
+   - Dataplane API server on port 5556
+   - Manages validation HAProxy instance
+   - Auth: `admin`/`validationpass`
+
+#### Production HAProxy Pods
+
+Separate deployment of HAProxy pods, each with **2 containers**:
+
+1. **HAProxy Container**:
+   - Serves actual production traffic (port 80)
+   - **Critical**: Must have health endpoint on port 8404 for `/healthz`
+   - Starts with minimal config (no health endpoint)
+   - **Readiness probe initially fails** until controller pushes proper config
+   - Labels: `app=haproxy`, `component=loadbalancer`
+
+2. **Production Dataplane API Container**:
+   - Dataplane API server on port 5555
+   - Receives validated configs from controller
+   - Auth: `admin`/`adminpass`
+
+#### Configuration Flow
+
+1. **Initial State**: Production pods start with minimal config, readiness probe fails
+2. **Validation**: Controller renders config and tests on validation sidecar
+3. **Deployment**: If validation passes, config is pushed to production pods
+4. **Ready State**: Production pods become ready after receiving config with health endpoint
+
+#### Critical Requirements
+
+- **Health Endpoint Mandatory**: HAProxy template MUST include:
+  ```
+  frontend health
+      bind *:8404
+      http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+  ```
+- **Pod Selector Matching**: Production pods must have labels matching ConfigMap's `pod_selector.match_labels`
+- **Shared Volumes**: Each pod needs emptyDir volumes for config, maps, and certificates
+- **Validation First**: All configs tested on validation sidecars before production deployment
 
 ### Current Implementation Status
 
@@ -362,7 +412,28 @@ The controller supports both traditional and structured JSON logging with automa
 - **JSON output**: Optional structured JSON format for log aggregation systems
 - **Context managers**: Programmatic context management for nested operations
 
-Enable structured logging with `--structured-logging` or `STRUCTURED_LOGGING=true` for JSON output suitable for log aggregation systems like ELK or Fluentd.
+#### Output Formats
+
+**Plain Text Mode** (default): Uses LogfmtFormatter that appends context fields in logfmt format to regular log messages:
+```
+2025-08-15 18:46:20,473 - operator - INFO - 🔄 Config has changed: reloading operation_id=test-op-123 component=operator resource_type=ConfigMap config_diff="{'root': {'values_changed': {'key1': {'old_value': 'old', 'new_value': 'new'}}}}"
+```
+
+**JSON Mode**: Enable with `--structured-logging` or `STRUCTURED_LOGGING=true` for structured JSON output suitable for log aggregation systems like ELK or Fluentd:
+```json
+{
+  "timestamp": "2025-08-15T16:46:20.474216Z",
+  "level": "INFO", 
+  "logger": "operator",
+  "message": "🔄 Config has changed: reloading",
+  "operation_id": "test-op-123",
+  "component": "operator",
+  "resource_type": "ConfigMap",
+  "config_diff": "{'root': {'values_changed': {'key1': {'old_value': 'old', 'new_value': 'new'}}}}"
+}
+```
+
+Both formats preserve all context information without duplication - context fields appear only in the structured part, never in the message text.
 
 ### Prometheus Metrics
 
@@ -517,5 +588,9 @@ Follow the style guide in `STYLEGUIDE.md`:
 - **"Connection refused"**: Verify Dataplane API is enabled on port 5555 (or custom port via annotation)
 - **"Configuration deployment failed"**: Check HAProxy logs for configuration errors and network connectivity
 
-Always fix failing tests and checks without asking for confirmation.
+## Misc Memories
+
+- Always fix failing tests and checks without asking for confirmation.
 - Always run tests and linters after code changes. Run acceptance tests after major code changes and after completing a task.
+- Always run a test after modifying it.
+- In Python always prefer module-level imports over local imports if having the choice.
