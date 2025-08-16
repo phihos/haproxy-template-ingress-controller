@@ -413,3 +413,32 @@ class TestIntegration:
                 assert dataplane_entry["event"] == "Dataplane API deploy"
                 assert dataplane_entry["pod_name"] == "haproxy-production-1"
                 assert dataplane_entry["version"] == "1.2.3"
+
+
+class TestEdgeCases:
+    """Test cases for edge cases and error conditions."""
+
+    def test_performance_with_many_context_fields(self):
+        """Test performance of logfmt renderer with many context fields."""
+        # Setup structured logging
+        setup_structured_logging(verbose_level=1, use_json=False)
+
+        # Create event dict with many fields
+        event_dict = {
+            "timestamp": "2025-01-01 12:00:00,000",
+            "level": "INFO",
+            "logger": "test.module",
+            "event": "Performance test",
+        }
+
+        # Add many context fields
+        for i in range(50):
+            event_dict[f"field_{i}"] = f"value_{i}"
+            event_dict[f"quoted_field_{i}"] = f"value with spaces {i}"
+
+        # Should not raise exceptions and should format correctly
+        result = custom_logfmt_renderer(None, None, event_dict)
+
+        assert "Performance test" in result
+        assert "field_0=value_0" in result
+        assert 'quoted_field_0="value with spaces 0"' in result

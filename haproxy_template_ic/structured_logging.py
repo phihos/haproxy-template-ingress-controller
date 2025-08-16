@@ -9,7 +9,6 @@ using the industry-standard structlog library.
 import logging
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
 from typing import Any, Optional, Iterator, List
 from uuid import uuid4
 
@@ -17,17 +16,11 @@ import structlog
 import structlog.contextvars
 
 
-@dataclass
-class LogContext:
-    """Container for structured logging context."""
+# LogContext dataclass removed - using contextvars directly for context management
 
-    operation_id: Optional[str] = None
-    component: Optional[str] = None
-    resource_type: Optional[str] = None
-    resource_namespace: Optional[str] = None
-    resource_name: Optional[str] = None
-    template_type: Optional[str] = None
-    pod_name: Optional[str] = None
+
+# Pre-compiled format string for better performance
+_BASE_MESSAGE_FORMAT = "{timestamp} - {logger} - {level} - {event}"
 
 
 def custom_logfmt_renderer(_, __, event_dict):
@@ -38,19 +31,27 @@ def custom_logfmt_renderer(_, __, event_dict):
     logger = event_dict.pop("logger", "")
     event = event_dict.pop("event", "")
 
-    # Format the base message traditionally
-    base_message = f"{timestamp} - {logger} - {level} - {event}"
+    # Format the base message using pre-compiled format string
+    base_message = _BASE_MESSAGE_FORMAT.format(
+        timestamp=timestamp, logger=logger, level=level, event=event
+    )
 
     # Format remaining context fields as logfmt and append
     if event_dict:
         logfmt_parts = []
         for key, value in event_dict.items():
-            # Quote values that contain spaces or special characters
-            if isinstance(value, str) and (
-                " " in value or '"' in value or "=" in value
+            # Quote values that contain spaces, tabs, newlines, or special characters
+            if isinstance(value, str) and any(
+                char in value for char in (" ", "\t", "\n", "\r", '"', "=")
             ):
-                # Escape quotes in the value
-                escaped_value = value.replace('"', '\\"')
+                # Escape special characters in the value
+                escaped_value = (
+                    value.replace("\\", "\\\\")
+                    .replace('"', '\\"')
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t")
+                )
                 logfmt_parts.append(f'{key}="{escaped_value}"')
             else:
                 logfmt_parts.append(f"{key}={value}")
@@ -63,10 +64,12 @@ def custom_logfmt_renderer(_, __, event_dict):
 
 def custom_timestamp_processor(_, __, event_dict):
     """Custom timestamp processor that formats timestamps to match original format."""
-    # Use the same timestamp format as the original implementation
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-    # Add milliseconds
-    timestamp += f",{int((time.time() % 1) * 1000):03d}"
+    # Capture time once to ensure thread safety
+    current_time = time.time()
+    # Format timestamp with milliseconds from the same time capture
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(current_time))
+    # Add milliseconds from the same time capture
+    timestamp += f",{int((current_time % 1) * 1000):03d}"
     event_dict["timestamp"] = timestamp
     return event_dict
 
@@ -141,12 +144,17 @@ def resource_context_manager(
     # Add any additional context fields
     context.update(extra_fields)
 
-    structlog.contextvars.bind_contextvars(**context)
+    # Track which keys we actually bind to ensure proper cleanup
+    bound_keys = list(context.keys())
+
+    if bound_keys:
+        structlog.contextvars.bind_contextvars(**context)
     try:
         yield
     finally:
-        # Unbind all the context fields we set
-        structlog.contextvars.unbind_contextvars(*context.keys())
+        # Unbind only the context fields we actually set
+        if bound_keys:
+            structlog.contextvars.unbind_contextvars(*bound_keys)
 
 
 def get_structured_logger(name: str) -> StructuredLogger:
