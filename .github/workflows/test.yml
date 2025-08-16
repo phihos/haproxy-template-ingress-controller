@@ -68,12 +68,13 @@ jobs:
             --cov=haproxy_template_ic \
             --cov-report=term-missing \
             --tb=short
+          ls -al
 
       - name: Upload unit test coverage
         uses: actions/upload-artifact@v4
         with:
           name: coverage-unit
-          path: .coverage
+          path: .coverage*
           retention-days: 7
           if-no-files-found: error
 
