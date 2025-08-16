@@ -162,6 +162,7 @@ module = [
     "deepdiff.*",    # Deep difference library - no official type stubs
     "docker.*",      # Docker library - no official type stubs
     "python_on_whales.*",  # Docker wrapper - no official type stubs
+    "haproxy_dataplane_v3.*",  # Generated HAProxy Dataplane API client
 ]
 ignore_missing_imports = true
 
