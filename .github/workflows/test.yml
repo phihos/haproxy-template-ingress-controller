@@ -239,17 +239,12 @@ jobs:
 
       - name: Combine coverage data and create XML
         run: |
-          # Copy all coverage files to current directory
-          find ./coverage-* -name '.coverage*' -type f -exec cp {} . \;
-          
-          # Combine coverage data
-          uv run coverage combine .coverage*
+          # Combine coverage data from all artifact directories
+          # This avoids file name conflicts when copying between directories
+          uv run coverage combine coverage-*/.coverage*
           
           # Generate XML report
           uv run coverage xml
-          
-          # Clean up coverage files
-          rm -f .coverage*
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
