@@ -287,40 +287,32 @@ async def test_dataplane_client_get_version():
     """Test DataplaneClient version retrieval."""
     client = DataplaneClient("http://10.0.1.5:5555/v3")
 
-    # Mock the lazy import function to return mock classes
-    mock_api_client = AsyncMock()
+    # Mock the dataplane classes directly
+    mock_api_client_class = Mock()
     mock_info_api_class = Mock()
 
-    mock_classes = {
-        "ApiClient": mock_api_client,
-        "InformationApi": mock_info_api_class,
-        "ApiException": Exception,
-    }
+    # Create proper async context manager mock
+    mock_api_client_instance = AsyncMock()
+    mock_api_client_context = AsyncMock()
+    mock_api_client_context.__aenter__.return_value = mock_api_client_instance
+    mock_api_client_context.__aexit__.return_value = None
+    mock_api_client_class.return_value = mock_api_client_context
 
-    with patch(
-        "haproxy_template_ic.dataplane._get_dataplane_classes",
-        return_value=mock_classes,
-    ):
-        # Create mock instances
-        mock_api_client_instance = AsyncMock()
-        mock_info_api_instance = AsyncMock()
+    with patch("haproxy_template_ic.dataplane.ApiClient", mock_api_client_class):
+        with patch("haproxy_template_ic.dataplane.InformationApi", mock_info_api_class):
+            # Setup InformationApi instance
+            mock_info_api_instance = AsyncMock()
+            mock_info_api_class.return_value = mock_info_api_instance
 
-        # Setup the context manager for ApiClient
-        mock_api_client.return_value.__aenter__.return_value = mock_api_client_instance
-        mock_api_client.return_value.__aexit__.return_value = None
+            # Create a mock response object with the expected attributes
+            mock_response = Mock()
+            mock_response.haproxy = {"version": "2.4.0"}
+            mock_response.api = {"api_version": "3.0"}
+            mock_response.system = {"hostname": "test"}
 
-        # Setup InformationApi instance
-        mock_info_api_class.return_value = mock_info_api_instance
+            mock_info_api_instance.get_info.return_value = mock_response
 
-        # Create a mock response object with the expected attributes
-        mock_response = Mock()
-        mock_response.haproxy = {"version": "2.4.0"}
-        mock_response.api = {"api_version": "3.0"}
-        mock_response.system = {"hostname": "test"}
-
-        mock_info_api_instance.get_info.return_value = mock_response
-
-        version_info = await client.get_version()
+            version_info = await client.get_version()
 
     # Check that the response includes data from all sources
     assert "version" in version_info
@@ -335,11 +327,21 @@ async def test_dataplane_client_validate_configuration_success():
 
     mock_resilient, mock_metrics = setup_fast_resilient_mocks()
 
-    # Mock the generated API client components
-    with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
+    # Mock the dataplane classes directly
+    mock_api_client_class = Mock()
+    mock_config_api_class = Mock()
+
+    # Create proper async context manager mock
+    mock_api_client_instance = AsyncMock()
+    mock_api_client_context = AsyncMock()
+    mock_api_client_context.__aenter__.return_value = mock_api_client_instance
+    mock_api_client_context.__aexit__.return_value = None
+    mock_api_client_class.return_value = mock_api_client_context
+
+    with patch("haproxy_template_ic.dataplane.ApiClient", mock_api_client_class):
         with patch(
-            "haproxy_template_ic.dataplane.ConfigurationApi"
-        ) as mock_config_api_class:
+            "haproxy_template_ic.dataplane.ConfigurationApi", mock_config_api_class
+        ):
             with patch(
                 "haproxy_template_ic.dataplane.get_resilient_operator",
                 return_value=mock_resilient,
@@ -348,17 +350,8 @@ async def test_dataplane_client_validate_configuration_success():
                     "haproxy_template_ic.dataplane.get_metrics_collector",
                     return_value=mock_metrics,
                 ):
-                    # Create mock instances
-                    mock_api_client_instance = AsyncMock()
-                    mock_config_api_instance = AsyncMock()
-
-                    # Setup the context manager for ApiClient
-                    mock_api_client.return_value.__aenter__.return_value = (
-                        mock_api_client_instance
-                    )
-                    mock_api_client.return_value.__aexit__.return_value = None
-
                     # Setup ConfigurationApi instance
+                    mock_config_api_instance = AsyncMock()
                     mock_config_api_class.return_value = mock_config_api_instance
 
                     # Mock successful validation (no exception)
@@ -376,40 +369,49 @@ async def test_dataplane_client_validate_configuration_failure():
 
     mock_resilient, mock_metrics = setup_fast_resilient_mocks()
 
-    # Mock the generated API client components
-    with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
+    # Mock the dataplane classes directly
+    mock_api_client_class = Mock()
+    mock_config_api_class = Mock()
+
+    # Create proper async context manager mock
+    mock_api_client_instance = AsyncMock()
+    mock_api_client_context = AsyncMock()
+    mock_api_client_context.__aenter__.return_value = mock_api_client_instance
+    mock_api_client_context.__aexit__.return_value = None
+    mock_api_client_class.return_value = mock_api_client_context
+
+    # Create a mock BadRequestException
+    class MockBadRequestException(Exception):
+        def __init__(self, msg):
+            self.body = msg
+            super().__init__(msg)
+
+    with patch("haproxy_template_ic.dataplane.ApiClient", mock_api_client_class):
         with patch(
-            "haproxy_template_ic.dataplane.ConfigurationApi"
-        ) as mock_config_api_class:
+            "haproxy_template_ic.dataplane.ConfigurationApi", mock_config_api_class
+        ):
             with patch(
-                "haproxy_template_ic.dataplane.get_resilient_operator",
-                return_value=mock_resilient,
+                "haproxy_template_ic.dataplane.BadRequestException",
+                MockBadRequestException,
             ):
                 with patch(
-                    "haproxy_template_ic.dataplane.get_metrics_collector",
-                    return_value=mock_metrics,
+                    "haproxy_template_ic.dataplane.get_resilient_operator",
+                    return_value=mock_resilient,
                 ):
-                    # Create mock instances
-                    mock_api_client_instance = AsyncMock()
-                    mock_config_api_instance = AsyncMock()
+                    with patch(
+                        "haproxy_template_ic.dataplane.get_metrics_collector",
+                        return_value=mock_metrics,
+                    ):
+                        # Setup ConfigurationApi instance
+                        mock_config_api_instance = AsyncMock()
+                        mock_config_api_class.return_value = mock_config_api_instance
 
-                    # Setup the context manager for ApiClient
-                    mock_api_client.return_value.__aenter__.return_value = (
-                        mock_api_client_instance
-                    )
-                    mock_api_client.return_value.__aexit__.return_value = None
+                        # Mock validation failure (BadRequestException)
+                        mock_config_api_instance.post_ha_proxy_configuration.side_effect = MockBadRequestException(
+                            "Validation failed"
+                        )
 
-                    # Setup ConfigurationApi instance
-                    mock_config_api_class.return_value = mock_config_api_instance
-
-                    # Mock validation failure (BadRequestException)
-                    from haproxy_dataplane_v3.exceptions import BadRequestException
-
-                    mock_config_api_instance.post_ha_proxy_configuration.side_effect = (
-                        BadRequestException("Validation failed")
-                    )
-
-                    result = await client.validate_configuration("invalid config")
+                        result = await client.validate_configuration("invalid config")
 
     assert result is False
 
@@ -421,11 +423,21 @@ async def test_dataplane_client_deploy_configuration_success():
 
     mock_resilient, mock_metrics = setup_fast_resilient_mocks()
 
-    # Mock the generated API client components to make the actual operation succeed
-    with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
+    # Mock the dataplane classes directly
+    mock_api_client_class = Mock()
+    mock_config_api_class = Mock()
+
+    # Create proper async context manager mock
+    mock_api_client_instance = AsyncMock()
+    mock_api_client_context = AsyncMock()
+    mock_api_client_context.__aenter__.return_value = mock_api_client_instance
+    mock_api_client_context.__aexit__.return_value = None
+    mock_api_client_class.return_value = mock_api_client_context
+
+    with patch("haproxy_template_ic.dataplane.ApiClient", mock_api_client_class):
         with patch(
-            "haproxy_template_ic.dataplane.ConfigurationApi"
-        ) as mock_config_api_class:
+            "haproxy_template_ic.dataplane.ConfigurationApi", mock_config_api_class
+        ):
             with patch(
                 "haproxy_template_ic.dataplane.get_resilient_operator",
                 return_value=mock_resilient,
@@ -434,17 +446,8 @@ async def test_dataplane_client_deploy_configuration_success():
                     "haproxy_template_ic.dataplane.get_metrics_collector",
                     return_value=mock_metrics,
                 ):
-                    # Create mock instances
-                    mock_api_client_instance = AsyncMock()
-                    mock_config_api_instance = AsyncMock()
-
-                    # Setup the context manager for ApiClient
-                    mock_api_client.return_value.__aenter__.return_value = (
-                        mock_api_client_instance
-                    )
-                    mock_api_client.return_value.__aexit__.return_value = None
-
                     # Setup ConfigurationApi instance
+                    mock_config_api_instance = AsyncMock()
                     mock_config_api_class.return_value = mock_config_api_instance
 
                     # Mock successful deployment

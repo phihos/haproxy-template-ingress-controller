@@ -13,6 +13,7 @@ dependencies = [
     "kopf[dev]>=1.38.0",
     "kr8s>=0.20.9",
     "kubernetes>=33.1.0",
+    "lazy-imports>=1.0.1",
     "opentelemetry-api>=1.36.0",
     "opentelemetry-exporter-jaeger>=1.21.0",
     "opentelemetry-instrumentation-asyncio>=0.57b0",
@@ -179,7 +180,7 @@ exclude_dirs = ["tests", "codegen"]  # Don't security-scan generated code
 
 [tool.deptry]
 extend_exclude = ["tests", "coverage_wrapper.py", "codegen"]  # Test files and generated code can use dev dependencies
-per_rule_ignores = { "DEP002" = ["deprecated", "aiohttp-retry", "pydantic", "python-dateutil", "typing-extensions", "urllib3"], "DEP003" = ["haproxy_dataplane_v3"] }
+per_rule_ignores = { "DEP002" = ["deprecated", "aiohttp-retry", "pydantic", "python-dateutil", "typing-extensions", "urllib3", "lazy-imports"], "DEP003" = ["haproxy_dataplane_v3"] }
 
 [tool.ruff]
 exclude = [

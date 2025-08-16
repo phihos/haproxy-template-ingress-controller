@@ -641,6 +641,7 @@ dependencies = [
     { name = "kopf", extra = ["dev"] },
     { name = "kr8s" },
     { name = "kubernetes" },
+    { name = "lazy-imports" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-jaeger" },
     { name = "opentelemetry-instrumentation-asyncio" },
@@ -695,6 +696,7 @@ requires-dist = [
     { name = "kopf", extras = ["dev"], specifier = ">=1.38.0" },
     { name = "kr8s", specifier = ">=0.20.9" },
     { name = "kubernetes", specifier = ">=33.1.0" },
+    { name = "lazy-imports", specifier = ">=1.0.1" },
     { name = "opentelemetry-api", specifier = ">=1.36.0" },
     { name = "opentelemetry-exporter-jaeger", specifier = ">=1.21.0" },
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.57b0" },
@@ -905,6 +907,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ae/52/19ebe8004c243fdfa78268a96727c71e08f00ff6fe69a301d0b7fcbce3c2/kubernetes-33.1.0.tar.gz", hash = "sha256:f64d829843a54c251061a8e7a14523b521f2dc5c896cf6d65ccf348648a88993", size = 1036779, upload-time = "2025-06-09T21:57:58.521Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/89/43/d9bebfc3db7dea6ec80df5cb2aad8d274dd18ec2edd6c4f21f32c237cbbb/kubernetes-33.1.0-py2.py3-none-any.whl", hash = "sha256:544de42b24b64287f7e0aa9513c93cb503f7f40eea39b20f66810011a86eabc5", size = 1941335, upload-time = "2025-06-09T21:57:56.327Z" },
+]
+
+[[package]]
+name = "lazy-imports"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e2/1c/6675601691fd6007021e8e95cfcb83e6d11067de3d7ecde0d0de970324c8/lazy_imports-1.0.1.tar.gz", hash = "sha256:7d3e4b1547cb574ec7ef3c47a074673e2612330b2b50bf7eec939f2c393fc261", size = 24484, upload-time = "2025-08-09T07:15:55.353Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/37/c84d7fec58dec38564574dec8f94bb1db788598fe397f116a9d6a86d3055/lazy_imports-1.0.1-py3-none-any.whl", hash = "sha256:eb5accc33bf9987e5197e79476bbeb960b74a2c16619bdf41281b3240f730846", size = 18896, upload-time = "2025-08-09T07:15:53.7Z" },
 ]
 
 [[package]]

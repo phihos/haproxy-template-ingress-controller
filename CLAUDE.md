@@ -105,9 +105,11 @@ uv run pytest -m integration --keep-containers=on-failure --verbose-docker
 - Dependency hygiene: `uv run deptry .`
 
 ### Generated Client
-- Regenerate HAProxy Dataplane API client: `bash ./scripts/regenerate_client.sh`
+- Regenerate HAProxy Dataplane API client: `bash ./scripts/regenerate_client.sh [--jar path/to/jar]`
   - Downloads the latest HAProxy Dataplane API v3 specification
   - Removes existing generated code and regenerates the complete client
+  - Optional `--jar` parameter allows using custom OpenAPI Generator JAR for latest features
+  - Built-in lazy loading support when using OpenAPI Generator master branch
   - Includes compatibility workarounds for known OpenAPI Generator bugs
 
 ### Development Environment
@@ -637,8 +639,11 @@ The controller implements full Dataplane API synchronization to deploy rendered 
 
 - **Complete API Coverage**: Uses the official OpenAPI-generated client with all 218 API endpoints from HAProxy Dataplane API v3
 - **Asyncio Compatible**: Generated with `--library asyncio` for full async/await support
+- **Built-in Lazy Loading**: Latest OpenAPI Generator includes lazy loading support via `lazy_imports` package, reducing import time from 20+ seconds to under 1 second
 - **Separate Code Structure**: Generated code is kept in `codegen/haproxy_dataplane_v3/` and excluded from linting/coverage
 - **Regeneration Script**: `scripts/regenerate_client.sh` downloads the latest spec and regenerates the client
+  - Supports custom JAR files via `--jar` option for accessing latest features like lazy loading
+  - Built-in lazy loading reduces import time from 20+ seconds to under 1 second when using latest generator
 - **Compatibility Shim**: `codegen/haproxy_dataplane_v3/haproxy_dataplane_v3/models/dict.py` works around OpenAPI Generator v7.14.0 Dict import bug
 
 ### Architecture
