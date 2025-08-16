@@ -721,28 +721,36 @@ The controller provides comprehensive monitoring capabilities through Prometheus
 
 ### Structured Logging
 
-The controller supports both traditional and structured JSON logging with automatic context injection:
+The controller uses **structlog**, the industry-standard Python structured logging library, with automatic context injection and correlation:
 
 - **Operation correlation**: Each operation gets a unique ID for tracing across log entries
-- **Component context**: Automatic tagging of log entries by component (operator, dataplane, management)
+- **Component context**: Automatic tagging of log entries by component (operator, dataplane, management)  
 - **Resource context**: Automatic inclusion of Kubernetes resource metadata (type, namespace, name)
 - **JSON output**: Optional structured JSON format for log aggregation systems
 - **Context managers**: Programmatic context management for nested operations
+- **High performance**: Built on structlog's optimized logging pipeline
+
+#### Technology Stack
+
+- **Core Library**: [structlog](https://www.structlog.org/) - The most popular Python structured logging framework
+- **Context Variables**: Uses Python's `contextvars` for async-safe context management
+- **Custom Processors**: Custom structlog processors for backward-compatible output formatting
+- **Zero Overhead**: Minimal performance impact with lazy evaluation and caching
 
 #### Output Formats
 
-**Plain Text Mode** (default): Uses LogfmtFormatter that appends context fields in logfmt format to regular log messages:
+**Plain Text Mode** (default): Uses custom logfmt processor that appends context fields in logfmt format to traditional log messages:
 ```
 2025-08-15 18:46:20,473 - operator - INFO - 🔄 Config has changed: reloading operation_id=test-op-123 component=operator resource_type=ConfigMap config_diff="{'root': {'values_changed': {'key1': {'old_value': 'old', 'new_value': 'new'}}}}"
 ```
 
-**JSON Mode**: Enable with `--structured-logging` or `STRUCTURED_LOGGING=true` for structured JSON output suitable for log aggregation systems like ELK or Fluentd:
+**JSON Mode**: Enable with `--structured-logging` or `STRUCTURED_LOGGING=true` for structured JSON output using structlog's built-in JSONRenderer:
 ```json
 {
   "timestamp": "2025-08-15T16:46:20.474216Z",
   "level": "INFO", 
   "logger": "operator",
-  "message": "🔄 Config has changed: reloading",
+  "event": "🔄 Config has changed: reloading",
   "operation_id": "test-op-123",
   "component": "operator",
   "resource_type": "ConfigMap",
@@ -750,7 +758,7 @@ The controller supports both traditional and structured JSON logging with automa
 }
 ```
 
-Both formats preserve all context information without duplication - context fields appear only in the structured part, never in the message text.
+Both formats preserve all context information without duplication and provide the same API as before while leveraging structlog's robust foundation.
 
 ### Prometheus Metrics
 

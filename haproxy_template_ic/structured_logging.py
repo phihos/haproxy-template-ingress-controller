@@ -1,27 +1,20 @@
 """
-Structured logging functionality for HAProxy Template IC.
+Structured logging functionality for HAProxy Template IC using structlog.
 
 This module provides context-aware structured logging with automatic
-metadata injection, operation correlation, and JSON output formatting.
+metadata injection, operation correlation, and JSON output formatting
+using the industry-standard structlog library.
 """
 
 import logging
-import json
 import time
 from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, Iterator
+from typing import Any, Optional, Iterator
 from uuid import uuid4
 
-# Context variables for structured logging
-operation_id_context: ContextVar[Optional[str]] = ContextVar(
-    "operation_id", default=None
-)
-component_context: ContextVar[Optional[str]] = ContextVar("component", default=None)
-resource_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
-    "resource", default=None
-)
+import structlog
+import structlog.contextvars
 
 
 @dataclass
@@ -37,186 +30,73 @@ class LogContext:
     pod_name: Optional[str] = None
 
 
-class StructuredFormatter(logging.Formatter):
-    """JSON formatter for structured logging with context injection."""
+def custom_logfmt_renderer(_, __, event_dict):
+    """Custom renderer that appends context fields in logfmt format to traditional log messages."""
+    # Extract standard log fields
+    timestamp = event_dict.pop("timestamp", "")
+    level = event_dict.pop("level", "")
+    logger = event_dict.pop("logger", "")
+    event = event_dict.pop("event", "")
 
-    def format(self, record: logging.LogRecord) -> str:
-        """Format log record as structured JSON with context."""
-        # Build base log entry
-        log_entry = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
-            + f".{int((record.created % 1) * 1000000):06d}Z",
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
+    # Format the base message traditionally
+    base_message = f"{timestamp} - {logger} - {level} - {event}"
 
-        # Add operation correlation
-        operation_id = operation_id_context.get()
-        if operation_id:
-            log_entry["operation_id"] = operation_id
+    # Format remaining context fields as logfmt and append
+    if event_dict:
+        logfmt_parts = []
+        for key, value in event_dict.items():
+            # Quote values that contain spaces or special characters
+            if isinstance(value, str) and (
+                " " in value or '"' in value or "=" in value
+            ):
+                # Escape quotes in the value
+                escaped_value = value.replace('"', '\\"')
+                logfmt_parts.append(f'{key}="{escaped_value}"')
+            else:
+                logfmt_parts.append(f"{key}={value}")
 
-        # Add component context
-        component = component_context.get()
-        if component:
-            log_entry["component"] = component
+        logfmt_string = " ".join(logfmt_parts)
+        return f"{base_message} {logfmt_string}"
 
-        # Add resource context
-        resource = resource_context.get()
-        if resource:
-            log_entry.update(resource)
-
-        # Add exception information if present
-        if record.exc_info:
-            log_entry["exception"] = self.formatException(record.exc_info)
-
-        # Add any extra fields from the log record
-        for key, value in record.__dict__.items():
-            if key not in {
-                "name",
-                "msg",
-                "args",
-                "levelname",
-                "levelno",
-                "pathname",
-                "filename",
-                "module",
-                "lineno",
-                "funcName",
-                "created",
-                "msecs",
-                "relativeCreated",
-                "thread",
-                "threadName",
-                "processName",
-                "process",
-                "exc_info",
-                "exc_text",
-                "stack_info",
-            }:
-                log_entry[key] = value
-
-        return json.dumps(log_entry, default=str)
+    return base_message
 
 
-class LogfmtFormatter(logging.Formatter):
-    """Formatter that appends context fields in logfmt format to regular log messages."""
-
-    def format(self, record: logging.LogRecord) -> str:
-        """Format log record with logfmt-formatted context appended."""
-        # Format the base message using parent formatter
-        base_message = super().format(record)
-
-        # Collect context fields from the record
-        context_fields = {}
-
-        # Add operation correlation
-        operation_id = operation_id_context.get()
-        if operation_id:
-            context_fields["operation_id"] = operation_id
-
-        # Add component context
-        component = component_context.get()
-        if component:
-            context_fields["component"] = component
-
-        # Add resource context
-        resource = resource_context.get()
-        if resource:
-            context_fields.update(resource)
-
-        # Add any extra fields from the log record
-        for key, value in record.__dict__.items():
-            if key not in {
-                "name",
-                "msg",
-                "args",
-                "levelname",
-                "levelno",
-                "pathname",
-                "filename",
-                "module",
-                "lineno",
-                "funcName",
-                "created",
-                "msecs",
-                "relativeCreated",
-                "thread",
-                "threadName",
-                "processName",
-                "process",
-                "exc_info",
-                "exc_text",
-                "stack_info",
-            }:
-                context_fields[key] = value
-
-        # Format context fields as logfmt and append to base message
-        if context_fields:
-            logfmt_parts = []
-            for key, value in context_fields.items():
-                # Quote values that contain spaces or special characters
-                if isinstance(value, str) and (
-                    " " in value or '"' in value or "=" in value
-                ):
-                    # Escape quotes in the value
-                    escaped_value = value.replace('"', '\\"')
-                    logfmt_parts.append(f'{key}="{escaped_value}"')
-                else:
-                    logfmt_parts.append(f"{key}={value}")
-
-            logfmt_string = " ".join(logfmt_parts)
-            return f"{base_message} {logfmt_string}"
-
-        return base_message
+def custom_timestamp_processor(_, __, event_dict):
+    """Custom timestamp processor that formats timestamps to match original format."""
+    # Use the same timestamp format as the original implementation
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    # Add milliseconds
+    timestamp += f",{int((time.time() % 1) * 1000):03d}"
+    event_dict["timestamp"] = timestamp
+    return event_dict
 
 
 class StructuredLogger:
-    """Wrapper for enhanced structured logging with context management."""
+    """Wrapper for enhanced structured logging with context management using structlog."""
 
-    def __init__(self, logger: logging.Logger) -> None:
-        """Initialize with base logger."""
+    def __init__(self, logger: structlog.BoundLogger) -> None:
+        """Initialize with structlog bound logger."""
         self.logger = logger
-
-    def _log_with_context(self, level: int, msg: str, **kwargs: Any) -> None:
-        """Log message with current context and additional fields."""
-        # Create a copy of kwargs to avoid modifying the original
-        extra = kwargs.copy()
-
-        # Add context information
-        operation_id = operation_id_context.get()
-        if operation_id:
-            extra["operation_id"] = operation_id
-
-        component = component_context.get()
-        if component:
-            extra["component"] = component
-
-        resource = resource_context.get()
-        if resource:
-            extra.update(resource)
-
-        self.logger.log(level, msg, extra=extra)
 
     def debug(self, msg: str, **kwargs: Any) -> None:
         """Log debug message with context."""
-        self._log_with_context(logging.DEBUG, msg, **kwargs)
+        self.logger.debug(msg, **kwargs)
 
     def info(self, msg: str, **kwargs: Any) -> None:
         """Log info message with context."""
-        self._log_with_context(logging.INFO, msg, **kwargs)
+        self.logger.info(msg, **kwargs)
 
     def warning(self, msg: str, **kwargs: Any) -> None:
         """Log warning message with context."""
-        self._log_with_context(logging.WARNING, msg, **kwargs)
+        self.logger.warning(msg, **kwargs)
 
     def error(self, msg: str, **kwargs: Any) -> None:
         """Log error message with context."""
-        self._log_with_context(logging.ERROR, msg, **kwargs)
+        self.logger.error(msg, **kwargs)
 
     def critical(self, msg: str, **kwargs: Any) -> None:
         """Log critical message with context."""
-        self._log_with_context(logging.CRITICAL, msg, **kwargs)
+        self.logger.critical(msg, **kwargs)
 
 
 @contextmanager
@@ -225,21 +105,21 @@ def operation_context(operation_id: Optional[str] = None) -> Iterator[str]:
     if operation_id is None:
         operation_id = str(uuid4())[:8]  # Short UUID for readability
 
-    token = operation_id_context.set(operation_id)
+    structlog.contextvars.bind_contextvars(operation_id=operation_id)
     try:
         yield operation_id
     finally:
-        operation_id_context.reset(token)
+        structlog.contextvars.unbind_contextvars("operation_id")
 
 
 @contextmanager
 def component_context_manager(component: str) -> Iterator[None]:
     """Context manager for component identification."""
-    token = component_context.set(component)
+    structlog.contextvars.bind_contextvars(component=component)
     try:
         yield
     finally:
-        component_context.reset(token)
+        structlog.contextvars.unbind_contextvars("component")
 
 
 @contextmanager
@@ -261,47 +141,60 @@ def resource_context_manager(
     # Add any additional context fields
     context.update(extra_fields)
 
-    token = resource_context.set(context)
+    structlog.contextvars.bind_contextvars(**context)
     try:
         yield
     finally:
-        resource_context.reset(token)
+        # Unbind all the context fields we set
+        structlog.contextvars.unbind_contextvars(*context.keys())
 
 
 def get_structured_logger(name: str) -> StructuredLogger:
     """Get a structured logger for the given name."""
-    base_logger = logging.getLogger(name)
-    return StructuredLogger(base_logger)
+    # Create a structlog logger bound to the name
+    bound_logger = structlog.get_logger(name)
+    return StructuredLogger(bound_logger)
 
 
 def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None:
-    """Configure structured logging with optional JSON output."""
+    """Configure structured logging with optional JSON output using structlog."""
     log_levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
     level = log_levels.get(verbose_level, logging.DEBUG)
 
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
+    # Configure the standard library logging first
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",  # structlog will handle all formatting
+        force=True,
+    )
 
-    # Remove existing handlers
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-
-    # Create console handler
-    handler = logging.StreamHandler()
-    handler.setLevel(level)
+    # Configure structlog processors
+    processors = [
+        structlog.contextvars.merge_contextvars,  # Merge context variables
+        structlog.processors.add_log_level,  # Add log level
+        structlog.processors.StackInfoRenderer(),  # Add stack info if requested
+    ]
 
     if use_json:
-        # Use structured JSON formatter
-        formatter: logging.Formatter = StructuredFormatter()
-    else:
-        # Use logfmt formatter that appends context to traditional format
-        formatter = LogfmtFormatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        # Add timestamp and JSON renderer for JSON output
+        processors.extend(
+            [
+                structlog.processors.TimeStamper(fmt="iso"),
+                structlog.processors.JSONRenderer(),
+            ]
         )
+    else:
+        # Add custom timestamp and logfmt renderer for traditional format
+        processors.extend([custom_timestamp_processor, custom_logfmt_renderer])
 
-    handler.setFormatter(formatter)
-    root_logger.addHandler(handler)
+    # Configure structlog
+    structlog.configure(
+        processors=processors,
+        wrapper_class=structlog.make_filtering_bound_logger(level),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
 
 
 # Convenience functions for common operations
