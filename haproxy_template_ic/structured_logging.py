@@ -10,7 +10,7 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Optional, Iterator
+from typing import Any, Optional, Iterator, List
 from uuid import uuid4
 
 import structlog
@@ -169,7 +169,7 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
     )
 
     # Configure structlog processors
-    processors = [
+    processors: List[Any] = [
         structlog.contextvars.merge_contextvars,  # Merge context variables
         structlog.processors.add_log_level,  # Add log level
         structlog.processors.StackInfoRenderer(),  # Add stack info if requested
