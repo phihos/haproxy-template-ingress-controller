@@ -73,8 +73,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-unit
-          path: .coverage*
+          path: .coverage
           retention-days: 7
+          if-no-files-found: error
 
   integration-tests:
     name: Integration Tests  
@@ -110,6 +111,7 @@ jobs:
           name: coverage-integration
           path: .coverage*
           retention-days: 7
+          if-no-files-found: error
 
   acceptance-tests:
     name: Acceptance Tests
@@ -138,7 +140,8 @@ jobs:
             --coverage \
             --cov=haproxy_template_ic \
             --cov-report=term-missing \
-            --tb=short
+            --tb=short \
+            -n auto
 
       - name: Upload acceptance test coverage
         uses: actions/upload-artifact@v4
@@ -146,6 +149,7 @@ jobs:
           name: coverage-acceptance
           path: .coverage*
           retention-days: 7
+          if-no-files-found: error
 
   coverage:
     name: Coverage Report
