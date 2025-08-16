@@ -13,7 +13,7 @@ Uses the complete generated HAProxy Dataplane API v3 client for all operations.
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import kr8s
 from kr8s.objects import Pod
@@ -35,18 +35,27 @@ from haproxy_template_ic.tracing import (
     set_span_error,
 )
 
-# Import the complete generated client
-from haproxy_dataplane_v3 import ApiClient, Configuration
-from haproxy_dataplane_v3.api import (
-    ConfigurationApi,
-    InformationApi,
-)
-from haproxy_dataplane_v3.exceptions import (
-    ApiException,
-    BadRequestException,
-)
+# Lazy import pattern for heavy generated client - only import for type checking
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
+
+
+def _get_dataplane_classes():
+    """Lazy import function for heavy generated client classes."""
+    from haproxy_dataplane_v3 import ApiClient, Configuration
+    from haproxy_dataplane_v3.api import ConfigurationApi, InformationApi
+    from haproxy_dataplane_v3.exceptions import ApiException, BadRequestException
+
+    return {
+        "ApiClient": ApiClient,
+        "Configuration": Configuration,
+        "ConfigurationApi": ConfigurationApi,
+        "InformationApi": InformationApi,
+        "ApiException": ApiException,
+        "BadRequestException": BadRequestException,
+    }
 
 
 @dataclass(frozen=True)
@@ -204,17 +213,29 @@ class DataplaneClient:
         self.timeout = timeout
         self.auth = auth or ("admin", "adminpass")  # Default auth
 
-        # Create the generated API client configuration
-        self._configuration = Configuration(
-            host=self.base_url,
-            username=self.auth[0],
-            password=self.auth[1],
-        )
+        # Defer configuration creation until first use
+        self._configuration = None
+
+    def _get_configuration(self):
+        """Lazy initialization of Configuration object."""
+        if self._configuration is None:
+            classes = _get_dataplane_classes()
+            Configuration = classes["Configuration"]
+            self._configuration = Configuration(
+                host=self.base_url,
+                username=self.auth[0],
+                password=self.auth[1],
+            )
+        return self._configuration
 
     async def get_version(self) -> Dict[str, Any]:
         """Get HAProxy version information using the generated client."""
         try:
-            async with ApiClient(self._configuration) as api_client:
+            classes = _get_dataplane_classes()
+            ApiClient = classes["ApiClient"]
+            InformationApi = classes["InformationApi"]
+
+            async with ApiClient(self._get_configuration()) as api_client:
                 info_api = InformationApi(api_client)
                 info_response = await info_api.get_info(_request_timeout=self.timeout)
 
@@ -229,12 +250,23 @@ class DataplaneClient:
 
                 return result
 
-        except ApiException as e:
-            logger.error(f"API error getting version from {self.base_url}: {e}")
-            raise DataplaneAPIError(f"Failed to get version: {e}") from e
         except Exception as e:
-            logger.error(f"Unexpected error getting version from {self.base_url}: {e}")
-            raise DataplaneAPIError(f"Unexpected error: {e}") from e
+            # Check if it's an ApiException (without importing the class at module level)
+            if e.__class__.__name__ == "ApiException":
+                logger.error(f"API error getting version from {self.base_url}: {e}")
+                raise DataplaneAPIError(f"Failed to get version: {e}") from e
+            elif hasattr(e, "__module__") and "haproxy_dataplane_v3" in str(
+                e.__module__
+            ):
+                logger.error(
+                    f"Dataplane API error getting version from {self.base_url}: {e}"
+                )
+                raise DataplaneAPIError(f"Failed to get version: {e}") from e
+            else:
+                logger.error(
+                    f"Unexpected error getting version from {self.base_url}: {e}"
+                )
+                raise DataplaneAPIError(f"Unexpected error: {e}") from e
 
     async def validate_configuration(self, config_content: str) -> bool:
         """Validate HAProxy configuration without applying it."""
@@ -259,7 +291,11 @@ class DataplaneClient:
             # Important: catch exceptions inside timing context to avoid mock __exit__ suppressing them
             with metrics.time_dataplane_api_operation("validate"):
                 try:
-                    async with ApiClient(self._configuration) as api_client:
+                    classes = _get_dataplane_classes()
+                    ApiClient = classes["ApiClient"]
+                    ConfigurationApi = classes["ConfigurationApi"]
+
+                    async with ApiClient(self._get_configuration()) as api_client:
                         config_api = ConfigurationApi(api_client)
 
                         # Use the generated client to validate configuration
@@ -273,17 +309,26 @@ class DataplaneClient:
                         )
                         success = True
 
-                except BadRequestException as e:
-                    # Configuration validation failed
-                    logger.warning(f"Configuration validation failed: {e}")
-                    if hasattr(e, "body") and e.body:
-                        logger.warning(f"Validation error details: {e.body}")
-                    caught_error = None  # Don't treat validation failure as an error
-                    success = False
-                except ApiException as e:
-                    caught_error = e
                 except Exception as e:
-                    caught_error = e
+                    # Handle BadRequestException (configuration validation failed)
+                    if e.__class__.__name__ == "BadRequestException":
+                        logger.warning(f"Configuration validation failed: {e}")
+                        if hasattr(e, "body") and e.body:
+                            logger.warning(f"Validation error details: {e.body}")
+                        caught_error = (
+                            None  # Don't treat validation failure as an error
+                        )
+                        success = False
+                    # Handle ApiException
+                    elif e.__class__.__name__ == "ApiException":
+                        caught_error = e
+                    # Handle other dataplane exceptions
+                    elif hasattr(e, "__module__") and "haproxy_dataplane_v3" in str(
+                        e.__module__
+                    ):
+                        caught_error = e
+                    else:
+                        caught_error = e
 
             if success:
                 record_span_event("validation_successful")
@@ -323,7 +368,11 @@ class DataplaneClient:
             async def deployment_operation():
                 with metrics.time_dataplane_api_operation("deploy"):
                     try:
-                        async with ApiClient(self._configuration) as api_client:
+                        classes = _get_dataplane_classes()
+                        ApiClient = classes["ApiClient"]
+                        ConfigurationApi = classes["ConfigurationApi"]
+
+                        async with ApiClient(self._get_configuration()) as api_client:
                             config_api = ConfigurationApi(api_client)
 
                             # Get current configuration version first
@@ -349,9 +398,16 @@ class DataplaneClient:
                             )
                             return str(new_version)
 
-                    except ApiException as e:
-                        # Convert to the expected exception type for resilience handling
-                        raise DataplaneAPIError(str(e)) from e
+                    except Exception as e:
+                        # Handle ApiException and other dataplane exceptions
+                        if e.__class__.__name__ == "ApiException" or (
+                            hasattr(e, "__module__")
+                            and "haproxy_dataplane_v3" in str(e.__module__)
+                        ):
+                            # Convert to the expected exception type for resilience handling
+                            raise DataplaneAPIError(str(e)) from e
+                        else:
+                            raise
 
             circuit_name = f"haproxy_deployment_{hash(self.base_url)}"
             result = await resilient_operator.execute_with_retry(

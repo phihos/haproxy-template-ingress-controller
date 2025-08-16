@@ -252,7 +252,7 @@ def docker_client():
     return DockerClient()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def docker_cleanup_session(docker_client):
     """Clean up Docker resources at session start to improve performance."""
     try:
@@ -288,14 +288,20 @@ def docker_cleanup_session(docker_client):
 
 
 @shared_session_scope_fixture(PickleStore())
-def shared_docker_images(docker_client):
+def shared_docker_images(request, docker_client, docker_cleanup_session):
     """
     Build Docker images once per test session, shared across pytest-xdist workers.
 
     This fixture ensures that HAProxy and Dataplane API images are built only once
     at the start of the test session, even when running with pytest-xdist parallel
     execution. The built images are cached and reused across all test workers.
+
+    This fixture is only activated for tests that explicitly request it or tests
+    marked with 'integration' marker.
     """
+    # Ensure cleanup runs first
+    docker_cleanup_session
+
     images = yield
     if images is SetupToken.FIRST:
         print("\n🐳 Building shared Docker images for integration tests...")

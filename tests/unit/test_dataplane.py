@@ -287,33 +287,40 @@ async def test_dataplane_client_get_version():
     """Test DataplaneClient version retrieval."""
     client = DataplaneClient("http://10.0.1.5:5555/v3")
 
-    # Mock the generated API client components
-    with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-        with patch(
-            "haproxy_template_ic.dataplane.InformationApi"
-        ) as mock_info_api_class:
-            # Create mock instances
-            mock_api_client_instance = AsyncMock()
-            mock_info_api_instance = AsyncMock()
+    # Mock the lazy import function to return mock classes
+    mock_api_client = AsyncMock()
+    mock_info_api_class = Mock()
 
-            # Setup the context manager for ApiClient
-            mock_api_client.return_value.__aenter__.return_value = (
-                mock_api_client_instance
-            )
-            mock_api_client.return_value.__aexit__.return_value = None
+    mock_classes = {
+        "ApiClient": mock_api_client,
+        "InformationApi": mock_info_api_class,
+        "ApiException": Exception,
+    }
 
-            # Setup InformationApi instance
-            mock_info_api_class.return_value = mock_info_api_instance
+    with patch(
+        "haproxy_template_ic.dataplane._get_dataplane_classes",
+        return_value=mock_classes,
+    ):
+        # Create mock instances
+        mock_api_client_instance = AsyncMock()
+        mock_info_api_instance = AsyncMock()
 
-            # Create a mock response object with the expected attributes
-            mock_response = Mock()
-            mock_response.haproxy = {"version": "2.4.0"}
-            mock_response.api = {"api_version": "3.0"}
-            mock_response.system = {"hostname": "test"}
+        # Setup the context manager for ApiClient
+        mock_api_client.return_value.__aenter__.return_value = mock_api_client_instance
+        mock_api_client.return_value.__aexit__.return_value = None
 
-            mock_info_api_instance.get_info.return_value = mock_response
+        # Setup InformationApi instance
+        mock_info_api_class.return_value = mock_info_api_instance
 
-            version_info = await client.get_version()
+        # Create a mock response object with the expected attributes
+        mock_response = Mock()
+        mock_response.haproxy = {"version": "2.4.0"}
+        mock_response.api = {"api_version": "3.0"}
+        mock_response.system = {"hostname": "test"}
+
+        mock_info_api_instance.get_info.return_value = mock_response
+
+        version_info = await client.get_version()
 
     # Check that the response includes data from all sources
     assert "version" in version_info
