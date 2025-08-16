@@ -110,7 +110,7 @@ jobs:
           docker buildx build \
             --cache-from type=gha,scope=haproxy-test \
             --cache-to type=gha,mode=max,scope=haproxy-test \
-            --tag haproxy-test:latest \
+            --tag test-haproxy:integration \
             --load \
             tests/integration/fixtures/dataplane/haproxy
           
@@ -118,7 +118,7 @@ jobs:
           docker buildx build \
             --cache-from type=gha,scope=dataplane-test \
             --cache-to type=gha,mode=max,scope=dataplane-test \
-            --tag dataplane-test:latest \
+            --tag test-dataplane:integration \
             --load \
             tests/integration/fixtures/dataplane/dataplane
 
@@ -170,14 +170,14 @@ jobs:
           # Restore HAProxy test container from cache
           docker buildx build \
             --cache-from type=gha,scope=haproxy-test \
-            --tag haproxy-test:latest \
+            --tag test-haproxy:integration \
             --load \
             tests/integration/fixtures/dataplane/haproxy
           
           # Restore Dataplane test container from cache
           docker buildx build \
             --cache-from type=gha,scope=dataplane-test \
-            --tag dataplane-test:latest \
+            --tag test-dataplane:integration \
             --load \
             tests/integration/fixtures/dataplane/dataplane
 
