@@ -224,19 +224,19 @@ uv run pytest -n auto
 
 ```bash
 # Run all acceptance tests
-uv run pytest -m "slow"
+uv run pytest -m "acceptance"
 
 # Run with detailed output
-uv run pytest -m "slow" -v -s
+uv run pytest -m "acceptance" -v -s
 
 # Run with cluster preservation for debugging
-uv run pytest -m "slow" --keep-cluster --keep-namespaces
+uv run pytest -m "acceptance" --keep-cluster --keep-namespaces
 
 # Run with coverage collection from running pods
-uv run pytest -m "slow" --coverage
+uv run pytest -m "acceptance" --coverage
 
 # Run specific acceptance test
-uv run pytest tests/e2e/test_acceptance.py::test_configmap_update_triggers_reload -m "slow"
+uv run pytest tests/e2e/test_acceptance.py::test_configmap_update_triggers_reload -m "acceptance"
 ```
 
 #### 🔍 Debugging Failed Tests
@@ -286,7 +286,7 @@ uv run pytest --cov=haproxy_template_ic --cov-report=xml --cov-report=term-missi
 
 # Combined unit + acceptance coverage
 uv run pytest --cov=haproxy_template_ic --cov-report=xml
-uv run pytest -m "slow" --coverage --cov=haproxy_template_ic --cov-append --cov-report=xml
+uv run pytest -m "acceptance" --coverage --cov=haproxy_template_ic --cov-append --cov-report=xml
 
 # View detailed HTML report
 open htmlcov/index.html  # macOS
@@ -397,7 +397,7 @@ uv run ruff format         # Auto-format
 uv run mypy haproxy_template_ic/  # Type check
 
 # 4. Comprehensive Testing
-uv run pytest -m "slow"   # Full acceptance tests (creates own cluster)
+uv run pytest -m "acceptance"   # Full acceptance tests (creates own cluster)
 uv run pytest --cov=haproxy_template_ic --cov-report=html  # Coverage analysis
 
 # 5. Quality Assurance (automated via pre-commit)

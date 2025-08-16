@@ -16,7 +16,7 @@ from tests.e2e.utils import (
 )
 
 
-@pytest.mark.slow
+@pytest.mark.acceptance
 def test_management_socket(ingress_controller, collect_coverage):
     """Test comprehensive management socket functionality.
 

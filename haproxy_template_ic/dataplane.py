@@ -6,6 +6,8 @@ This module provides functionality to:
 2. Validate configurations via validation sidecars
 3. Deploy configurations to production HAProxy instances
 4. Synchronize state across all HAProxy instances
+
+Uses the complete generated HAProxy Dataplane API v3 client for all operations.
 """
 
 import asyncio
@@ -13,7 +15,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-import httpx
 import kr8s
 from kr8s.objects import Pod
 
@@ -32,6 +33,17 @@ from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
     set_span_error,
+)
+
+# Import the complete generated client
+from haproxy_dataplane_v3 import ApiClient, Configuration
+from haproxy_dataplane_v3.api import (
+    ConfigurationApi,
+    InformationApi,
+)
+from haproxy_dataplane_v3.exceptions import (
+    ApiException,
+    BadRequestException,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,22 +177,64 @@ class HAProxyPodDiscovery:
         if not pod_ip:
             raise DataplaneAPIError(f"Pod {pod.namespace}/{pod.name} has no IP address")
 
-        return f"http://{pod_ip}:{dataplane_port}/v2"
+        # Return the complete URL with v3 base path (this will be the host for Configuration)
+        return f"http://{pod_ip}:{dataplane_port}"
 
 
 class DataplaneClient:
-    """HTTP client for HAProxy Dataplane API."""
+    """Wrapper around the generated HAProxy Dataplane API v3 client."""
 
-    def __init__(self, base_url: str, timeout: float = 30.0):
-        self.base_url = base_url
+    def __init__(
+        self, base_url: str, timeout: float = 30.0, auth: Optional[tuple] = None
+    ):
+        """
+        Initialize the client.
+
+        Args:
+            base_url: The base URL of the Dataplane API (with or without /v3)
+            timeout: Request timeout in seconds
+            auth: Tuple of (username, password) for basic auth
+        """
+        # Normalize the base URL to ensure it ends with /v3
+        normalized_url = base_url.rstrip("/")
+        if not normalized_url.endswith("/v3"):
+            normalized_url += "/v3"
+
+        self.base_url = normalized_url
         self.timeout = timeout
+        self.auth = auth or ("admin", "adminpass")  # Default auth
+
+        # Create the generated API client configuration
+        self._configuration = Configuration(
+            host=self.base_url,
+            username=self.auth[0],
+            password=self.auth[1],
+        )
 
     async def get_version(self) -> Dict[str, Any]:
-        """Get HAProxy version information."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(f"{self.base_url}/info")
-            response.raise_for_status()
-            return response.json()
+        """Get HAProxy version information using the generated client."""
+        try:
+            async with ApiClient(self._configuration) as api_client:
+                info_api = InformationApi(api_client)
+                info_response = await info_api.get_info(_request_timeout=self.timeout)
+
+                # Convert the generated model to dict format expected by existing code
+                result = {}
+                if hasattr(info_response, "haproxy") and info_response.haproxy:
+                    result.update(info_response.haproxy)
+                if hasattr(info_response, "api") and info_response.api:
+                    result.update(info_response.api)
+                if hasattr(info_response, "system") and info_response.system:
+                    result.update(info_response.system)
+
+                return result
+
+        except ApiException as e:
+            logger.error(f"API error getting version from {self.base_url}: {e}")
+            raise DataplaneAPIError(f"Failed to get version: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error getting version from {self.base_url}: {e}")
+            raise DataplaneAPIError(f"Unexpected error: {e}") from e
 
     async def validate_configuration(self, config_content: str) -> bool:
         """Validate HAProxy configuration without applying it."""
@@ -201,26 +255,34 @@ class DataplaneClient:
 
             caught_error: Optional[Exception] = None
             success: bool = False
+
             # Important: catch exceptions inside timing context to avoid mock __exit__ suppressing them
             with metrics.time_dataplane_api_operation("validate"):
                 try:
-                    async with httpx.AsyncClient(timeout=adaptive_timeout) as client:
-                        # Support unit-test mocks that inject side_effect on client.post
-                        potential_side_effect = getattr(
-                            getattr(client, "post", None), "side_effect", None
+                    async with ApiClient(self._configuration) as api_client:
+                        config_api = ConfigurationApi(api_client)
+
+                        # Use the generated client to validate configuration
+                        # Ensure config ends with newline to avoid HAProxy truncation errors
+                        config_data = config_content.rstrip() + "\n"
+                        await config_api.post_ha_proxy_configuration(
+                            data=config_data,
+                            only_validate=True,
+                            skip_version=True,
+                            _request_timeout=adaptive_timeout,
                         )
-                        if isinstance(potential_side_effect, Exception):
-                            # Simulate the exception path as httpx would
-                            raise potential_side_effect
-                        response = await client.post(
-                            f"{self.base_url}/services/haproxy/configuration/raw",
-                            content=config_content,
-                            headers={"Content-Type": "text/plain"},
-                            params={"force_reload": "false", "version": "0"},
-                        )
-                        response.raise_for_status()
                         success = True
-                except Exception as e:  # noqa: BLE001
+
+                except BadRequestException as e:
+                    # Configuration validation failed
+                    logger.warning(f"Configuration validation failed: {e}")
+                    if hasattr(e, "body") and e.body:
+                        logger.warning(f"Validation error details: {e.body}")
+                    caught_error = None  # Don't treat validation failure as an error
+                    success = False
+                except ApiException as e:
+                    caught_error = e
+                except Exception as e:
                     caught_error = e
 
             if success:
@@ -228,7 +290,10 @@ class DataplaneClient:
                 return True
 
             # Failure path
-            record_span_event("validation_failed", {"error": str(caught_error)})
+            record_span_event(
+                "validation_failed",
+                {"error": str(caught_error) if caught_error else "validation_failed"},
+            )
             if caught_error is not None:
                 set_span_error(caught_error, "Configuration validation failed")
             return False
@@ -257,24 +322,36 @@ class DataplaneClient:
 
             async def deployment_operation():
                 with metrics.time_dataplane_api_operation("deploy"):
-                    async with httpx.AsyncClient(timeout=self.timeout) as client:
-                        # Deploy configuration with reload
-                        response = await client.post(
-                            f"{self.base_url}/services/haproxy/configuration/raw",
-                            content=config_content,
-                            headers={"Content-Type": "text/plain"},
-                            params={"force_reload": "true"},
-                        )
-                        response.raise_for_status()
+                    try:
+                        async with ApiClient(self._configuration) as api_client:
+                            config_api = ConfigurationApi(api_client)
 
-                        # Get the new configuration version
-                        version_response = await client.get(
-                            f"{self.base_url}/services/haproxy/configuration/version"
-                        )
-                        version_response.raise_for_status()
-                        version_data = version_response.json()
+                            # Get current configuration version first
+                            current_version = (
+                                await config_api.get_configuration_version(
+                                    _request_timeout=self.timeout
+                                )
+                            )
 
-                        return str(version_data.get("version", "unknown"))
+                            # Deploy configuration with reload using generated client
+                            # Ensure config ends with newline to avoid HAProxy truncation errors
+                            config_data = config_content.rstrip() + "\n"
+                            await config_api.post_ha_proxy_configuration(
+                                data=config_data,
+                                version=current_version,
+                                force_reload=True,
+                                _request_timeout=self.timeout,
+                            )
+
+                            # Get the new configuration version
+                            new_version = await config_api.get_configuration_version(
+                                _request_timeout=self.timeout
+                            )
+                            return str(new_version)
+
+                    except ApiException as e:
+                        # Convert to the expected exception type for resilience handling
+                        raise DataplaneAPIError(str(e)) from e
 
             circuit_name = f"haproxy_deployment_{hash(self.base_url)}"
             result = await resilient_operator.execute_with_retry(
@@ -423,7 +500,9 @@ class ConfigSynchronizer:
 
         validation_tasks = []
         for instance in validation_instances:
-            client = DataplaneClient(instance.dataplane_url)
+            # Determine auth based on instance type
+            auth = ("admin", "adminpass")
+            client = DataplaneClient(instance.dataplane_url, auth=auth)
             task = asyncio.create_task(
                 self._validate_instance(client, instance, config)
             )
@@ -481,7 +560,9 @@ class ConfigSynchronizer:
 
         deployment_tasks = []
         for instance in production_instances:
-            client = DataplaneClient(instance.dataplane_url)
+            # Use default production auth
+            auth = ("admin", "adminpass")
+            client = DataplaneClient(instance.dataplane_url, auth=auth)
             task = asyncio.create_task(
                 self._deploy_to_instance(client, instance, config)
             )

@@ -217,8 +217,9 @@ kubectl logs -f haproxy-template-ic
 pre-commit install
 
 # Test suite
-uv run pytest                    # Unit tests
-uv run pytest -m "slow"         # Acceptance tests (creates test cluster)
+uv run pytest -m "not integration and not acceptance"  # Unit tests
+uv run pytest -m "integration"  # Integration tests (Docker containers)
+uv run pytest -m "acceptance"   # Acceptance tests (creates test cluster)
 
 # Code quality
 uv run ruff format

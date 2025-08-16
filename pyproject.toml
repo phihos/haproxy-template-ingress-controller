@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.13"
 dependencies = [
+    "aiohttp-retry>=2.9.1",
     "click>=8.2.1",
     "deepdiff>=8.6.0",
     "deprecated>=1.2.18",
@@ -19,7 +20,11 @@ dependencies = [
     "opentelemetry-sdk>=1.36.0",
     "prometheus-async>=25.1.0",
     "prometheus-client>=0.22.1",
+    "pydantic>=2.0.0", # Required by generated client
+    "python-dateutil>=2.8.2", # Required by generated client
     "pyyaml>=6.0.2",
+    "typing-extensions>=4.0.0", # Required by generated client
+    "urllib3>=2.0.0", # Required by generated client (with asyncio support)
     "uvloop>=0.21.0",
 ]
 
@@ -62,7 +67,7 @@ members = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = [".", "codegen/haproxy_dataplane_v3"]
 
 [tool.pytest.ini_options]
 filterwarnings = [
@@ -82,7 +87,8 @@ addopts = [
     "auto",
 ]
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "acceptance: marks tests as acceptance/end-to-end tests (deselect with '-m \"not acceptance\"')",
+    "integration: marks tests as integration tests using real external dependencies (deselect with '-m \"not integration\"')",
     "asyncio: marks tests as async (deselect with '-m \"not asyncio\"')",
 ]
 
@@ -94,6 +100,7 @@ omit = [
     "*/__pycache__/*",
     "*/venv/*",
     "*/.venv/*",
+    "codegen/*",  # Exclude generated code
 ]
 
 [tool.coverage.paths]
@@ -106,6 +113,7 @@ source = [
 omit = [
     "tests/*",
     "*/tests/*",
+    "codegen/*",  # Exclude generated code
     "*/__pycache__/*",
     "*/venv/*",
     "*/.venv/*",
@@ -138,9 +146,10 @@ warn_unused_ignores = false
 warn_no_return = false
 warn_unreachable = true
 
-# Exclude test files for now to focus on production code
+# Exclude test files and generated code for now to focus on production code
 exclude = [
     "tests/.*",
+    "codegen/.*",  # Exclude generated code
 ]
 
 # For third-party libraries without type stubs or py.typed markers
@@ -165,11 +174,21 @@ disallow_any_decorated = false
 disallow_any_explicit = false
 
 [tool.bandit]
-exclude_dirs = ["tests"]
+exclude_dirs = ["tests", "codegen"]  # Don't security-scan generated code
 
 [tool.deptry]
-extend_exclude = ["tests", "coverage_wrapper.py"]  # Test files can use dev dependencies
-per_rule_ignores = { "DEP002" = "deprecated" }  # Required by opentelemetry-exporter-jaeger transitive dependency
+extend_exclude = ["tests", "coverage_wrapper.py", "codegen"]  # Test files and generated code can use dev dependencies
+per_rule_ignores = { "DEP002" = ["deprecated", "aiohttp-retry", "pydantic", "python-dateutil", "typing-extensions", "urllib3"], "DEP003" = ["haproxy_dataplane_v3"] }
+
+[tool.ruff]
+exclude = [
+    "codegen",  # Don't lint generated code
+]
+
+[tool.ruff.lint]
+extend-ignore = [
+    # Allow generated code patterns that don't follow our rules
+]
 
 [tool.commitizen]
 version = "0.1.0"

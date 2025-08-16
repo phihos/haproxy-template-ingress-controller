@@ -208,7 +208,7 @@ def pytest_runtest_makereport(item, call):
 
 
 class PickleStore(LocalFileStoreMixin):
-    """Store that reads and writes json data using the buildin json module."""
+    """Store that reads and writes pickle data using the pickle module."""
 
     def read(self, identifier: str, fixture_values: dict[str, Any]) -> str:
         """Read data from a file."""
@@ -419,10 +419,7 @@ def config_dict():
         "haproxy_config": {
             "template": """
 global
-    daemon
-    user haproxy
-    group haproxy
-    stats socket /tmp/haproxy-stats.sock mode 600 level admin
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
 
 defaults
     mode http
@@ -601,9 +598,7 @@ def haproxy_production_pods(k8s_client, k8s_namespace, request):
         # Initial HAProxy config without health endpoint (makes pod not ready)
         initial_haproxy_config = """
 global
-    user haproxy
-    group haproxy
-    stats socket /tmp/haproxy-stats.sock mode 600 level admin
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
     
 defaults
     mode http
@@ -855,9 +850,7 @@ def controller_with_validation_sidecar(
     # Base HAProxy config for validation sidecar (minimal working config)
     validation_haproxy_config = """
 global
-    user haproxy
-    group haproxy
-    stats socket /tmp/haproxy-stats.sock mode 600 level admin
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
     
 defaults
     mode http
@@ -1103,10 +1096,7 @@ def enhanced_configmap_with_pod_selector(k8s_client, k8s_namespace):
         "haproxy_config": {
             "template": """
 global
-    daemon
-    user haproxy
-    group haproxy
-    stats socket /tmp/haproxy-stats.sock mode 600 level admin
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
     
 defaults
     mode http
