@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import os
 import random
 import re
 import shutil
@@ -11,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Dict, Tuple, List, Optional
 
+import filelock
 import httpx
 from python_on_whales import DockerClient
 
@@ -18,8 +20,8 @@ from .progress import TestProgressReporter, ContainerWaitReporter, get_test_repo
 from .progress import progress_context as progress_context
 
 
-def find_free_port(max_retries: int = 10) -> int:
-    """Find a free port with retry logic for test isolation."""
+def find_free_port(used_ports: set, max_retries: int = 10) -> int:
+    """Find a free port with collision checking against used ports set."""
     for attempt in range(max_retries):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -28,47 +30,92 @@ def find_free_port(max_retries: int = 10) -> int:
                 s.listen(1)
                 port = s.getsockname()[1]
 
-            # Port was successfully allocated and socket is now closed
-            # Reduced delay for faster tests while maintaining isolation
-            time.sleep(random.uniform(0.02, 0.05))
-            return port
+            # Check if port is already used by another worker
+            if port not in used_ports:
+                return port
 
         except OSError:
-            if attempt < max_retries - 1:
-                time.sleep(random.uniform(0.1, 0.3))
-                continue
-            raise
+            pass
+
+        # Port was taken or socket error occurred, try again
+        if attempt < max_retries - 1:
+            time.sleep(random.uniform(0.05, 0.15))
+            continue
+
     raise RuntimeError(f"Could not find free port after {max_retries} attempts")
 
 
-def allocate_test_ports(max_retries: int = 5) -> Dict[str, int]:
-    """Allocate unique ports for a test instance with collision avoidance."""
+def get_worker_id() -> str:
+    """Get pytest-xdist worker ID or 'master' for non-xdist runs."""
+    return os.environ.get("PYTEST_XDIST_WORKER", "master")
+
+
+def allocate_test_ports(max_retries: int = 10) -> Dict[str, int]:
+    """
+    Allocate unique ports for a test instance with file-based coordination.
+
+    Uses file locking to coordinate port allocation between pytest-xdist workers,
+    preventing race conditions and port conflicts.
+    """
+    worker_id = get_worker_id()
+    lock_file = Path(tempfile.gettempdir()) / "integration_test_ports.lock"
+    port_registry_file = Path(tempfile.gettempdir()) / "integration_test_ports.txt"
+
     for attempt in range(max_retries):
         try:
-            # Allocate all ports at once to check for conflicts
-            ports = {
-                "validation_port": find_free_port(),
-                "validation_haproxy_port": find_free_port(),
-                "validation_health_port": find_free_port(),
-                "production_port": find_free_port(),
-                "http_port": find_free_port(),
-                "health_port": find_free_port(),
-            }
+            # Use file lock to coordinate between workers
+            with filelock.FileLock(str(lock_file), timeout=30):
+                # Read currently used ports from registry
+                used_ports = set()
+                if port_registry_file.exists():
+                    try:
+                        content = port_registry_file.read_text().strip()
+                        if content:
+                            used_ports = set(
+                                int(p) for p in content.split("\n") if p.strip()
+                            )
+                    except (ValueError, OSError):
+                        # Corrupted file, start fresh
+                        pass
 
-            # Verify no duplicate ports were allocated
-            port_values = list(ports.values())
-            if len(port_values) == len(set(port_values)):
-                return ports
-            else:
-                # Duplicate ports detected, try again
-                if attempt < max_retries - 1:
-                    time.sleep(random.uniform(0.2, 0.8))
-                    continue
-                raise RuntimeError("Duplicate ports allocated")
+                # Allocate all ports needed for this test
+                port_names = [
+                    "validation_port",
+                    "validation_haproxy_port",
+                    "validation_health_port",
+                    "production_port",
+                    "http_port",
+                    "health_port",
+                ]
 
-        except Exception as e:
+                allocated_ports = {}
+                for port_name in port_names:
+                    port = find_free_port(used_ports, max_retries=20)
+                    allocated_ports[port_name] = port
+                    used_ports.add(port)
+
+                # Verify no duplicates in our allocation
+                port_values = list(allocated_ports.values())
+                if len(port_values) != len(set(port_values)):
+                    raise RuntimeError("Duplicate ports in allocation")
+
+                # Write allocated ports to registry
+                all_ports = (
+                    used_ports if port_registry_file.exists() else set(port_values)
+                )
+                all_ports.update(port_values)
+                port_registry_file.write_text(
+                    "\n".join(str(p) for p in sorted(all_ports))
+                )
+
+                return allocated_ports
+
+        except (filelock.Timeout, RuntimeError) as e:
             if attempt < max_retries - 1:
-                time.sleep(random.uniform(0.5, 1.5))
+                # Add jitter and worker-specific delay to reduce contention
+                base_delay = 0.5 + (hash(worker_id) % 100) / 1000  # 0.5-0.6s base
+                jitter = random.uniform(0.2, 0.8)
+                time.sleep(base_delay + jitter)
                 continue
             raise RuntimeError(
                 f"Failed to allocate ports after {max_retries} attempts: {e}"
@@ -76,6 +123,50 @@ def allocate_test_ports(max_retries: int = 5) -> Dict[str, int]:
 
     # This should never be reached but added for mypy completeness
     raise RuntimeError("Failed to allocate ports: no attempts made")
+
+
+def release_test_ports(ports: Dict[str, int]) -> None:
+    """
+    Release ports from the global registry when test is complete.
+
+    Uses file locking to coordinate removal between pytest-xdist workers.
+    """
+    if not ports:
+        return
+
+    lock_file = Path(tempfile.gettempdir()) / "integration_test_ports.lock"
+    port_registry_file = Path(tempfile.gettempdir()) / "integration_test_ports.txt"
+
+    try:
+        with filelock.FileLock(str(lock_file), timeout=10):
+            if not port_registry_file.exists():
+                return
+
+            # Read current registry
+            try:
+                content = port_registry_file.read_text().strip()
+                if not content:
+                    return
+                used_ports = set(int(p) for p in content.split("\n") if p.strip())
+            except (ValueError, OSError):
+                return
+
+            # Remove our ports from the registry
+            port_values = set(ports.values())
+            remaining_ports = used_ports - port_values
+
+            # Write back the remaining ports
+            if remaining_ports:
+                port_registry_file.write_text(
+                    "\n".join(str(p) for p in sorted(remaining_ports))
+                )
+            else:
+                # No ports left, remove the file
+                port_registry_file.unlink(missing_ok=True)
+
+    except (filelock.Timeout, OSError):
+        # Port cleanup is best-effort, don't fail tests for it
+        pass
 
 
 def generate_project_name(test_name: str) -> str:
@@ -466,6 +557,13 @@ class DockerComposeManager:
                 shutil.rmtree(self.temp_dir)
             except Exception as e:
                 self.reporter.warning(f"Error during temp directory cleanup: {e}")
+
+        # Release allocated ports from global registry
+        try:
+            self.reporter.docker_operation("Releasing allocated ports")
+            release_test_ports(self.ports)
+        except Exception as e:
+            self.reporter.warning(f"Error during port cleanup: {e}")
 
         if exc_type is not None:
             self.reporter.error(f"Test failed with {exc_type.__name__}: {exc_val}")
