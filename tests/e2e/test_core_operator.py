@@ -17,7 +17,7 @@ from tests.e2e.utils import (
 )
 
 
-@pytest.mark.slow
+@pytest.mark.acceptance
 def test_basic_init(ingress_controller, collect_coverage):
     """Test that the operator initializes successfully.
 

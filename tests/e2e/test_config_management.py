@@ -21,7 +21,7 @@ from tests.e2e.utils import (
 )
 
 
-@pytest.mark.slow
+@pytest.mark.acceptance
 def test_config_reload(ingress_controller, configmap, config_dict, collect_coverage):
     """Test that configuration changes are detected and applied.
 
@@ -55,7 +55,7 @@ def test_config_reload(ingress_controller, configmap, config_dict, collect_cover
     verify_config_contains(updated_response["config"], expected_new_config)
 
 
-@pytest.mark.slow
+@pytest.mark.acceptance
 def test_no_reload_loop_on_repeated_events(
     ingress_controller, configmap, config_dict, collect_coverage
 ):

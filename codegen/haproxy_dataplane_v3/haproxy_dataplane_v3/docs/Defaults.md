@@ -1,0 +1,153 @@
+# Defaults
+
+Defaults with all it's children resources
+
+## Properties
+
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+**abortonclose** | **str** |  | [optional] 
+**accept_invalid_http_request** | **str** |  | [optional] 
+**accept_invalid_http_response** | **str** |  | [optional] 
+**accept_unsafe_violations_in_http_request** | **str** |  | [optional] 
+**accept_unsafe_violations_in_http_response** | **str** |  | [optional] 
+**adv_check** | **str** |  | [optional] 
+**allbackups** | **str** |  | [optional] 
+**backlog** | **int** |  | [optional] 
+**balance** | [**Balance**](Balance.md) |  | [optional] 
+**check_timeout** | **int** |  | [optional] 
+**checkcache** | **str** |  | [optional] 
+**clflog** | **bool** |  | [optional] 
+**client_fin_timeout** | **int** |  | [optional] 
+**client_timeout** | **int** |  | [optional] 
+**clitcpka** | **str** |  | [optional] 
+**clitcpka_cnt** | **int** |  | [optional] 
+**clitcpka_idle** | **int** |  | [optional] 
+**clitcpka_intvl** | **int** |  | [optional] 
+**compression** | [**Compression**](Compression.md) |  | [optional] 
+**connect_timeout** | **int** |  | [optional] 
+**contstats** | **str** |  | [optional] 
+**cookie** | [**Cookie**](Cookie.md) |  | [optional] 
+**default_backend** | **str** |  | [optional] 
+**default_server** | [**DefaultServer**](DefaultServer.md) |  | [optional] 
+**disable_h2_upgrade** | **str** |  | [optional] 
+**disabled** | **bool** |  | [optional] 
+**dontlog_normal** | **str** |  | [optional] 
+**dontlognull** | **str** |  | [optional] 
+**dynamic_cookie_key** | **str** |  | [optional] 
+**email_alert** | [**EmailAlert**](EmailAlert.md) |  | [optional] 
+**enabled** | **bool** |  | [optional] 
+**error_files** | [**List[Errorfile]**](Errorfile.md) |  | [optional] 
+**error_log_format** | **str** |  | [optional] 
+**errorfiles_from_http_errors** | [**List[Errorfiles]**](Errorfiles.md) |  | [optional] 
+**errorloc302** | [**Errorloc**](Errorloc.md) |  | [optional] 
+**errorloc303** | [**Errorloc**](Errorloc.md) |  | [optional] 
+**external_check** | **str** |  | [optional] 
+**external_check_command** | **str** |  | [optional] 
+**external_check_path** | **str** |  | [optional] 
+**forwardfor** | [**Forwardfor**](Forwardfor.md) |  | [optional] 
+**var_from** | **str** |  | [optional] 
+**fullconn** | **int** |  | [optional] 
+**h1_case_adjust_bogus_client** | **str** |  | [optional] 
+**h1_case_adjust_bogus_server** | **str** |  | [optional] 
+**hash_balance_factor** | **int** |  | [optional] 
+**hash_preserve_affinity** | **str** |  | [optional] 
+**hash_type** | [**HashType**](HashType.md) |  | [optional] 
+**http_buffer_request** | **str** |  | [optional] 
+**http_drop_request_trailers** | **str** |  | [optional] 
+**http_drop_response_trailers** | **str** |  | [optional] 
+**http_use_htx** | **str** |  | [optional] 
+**http_connection_mode** | **str** |  | [optional] 
+**http_ignore_probes** | **str** |  | [optional] 
+**http_keep_alive_timeout** | **int** |  | [optional] 
+**http_no_delay** | **str** |  | [optional] 
+**http_pretend_keepalive** | **str** |  | [optional] 
+**http_request_timeout** | **int** |  | [optional] 
+**http_restrict_req_hdr_names** | **str** |  | [optional] 
+**http_reuse** | **str** |  | [optional] 
+**http_send_name_header** | **str** |  | [optional] 
+**http_use_proxy_header** | **str** |  | [optional] 
+**httpchk_params** | [**HttpchkParams**](HttpchkParams.md) |  | [optional] 
+**httplog** | **bool** |  | [optional] 
+**httpslog** | **str** |  | [optional] 
+**idle_close_on_response** | **str** |  | [optional] 
+**independent_streams** | **str** |  | [optional] 
+**load_server_state_from_file** | **str** |  | [optional] 
+**log_format** | **str** |  | [optional] 
+**log_format_sd** | **str** |  | [optional] 
+**log_health_checks** | **str** |  | [optional] 
+**log_separate_errors** | **str** |  | [optional] 
+**log_steps** | **List[str]** |  | [optional] 
+**log_tag** | **str** |  | [optional] 
+**logasap** | **str** |  | [optional] 
+**max_keep_alive_queue** | **int** |  | [optional] 
+**maxconn** | **int** |  | [optional] 
+**metadata** | **object** |  | [optional] 
+**mode** | **str** |  | [optional] 
+**monitor_uri** | **str** |  | [optional] 
+**mysql_check_params** | [**MysqlCheckParams**](MysqlCheckParams.md) |  | [optional] 
+**name** | **str** |  | [optional] 
+**nolinger** | **str** |  | [optional] 
+**originalto** | [**Originalto**](Originalto.md) |  | [optional] 
+**persist** | **str** |  | [optional] 
+**persist_rule** | [**PersistRule**](PersistRule.md) |  | [optional] 
+**pgsql_check_params** | [**PgsqlCheckParams**](PgsqlCheckParams.md) |  | [optional] 
+**prefer_last_server** | **str** |  | [optional] 
+**queue_timeout** | **int** |  | [optional] 
+**redispatch** | [**Redispatch**](Redispatch.md) |  | [optional] 
+**retries** | **int** |  | [optional] 
+**retry_on** | **str** |  | [optional] 
+**server_fin_timeout** | **int** |  | [optional] 
+**server_timeout** | **int** |  | [optional] 
+**smtpchk_params** | [**SmtpchkParams**](SmtpchkParams.md) |  | [optional] 
+**socket_stats** | **str** |  | [optional] 
+**source** | [**Source**](Source.md) |  | [optional] 
+**splice_auto** | **str** |  | [optional] 
+**splice_request** | **str** |  | [optional] 
+**splice_response** | **str** |  | [optional] 
+**srvtcpka** | **str** |  | [optional] 
+**srvtcpka_cnt** | **int** |  | [optional] 
+**srvtcpka_idle** | **int** |  | [optional] 
+**srvtcpka_intvl** | **int** |  | [optional] 
+**stats_options** | [**StatsOptions**](StatsOptions.md) |  | [optional] 
+**tarpit_timeout** | **int** |  | [optional] 
+**tcp_smart_accept** | **str** |  | [optional] 
+**tcp_smart_connect** | **str** |  | [optional] 
+**tcpka** | **str** |  | [optional] 
+**tcplog** | **bool** |  | [optional] 
+**transparent** | **str** |  | [optional] 
+**tunnel_timeout** | **int** |  | [optional] 
+**unique_id_format** | **str** |  | [optional] 
+**unique_id_header** | **str** |  | [optional] 
+**acl_list** | [**List[Acl]**](Acl.md) | HAProxy ACL lines array (corresponds to acl directives) | [optional] 
+**http_after_response_rule_list** | [**List[HttpAfterResponseRule]**](HttpAfterResponseRule.md) | HAProxy HTTP after response rules array (corresponds to http-after-response directives) | [optional] 
+**http_check_list** | [**List[HttpCheck]**](HttpCheck.md) |  | [optional] 
+**http_error_rule_list** | [**List[HttpErrorRule]**](HttpErrorRule.md) | HAProxy HTTP error rules array (corresponds to http-error directives) | [optional] 
+**http_request_rule_list** | [**List[HttpRequestRule]**](HttpRequestRule.md) | HAProxy HTTP request rules array (corresponds to http-request directives) | [optional] 
+**http_response_rule_list** | [**List[HttpResponseRule]**](HttpResponseRule.md) | HAProxy HTTP response rules array (corresponds to http-response directives) | [optional] 
+**log_target_list** | [**List[LogTarget]**](LogTarget.md) | HAProxy log target array (corresponds to log directives) | [optional] 
+**quic_initial_rule_list** | [**List[QuicInitialRule]**](QuicInitialRule.md) |  | [optional] 
+**tcp_check_rule_list** | [**List[TcpCheck]**](TcpCheck.md) |  | [optional] 
+**tcp_request_rule_list** | [**List[TcpRequestRule]**](TcpRequestRule.md) | HAProxy TCP request rules array (corresponds to tcp-request directive) | [optional] 
+**tcp_response_rule_list** | [**List[TcpResponseRule]**](TcpResponseRule.md) | HAProxy TCP response rules array (corresponds to tcp-response directive) | [optional] 
+
+## Example
+
+```python
+from haproxy_dataplane_v3.models.defaults import Defaults
+
+# TODO update the JSON string below
+json = "{}"
+# create an instance of Defaults from a JSON string
+defaults_instance = Defaults.from_json(json)
+# print the JSON string representation of the object
+print(Defaults.to_json())
+
+# convert the object into a dict
+defaults_dict = defaults_instance.to_dict()
+# create an instance of Defaults from a dict
+defaults_from_dict = Defaults.from_dict(defaults_dict)
+```
+[[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+

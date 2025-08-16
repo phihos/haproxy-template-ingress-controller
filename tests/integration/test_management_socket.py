@@ -22,6 +22,7 @@ from haproxy_template_ic.management_socket import (
     StateSerializer,
     DataclassJSONEncoder,
 )
+from .utils import get_test_reporter, progress_context
 from haproxy_template_ic.config import (
     Config,
     MapConfig,
@@ -222,39 +223,52 @@ async def test_process_management_command_errors():
 @pytest.mark.asyncio
 async def test_management_socket_server_socket_cleanup():
     """Test socket file cleanup on server startup."""
-    memo = MagicMock()
+    reporter = get_test_reporter()
 
-    # Use a temporary socket path
-    with tempfile.TemporaryDirectory() as tmpdir:
-        socket_path = os.path.join(tmpdir, "test.sock")
+    with progress_context(
+        "test_management_socket_server_socket_cleanup", reporter
+    ) as progress:
+        progress.phase("SETUP", "Creating mock memo and temporary socket")
+        memo = MagicMock()
 
-        # Create a dummy socket file
-        Path(socket_path).touch()
-        assert Path(socket_path).exists()
+        # Use a temporary socket path
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "test.sock")
 
-        # Start server (should clean up existing socket)
-        server_task = asyncio.create_task(
-            run_management_socket_server(memo, socket_path)
-        )
-
-        try:
-            # Give server time to start
-            await asyncio.sleep(0.1)
-
-            # Socket should still exist (server recreated it)
+            progress.phase("PRECONDITION", "Creating dummy socket file")
+            # Create a dummy socket file
+            Path(socket_path).touch()
             assert Path(socket_path).exists()
 
-            # Test basic connectivity
-            client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client_socket.connect(socket_path)
-            client_socket.close()
+            progress.phase("SERVER_START", "Starting management socket server")
+            # Start server (should clean up existing socket)
+            server_task = asyncio.create_task(
+                run_management_socket_server(memo, socket_path)
+            )
 
-        finally:
-            server_task.cancel()
             try:
-                await server_task
-            except asyncio.CancelledError:
-                pass
+                progress.phase("INITIALIZATION", "Waiting for server initialization")
+                # Give server time to start
+                await asyncio.sleep(0.1)
+
+                progress.phase("VALIDATION", "Testing socket cleanup and connectivity")
+                # Socket should still exist (server recreated it)
+                assert Path(socket_path).exists()
+
+                # Test basic connectivity
+                client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client_socket.connect(socket_path)
+                client_socket.close()
+
+                reporter.debug("Socket connectivity test successful")
+
+            finally:
+                progress.phase("CLEANUP", "Stopping server task")
+                server_task.cancel()
+                try:
+                    await server_task
+                except asyncio.CancelledError:
+                    pass
 
 
 # =============================================================================

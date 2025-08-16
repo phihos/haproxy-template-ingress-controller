@@ -1,8 +1,51 @@
 name: Tests
-on: [push]
+
+on: 
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  qa:
+  linting:
+    name: Code Quality & Linting
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.x"
+          activate-environment: true
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run code formatting check
+        run: uv run --frozen ruff format --check
+
+      - name: Run linting
+        run: uv run --frozen ruff check
+
+      - name: Run type checking
+        run: uv run --frozen mypy haproxy_template_ic/
+
+      - name: Run security scan
+        run: uv run bandit -c pyproject.toml -r haproxy_template_ic/ --quiet
+
+      - name: Run dependency hygiene check
+        run: uv run --frozen deptry .
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -17,30 +60,191 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv sync --group dev
+        run: uv sync --group dev
 
-      - name: Run linting and fast tests
+      - name: Run unit tests
         run: |
-          uv run --frozen ruff format --check
-          uv run --frozen ruff check
-          uv run --frozen mypy haproxy_template_ic/
-          uv run --frozen pytest tests -m "not slow" --cov=haproxy_template_ic --cov-report=term-missing -s
+          uv run --frozen pytest tests -m "not integration and not acceptance" \
+            --cov=haproxy_template_ic \
+            --cov-report=term-missing \
+            --tb=short
 
-      - name: Run security and dependency checks
-        run: |
-          uv run bandit -c pyproject.toml -r haproxy_template_ic/ --quiet
-          uv run --frozen deptry .
+      - name: Upload unit test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: .coverage*
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
 
-      - name: Run slow tests with coverage
+  integration-tests:
+    name: Integration Tests  
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for coverage reporting
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.12.5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.x"
+          activate-environment: true
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Build test containers with Docker layer caching
         run: |
-          uv run --frozen pytest tests -m "slow" --cluster-name haproxy-template-ic-test --coverage --cov=haproxy_template_ic --cov-report=term-missing --cov-append -s
+          # Build HAProxy test container with caching
+          docker buildx build \
+            --cache-from type=gha,scope=haproxy-test \
+            --cache-to type=gha,mode=max,scope=haproxy-test \
+            --tag test-haproxy:integration \
+            --load \
+            tests/integration/fixtures/dataplane/haproxy
+          
+          # Build Dataplane test container with caching  
+          docker buildx build \
+            --cache-from type=gha,scope=dataplane-test \
+            --cache-to type=gha,mode=max,scope=dataplane-test \
+            --tag test-dataplane:integration \
+            --load \
+            tests/integration/fixtures/dataplane/dataplane
+
+      - name: Run integration tests
+        run: |
+          uv run --frozen pytest tests -m "integration" \
+            --cov=haproxy_template_ic \
+            --cov-report=term-missing \
+            --tb=short \
+            -n auto
+
+      - name: Upload integration test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: .coverage*
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+
+  acceptance-tests:
+    name: Acceptance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for coverage reporting
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.12.5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.x"
+          activate-environment: true
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Restore test containers from cache
+        run: |
+          # Restore HAProxy test container from cache
+          docker buildx build \
+            --cache-from type=gha,scope=haproxy-test \
+            --tag test-haproxy:integration \
+            --load \
+            tests/integration/fixtures/dataplane/haproxy
+          
+          # Restore Dataplane test container from cache
+          docker buildx build \
+            --cache-from type=gha,scope=dataplane-test \
+            --tag test-dataplane:integration \
+            --load \
+            tests/integration/fixtures/dataplane/dataplane
+
+      - name: Run acceptance tests
+        run: |
+          uv run --frozen pytest tests -m "acceptance" \
+            --cluster-name haproxy-template-ic-test \
+            --coverage \
+            --cov=haproxy_template_ic \
+            --cov-report=term-missing \
+            --tb=short \
+            -n auto
+
+      - name: Upload acceptance test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-acceptance
+          path: .coverage*
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [unit-tests, integration-tests, acceptance-tests]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.x"
+          activate-environment: true
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Download unit test coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+          path: ./coverage-unit/
+
+      - name: Download integration test coverage  
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+          path: ./coverage-integration/
+
+      - name: Download acceptance test coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-acceptance
+          path: ./coverage-acceptance/
 
       - name: Combine coverage data and create XML
         run: |
-          find . -name '.coverage*' -type f -exec uv run coverage combine {} + || true
+          # Combine coverage data from all artifact directories
+          # This avoids file name conflicts when copying between directories
+          uv run coverage combine coverage-*/.coverage*
+          
+          # Generate XML report
           uv run coverage xml
-          find . -name '.coverage*' -type f -delete || true
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -48,11 +252,14 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.xml
           flags: full
-          name: full-test-suite
+          name: combined-test-suite
           fail_ci_if_error: true
 
   dev-script:
+    name: Development Environment Validation
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
       - uses: actions/checkout@v4
         with:

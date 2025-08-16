@@ -46,6 +46,18 @@ wheels = [
 ]
 
 [[package]]
+name = "aiohttp-retry"
+version = "2.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/61/ebda4d8e3d8cfa1fd3db0fb428db2dd7461d5742cea35178277ad180b033/aiohttp_retry-2.9.1.tar.gz", hash = "sha256:8eb75e904ed4ee5c2ec242fefe85bf04240f685391c4879d8f541d6028ff01f1", size = 13608, upload-time = "2024-11-06T10:44:54.574Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/99/84ba7273339d0f3dfa57901b846489d2e5c2cd731470167757f1935fffbd/aiohttp_retry-2.9.1-py3-none-any.whl", hash = "sha256:66d2759d1921838256a05a3f80ad7e724936f083e35be5abb5e16eed6be6dc54", size = 9981, upload-time = "2024-11-06T10:44:52.917Z" },
+]
+
+[[package]]
 name = "aiosignal"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -580,6 +592,15 @@ wheels = [
 ]
 
 [[package]]
+name = "gprof2dot"
+version = "2025.4.14"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/fd/cad13fa1f7a463a607176432c4affa33ea162f02f58cc36de1d40d3e6b48/gprof2dot-2025.4.14.tar.gz", hash = "sha256:35743e2d2ca027bf48fa7cba37021aaf4a27beeae1ae8e05a50b55f1f921a6ce", size = 39536, upload-time = "2025-04-14T07:21:45.76Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/ed/89d760cb25279109b89eb52975a7b5479700d3114a2421ce735bfb2e7513/gprof2dot-2025.4.14-py3-none-any.whl", hash = "sha256:0742e4c0b4409a5e8777e739388a11e1ed3750be86895655312ea7c20bd0090e", size = 37555, upload-time = "2025-04-14T07:21:43.319Z" },
+]
+
+[[package]]
 name = "grpcio"
 version = "1.74.0"
 source = { registry = "https://pypi.org/simple" }
@@ -611,6 +632,7 @@ name = "haproxy-template-ic"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp-retry" },
     { name = "click" },
     { name = "deepdiff" },
     { name = "deprecated" },
@@ -619,6 +641,7 @@ dependencies = [
     { name = "kopf", extra = ["dev"] },
     { name = "kr8s" },
     { name = "kubernetes" },
+    { name = "lazy-imports" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-jaeger" },
     { name = "opentelemetry-instrumentation-asyncio" },
@@ -626,7 +649,11 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "prometheus-async" },
     { name = "prometheus-client" },
+    { name = "pydantic" },
+    { name = "python-dateutil" },
     { name = "pyyaml" },
+    { name = "typing-extensions" },
+    { name = "urllib3" },
     { name = "uvloop" },
 ]
 
@@ -647,6 +674,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-kind" },
+    { name = "pytest-profiling" },
     { name = "pytest-shared-session-scope" },
     { name = "pytest-xdist" },
     { name = "python-on-whales" },
@@ -659,6 +687,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp-retry", specifier = ">=2.9.1" },
     { name = "click", specifier = ">=8.2.1" },
     { name = "deepdiff", specifier = ">=8.6.0" },
     { name = "deprecated", specifier = ">=1.2.18" },
@@ -667,6 +696,7 @@ requires-dist = [
     { name = "kopf", extras = ["dev"], specifier = ">=1.38.0" },
     { name = "kr8s", specifier = ">=0.20.9" },
     { name = "kubernetes", specifier = ">=33.1.0" },
+    { name = "lazy-imports", specifier = ">=1.0.1" },
     { name = "opentelemetry-api", specifier = ">=1.36.0" },
     { name = "opentelemetry-exporter-jaeger", specifier = ">=1.21.0" },
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.57b0" },
@@ -674,7 +704,11 @@ requires-dist = [
     { name = "opentelemetry-sdk", specifier = ">=1.36.0" },
     { name = "prometheus-async", specifier = ">=25.1.0" },
     { name = "prometheus-client", specifier = ">=0.22.1" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "python-dateutil", specifier = ">=2.8.2" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "typing-extensions", specifier = ">=4.0.0" },
+    { name = "urllib3", specifier = ">=2.0.0" },
     { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
@@ -695,6 +729,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
     { name = "pytest-cov", specifier = ">=5.0.0" },
     { name = "pytest-kind", specifier = ">=22.11.1" },
+    { name = "pytest-profiling", specifier = ">=1.8.1" },
     { name = "pytest-shared-session-scope", specifier = ">=0.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "python-on-whales", specifier = ">=0.78.0" },
@@ -872,6 +907,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ae/52/19ebe8004c243fdfa78268a96727c71e08f00ff6fe69a301d0b7fcbce3c2/kubernetes-33.1.0.tar.gz", hash = "sha256:f64d829843a54c251061a8e7a14523b521f2dc5c896cf6d65ccf348648a88993", size = 1036779, upload-time = "2025-06-09T21:57:58.521Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/89/43/d9bebfc3db7dea6ec80df5cb2aad8d274dd18ec2edd6c4f21f32c237cbbb/kubernetes-33.1.0-py2.py3-none-any.whl", hash = "sha256:544de42b24b64287f7e0aa9513c93cb503f7f40eea39b20f66810011a86eabc5", size = 1941335, upload-time = "2025-06-09T21:57:56.327Z" },
+]
+
+[[package]]
+name = "lazy-imports"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e2/1c/6675601691fd6007021e8e95cfcb83e6d11067de3d7ecde0d0de970324c8/lazy_imports-1.0.1.tar.gz", hash = "sha256:7d3e4b1547cb574ec7ef3c47a074673e2612330b2b50bf7eec939f2c393fc261", size = 24484, upload-time = "2025-08-09T07:15:55.353Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/37/c84d7fec58dec38564574dec8f94bb1db788598fe397f116a9d6a86d3055/lazy_imports-1.0.1-py3-none-any.whl", hash = "sha256:eb5accc33bf9987e5197e79476bbeb960b74a2c16619bdf41281b3240f730846", size = 18896, upload-time = "2025-08-09T07:15:53.7Z" },
 ]
 
 [[package]]
@@ -1494,6 +1538,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/28/bc/5816716a372636e90251bbf81a2d51c2eb340dc77cb5e7237c1a455fa3f4/pytest-kind-22.11.1.tar.gz", hash = "sha256:ae7a4c753fcbbf9e44a0cc587d5219a0b8b2b1e7bcc9cbe14234f745dd5db681", size = 18014, upload-time = "2022-11-30T17:06:06.734Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7d/f2/c9eda764e0a32b8c14eab539d6dcb409d7b1cabaceb5caa9db89c769b2f0/pytest_kind-22.11.1-py3-none-any.whl", hash = "sha256:35fd99e4f94e0374834b5893ee4a95e33ad5dc1c18080356f01fadf21224e830", size = 18530, upload-time = "2022-11-30T17:06:08.08Z" },
+]
+
+[[package]]
+name = "pytest-profiling"
+version = "1.8.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "gprof2dot" },
+    { name = "pytest" },
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/44/74/806cafd6f2108d37979ec71e73b2ff7f7db88eabd19d3b79c5d6cc229c36/pytest-profiling-1.8.1.tar.gz", hash = "sha256:3f171fa69d5c82fa9aab76d66abd5f59da69135c37d6ae5bf7557f1b154cb08d", size = 33135, upload-time = "2024-11-29T19:34:13.85Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/ac/c428c66241a144617a8af7a28e2e055e1438d23b949b62ac4b401a69fb79/pytest_profiling-1.8.1-py3-none-any.whl", hash = "sha256:3dd8713a96298b42d83de8f5951df3ada3e61b3e5d2a06956684175529e17aea", size = 9929, upload-time = "2024-11-29T19:33:02.111Z" },
 ]
 
 [[package]]

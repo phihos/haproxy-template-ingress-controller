@@ -48,8 +48,9 @@ This repository uses modern Python tooling and enforces a consistent, readable c
 ## Tests
 - Layout: `tests/` with `unit/`, `integration/`, `e2e/`.
 - Use `pytest` with markers:
-  - `-m "not slow"` for fast CI path
-  - `-m slow` for slower acceptance tests
+  - `-m "not integration and not acceptance"` for fast unit tests
+  - `-m integration` for integration tests with Docker containers
+  - `-m acceptance` for full end-to-end acceptance tests
 - Write deterministic tests; avoid real network or time dependencies unless in `e2e/`.
 - Use fixtures for shared setup and to keep tests isolated.
 
