@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from jinja2 import Template
 
-from haproxy_template_ic.config import (
+from haproxy_template_ic.config_models import (
     Config,
     HAProxyConfigContext,
     PodSelector,

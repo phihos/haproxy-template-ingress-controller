@@ -7,7 +7,7 @@ enhanced collection classes for working with configuration data.
 
 import base64
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from jinja2 import (
     BaseLoader,
@@ -20,11 +20,20 @@ from jinja2 import (
 # Import all Pydantic models and the main parsing function
 from .config_models import (
     WatchResourceConfig,
-    WatchResourceCollection as WatchResourceCollectionType,
-    MapCollection as MapCollectionType,
-    TemplateSnippetCollection as TemplateSnippetCollectionType,
-    CertificateCollection as CertificateCollectionType,
+    MapConfig,
+    CertificateConfig,
+    TemplateSnippet,
 )
+
+# -----------------------------------------------------------------------------
+# Collection type aliases (plain dictionaries)
+# -----------------------------------------------------------------------------
+
+# Collections are now just plain dictionaries for simplicity
+WatchResourceCollection = Dict[str, WatchResourceConfig]
+MapCollection = Dict[str, MapConfig]
+TemplateSnippetCollection = Dict[str, TemplateSnippet]
+CertificateCollection = Dict[str, CertificateConfig]
 
 # -----------------------------------------------------------------------------
 # Jinja2 setup and template functionality
@@ -42,7 +51,7 @@ def b64decode_filter(value: str) -> str:
 class SnippetLoader(BaseLoader):
     """Custom Jinja2 loader that can resolve template snippets by name."""
 
-    def __init__(self, snippets: Optional[TemplateSnippetCollectionType] = None):
+    def __init__(self, snippets: Optional[TemplateSnippetCollection] = None):
         self.snippets = snippets if snippets is not None else {}
 
     def get_source(
@@ -61,7 +70,7 @@ class SnippetLoader(BaseLoader):
 
 
 def get_template_environment(
-    snippets: Optional[TemplateSnippetCollectionType] = None,
+    snippets: Optional[TemplateSnippetCollection] = None,
 ) -> Environment:
     """Get or create a Jinja2 environment with snippet support."""
     # Create snippet loader
@@ -104,7 +113,7 @@ def compile_template(
 def render_template(
     template_str: str,
     context: Dict[str, Any],
-    snippets: Optional[TemplateSnippetCollectionType] = None,
+    snippets: Optional[TemplateSnippetCollection] = None,
 ) -> str:
     """Render a template with the given context and snippets."""
     # Convert snippets to tuple for caching
@@ -115,53 +124,3 @@ def render_template(
         return template.render(**context)
     except Exception as e:
         raise ValueError(f"Template rendering failed: {e}") from e
-
-
-# -----------------------------------------------------------------------------
-# Enhanced collection classes with improved functionality
-# -----------------------------------------------------------------------------
-
-
-# Enhanced collection classes with backward compatibility for list initialization
-class WatchResourceCollection(WatchResourceCollectionType):
-    """Enhanced collection with backward compatibility."""
-
-    def __init__(self, data=None):
-        if data is None:
-            super().__init__()
-        elif isinstance(data, list):
-            # Convert list to dict using id as key for backward compatibility
-            dict_data = {}
-            for item in data:
-                key = (
-                    item.id if hasattr(item, "id") and item.id else str(len(dict_data))
-                )
-                dict_data[key] = item
-            super().__init__(dict_data)
-        elif isinstance(data, dict):
-            super().__init__(data)
-        else:
-            super().__init__()
-
-    def by_id(self, resource_id: str) -> Optional[WatchResourceConfig]:
-        """Get watch resource by ID."""
-        return self.get(resource_id)
-
-    def with_validation_enabled(self) -> List[WatchResourceConfig]:
-        """Get all resources with validation webhook enabled."""
-        return [config for config in self.values() if config.enable_validation_webhook]
-
-    def by_api_version(self, api_version: str) -> List[WatchResourceConfig]:
-        """Get all resources with specific API version."""
-        return [config for config in self.values() if config.api_version == api_version]
-
-
-# Use the type aliases from config_models.py as the base types
-MapCollection = MapCollectionType
-TemplateSnippetCollection = TemplateSnippetCollectionType
-CertificateCollection = CertificateCollectionType
-
-
-# All models are now imported from config_models.py - no duplicate definitions needed
-
-# All models are now imported from config_models.py - type aliases are imported above

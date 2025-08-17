@@ -13,7 +13,7 @@ import jinja2
 import kopf
 import yaml
 
-from haproxy_template_ic.config import config_from_dict
+from haproxy_template_ic.config_models import config_from_dict
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import (
     trace_async_function,
@@ -481,19 +481,22 @@ _webhook_registry = WebhookRegistry()
 
 def register_validation_webhooks_from_config(operator_config) -> None:
     """Register validation webhooks based on operator configuration."""
-    if not hasattr(operator_config, "watch_resources"):
-        logger.debug("No watch_resources configuration found")
+    if not hasattr(operator_config, "watched_resources"):
+        logger.debug("No watched_resources configuration found")
         return
 
-    for resource_config in operator_config.watch_resources:
+    for resource_id, resource_config in operator_config.watched_resources.items():
         if not resource_config.enable_validation_webhook:
             logger.debug(f"Validation webhook disabled for {resource_config.kind}")
             continue
 
-        group = resource_config.group or ""
-        version = resource_config.version or "v1"
+        # Parse group and version from api_version
+        if "/" in resource_config.api_version:
+            group, version = resource_config.api_version.rsplit("/", 1)
+        else:
+            group = ""
+            version = resource_config.api_version
         kind = resource_config.kind
-        resource_id = resource_config.id or kind.lower()
 
         logger.info(
             f"Enabling validation webhook for {resource_config.kind} (id: {resource_id})"

@@ -24,7 +24,7 @@ from haproxy_template_ic.operator import (
     initialize_configuration,
     _is_valid_resource,
 )
-from haproxy_template_ic.config import (
+from haproxy_template_ic.config_models import (
     Config,
     MapConfig,
     MapCollection,

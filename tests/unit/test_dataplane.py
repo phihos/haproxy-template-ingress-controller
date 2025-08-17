@@ -17,7 +17,7 @@ from haproxy_template_ic.dataplane import (
     DataplaneClient,
     ConfigSynchronizer,
 )
-from haproxy_template_ic.config import (
+from haproxy_template_ic.config_models import (
     PodSelector,
     HAProxyConfigContext,
     RenderedConfig,

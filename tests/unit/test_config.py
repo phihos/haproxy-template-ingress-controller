@@ -1,6 +1,7 @@
 import pytest
+from pydantic import ValidationError
 
-from haproxy_template_ic.config import (
+from haproxy_template_ic.config_models import (
     Config,
     WatchResourceConfig,
     MapConfig,
@@ -107,7 +108,7 @@ def test_valid_configs(
 
     assert isinstance(config, Config)
     assert config.pod_selector.match_labels == expected_pod_selector
-    assert len(config.watch_resources) == expected_watch_resources_count
+    assert len(config.watched_resources) == expected_watch_resources_count
     assert len(config.maps) == expected_maps_count
 
 
@@ -159,20 +160,25 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
     """Test that watch_resources are properly structured as WatchResourceConfig objects."""
     config = config_from_dict(config_dict)
 
-    # Find the watch resource by id in the list
+    # Find the watch resource by key in the dictionary
     target_id = expected_watch_resource["name"]
-    watch_resource = None
-    for wr in config.watch_resources:
-        if wr.id == target_id:
-            watch_resource = wr
-            break
+    assert target_id in config.watched_resources, (
+        f"Watch resource with id {target_id} not found"
+    )
 
-    assert watch_resource is not None, f"Watch resource with id {target_id} not found"
+    watch_resource = config.watched_resources[target_id]
     assert isinstance(watch_resource, WatchResourceConfig)
-    assert watch_resource.id == expected_watch_resource["name"]
-    assert watch_resource.group == expected_watch_resource["group"]
-    assert watch_resource.version == expected_watch_resource["version"]
     assert watch_resource.kind == expected_watch_resource["kind"]
+    # Check api_version contains the group and version info
+    if expected_watch_resource["group"] and expected_watch_resource["version"]:
+        expected_api_version = (
+            f"{expected_watch_resource['group']}/{expected_watch_resource['version']}"
+        )
+    elif expected_watch_resource["version"]:
+        expected_api_version = expected_watch_resource["version"]
+    else:
+        expected_api_version = "v1"  # Default
+    assert watch_resource.api_version == expected_api_version
 
 
 @pytest.mark.parametrize(
@@ -235,21 +241,16 @@ def test_maps_structure(config_dict, expected_map):
     """Test that maps are properly structured as MapConfig objects."""
     config = config_from_dict(config_dict)
 
-    # Find the map config by path in the list
+    # Find the map config by path in the dictionary
     target_path = expected_map["name"]
-    map_config = None
-    for map_cfg in config.maps:
-        if map_cfg.path == target_path:
-            map_config = map_cfg
-            break
+    assert target_path in config.maps, f"Map with path {target_path} not found"
 
-    assert map_config is not None, f"Map with path {target_path} not found"
+    map_config = config.maps[target_path]
     assert isinstance(map_config, MapConfig)
-    # Path is now stored in the MapConfig object
-    assert map_config.path == expected_map["path"]
-    assert isinstance(map_config.template, Template)
+    # Template should be compiled
+    assert isinstance(map_config.compiled_template, Template)
     # Test that the template renders correctly with sample data
-    rendered = map_config.template.render(
+    rendered = map_config.compiled_template.render(
         name="test-server", ip="192.168.1.1", port="8080", format="combined"
     )
     assert rendered == expected_map["expected_rendered"]
@@ -353,7 +354,7 @@ def test_rendered_map_is_frozen():
     map_config = MapConfig(template=Template("test"))
     rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
 
-    with pytest.raises(AttributeError):
+    with pytest.raises((AttributeError, ValidationError)):
         rendered_map.path = "/new/path"
 
 
@@ -540,61 +541,53 @@ def test_haproxy_config_context_default_rendered_certificates():
 
 
 def test_watch_resource_collection_by_id():
-    """Test WatchResourceCollection.by_id method."""
-    from haproxy_template_ic.config import WatchResourceCollection, WatchResourceConfig
+    """Test watch resource collection access by key."""
+    from haproxy_template_ic.config import WatchResourceConfig
 
-    resources = WatchResourceCollection(
-        [
-            WatchResourceConfig(kind="Pod", group="", version="v1", id="pods"),
-            WatchResourceConfig(kind="Service", group="", version="v1", id="services"),
-            WatchResourceConfig(
-                kind="Ingress", group="networking.k8s.io", version="v1", id="ingresses"
-            ),
-        ]
-    )
+    resources = {
+        "pods": WatchResourceConfig(kind="Pod", api_version="v1"),
+        "services": WatchResourceConfig(kind="Service", api_version="v1"),
+        "ingresses": WatchResourceConfig(
+            kind="Ingress", api_version="networking.k8s.io/v1"
+        ),
+    }
 
     # Test successful lookup
-    found = resources.by_id("services")
+    found = resources.get("services")
     assert found is not None
     assert found.kind == "Service"
-    assert found.id == "services"
 
     # Test not found
-    not_found = resources.by_id("nonexistent")
+    not_found = resources.get("nonexistent")
     assert not_found is None
 
     # Test empty collection
-    empty_collection = WatchResourceCollection([])
-    assert empty_collection.by_id("anything") is None
+    empty_collection = {}
+    assert empty_collection.get("anything") is None
 
 
 def test_map_collection_by_path():
-    """Test MapCollection.by_path method."""
-    from haproxy_template_ic.config import MapCollection, MapConfig
-    from jinja2 import Template
+    """Test map collection access by path key."""
+    from haproxy_template_ic.config import MapConfig
 
-    maps = MapCollection(
-        [
-            MapConfig(
-                path="/etc/haproxy/maps/backend.map", template=Template("backend map")
-            ),
-            MapConfig(path="/etc/haproxy/maps/path.map", template=Template("path map")),
-            MapConfig(path="/etc/haproxy/maps/host.map", template=Template("host map")),
-        ]
-    )
+    maps = {
+        "/etc/haproxy/maps/backend.map": MapConfig(template="backend map"),
+        "/etc/haproxy/maps/path.map": MapConfig(template="path map"),
+        "/etc/haproxy/maps/host.map": MapConfig(template="host map"),
+    }
 
     # Test successful lookup
-    found = maps.by_path("/etc/haproxy/maps/path.map")
+    found = maps.get("/etc/haproxy/maps/path.map")
     assert found is not None
-    assert found.path == "/etc/haproxy/maps/path.map"
+    assert found.template == "path map"
 
     # Test not found
-    not_found = maps.by_path("/nonexistent.map")
+    not_found = maps.get("/nonexistent.map")
     assert not_found is None
 
     # Test empty collection
-    empty_collection = MapCollection([])
-    assert empty_collection.by_path("/anything") is None
+    empty_collection = {}
+    assert empty_collection.get("/anything") is None
 
 
 def test_template_snippet_collection_by_name():

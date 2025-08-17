@@ -8,7 +8,7 @@ validation, type coercion, and enhanced developer experience.
 from typing import Any, Dict, List, Optional
 
 from jinja2 import Template
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ResourceFilter(BaseModel):
@@ -21,14 +21,24 @@ class ResourceFilter(BaseModel):
         None, description="Resource label selector"
     )
 
-    @validator("namespace_selector", "label_selector")
+    @field_validator("namespace_selector", "label_selector")
+    @classmethod
     def validate_selector(cls, v):
         if v is not None and not isinstance(v, dict):
             raise ValueError("Selector must be a dictionary")
         return v
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(
+        frozen=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "namespace_selector": {"environment": "production"},
+                    "label_selector": {"app": "my-app", "version": "v1.0.0"},
+                }
+            ]
+        },
+    )
 
 
 class WatchResourceConfig(BaseModel):
@@ -47,33 +57,8 @@ class WatchResourceConfig(BaseModel):
         None, description="Optional resource filtering"
     )
 
-    # Backward compatibility fields
-    id: str = Field("", description="Resource ID (for backward compatibility)")
-    group: Optional[str] = Field(None, description="Group (for backward compatibility)")
-    version: Optional[str] = Field(
-        None, description="Version (for backward compatibility)"
-    )
-    filter: Optional[ResourceFilter] = Field(
-        None, description="Filter (for backward compatibility)"
-    )
-
-    def __init__(self, **data):
-        # Handle backward compatibility: convert group/version to api_version
-        if "api_version" not in data:
-            group = data.get("group", "")
-            version = data.get("version", "v1")
-            if group:
-                data["api_version"] = f"{group}/{version}"
-            else:
-                data["api_version"] = version
-
-        # Handle filter -> resource_filter mapping
-        if "filter" in data and "resource_filter" not in data:
-            data["resource_filter"] = data["filter"]
-
-        super().__init__(**data)
-
-    @validator("api_version")
+    @field_validator("api_version")
+    @classmethod
     def validate_api_version(cls, v):
         if not v or not isinstance(v, str):
             raise ValueError("api_version must be a non-empty string")
@@ -86,7 +71,8 @@ class WatchResourceConfig(BaseModel):
                 )
         return v
 
-    @validator("kind")
+    @field_validator("kind")
+    @classmethod
     def validate_kind(cls, v):
         if not v or not isinstance(v, str):
             raise ValueError("kind must be a non-empty string")
@@ -105,11 +91,13 @@ class MapConfig(BaseModel):
 
     template: str = Field(..., description="Jinja2 template for the map content")
     compiled_template: Optional[Template] = Field(
-        None, description="Compiled Jinja2 template (internal use)"
+        None,
+        description="Compiled Jinja2 template (internal use)",
+        exclude=True,  # Exclude from serialization and schema generation
     )
-    path: str = Field("", description="Map file path (for backward compatibility)")
 
-    @validator("template", pre=True)
+    @field_validator("template", mode="before")
+    @classmethod
     def validate_template(cls, v):
         # Handle both string templates and Template objects for backward compatibility
         if isinstance(v, Template):
@@ -123,14 +111,6 @@ class MapConfig(BaseModel):
         else:
             raise ValueError("template must be a string or Template object")
 
-    def __init__(self, **data):
-        # Handle Template objects passed directly
-        if "template" in data and isinstance(data["template"], Template):
-            template_obj = data["template"]
-            data["template"] = "template from Template object"  # Store placeholder
-            data["compiled_template"] = template_obj  # Store the actual template
-        super().__init__(**data)
-
     class Config:
         # Allow Template objects (not JSON serializable but used internally)
         arbitrary_types_allowed = True
@@ -142,13 +122,13 @@ class TemplateSnippet(BaseModel):
     name: str = Field(..., description="Snippet name for {% include %}")
     template: str = Field(..., description="Jinja2 template content")
     compiled_template: Optional[Template] = Field(
-        None, description="Compiled Jinja2 template (internal use)"
-    )
-    source: str = Field(
-        "", description="Source template string (for backward compatibility)"
+        None,
+        description="Compiled Jinja2 template (internal use)",
+        exclude=True,  # Exclude from serialization and schema generation
     )
 
-    @validator("name")
+    @field_validator("name")
+    @classmethod
     def validate_name(cls, v):
         if not v or not isinstance(v, str):
             raise ValueError("name must be a non-empty string")
@@ -157,17 +137,11 @@ class TemplateSnippet(BaseModel):
             raise ValueError("name cannot contain spaces or newlines")
         return v
 
-    @validator("template")
+    @field_validator("template")
+    @classmethod
     def validate_template(cls, v):
         if not isinstance(v, str):
             raise ValueError("template must be a string")
-        return v
-
-    @validator("source", pre=True, always=True)
-    def set_source_from_template(cls, v, values):
-        # If source is not explicitly set, use template value
-        if not v and "template" in values:
-            return values["template"]
         return v
 
     class Config:
@@ -180,11 +154,13 @@ class CertificateConfig(BaseModel):
 
     template: str = Field(..., description="Jinja2 template for certificate content")
     compiled_template: Optional[Template] = Field(
-        None, description="Compiled Jinja2 template (internal use)"
+        None,
+        description="Compiled Jinja2 template (internal use)",
+        exclude=True,  # Exclude from serialization and schema generation
     )
-    name: str = Field("", description="Certificate name (for backward compatibility)")
 
-    @validator("template")
+    @field_validator("template")
+    @classmethod
     def validate_template(cls, v):
         if not v or not isinstance(v, str):
             raise ValueError("template must be a non-empty string")
@@ -202,7 +178,8 @@ class PodSelector(BaseModel):
         ..., description="Labels to match HAProxy pods"
     )
 
-    @validator("match_labels")
+    @field_validator("match_labels")
+    @classmethod
     def validate_labels(cls, v):
         if not v:
             raise ValueError("match_labels cannot be empty")
@@ -236,12 +213,8 @@ class Config(BaseModel):
         default_factory=dict, description="TLS certificates"
     )
 
-    # Raw configuration for backward compatibility
-    raw: Optional[Dict[str, Any]] = Field(
-        None, description="Raw configuration dictionary"
-    )
-
-    @validator("maps")
+    @field_validator("maps")
+    @classmethod
     def validate_map_paths(cls, v):
         """Validate that map paths are absolute."""
         for path in v.keys():
@@ -249,7 +222,8 @@ class Config(BaseModel):
                 raise ValueError(f"Map path must be absolute: {path}")
         return v
 
-    @validator("certificates")
+    @field_validator("certificates")
+    @classmethod
     def validate_cert_paths(cls, v):
         """Validate that certificate paths are absolute."""
         for path in v.keys():
@@ -257,7 +231,8 @@ class Config(BaseModel):
                 raise ValueError(f"Certificate path must be absolute: {path}")
         return v
 
-    @validator("template_snippets")
+    @field_validator("template_snippets")
+    @classmethod
     def validate_snippet_names(cls, v):
         """Validate snippet names for template inclusion."""
         for name, snippet in v.items():
@@ -267,13 +242,54 @@ class Config(BaseModel):
                 )
         return v
 
-    class Config:
-        # Allow extra fields for future extensibility
-        extra = "forbid"
+    model_config = ConfigDict(
+        # Forbid extra fields for strict validation
+        extra="forbid",
         # Validate assignment to catch errors early
-        validate_assignment = True
+        validate_assignment=True,
         # Allow Template objects (not JSON serializable but used internally)
-        arbitrary_types_allowed = True
+        arbitrary_types_allowed=True,
+        # Add title and description for better schema generation
+        title="HAProxy Template IC Configuration",
+        # Custom JSON schema modifications
+        json_schema_extra={
+            "examples": [
+                {
+                    "pod_selector": {
+                        "match_labels": {"app": "haproxy", "component": "loadbalancer"}
+                    },
+                    "haproxy_config": {
+                        "template": 'global\n    daemon\n\ndefaults\n    mode http\n    timeout connect 5000ms\n    timeout client 50000ms\n    timeout server 50000ms\n\nfrontend health\n    bind *:8404\n    http-request return status 200 content-type text/plain string "OK" if { path /healthz }\n\nfrontend main\n    bind *:80\n    # Add your routing logic here'
+                    },
+                    "watched_resources": {
+                        "ingresses": {
+                            "api_version": "networking.k8s.io/v1",
+                            "kind": "Ingress",
+                            "enable_validation_webhook": True,
+                        },
+                        "services": {
+                            "api_version": "v1",
+                            "kind": "Service",
+                            "enable_validation_webhook": False,
+                        },
+                    },
+                    "maps": {
+                        "/etc/haproxy/maps/host.map": {
+                            "template": "{% for _, ingress in resources.get('ingresses', {}).items() %}\n{% if ingress.spec and ingress.spec.rules %}\n{% for rule in ingress.spec.rules %}\n{% if rule.host %}\n{{ rule.host }} {{ rule.host }}\n{% endif %}\n{% endfor %}\n{% endif %}\n{% endfor %}"
+                        }
+                    },
+                    "template_snippets": {
+                        "backend-name": {
+                            "name": "backend-name",
+                            "template": "backend_{{ service_name }}_{{ port }}",
+                        }
+                    },
+                }
+            ],
+            "additionalProperties": False,
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+        },
+    )
 
 
 class RenderedMap(BaseModel):
@@ -285,7 +301,8 @@ class RenderedMap(BaseModel):
         None, description="Source map configuration"
     )
 
-    @validator("path")
+    @field_validator("path")
+    @classmethod
     def validate_path(cls, v):
         if not v.startswith("/"):
             raise ValueError("Map path must be absolute")
@@ -294,6 +311,7 @@ class RenderedMap(BaseModel):
     class Config:
         # Allow arbitrary types for MapConfig
         arbitrary_types_allowed = True
+        frozen = True
 
 
 class RenderedConfig(BaseModel):
@@ -301,7 +319,8 @@ class RenderedConfig(BaseModel):
 
     content: str = Field(..., description="Rendered configuration content")
 
-    @validator("content")
+    @field_validator("content")
+    @classmethod
     def validate_content(cls, v):
         if not v or not isinstance(v, str):
             raise ValueError("content must be a non-empty string")
@@ -317,7 +336,8 @@ class RenderedCertificate(BaseModel):
     path: str = Field(..., description="Absolute path to the certificate file")
     content: str = Field(..., description="Rendered certificate content")
 
-    @validator("path")
+    @field_validator("path")
+    @classmethod
     def validate_path(cls, v):
         if not v.startswith("/"):
             raise ValueError("Certificate path must be absolute")
@@ -409,11 +429,8 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
         # Transform old config format to new Pydantic format
         transformed_data = _transform_legacy_config(data)
 
-        # Store raw data for backward compatibility
-        transformed_data["raw"] = data
-
         # Use Pydantic parsing for basic validation
-        config = Config.parse_obj(transformed_data)
+        config = Config.model_validate(transformed_data)
 
         # Now compile templates - this is done post-validation to handle includes
         _compile_templates_in_config(config)
@@ -473,25 +490,32 @@ def _transform_legacy_config(data: Dict[str, Any]) -> Dict[str, Any]:
                 "path": "/etc/haproxy/haproxy.cfg",
             }
 
-    # Transform watched_resources from legacy format to new format
+    # Handle watched_resources
+    if "watch_resources" in result:
+        # Convert old field name to new field name
+        result["watched_resources"] = result.pop("watch_resources")
+
     if "watched_resources" in result:
         resources = {}
         watch_data = result["watched_resources"]
 
         if isinstance(watch_data, dict):
-            # New dict format: {id: {kind: ..., api_version: ...}}
+            # Dict format: {id: {kind: ..., api_version: ...}}
             for resource_id, config in watch_data.items():
                 if isinstance(config, dict):
-                    # Handle different formats for api_version/group/version
+                    # Handle api_version construction from group/version
                     api_version = config.get("api_version")
                     if not api_version:
-                        # Legacy format with separate group/version
-                        group = config.get("group", "")
-                        version = config.get("version", "v1")
-                        if group:
-                            api_version = f"{group}/{version}"
+                        group = config.get("group")
+                        version = config.get("version")
+
+                        # Handle None/empty values
+                        if group is None and version is None:
+                            api_version = "v1"  # Default for core resources
+                        elif group is None or group == "":
+                            api_version = version if version else "v1"
                         else:
-                            api_version = version
+                            api_version = f"{group}/{version if version else 'v1'}"
 
                     resources[resource_id] = {
                         "api_version": api_version,
@@ -499,29 +523,9 @@ def _transform_legacy_config(data: Dict[str, Any]) -> Dict[str, Any]:
                         "enable_validation_webhook": config.get(
                             "enable_validation_webhook", False
                         ),
-                        "resource_filter": config.get("filter"),
+                        "resource_filter": config.get("resource_filter")
+                        or config.get("filter"),
                     }
-        elif isinstance(watch_data, list):
-            # Legacy list format: [{id: ..., kind: ...}]
-            for i, config in enumerate(watch_data):
-                resource_id = config.get("id", str(i))
-                api_version = config.get("api_version")
-                if not api_version:
-                    group = config.get("group", "")
-                    version = config.get("version", "v1")
-                    if group:
-                        api_version = f"{group}/{version}"
-                    else:
-                        api_version = version
-
-                resources[resource_id] = {
-                    "api_version": api_version,
-                    "kind": config["kind"],
-                    "enable_validation_webhook": config.get(
-                        "enable_validation_webhook", False
-                    ),
-                    "resource_filter": config.get("filter"),
-                }
 
         result["watched_resources"] = resources
 
@@ -576,7 +580,217 @@ def _compile_templates_in_config(config: Config) -> None:
         raise ValueError(f"Template compilation failed: {e}") from e
 
 
+# =============================================================================
+# JSON Schema Generation and Export
+# =============================================================================
+
+
+def export_config_schema(include_examples: bool = True) -> Dict[str, Any]:
+    """
+    Export the JSON schema for the main Config model.
+
+    Args:
+        include_examples: Whether to include example values in the schema
+
+    Returns:
+        dict: JSON schema for the Config model
+    """
+    try:
+        # Generate schema in 'serialization' mode to exclude non-serializable fields
+        schema = Config.model_json_schema(mode="serialization")
+    except Exception:
+        # Fallback: create a simplified schema manually
+        schema = _create_simplified_config_schema()
+
+    if include_examples:
+        # Add examples to the schema for better documentation
+        _add_schema_examples(schema)
+
+    return schema
+
+
+def export_all_schemas() -> Dict[str, Any]:
+    """
+    Export JSON schemas for all configuration models.
+
+    Returns:
+        dict: Dictionary containing schemas for all models
+    """
+    return {
+        "Config": Config.model_json_schema(),
+        "WatchResourceConfig": WatchResourceConfig.model_json_schema(),
+        "MapConfig": MapConfig.model_json_schema(),
+        "TemplateSnippet": TemplateSnippet.model_json_schema(),
+        "CertificateConfig": CertificateConfig.model_json_schema(),
+        "PodSelector": PodSelector.model_json_schema(),
+        "ResourceFilter": ResourceFilter.model_json_schema(),
+        "RenderedMap": RenderedMap.model_json_schema(),
+        "RenderedConfig": RenderedConfig.model_json_schema(),
+        "RenderedCertificate": RenderedCertificate.model_json_schema(),
+        "TemplateContext": TemplateContext.model_json_schema(),
+        "HAProxyConfigContext": HAProxyConfigContext.model_json_schema(),
+    }
+
+
+def _add_schema_examples(schema: Dict[str, Any]) -> None:
+    """Add example values to schema properties for documentation."""
+    properties = schema.get("properties", {})
+
+    # Add examples for main configuration sections
+    if "pod_selector" in properties:
+        properties["pod_selector"]["example"] = {
+            "match_labels": {"app": "haproxy", "component": "loadbalancer"}
+        }
+
+    if "watched_resources" in properties:
+        properties["watched_resources"]["example"] = {
+            "ingresses": {
+                "api_version": "networking.k8s.io/v1",
+                "kind": "Ingress",
+                "enable_validation_webhook": True,
+            },
+            "services": {
+                "api_version": "v1",
+                "kind": "Service",
+                "enable_validation_webhook": False,
+            },
+        }
+
+    if "maps" in properties:
+        properties["maps"]["example"] = {
+            "/etc/haproxy/maps/host.map": {
+                "template": "{% for _, ingress in resources.get('ingresses', {}).items() %}\n{% if ingress.spec and ingress.spec.rules %}\n{% for rule in ingress.spec.rules %}\n{% if rule.host %}\n{{ rule.host }} {{ rule.host }}\n{% endif %}\n{% endfor %}\n{% endif %}\n{% endfor %}"
+            }
+        }
+
+    if "template_snippets" in properties:
+        properties["template_snippets"]["example"] = {
+            "backend-name": {
+                "name": "backend-name",
+                "template": "backend_{{ service_name }}_{{ port }}",
+            },
+            "health-check": {
+                "name": "health-check",
+                "template": "option httpchk GET /health",
+            },
+        }
+
+    if "haproxy_config" in properties:
+        properties["haproxy_config"]["example"] = {
+            "template": 'global\n    daemon\n\ndefaults\n    mode http\n    timeout connect 5000ms\n    timeout client 50000ms\n    timeout server 50000ms\n\nfrontend health\n    bind *:8404\n    http-request return status 200 content-type text/plain string "OK" if { path /healthz }\n\nfrontend main\n    bind *:80\n    {% include "backend-routing" %}'
+        }
+
+
+def validate_config_against_schema(config_data: Dict[str, Any]) -> List[str]:
+    """
+    Validate configuration data against the schema and return validation errors.
+
+    Args:
+        config_data: Configuration data to validate
+
+    Returns:
+        list: List of validation error messages (empty if valid)
+    """
+    try:
+        # This will raise ValidationError if invalid
+        Config.model_validate(config_data)
+        return []
+    except Exception as e:
+        # Parse validation errors into readable messages
+        errors = []
+        if hasattr(e, "errors"):
+            for error in e.errors():
+                loc = " -> ".join(str(x) for x in error["loc"])
+                msg = error["msg"]
+                errors.append(f"{loc}: {msg}")
+        else:
+            errors.append(str(e))
+        return errors
+
+
+def get_schema_version() -> str:
+    """
+    Get the schema version for configuration compatibility checking.
+
+    Returns:
+        str: Schema version string
+    """
+    # This can be used for schema migration and compatibility checking
+    return "1.0.0"
+
+
+def _create_simplified_config_schema() -> Dict[str, Any]:
+    """Create a simplified schema manually when automatic generation fails."""
+    return {
+        "type": "object",
+        "properties": {
+            "pod_selector": {
+                "type": "object",
+                "properties": {
+                    "match_labels": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    }
+                },
+                "required": ["match_labels"],
+            },
+            "haproxy_config": {
+                "type": "object",
+                "properties": {"template": {"type": "string"}},
+                "required": ["template"],
+            },
+            "watched_resources": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "api_version": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "enable_validation_webhook": {
+                            "type": "boolean",
+                            "default": True,
+                        },
+                    },
+                    "required": ["api_version", "kind"],
+                },
+            },
+            "maps": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {"template": {"type": "string"}},
+                    "required": ["template"],
+                },
+            },
+            "template_snippets": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "template": {"type": "string"},
+                    },
+                    "required": ["name", "template"],
+                },
+            },
+            "certificates": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {"template": {"type": "string"}},
+                    "required": ["template"],
+                },
+            },
+        },
+        "required": ["pod_selector", "haproxy_config"],
+        "additionalProperties": False,
+    }
+
+
+# =============================================================================
 # Type aliases for collections (maintains compatibility)
+# =============================================================================
+
 WatchResourceCollection = Dict[str, WatchResourceConfig]
 MapCollection = Dict[str, MapConfig]
 TemplateSnippetCollection = Dict[str, TemplateSnippet]

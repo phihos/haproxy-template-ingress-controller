@@ -23,7 +23,7 @@ from haproxy_template_ic.management_socket import (
     DataclassJSONEncoder,
 )
 from .utils import get_test_reporter, progress_context
-from haproxy_template_ic.config import (
+from haproxy_template_ic.config_models import (
     Config,
     MapConfig,
     HAProxyConfigContext,
@@ -382,7 +382,11 @@ def test_state_serializer_serialize_haproxy_config_context():
 
 def test_state_serializer_serialize_haproxy_config_context_with_rendered_config():
     """Test _serialize_haproxy_config_context method with rendered config."""
-    from haproxy_template_ic.config import HAProxyConfigContext, RenderedConfig, Config
+    from haproxy_template_ic.config_models import (
+        HAProxyConfigContext,
+        RenderedConfig,
+        Config,
+    )
     from jinja2 import Template
 
     memo = MagicMock()
@@ -411,7 +415,7 @@ def test_state_serializer_serialize_haproxy_config_context_with_rendered_config(
 
 def test_state_serializer_serialize_haproxy_config_context_with_rendered_certificates():
     """Test _serialize_haproxy_config_context method with rendered certificates."""
-    from haproxy_template_ic.config import (
+    from haproxy_template_ic.config_models import (
         HAProxyConfigContext,
         RenderedCertificate,
         CertificateConfig,
@@ -550,7 +554,7 @@ async def test_process_command_dump_config_empty():
 @pytest.mark.asyncio
 async def test_process_command_dump_config_with_rendered_config():
     """Test dump config command with rendered HAProxy config."""
-    from haproxy_template_ic.config import RenderedConfig, Config
+    from haproxy_template_ic.config_models import RenderedConfig, Config
     from jinja2 import Template
 
     memo = MagicMock()
@@ -583,7 +587,7 @@ async def test_process_command_dump_config_with_rendered_config():
 @pytest.mark.asyncio
 async def test_process_command_dump_config_with_rendered_certificates():
     """Test dump config command with rendered certificates."""
-    from haproxy_template_ic.config import RenderedCertificate, CertificateConfig
+    from haproxy_template_ic.config_models import RenderedCertificate, CertificateConfig
     from jinja2 import Template
 
     memo = MagicMock()

@@ -14,7 +14,7 @@ from haproxy_template_ic.webhook import (
     WebhookRegistry,
     register_validation_webhooks_from_config,
 )
-from haproxy_template_ic.config import WatchResourceConfig
+from haproxy_template_ic.config_models import WatchResourceConfig
 
 
 class TestConfigMapValidator:

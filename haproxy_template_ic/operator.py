@@ -32,7 +32,7 @@ from haproxy_template_ic.tracing import (
     record_span_event,
 )
 
-from haproxy_template_ic.config import (
+from haproxy_template_ic.config_models import (
     HAProxyConfigContext,
     RenderedCertificate,
     RenderedConfig,
@@ -205,10 +205,10 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
 
             # Collect all indices from registered watch resources
     indices: Dict[str, Dict[str, Any]] = {}
-    for watch_config in memo.config.watch_resources:
+    for resource_id, watch_config in memo.config.watched_resources.items():
         try:
             # Get the index for this resource type
-            index_data = memo.indices.get(watch_config.id)
+            index_data = memo.indices.get(resource_id)
 
             # Convert kopf index store to a dictionary with resource objects
             # The index_data is a kopf Store object containing resource data
@@ -242,16 +242,16 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
                         )
             else:
                 logger.warning(
-                    f"⚠️ Index data for '{watch_config.id}' is not iterable: {type(index_data)}"
+                    f"⚠️ Index data for '{resource_id}' is not iterable: {type(index_data)}"
                 )
 
-            indices[watch_config.id] = resource_dict
+            indices[resource_id] = resource_dict
             logger.debug(
-                f"📊 Retrieved index '{watch_config.id}' with {len(resource_dict)} items"
+                f"📊 Retrieved index '{resource_id}' with {len(resource_dict)} items"
             )
         except Exception as e:
-            logger.warning(f"⚠️ Could not retrieve index '{watch_config.id}': {e}")
-            indices[watch_config.id] = {}
+            logger.warning(f"⚠️ Could not retrieve index '{resource_id}': {e}")
+            indices[resource_id] = {}
 
     # Record watched resource metrics
     metrics.record_watched_resources(indices)
@@ -300,41 +300,38 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
         logger.error(f"❌ Failed to render HAProxy configuration template: {e}")
 
     # Render each map template
-    for map_config in memo.config.maps:
+    for map_path, map_config in memo.config.maps.items():
         try:
-            with trace_template_render("map", map_config.path):
+            with trace_template_render("map", map_path):
                 with metrics.time_template_render("map"):
-                    rendered_content = map_config.template.render(**template_vars)
+                    rendered_content = map_config.compiled_template.render(
+                        **template_vars
+                    )
             rendered_map = RenderedMap(
-                path=map_config.path, content=rendered_content, map_config=map_config
+                path=map_path, content=rendered_content, map_config=map_config
             )
             memo.haproxy_config_context.rendered_maps.append(rendered_map)
             metrics.record_template_render("map", "success")
-            add_span_attributes(
-                map_path=map_config.path, map_size=len(rendered_content)
-            )
-            record_span_event("map_rendered", {"path": map_config.path})
-            logger.debug(f"✅ Rendered template for {map_config.path}")
+            add_span_attributes(map_path=map_path, map_size=len(rendered_content))
+            record_span_event("map_rendered", {"path": map_path})
+            logger.debug(f"✅ Rendered template for {map_path}")
         except Exception as e:
             metrics.record_template_render("map", "error")
             metrics.record_error("template_render_failed", "operator")
-            record_span_event(
-                "map_render_failed", {"path": map_config.path, "error": str(e)}
-            )
-            logger.error(f"❌ Failed to render template for {map_config.path}: {e}")
+            record_span_event("map_render_failed", {"path": map_path, "error": str(e)})
+            logger.error(f"❌ Failed to render template for {map_path}: {e}")
 
     # Render each certificate template
-    for certificate_config in memo.config.certificates:
+    for cert_path, certificate_config in memo.config.certificates.items():
         try:
-            with trace_template_render("certificate", certificate_config.name):
+            with trace_template_render("certificate", cert_path):
                 with metrics.time_template_render("certificate"):
-                    rendered_content = certificate_config.template.render(
+                    rendered_content = certificate_config.compiled_template.render(
                         **template_vars
                     )
             rendered_certificate = RenderedCertificate(
-                name=certificate_config.name,
+                path=cert_path,
                 content=rendered_content,
-                certificate_config=certificate_config,
             )
             memo.haproxy_config_context.rendered_certificates.append(
                 rendered_certificate
@@ -442,15 +439,15 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
 
 def setup_resource_watchers(memo: Any) -> None:
     """Set up watchers for Kubernetes resources."""
-    resource_count = len(memo.config.watch_resources)
+    resource_count = len(memo.config.watched_resources)
     logger.info(f"👀 Setting up {resource_count} resource watchers...")
 
-    for watch_config in memo.config.watch_resources:
+    for resource_id, watch_config in memo.config.watched_resources.items():
         resource_type = watch_config.kind.lower()
 
         # Set up index and event handler with group/version if specified
-        kwargs = {"id": watch_config.id, "param": watch_config.id}
-        event_kwargs = {"id": f"{watch_config.id}_event"}
+        kwargs = {"id": resource_id, "param": resource_id}
+        event_kwargs = {"id": f"{resource_id}_event"}
 
         if watch_config.group and watch_config.version:
             kwargs.update(
@@ -462,11 +459,11 @@ def setup_resource_watchers(memo: Any) -> None:
 
             api_version = f"{watch_config.group}/{watch_config.version}"
             logger.info(
-                f"🔍 Watching {resource_type} ({api_version}) with id '{watch_config.id}'"
+                f"🔍 Watching {resource_type} ({api_version}) with id '{resource_id}'"
             )
         else:
             logger.info(
-                f"🔍 Watching {resource_type} (core/v1) with id '{watch_config.id}'"
+                f"🔍 Watching {resource_type} (core/v1) with id '{resource_id}'"
             )
 
         kopf.index(resource_type, **kwargs)(update_resource_index)  # type: ignore[arg-type]
@@ -542,7 +539,7 @@ def configure_webhook_server(
     # Check if any resources have webhook validation enabled
     has_webhooks = any(
         getattr(watch_config, "enable_validation_webhook", False)
-        for watch_config in memo.config.watch_resources
+        for watch_config in memo.config.watched_resources.values()
     )
 
     if not has_webhooks:

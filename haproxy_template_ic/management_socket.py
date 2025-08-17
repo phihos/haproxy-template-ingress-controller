@@ -70,22 +70,26 @@ class StateSerializer:
         config["pod_selector"] = pod_selector
 
         # Serialize watch resources
-        for watch_config in self.memo.config.watch_resources:
-            config["watch_resources"][watch_config.id] = {
+        for resource_id, watch_config in self.memo.config.watched_resources.items():
+            # Parse group and version from api_version
+            if "/" in watch_config.api_version:
+                group, version = watch_config.api_version.rsplit("/", 1)
+            else:
+                group = ""
+                version = watch_config.api_version
+
+            config["watch_resources"][resource_id] = {
                 "kind": watch_config.kind,
-                "group": watch_config.group,
-                "version": watch_config.version,
+                "group": group,
+                "version": version,
+                "api_version": watch_config.api_version,
             }
 
         # Serialize maps
-        for map_config in self.memo.config.maps:
-            template_source = "unavailable"
-            if hasattr(map_config.template, "source"):
-                template_source = str(map_config.template.source)
-
-            config["maps"][map_config.path] = {
-                "path": map_config.path,
-                "template_source": template_source,
+        for map_path, map_config in self.memo.config.maps.items():
+            config["maps"][map_path] = {
+                "path": map_path,
+                "template_source": map_config.template,
             }
 
         # Serialize haproxy_config
@@ -252,33 +256,39 @@ class ManagementSocketServer:
             identifier = parts[2]
 
             if collection_type == "maps":
-                map_config = self.memo.config.maps.by_path(identifier)
+                map_config = self.memo.config.maps.get(identifier)
                 if map_config:
                     return {
                         "result": {
-                            "path": map_config.path,
-                            "template_source": getattr(
-                                map_config.template, "source", "unavailable"
-                            ),
+                            "path": identifier,
+                            "template_source": map_config.template,
                         }
                     }
                 return {"error": f"Map not found: {identifier}"}
 
             elif collection_type == "watch_resources":
-                watch_config = self.memo.config.watch_resources.by_id(identifier)
+                watch_config = self.memo.config.watched_resources.get(identifier)
                 if watch_config:
+                    # Parse group and version from api_version
+                    if "/" in watch_config.api_version:
+                        group, version = watch_config.api_version.rsplit("/", 1)
+                    else:
+                        group = ""
+                        version = watch_config.api_version
+
                     return {
                         "result": {
-                            "id": watch_config.id,
+                            "id": identifier,
                             "kind": watch_config.kind,
-                            "group": watch_config.group,
-                            "version": watch_config.version,
+                            "group": group,
+                            "version": version,
+                            "api_version": watch_config.api_version,
                         }
                     }
                 return {"error": f"Watch resource not found: {identifier}"}
 
             elif collection_type == "template_snippets":
-                snippet = self.memo.config.template_snippets.by_name(identifier)
+                snippet = self.memo.config.template_snippets.get(identifier)
                 if snippet:
                     return {
                         "result": {
@@ -291,14 +301,12 @@ class ManagementSocketServer:
                 return {"error": f"Template snippet not found: {identifier}"}
 
             elif collection_type == "certificates":
-                cert_config = self.memo.config.certificates.by_name(identifier)
+                cert_config = self.memo.config.certificates.get(identifier)
                 if cert_config:
                     return {
                         "result": {
-                            "name": cert_config.name,
-                            "template_source": getattr(
-                                cert_config.template, "source", "unavailable"
-                            ),
+                            "path": identifier,
+                            "template_source": cert_config.template,
                         }
                     }
                 return {"error": f"Certificate not found: {identifier}"}
