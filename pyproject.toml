@@ -167,6 +167,7 @@ module = [
     "docker.*",      # Docker library - no official type stubs
     "python_on_whales.*",  # Docker wrapper - no official type stubs
     "haproxy_dataplane_v3.*",  # Generated HAProxy Dataplane API client
+    "aiobreaker.*",  # Circuit breaker library - no official type stubs
 ]
 ignore_missing_imports = true
 

@@ -346,7 +346,13 @@ class ResilientOperator:
 
         except RetryError as retry_error:
             # Extract the last exception from the retry error
-            last_error = retry_error.last_attempt.exception()
+            raw_error = retry_error.last_attempt.exception()
+            # Ensure we have an Exception (not BaseException) for type safety
+            last_error = (
+                raw_error
+                if isinstance(raw_error, Exception)
+                else Exception(str(raw_error))
+            )
 
         except Exception as error:
             # Direct exception (e.g., from circuit breaker)
