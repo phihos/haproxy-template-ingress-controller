@@ -1122,5 +1122,7 @@ chore: update dependencies to latest versions
 - Always run a test after modifying it.
 - In Python always prefer module-level imports over local imports if having the choice.
 - **NEVER declare a task complete without verifying that all functionality works as intended.** A task is only complete when all tests pass and the functionality can be demonstrated successfully.
+- **Test Updates Are Mandatory**: When refactoring or changing APIs, updating tests is part of the development cycle, not an optional follow-up task. Any API changes must include corresponding test updates in the same work session.
+- **Full Test Suite Must Pass**: Before considering any development task complete, the full test suite must pass. This includes unit tests, integration tests, and acceptance tests where applicable.
 - **NEVER edit generated code (e.g., OpenAPI generator output).** Generated code should be regenerated from source specifications if changes are needed. Keep generated code in a separate directory and exclude it from linting, formatting, and coverage tools.
 - **Integration test progress context naming**: Always use `progress_context` (not `test_progress`) as the function name to avoid pytest's test discovery pattern which would incorrectly identify it as a test function.

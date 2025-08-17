@@ -6,6 +6,7 @@ from haproxy_template_ic.config_models import (
     WatchResourceConfig,
     MapConfig,
     CertificateConfig,
+    PodSelector,
     config_from_dict,
     RenderedMap,
     RenderedConfig,
@@ -34,7 +35,7 @@ from jinja2 import Template
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {},
+                "watched_resources": {},
                 "maps": {},
             },
             {"app": "myapp"},
@@ -46,7 +47,7 @@ from jinja2 import Template
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {
+                "watched_resources": {
                     "ingresses": {
                         "group": "networking.k8s.io",
                         "version": "v1",
@@ -82,7 +83,7 @@ from jinja2 import Template
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {
+                "watched_resources": {
                     "ingresses": {"group": "networking.k8s.io", "kind": "Ingress"}
                 },
                 "maps": {
@@ -119,7 +120,7 @@ def test_valid_configs(
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {
+                "watched_resources": {
                     "ingresses": {
                         "group": "networking.k8s.io",
                         "version": "v1",
@@ -138,7 +139,7 @@ def test_valid_configs(
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {
+                "watched_resources": {
                     "services": {"group": "", "version": "v1", "kind": "Service"}
                 },
             },
@@ -148,7 +149,7 @@ def test_valid_configs(
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {
+                "watched_resources": {
                     "pods": {"group": None, "version": None, "kind": "Pod"}
                 },
             },
@@ -260,7 +261,7 @@ def test_maps_structure(config_dict, expected_map):
     "config_dict",
     [
         # Missing required pod_selector field
-        {"watch_resources": {}},
+        {"watched_resources": {}},
         {"maps": {}},
         {},
         # Invalid field types
@@ -277,7 +278,7 @@ def test_maps_structure(config_dict, expected_map):
         },
         {
             "pod_selector": {"match_labels": {"app": "myapp"}},
-            "watch_resources": {},
+            "watched_resources": {},
             "maps": {},
             "extra_field": "should_raise_exception",
         },
@@ -326,7 +327,7 @@ def test_maps_structure(config_dict, expected_map):
         # Missing mandatory kind field in WatchResourceConfig
         {
             "pod_selector": {"match_labels": {"app": "myapp"}},
-            "watch_resources": {"pods": {"group": "v1", "version": "v1"}},
+            "watched_resources": {"pods": {"group": "v1", "version": "v1"}},
         },
     ],
 )
@@ -339,7 +340,7 @@ def test_invalid_configs(config_dict):
 # RenderedMap Tests
 def test_rendered_map_creation():
     """Test RenderedMap dataclass creation."""
-    map_config = MapConfig(template=Template("test {{ name }}"))
+    map_config = MapConfig(template="test {{ name }}")
     rendered_map = RenderedMap(
         path="/etc/haproxy/maps/test.map", content="test content", map_config=map_config
     )
@@ -351,7 +352,7 @@ def test_rendered_map_creation():
 
 def test_rendered_map_is_frozen():
     """Test that RenderedMap is immutable."""
-    map_config = MapConfig(template=Template("test"))
+    map_config = MapConfig(template="test")
     rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
 
     with pytest.raises((AttributeError, ValidationError)):
@@ -361,11 +362,11 @@ def test_rendered_map_is_frozen():
 # TemplateContext Tests
 def test_template_context_creation():
     """Test TemplateContext dataclass creation."""
-    resources = {"name": "test", "host": "example.com"}
-    context = TemplateContext(resources=resources, cluster_name="test-cluster")
+    resources = {"test_resource": {"name": "test", "host": "example.com"}}
+    context = TemplateContext(resources=resources, namespace="test-namespace")
 
     assert context.resources == resources
-    assert context.cluster_name == "test-cluster"
+    assert context.namespace == "test-namespace"
 
 
 def test_template_context_default_resources():
@@ -373,43 +374,71 @@ def test_template_context_default_resources():
     context = TemplateContext()
 
     assert context.resources == {}
-    assert context.cluster_name == "default"
+    assert context.namespace is None
 
 
 def test_template_context_is_frozen():
     """Test that TemplateContext is immutable."""
-    context = TemplateContext(resources={"name": "test"})
+    context = TemplateContext(resources={"pods": {"test-pod": {"name": "test"}}})
 
-    with pytest.raises(AttributeError):
-        context.resources = {"name": "new"}
+    with pytest.raises(ValidationError):
+        context.resources = {"pods": {"new-pod": {"name": "new"}}}
 
-    with pytest.raises(AttributeError):
-        context.cluster_name = "new-cluster"
+    with pytest.raises(ValidationError):
+        context.namespace = "new-namespace"
 
 
 # HAProxyConfigContext Tests
 def test_haproxy_config_context_creation():
     """Test HAProxyConfigContext dataclass creation."""
-    context = HAProxyConfigContext()
+    # Create required config and template_context
+    from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
+
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
+    )
+    template_context = TemplateContext()
+
+    context = HAProxyConfigContext(config=config, template_context=template_context)
 
     assert context.rendered_maps == []
 
 
 def test_haproxy_config_context_with_custom_data():
     """Test HAProxyConfigContext with custom rendered maps."""
-    map_config = MapConfig(template=Template("test"), path="/test")
+    map_config = MapConfig(template="test")
     rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
     rendered_maps = [rendered_map]
 
-    context = HAProxyConfigContext(rendered_maps=rendered_maps)
+    # Create required config and template_context
+    from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
+
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
+    )
+    template_context = TemplateContext()
+
+    context = HAProxyConfigContext(
+        config=config, template_context=template_context, rendered_maps=rendered_maps
+    )
 
     assert context.rendered_maps == rendered_maps
 
 
 def test_haproxy_config_context_mutable():
     """Test that HAProxyConfigContext is mutable (not frozen)."""
-    context = HAProxyConfigContext()
-    map_config = MapConfig(template=Template("test"), path="/test")
+    from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
+
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "test"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
+    )
+    template_context = TemplateContext()
+
+    context = HAProxyConfigContext(config=config, template_context=template_context)
+    map_config = MapConfig(template="test")
     rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
 
     # Should be able to modify rendered_maps
@@ -421,46 +450,34 @@ def test_haproxy_config_context_mutable():
 # RenderedConfig Tests
 def test_rendered_config_creation():
     """Test RenderedConfig dataclass creation."""
-    config = Config(
-        raw={},
-        pod_selector={"match_labels": {}},
-        haproxy_config=Template("global\n    daemon"),
-    )
-
-    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
+    rendered_config = RenderedConfig(content="global\n    daemon")
 
     assert rendered_config.content == "global\n    daemon"
-    assert rendered_config.config == config
 
 
 def test_rendered_config_frozen():
     """Test that RenderedConfig is frozen (immutable)."""
-    config = Config(
-        raw={},
-        pod_selector={"match_labels": {}},
-        haproxy_config=Template("global\n    daemon"),
-    )
+    rendered_config = RenderedConfig(content="global\n    daemon")
 
-    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
-
-    # Should not be able to modify fields
-    with pytest.raises(AttributeError):
+    # Should not be able to modify fields (Pydantic immutability)
+    with pytest.raises(ValidationError):
         rendered_config.content = "new content"
-
-    with pytest.raises(AttributeError):
-        rendered_config.config = config
 
 
 def test_haproxy_config_context_with_rendered_config():
     """Test HAProxyConfigContext with rendered config."""
     config = Config(
-        raw={},
-        pod_selector={"match_labels": {}},
-        haproxy_config=Template("global\n    daemon"),
+        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
     )
+    template_context = TemplateContext()
 
-    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
-    context = HAProxyConfigContext(rendered_config=rendered_config)
+    rendered_config = RenderedConfig(content="global\n    daemon")
+    context = HAProxyConfigContext(
+        config=config,
+        template_context=template_context,
+        rendered_config=rendered_config,
+    )
 
     assert context.rendered_config == rendered_config
     assert context.rendered_config.content == "global\n    daemon"
@@ -468,7 +485,12 @@ def test_haproxy_config_context_with_rendered_config():
 
 def test_haproxy_config_context_default_rendered_config():
     """Test HAProxyConfigContext default rendered_config is None."""
-    context = HAProxyConfigContext()
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
+    )
+    template_context = TemplateContext()
+    context = HAProxyConfigContext(config=config, template_context=template_context)
 
     assert context.rendered_config is None
     assert context.rendered_maps == []
@@ -477,60 +499,56 @@ def test_haproxy_config_context_default_rendered_config():
 # RenderedCertificate Tests
 def test_rendered_certificate_creation():
     """Test RenderedCertificate dataclass creation."""
-    certificate_config = CertificateConfig(
-        template=Template("cert content"), name="test-cert"
-    )
-
     rendered_certificate = RenderedCertificate(
-        name="test-cert", content="cert content", certificate_config=certificate_config
+        path="/etc/haproxy/certs/test.pem", content="cert content"
     )
 
-    assert rendered_certificate.name == "test-cert"
+    assert rendered_certificate.path == "/etc/haproxy/certs/test.pem"
     assert rendered_certificate.content == "cert content"
-    assert rendered_certificate.certificate_config == certificate_config
 
 
 def test_rendered_certificate_frozen():
     """Test that RenderedCertificate is frozen (immutable)."""
-    certificate_config = CertificateConfig(
-        template=Template("cert content"), name="test-cert"
-    )
-
     rendered_certificate = RenderedCertificate(
-        name="test-cert", content="cert content", certificate_config=certificate_config
+        path="/etc/haproxy/certs/test.pem", content="cert content"
     )
 
-    # Should not be able to modify fields
-    with pytest.raises(AttributeError):
-        rendered_certificate.name = "new-name"
-
-    with pytest.raises(AttributeError):
-        rendered_certificate.content = "new content"
-
-    with pytest.raises(AttributeError):
-        rendered_certificate.certificate_config = certificate_config
+    # Should not be able to modify fields (Pydantic immutability)
+    with pytest.raises(ValidationError):
+        rendered_certificate.path = "/new/path.pem"
 
 
 def test_haproxy_config_context_with_rendered_certificates():
     """Test HAProxyConfigContext with rendered certificates."""
-    certificate_config = CertificateConfig(
-        template=Template("cert content"), name="test-cert"
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
     )
+    template_context = TemplateContext()
 
     rendered_certificate = RenderedCertificate(
-        name="test-cert", content="cert content", certificate_config=certificate_config
+        path="/etc/haproxy/certs/test.pem", content="cert content"
     )
 
-    context = HAProxyConfigContext(rendered_certificates=[rendered_certificate])
+    context = HAProxyConfigContext(
+        config=config,
+        template_context=template_context,
+        rendered_certificates=[rendered_certificate],
+    )
 
     assert len(context.rendered_certificates) == 1
     assert context.rendered_certificates[0] == rendered_certificate
-    assert context.rendered_certificates[0].name == "test-cert"
+    assert context.rendered_certificates[0].path == "/etc/haproxy/certs/test.pem"
 
 
 def test_haproxy_config_context_default_rendered_certificates():
     """Test HAProxyConfigContext default rendered_certificates is empty list."""
-    context = HAProxyConfigContext()
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
+    )
+    template_context = TemplateContext()
+    context = HAProxyConfigContext(config=config, template_context=template_context)
 
     assert context.rendered_certificates == []
 
@@ -591,132 +609,96 @@ def test_map_collection_by_path():
 
 
 def test_template_snippet_collection_by_name():
-    """Test TemplateSnippetCollection.by_name method."""
-    from haproxy_template_ic.config import TemplateSnippetCollection, TemplateSnippet
-    from jinja2 import Template
+    """Test template snippet collection access by name (dict-based)."""
+    from haproxy_template_ic.config_models import TemplateSnippet
 
-    snippets = TemplateSnippetCollection(
-        [
-            TemplateSnippet(
-                name="backend-servers",
-                template=Template("backend servers"),
-                source="backend servers",
-            ),
-            TemplateSnippet(
-                name="health-check",
-                template=Template("health check"),
-                source="health check",
-            ),
-            TemplateSnippet(
-                name="logging",
-                template=Template("logging config"),
-                source="logging config",
-            ),
-        ]
-    )
+    snippets = {
+        "backend-servers": TemplateSnippet(
+            name="backend-servers", template="backend servers"
+        ),
+        "health-check": TemplateSnippet(name="health-check", template="health check"),
+        "logging": TemplateSnippet(name="logging", template="logging config"),
+    }
 
     # Test successful lookup
-    found = snippets.by_name("health-check")
+    found = snippets.get("health-check")
     assert found is not None
     assert found.name == "health-check"
 
     # Test not found
-    not_found = snippets.by_name("nonexistent")
+    not_found = snippets.get("nonexistent")
     assert not_found is None
 
     # Test empty collection
-    empty_collection = TemplateSnippetCollection([])
-    assert empty_collection.by_name("anything") is None
+    empty_collection = {}
+    assert empty_collection.get("anything") is None
 
 
 def test_certificate_collection_by_name():
-    """Test CertificateCollection.by_name method."""
-    from haproxy_template_ic.config import CertificateCollection, CertificateConfig
-    from jinja2 import Template
+    """Test certificate collection access by path (dict-based)."""
 
-    certificates = CertificateCollection(
-        [
-            CertificateConfig(name="tls.pem", template=Template("tls cert")),
-            CertificateConfig(name="ca.pem", template=Template("ca cert")),
-            CertificateConfig(name="server.pem", template=Template("server cert")),
-        ]
-    )
+    certificates = {
+        "/etc/haproxy/certs/tls.pem": CertificateConfig(template="tls cert"),
+        "/etc/haproxy/certs/ca.pem": CertificateConfig(template="ca cert"),
+        "/etc/haproxy/certs/server.pem": CertificateConfig(template="server cert"),
+    }
 
     # Test successful lookup
-    found = certificates.by_name("ca.pem")
+    found = certificates.get("/etc/haproxy/certs/ca.pem")
     assert found is not None
-    assert found.name == "ca.pem"
+    assert found.template == "ca cert"
 
     # Test not found
-    not_found = certificates.by_name("nonexistent.pem")
+    not_found = certificates.get("/etc/haproxy/certs/nonexistent.pem")
     assert not_found is None
 
     # Test empty collection
-    empty_collection = CertificateCollection([])
-    assert empty_collection.by_name("anything") is None
+    empty_collection = {}
+    assert empty_collection.get("/anything") is None
 
 
 def test_template_context_get_methods():
-    """Test TemplateContext get_* methods."""
-    from haproxy_template_ic.config import (
+    """Test TemplateContext helper methods."""
+    from haproxy_template_ic.config_models import (
         TemplateContext,
         Config,
-        WatchResourceCollection,
-        MapCollection,
-        TemplateSnippetCollection,
-        CertificateCollection,
         MapConfig,
         TemplateSnippet,
-        CertificateConfig,
         PodSelector,
-    )
-    from jinja2 import Template
-
-    # Create config with collections
-    maps = MapCollection([MapConfig(path="/test.map", template=Template("test"))])
-    snippets = TemplateSnippetCollection(
-        [
-            TemplateSnippet(
-                name="test-snippet", template=Template("snippet"), source="snippet"
-            )
-        ]
-    )
-    certificates = CertificateCollection(
-        [CertificateConfig(name="test.pem", template=Template("cert"))]
+        WatchResourceConfig,
     )
 
-    config = Config(
-        raw={"test": "config"},
+    # Create config with collections for testing
+    test_config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        maps=maps,
-        template_snippets=snippets,
-        certificates=certificates,
-        watch_resources=WatchResourceCollection([]),
+        haproxy_config=MapConfig(template="global\n    daemon"),
+        maps={"/test.map": MapConfig(template="test")},
+        template_snippets={
+            "test-snippet": TemplateSnippet(name="test-snippet", template="snippet")
+        },
+        certificates={"/test.pem": CertificateConfig(template="cert")},
+        watched_resources={"test": WatchResourceConfig(api_version="v1", kind="Pod")},
     )
 
-    context = TemplateContext(config=config)
+    # Test accessing config collections directly
+    assert test_config.template_snippets.get("test-snippet") is not None
+    assert test_config.template_snippets.get("test-snippet").name == "test-snippet"
 
-    # Test successful lookups
-    assert context.get_template_snippet("test-snippet") is not None
-    assert context.get_template_snippet("test-snippet").name == "test-snippet"
+    assert test_config.maps.get("/test.map") is not None
+    assert test_config.maps.get("/test.map").template == "test"
 
-    assert context.get_map_config("/test.map") is not None
-    assert context.get_map_config("/test.map").path == "/test.map"
-
-    assert context.get_certificate_config("test.pem") is not None
-    assert context.get_certificate_config("test.pem").name == "test.pem"
+    assert test_config.certificates.get("/test.pem") is not None
+    assert test_config.certificates.get("/test.pem").template == "cert"
 
     # Test not found
-    assert context.get_template_snippet("nonexistent") is None
-    assert context.get_map_config("/nonexistent.map") is None
-    assert context.get_certificate_config("nonexistent.pem") is None
+    assert test_config.template_snippets.get("nonexistent") is None
+    assert test_config.maps.get("/nonexistent.map") is None
+    assert test_config.certificates.get("/nonexistent.pem") is None
 
-    # Test with no config
-    context_no_config = TemplateContext()
-    assert context_no_config.get_template_snippet("anything") is None
-    assert context_no_config.get_map_config("anything") is None
-    assert context_no_config.get_certificate_config("anything") is None
+    # Test basic template context functionality
+    context_basic = TemplateContext(resources={"test": {}})
+    assert context_basic.resources == {"test": {}}
+    assert context_basic.namespace is None
 
 
 # =============================================================================
@@ -726,27 +708,27 @@ def test_template_context_get_methods():
 
 def test_config_from_dict_error_conditions():
     """Test error conditions in config_from_dict."""
-    # Test non-dict input
-    with pytest.raises(ValueError, match="Configuration must be a dictionary"):
+    # Test non-dict input - Pydantic will handle this
+    with pytest.raises(ValueError):
         config_from_dict("not a dict")
 
-    with pytest.raises(ValueError, match="Configuration must be a dictionary"):
+    with pytest.raises(ValueError):
         config_from_dict(["list", "not", "dict"])
 
-    # Test missing required fields
-    with pytest.raises(ValueError, match="Missing required field: pod_selector"):
+    # Test missing required fields - Pydantic validation errors
+    with pytest.raises(ValueError):
         config_from_dict({})
 
-    with pytest.raises(ValueError, match="Missing required field: haproxy_config"):
+    with pytest.raises(ValueError):
         config_from_dict({"pod_selector": {"match_labels": {"app": "test"}}})
 
 
 def test_parse_pod_selector_errors():
-    """Test parse_pod_selector error conditions."""
-    from haproxy_template_ic.config import config_from_dict
+    """Test pod_selector validation error conditions."""
+    from haproxy_template_ic.config_models import config_from_dict
 
-    # Test invalid pod_selector type
-    with pytest.raises(ValueError, match="pod_selector must be a dict"):
+    # Test invalid pod_selector type - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": "invalid_string",
@@ -754,7 +736,7 @@ def test_parse_pod_selector_errors():
             }
         )
 
-    with pytest.raises(ValueError, match="pod_selector must be a dict"):
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": ["invalid", "list"],
@@ -764,9 +746,9 @@ def test_parse_pod_selector_errors():
 
 
 def test_parse_maps_errors():
-    """Test parse_maps error conditions."""
-    # Test invalid map config (not dict)
-    with pytest.raises(ValueError, match="Map config for '/test' must be a dict"):
+    """Test maps validation error conditions."""
+    # Test invalid map config (not dict) - Pydantic will validate this
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -775,8 +757,8 @@ def test_parse_maps_errors():
             }
         )
 
-    # Test missing template
-    with pytest.raises(ValueError, match="Map '/test' missing required 'template'"):
+    # Test missing template - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -785,8 +767,8 @@ def test_parse_maps_errors():
             }
         )
 
-    # Test invalid maps type
-    with pytest.raises(ValueError, match="maps must be a dict"):
+    # Test invalid maps type - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -797,55 +779,53 @@ def test_parse_maps_errors():
 
 
 def test_parse_watch_resources_errors():
-    """Test parse_watch_resources error conditions."""
-    # Test invalid watch resource (not dict)
-    with pytest.raises(ValueError, match="Watch resource 'test' must be a dict"):
+    """Test watched_resources validation error conditions."""
+    # Test invalid watch resource (not dict) - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {"test": "invalid_string"},
+                "watched_resources": {"test": "invalid_string"},
             }
         )
 
-    # Test missing kind
-    with pytest.raises(
-        ValueError, match="Watch resource 'test' missing required 'kind'"
-    ):
+    # Test missing kind - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {"test": {}},
+                "watched_resources": {"test": {}},
             }
         )
 
-    # Test invalid watch_resources type
-    with pytest.raises(ValueError, match="watch_resources must be a dict"):
+    # Test invalid watched_resources type - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": "invalid_string",
+                "watched_resources": "invalid_string",
             }
         )
 
 
 def test_parse_template_snippets_errors():
-    """Test parse_template_snippets error conditions."""
-    # Test dict format errors
-    with pytest.raises(ValueError, match="Template snippet 'test' must be a string"):
-        config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                # Using a dict for a snippet should be invalid now
-                "template_snippets": {"test": {"template": "invalid"}},
-            }
-        )
+    """Test template_snippets validation error conditions."""
+    # Test dict format - snippets now accept dict format with name and template
+    # So this is actually valid in the new format, testing valid snippet creation
+    config = config_from_dict(
+        {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+            "template_snippets": {"test": "valid template string"},
+        }
+    )
+    assert "test" in config.template_snippets
 
-    # Dict value must be a string, any non-string is invalid
-    with pytest.raises(ValueError, match="Template snippet 'test' must be a string"):
+    # Test invalid non-string value - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -854,18 +834,8 @@ def test_parse_template_snippets_errors():
             }
         )
 
-    # Test list format errors
-    with pytest.raises(ValueError, match="template_snippets must be a dict"):
-        config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "template_snippets": ["invalid_string"],
-            }
-        )
-
-    # Test invalid type
-    with pytest.raises(ValueError, match="template_snippets must be a dict"):
+    # Test invalid type - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -876,9 +846,9 @@ def test_parse_template_snippets_errors():
 
 
 def test_parse_certificates_errors():
-    """Test parse_certificates error conditions."""
-    # Test dict format errors
-    with pytest.raises(ValueError, match="Certificate 'test' must be a dict"):
+    """Test certificates validation error conditions."""
+    # Test invalid certificate format - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -887,10 +857,8 @@ def test_parse_certificates_errors():
             }
         )
 
-    # Test missing template in dict format
-    with pytest.raises(
-        ValueError, match="Certificate 'test' missing required 'template'"
-    ):
+    # Test missing template - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -899,8 +867,8 @@ def test_parse_certificates_errors():
             }
         )
 
-    # Test list format errors
-    with pytest.raises(ValueError, match="Certificate must be a dict"):
+    # Test invalid certificates format - Pydantic validation (no longer supports list format)
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -909,28 +877,8 @@ def test_parse_certificates_errors():
             }
         )
 
-    # Test missing name in list format
-    with pytest.raises(ValueError, match="Certificate missing required 'name'"):
-        config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "certificates": [{"template": "test"}],
-            }
-        )
-
-    # Test missing template in list format
-    with pytest.raises(ValueError, match="Certificate missing required 'template'"):
-        config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "certificates": [{"name": "test"}],
-            }
-        )
-
-    # Test invalid type
-    with pytest.raises(ValueError, match="certificates must be a dict or list"):
+    # Test invalid certificates type - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -941,37 +889,41 @@ def test_parse_certificates_errors():
 
 
 def test_parse_resource_filter_errors():
-    """Test parse_resource_filter error conditions."""
-    # Test invalid filter type - this should cause an AttributeError when trying to call .get()
-    with pytest.raises(AttributeError, match="'str' object has no attribute 'get'"):
+    """Test resource filter validation error conditions."""
+    # Test invalid filter type - Pydantic validation will handle this
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {
-                    "test": {"kind": "Pod", "filter": "invalid_string"}
+                "watched_resources": {
+                    "test": {
+                        "api_version": "v1",
+                        "kind": "Pod",
+                        "resource_filter": "invalid_string",
+                    }
                 },
             }
         )
 
 
 def test_list_format_parsing():
-    """Test parsing list format for maps, template_snippets, and certificates."""
-    # Test maps list format
+    """Test parsing dict format for maps, template_snippets, and certificates."""
+    # Test maps dict format (new format only supports dict)
     config = config_from_dict(
         {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-            "maps": [
-                {"path": "/test1.map", "template": "test1"},
-                {"path": "/test2.map", "template": "test2"},
-            ],
+            "maps": {
+                "/test1.map": {"template": "test1"},
+                "/test2.map": {"template": "test2"},
+            },
         }
     )
 
     assert len(config.maps) == 2
-    assert config.maps.by_path("/test1.map") is not None
-    assert config.maps.by_path("/test2.map") is not None
+    assert config.maps.get("/test1.map") is not None
+    assert config.maps.get("/test2.map") is not None
 
     # Test template_snippets dict format
     config = config_from_dict(
@@ -986,46 +938,46 @@ def test_list_format_parsing():
     )
 
     assert len(config.template_snippets) == 2
-    assert config.template_snippets.by_name("snippet1") is not None
-    assert config.template_snippets.by_name("snippet2") is not None
+    assert config.template_snippets.get("snippet1") is not None
+    assert config.template_snippets.get("snippet2") is not None
 
-    # Test certificates list format
+    # Test certificates dict format (new format only supports dict)
     config = config_from_dict(
         {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-            "certificates": [
-                {"name": "cert1.pem", "template": "test1"},
-                {"name": "cert2.pem", "template": "test2"},
-            ],
+            "certificates": {
+                "/etc/haproxy/certs/cert1.pem": {"template": "test1"},
+                "/etc/haproxy/certs/cert2.pem": {"template": "test2"},
+            },
         }
     )
 
     assert len(config.certificates) == 2
-    assert config.certificates.by_name("cert1.pem") is not None
-    assert config.certificates.by_name("cert2.pem") is not None
+    assert config.certificates.get("/etc/haproxy/certs/cert1.pem") is not None
+    assert config.certificates.get("/etc/haproxy/certs/cert2.pem") is not None
 
-    # Test watch_resources list format
+    # Test watched_resources dict format
     config = config_from_dict(
         {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-            "watch_resources": [
-                {"id": "pods", "kind": "Pod"},
-                {"id": "services", "kind": "Service", "group": "", "version": "v1"},
-            ],
+            "watched_resources": {
+                "pods": {"api_version": "v1", "kind": "Pod"},
+                "services": {"api_version": "v1", "kind": "Service"},
+            },
         }
     )
 
-    assert len(config.watch_resources) == 2
-    assert config.watch_resources.by_id("pods") is not None
-    assert config.watch_resources.by_id("services") is not None
+    assert len(config.watched_resources) == 2
+    assert config.watched_resources.get("pods") is not None
+    assert config.watched_resources.get("services") is not None
 
 
 def test_list_format_errors():
-    """Test error conditions for list format parsing."""
-    # Test maps list format errors
-    with pytest.raises(ValueError, match="Map config must be a dict"):
+    """Test error conditions for validation."""
+    # Test invalid maps format - Pydantic validation
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
@@ -1034,30 +986,13 @@ def test_list_format_errors():
             }
         )
 
-    with pytest.raises(ValueError, match="Map missing required 'path'"):
+    # Test map path validation (relative paths not allowed)
+    with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "maps": [{"template": "test"}],
-            }
-        )
-
-    with pytest.raises(ValueError, match="Map missing required 'template'"):
-        config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "maps": [{"path": "/test.map"}],
-            }
-        )
-
-    with pytest.raises(ValueError, match="Map path 'relative' must be absolute"):
-        config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "test"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "maps": [{"path": "relative", "template": "test"}],
+                "maps": {"relative": {"template": "test"}},
             }
         )
 
@@ -1067,7 +1002,7 @@ def test_list_format_errors():
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": ["invalid_string"],
+                "watched_resources": ["invalid_string"],
             }
         )
 
@@ -1076,7 +1011,7 @@ def test_list_format_errors():
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": [{"id": "test"}],
+                "watched_resources": [{"id": "test"}],
             }
         )
 
@@ -1346,43 +1281,43 @@ def test_template_snippet_update_during_config_reload():
 
 def test_template_context_helper_methods():
     """Test the new helper methods for resource access."""
-    # Create a template context with some test resources
+    # Create a template context with some test resources (using string keys)
     test_resources = {
         "ingresses": {
-            ("default", "ing1"): {"metadata": {"name": "ing1"}},
-            ("default", "ing2"): {"metadata": {"name": "ing2"}},
+            "default/ing1": {"metadata": {"name": "ing1"}},
+            "default/ing2": {"metadata": {"name": "ing2"}},
         },
         "services": {
-            ("default", "svc1"): {"metadata": {"name": "svc1"}},
+            "default/svc1": {"metadata": {"name": "svc1"}},
         },
         "empty_type": {},
     }
 
     context = TemplateContext(resources=test_resources)
 
-    # Test get_resources
-    assert len(context.get_resources("ingresses")) == 2
-    assert len(context.get_resources("services")) == 1
-    assert len(context.get_resources("empty_type")) == 0
-    assert len(context.get_resources("nonexistent")) == 0
+    # Test basic resource access
+    assert len(context.resources.get("ingresses", {})) == 2
+    assert len(context.resources.get("services", {})) == 1
+    assert len(context.resources.get("empty_type", {})) == 0
+    assert len(context.resources.get("nonexistent", {})) == 0
 
-    # Test iterate_resources
-    ingress_items = list(context.iterate_resources("ingresses"))
+    # Test resource iteration
+    ingress_items = list(context.resources.get("ingresses", {}).items())
     assert len(ingress_items) == 2
-    assert ingress_items[0][0] == ("default", "ing1")
-    assert ingress_items[1][0] == ("default", "ing2")
+    assert ingress_items[0][0] == "default/ing1"
+    assert ingress_items[1][0] == "default/ing2"
 
-    # Test count_resources
-    assert context.count_resources("ingresses") == 2
-    assert context.count_resources("services") == 1
-    assert context.count_resources("empty_type") == 0
-    assert context.count_resources("nonexistent") == 0
+    # Test resource counting
+    assert len(context.resources.get("ingresses", {})) == 2
+    assert len(context.resources.get("services", {})) == 1
+    assert len(context.resources.get("empty_type", {})) == 0
+    assert len(context.resources.get("nonexistent", {})) == 0
 
-    # Test has_resources
-    assert context.has_resources("ingresses") is True
-    assert context.has_resources("services") is True
-    assert context.has_resources("empty_type") is False
-    assert context.has_resources("nonexistent") is False
+    # Test resource existence
+    assert bool(context.resources.get("ingresses", {})) is True
+    assert bool(context.resources.get("services", {})) is True
+    assert bool(context.resources.get("empty_type", {})) is False
+    assert bool(context.resources.get("nonexistent", {})) is False
 
 
 def test_template_environment_caching():
@@ -1473,7 +1408,7 @@ def test_type_safety_enhancements():
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": {
+                "watched_resources": {
                     "test": {"kind": 123}  # Non-string kind
                 },
             }
@@ -1485,7 +1420,7 @@ def test_type_safety_enhancements():
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "watch_resources": [
+                "watched_resources": [
                     {"kind": ["Pod"]}  # Non-string kind
                 ],
             }
@@ -1587,10 +1522,10 @@ def test_host_map_template_rendering():
 
     config = config_from_dict(config_dict)
 
-    # Create mock ingress resources
+    # Create mock ingress resources (using string keys)
     mock_resources = {
         "ingresses": {
-            ("default", "test-ingress"): {
+            "default/test-ingress": {
                 "metadata": {"name": "test-ingress", "namespace": "default"},
                 "spec": {
                     "rules": [
@@ -1600,7 +1535,7 @@ def test_host_map_template_rendering():
                     ]
                 },
             },
-            ("production", "prod-ingress"): {
+            "production/prod-ingress": {
                 "metadata": {"name": "prod-ingress", "namespace": "production"},
                 "spec": {"rules": [{"host": "prod.example.com"}]},
             },

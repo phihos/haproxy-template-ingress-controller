@@ -33,7 +33,10 @@ from haproxy_template_ic.tracing import (
 )
 
 from haproxy_template_ic.config_models import (
+    Config,
     HAProxyConfigContext,
+    MapConfig,
+    PodSelector,
     RenderedCertificate,
     RenderedConfig,
     RenderedMap,
@@ -613,7 +616,13 @@ def create_operator_memo(cli_options: Any) -> Any:
             stop_flag=stop_flag,
             cli_options=cli_options,
             config_reload_flag=config_reload_flag,
-            haproxy_config_context=HAProxyConfigContext(),
+            haproxy_config_context=HAProxyConfigContext(
+                config=Config(
+                    pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+                    haproxy_config=MapConfig(template="# Initial config"),
+                ),
+                template_context=TemplateContext(),
+            ),
         ),
         loop,
         stop_flag,
