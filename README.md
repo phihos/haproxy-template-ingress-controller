@@ -273,6 +273,8 @@ The controller supports configuration via CLI options or environment variables:
 
 #### Logging Configuration
 
+The controller uses [structlog](https://www.structlog.org/) for high-performance structured logging with automatic context injection.
+
 **Plain Text Mode** (default): Context fields appended in logfmt format:
 ```bash
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
@@ -280,7 +282,7 @@ kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="VERBOSE=2"
 ```
 
-**JSON Mode**: Structured JSON output for log aggregation:
+**JSON Mode**: Structured JSON output for log aggregation systems:
 ```bash
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-config" \
