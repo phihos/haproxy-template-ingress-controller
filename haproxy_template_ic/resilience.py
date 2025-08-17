@@ -124,7 +124,7 @@ def categorize_error(error: Exception) -> ErrorCategory:
                 return ErrorCategory.CLIENT_ERROR
         except (AttributeError, TypeError):
             # Handle cases where response mock doesn't have proper status_code
-            return ErrorCategory.SERVER_ERROR
+            return ErrorCategory.UNKNOWN
 
     if isinstance(error, httpx.ConnectError):
         return ErrorCategory.NETWORK
@@ -171,8 +171,9 @@ class CircuitBreakerWrapper:
             # Check if recovery timeout has passed
             if (
                 hasattr(self, "last_failure_time")
-                and time.time() - self.last_failure_time > 60
-            ):  # default recovery
+                and time.time() - self.last_failure_time
+                > self.circuit_config.recovery_timeout
+            ):
                 self._state = CircuitState.HALF_OPEN
                 self.success_count = 0
                 return True
@@ -221,7 +222,15 @@ class CircuitBreakerWrapper:
 
     async def call(self, operation: Callable[[], Awaitable[T]]) -> T:
         """Call operation through the circuit breaker."""
-        return await self.aio_breaker.call(operation)
+        try:
+            result = await self.aio_breaker.call(operation)
+            # Success - update wrapper state tracking for test compatibility
+            self.record_success()
+            return result
+        except Exception:
+            # Failure - update wrapper state tracking for test compatibility
+            self.record_failure()
+            raise
 
     @property
     def current_state(self) -> str:
@@ -401,12 +410,9 @@ def get_resilient_operator() -> ResilientOperator:
     return _resilient_operator
 
 
-# Backward compatibility aliases for classes that were removed
-
-
-# Create proper CircuitBreaker for backward compatibility
+# Backward compatibility adapter for CircuitBreaker
 class CircuitBreaker:
-    """Circuit breaker implementation for backward compatibility with tests."""
+    """Circuit breaker adapter for backward compatibility with tests."""
 
     def __init__(
         self,
@@ -414,88 +420,80 @@ class CircuitBreaker:
         config: CircuitBreakerConfig,
         timeout_config: Optional[TimeoutConfig] = None,
     ):
-        self.name = name
-        self.config = config
-        self.timeout_config = timeout_config or TimeoutConfig()
-
-        # Create underlying aiobreaker instance for production use
-        self.aio_breaker = AIOCircuitBreaker(
+        # Create underlying aiobreaker instance
+        aio_breaker = AIOCircuitBreaker(
             fail_max=config.failure_threshold,
             timeout_duration=config.recovery_timeout,
             name=name,
         )
 
-        # Manual state tracking for test compatibility
-        self._state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.success_count = 0
-        self.last_failure_time = 0.0
-        self.current_timeout = self.timeout_config.initial_timeout
+        # Create the wrapper with proper parameter order
+        self._wrapper = CircuitBreakerWrapper(
+            aio_breaker=aio_breaker,
+            timeout_config=timeout_config,
+            circuit_config=config,
+        )
 
+        # Store config for test compatibility
+        self.name = name
+        self.config = config
+        self.timeout_config = timeout_config or TimeoutConfig()
+
+    # Delegate all properties and methods to the wrapper
     @property
     def state(self) -> CircuitState:
-        """Get current circuit breaker state."""
-        return self._state
+        return self._wrapper.state
 
     @state.setter
     def state(self, value: CircuitState) -> None:
-        """Set circuit breaker state (for test compatibility)."""
-        self._state = value
+        self._wrapper.state = value
+
+    @property
+    def failure_count(self) -> int:
+        return self._wrapper.failure_count
+
+    @failure_count.setter
+    def failure_count(self, value: int) -> None:
+        self._wrapper.failure_count = value
+
+    @property
+    def success_count(self) -> int:
+        return self._wrapper.success_count
+
+    @success_count.setter
+    def success_count(self, value: int) -> None:
+        self._wrapper.success_count = value
+
+    @property
+    def last_failure_time(self) -> float:
+        return self._wrapper.last_failure_time
+
+    @last_failure_time.setter
+    def last_failure_time(self, value: float) -> None:
+        self._wrapper.last_failure_time = value
+
+    @property
+    def current_timeout(self) -> float:
+        return self._wrapper.current_timeout
+
+    @current_timeout.setter
+    def current_timeout(self, value: float) -> None:
+        self._wrapper.current_timeout = value
 
     def can_execute(self) -> bool:
-        """Check if operation can be executed based on circuit state."""
-        if self._state == CircuitState.OPEN:
-            # Check if recovery timeout has passed
-            if time.time() - self.last_failure_time > self.config.recovery_timeout:
-                self._state = CircuitState.HALF_OPEN
-                self.success_count = 0
-                return True
-            return False
-        return True
+        return self._wrapper.can_execute()
 
     def record_success(self) -> None:
-        """Record a successful operation."""
-        if self._state == CircuitState.HALF_OPEN:
-            self.success_count += 1
-            if self.success_count >= self.config.success_threshold:
-                self._state = CircuitState.CLOSED
-                self.failure_count = 0
-
-        if self._state == CircuitState.CLOSED:
-            self.failure_count = 0  # Reset failure count on success
-
-        # Adjust timeout downward on success
-        self.current_timeout = max(
-            self.timeout_config.initial_timeout,
-            self.current_timeout * self.timeout_config.success_timeout_reduction,
-        )
+        self._wrapper.record_success()
 
     def record_failure(self) -> None:
-        """Record a failed operation."""
-        self.failure_count += 1
-        self.last_failure_time = time.time()
-
-        # Adjust timeout upward on failure
-        self.current_timeout = min(
-            self.timeout_config.max_timeout,
-            self.timeout_config.absolute_max_timeout,
-            self.current_timeout * self.timeout_config.timeout_multiplier,
-        )
-
-        if self._state == CircuitState.CLOSED:
-            if self.failure_count >= self.config.failure_threshold:
-                self._state = CircuitState.OPEN
-        elif self._state == CircuitState.HALF_OPEN:
-            self._state = CircuitState.OPEN
+        self._wrapper.record_failure()
 
     def get_adaptive_timeout(self) -> Optional[float]:
-        """Get the current adaptive timeout if available."""
-        return self.current_timeout
+        return self._wrapper.get_adaptive_timeout()
 
     async def call(self, operation: Callable[[], Awaitable[T]]) -> T:
-        """Call operation through the circuit breaker."""
-        # For production use, delegate to aiobreaker
-        return await self.aio_breaker.call(operation)
+        return await self._wrapper.call(operation)
 
 
 class AdaptiveTimeoutManager:
