@@ -892,6 +892,67 @@ Follow the style guide in `STYLEGUIDE.md`:
 
 ## Development Workflow
 
+### Standard Feature Development Process
+
+When implementing new features or refactoring existing code, follow this standardized workflow:
+
+1. **Create feature branch**:
+   ```bash
+   git checkout -b feature/descriptive-branch-name
+   # or for refactoring:
+   git checkout -b refactor/descriptive-branch-name
+   ```
+
+2. **Plan and implement changes**:
+   - Use TodoWrite tool to create a structured task list for complex tasks
+   - Implement changes incrementally with regular testing
+   - Maintain backward compatibility whenever possible
+   - Run tests frequently during development: `uv run pytest -m "not integration and not acceptance"`
+
+3. **Comprehensive testing**:
+   ```bash
+   # Run all unit tests
+   uv run pytest -m "not integration and not acceptance"
+   
+   # Run integration tests if changes affect external dependencies
+   uv run pytest -m integration
+   
+   # Run acceptance tests for major changes
+   uv run pytest -m acceptance
+   ```
+
+4. **Code quality checks**:
+   ```bash
+   # Format and lint code
+   uv run ruff format
+   uv run ruff check --fix
+   
+   # Type checking (optional but recommended)
+   uv run mypy haproxy_template_ic/
+   ```
+
+5. **Commit changes**:
+   ```bash
+   git add .
+   git commit -m "feat: descriptive commit message following conventional commits"
+   ```
+
+6. **Create pull request**:
+   ```bash
+   git push -u origin feature/descriptive-branch-name
+   gh pr create --title "feat: descriptive title" --body "Detailed description of changes"
+   ```
+
+7. **Address code review feedback**:
+   - Implement suggestions from code review
+   - Push additional commits to the same branch
+   - Re-run tests and quality checks as needed
+
+8. **Merge and cleanup**:
+   - Merge PR when approved
+   - Delete feature branch after successful merge
+   - Update local main branch: `git checkout main && git pull origin main`
+
 ### Local Development with kind
 
 1. **Setup development environment**:
