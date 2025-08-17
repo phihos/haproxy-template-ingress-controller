@@ -533,9 +533,18 @@ class ConfigSynchronizer:
         """Validate configuration on a single instance with circuit breaking."""
         circuit_name = f"validation_{instance.name}"
 
+        # Wrapper function that treats validation failure as an exception
+        async def validation_operation():
+            is_valid = await client.validate_configuration(config)
+            if not is_valid:
+                raise ValidationError(
+                    f"Configuration validation failed on {instance.name}"
+                )
+            return is_valid
+
         # Use resilient operation with circuit breaking for validation
         result = await self.resilient_operator.execute_with_retry(
-            operation=lambda: client.validate_configuration(config),
+            operation=validation_operation,
             operation_name=f"validate_config_{instance.name}",
             circuit_breaker_name=circuit_name,
             retry_policy=RetryPolicy(max_attempts=2, base_delay=1.0),
