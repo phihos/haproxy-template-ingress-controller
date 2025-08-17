@@ -114,7 +114,9 @@ class TestConfigSchemaExport:
 
         errors = validate_config_against_schema(invalid_config)
         assert len(errors) > 0
-        assert any("match_labels cannot be empty" in error for error in errors)
+        assert any(
+            "Dictionary should have at least 1 item" in error for error in errors
+        )
 
     def test_validate_config_against_schema_missing_required(self):
         """Test config validation with missing required fields."""
@@ -422,7 +424,7 @@ class TestSchemaIntegration:
         schema = export_config_schema(include_examples=True)
 
         # Get example from schema
-        examples = schema.get("json_schema_extra", {}).get("examples", [])
+        examples = schema.get("examples", [])
         assert len(examples) > 0
 
         example_config = examples[0]

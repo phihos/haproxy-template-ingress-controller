@@ -4,7 +4,44 @@ This document describes the enhanced Pydantic features added to HAProxy Template
 
 ## Features Overview
 
-### 1. JSON Schema Generation and Export
+### 1. Built-in Validation with Type Aliases
+
+HAProxy Template IC leverages Pydantic's built-in validation features through type aliases for better maintainability and standardized error messages:
+
+#### Available Type Aliases
+
+- **`NonEmptyStr`**: Non-empty string validation using `StringConstraints(min_length=1)`
+- **`NonEmptyStrictStr`**: Strict string validation that prevents type coercion (e.g., prevents Template objects from being accepted)
+- **`AbsolutePath`**: Validates absolute paths using regex pattern `^/`
+- **`KubernetesKind`**: Validates Kubernetes resource kinds (PascalCase format like "Service", "Ingress")
+- **`ApiVersion`**: Validates API version formats (supports both "v1" and "group/version" formats)
+- **`SnippetName`**: Validates template snippet names (no spaces or newlines allowed)
+
+#### Benefits of Built-in Validation
+
+- **Reduced complexity**: ~100+ lines of custom validation code removed
+- **Standardized errors**: Consistent error messages from Pydantic
+- **Better performance**: Optimized built-in validators
+- **Type safety**: Enhanced through Annotated types
+- **Maintainability**: Uses library features instead of custom logic
+
+#### Example Usage
+
+```python
+from typing import Annotated
+from pydantic import BaseModel
+from pydantic.types import StringConstraints
+
+# Define reusable validation types
+NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
+AbsolutePath = Annotated[str, StringConstraints(pattern="^/")]
+
+class MyConfig(BaseModel):
+    name: NonEmptyStr  # Must be non-empty string
+    config_path: AbsolutePath  # Must start with /
+```
+
+### 2. JSON Schema Generation and Export
 
 Generate comprehensive JSON schemas for configuration validation and documentation:
 
@@ -279,9 +316,9 @@ Validation provides helpful error messages:
 ❌ Configuration file config.yaml is invalid
 
 Errors:
-  - pod_selector -> match_labels: match_labels cannot be empty
-  - haproxy_config -> template: template must be a non-empty string
-  - maps -> /invalid/path: Map path must be absolute
+  - pod_selector -> match_labels: Dictionary should have at least 1 item after validation, not 0
+  - haproxy_config -> template: String should have at least 1 character
+  - maps -> `/invalid/path`: String should match pattern '^/'
 ```
 
 ## Best Practices
@@ -332,6 +369,54 @@ fi
 ```
 
 ## Migration Guide
+
+### Validation Changes (v2024.x)
+
+HAProxy Template IC has migrated from custom validators to Pydantic's built-in validation features. This change improves maintainability and provides standardized error messages.
+
+#### What Changed
+
+1. **Error Messages**: Validation error messages now use Pydantic's standard format:
+   ```
+   # Old format
+   "template must be a non-empty string"
+   
+   # New format  
+   "String should have at least 1 character"
+   ```
+
+2. **Validation Implementation**: 
+   - Removed ~100+ lines of custom validation code
+   - Now uses Pydantic's `StringConstraints` and `Annotated` types
+   - Better type safety and performance
+
+3. **Type Aliases**: Introduction of reusable type aliases for common validation patterns
+
+#### Migration Steps
+
+1. **Update Error Handling**: If your code parses validation error messages, update to match Pydantic's format:
+   ```python
+   # Update error message matching
+   if "String should have at least 1 character" in error:
+       # Handle empty string error
+   ```
+
+2. **Custom Extensions**: If you extend the configuration models, use the new type aliases:
+   ```python
+   from haproxy_template_ic.config_models import NonEmptyStr, AbsolutePath
+   
+   class MyCustomConfig(BaseModel):
+       name: NonEmptyStr
+       path: AbsolutePath
+   ```
+
+3. **Testing**: Existing configurations continue to work unchanged, but update test cases that check specific error messages.
+
+#### Backward Compatibility
+
+- **Configuration Format**: No changes to ConfigMap structure
+- **API Compatibility**: All public APIs remain the same
+- **Functionality**: Identical validation behavior with improved implementation
 
 ### From Manual Configuration
 

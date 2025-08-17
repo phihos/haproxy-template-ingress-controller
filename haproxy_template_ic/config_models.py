@@ -3,12 +3,64 @@ Pydantic models for HAProxy Template IC configuration.
 
 This module contains all configuration models using Pydantic for automatic
 validation, type coercion, and enhanced developer experience.
+
+## Type Aliases and Validation
+
+This module leverages Pydantic's built-in features for validation instead of
+custom validators, providing better maintainability and standardized error messages:
+
+- NonEmptyStr: Non-empty string validation using StringConstraints(min_length=1)
+- NonEmptyStrictStr: Strict string validation preventing type coercion
+- AbsolutePath: Path validation using regex pattern "^/"
+- KubernetesKind: Kubernetes resource kind validation (PascalCase)
+- ApiVersion: API version format validation (supports "v1" and "group/version")
+- SnippetName: Template snippet name validation (no spaces/newlines)
+
+## Benefits of Built-in Validation
+
+- Reduced code complexity (~100+ lines of custom validators removed)
+- Standardized error messages from Pydantic
+- Better type safety through Annotated types
+- Improved performance using optimized built-in validators
+- Enhanced maintainability using library features
 """
 
-from typing import Any, Dict, List, Optional
+from functools import cached_property
+from typing import Annotated, Any, Dict, List, Optional
 
 from jinja2 import Template
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.types import StringConstraints
+
+
+# =============================================================================
+# Type Aliases for Common Validation Patterns
+# =============================================================================
+
+# Non-empty string validation
+NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
+
+# Non-empty strict string for template validation (prevents Template objects)
+NonEmptyStrictStr = Annotated[str, StringConstraints(min_length=1, strict=True)]
+
+# Absolute path validation
+AbsolutePath = Annotated[str, StringConstraints(pattern="^/")]
+
+# Kubernetes kind validation (PascalCase starting with uppercase)
+KubernetesKind = Annotated[
+    str, StringConstraints(min_length=1, pattern="^[A-Z][a-zA-Z0-9]*$")
+]
+
+# API version validation (supports both 'v1' and 'group/version' formats)
+ApiVersion = Annotated[
+    str,
+    StringConstraints(
+        min_length=1, pattern="^([a-z0-9.-]+/)?v[0-9]+([a-z][a-z0-9]*)?$"
+    ),
+]
+
+# Template snippet name (no spaces or newlines)
+SnippetName = Annotated[str, StringConstraints(min_length=1, pattern="^[^\\s\\n]+$")]
 
 
 class ResourceFilter(BaseModel):
@@ -20,13 +72,6 @@ class ResourceFilter(BaseModel):
     label_selector: Optional[Dict[str, str]] = Field(
         None, description="Resource label selector"
     )
-
-    @field_validator("namespace_selector", "label_selector")
-    @classmethod
-    def validate_selector(cls, v):
-        if v is not None and not isinstance(v, dict):
-            raise ValueError("Selector must be a dictionary")
-        return v
 
     model_config = ConfigDict(
         frozen=True,
@@ -44,10 +89,10 @@ class ResourceFilter(BaseModel):
 class WatchResourceConfig(BaseModel):
     """Configuration for a Kubernetes resource to watch."""
 
-    api_version: str = Field(
+    api_version: ApiVersion = Field(
         ..., description="Kubernetes API version (e.g., 'v1', 'networking.k8s.io/v1')"
     )
-    kind: str = Field(
+    kind: KubernetesKind = Field(
         ..., description="Kubernetes resource kind (e.g., 'Service', 'Ingress')"
     )
     enable_validation_webhook: bool = Field(
@@ -57,29 +102,19 @@ class WatchResourceConfig(BaseModel):
         None, description="Optional resource filtering"
     )
 
-    @field_validator("api_version")
-    @classmethod
-    def validate_api_version(cls, v):
-        if not v or not isinstance(v, str):
-            raise ValueError("api_version must be a non-empty string")
-        # Basic format validation - should contain version info
-        if "/" in v:
-            group, version = v.rsplit("/", 1)
-            if not group or not version:
-                raise ValueError(
-                    "api_version format should be 'group/version' or just 'version'"
-                )
-        return v
+    @property
+    def group(self) -> str:
+        """Extract group from api_version."""
+        if "/" in self.api_version:
+            return self.api_version.rsplit("/", 1)[0]
+        return ""
 
-    @field_validator("kind")
-    @classmethod
-    def validate_kind(cls, v):
-        if not v or not isinstance(v, str):
-            raise ValueError("kind must be a non-empty string")
-        # Kind should be PascalCase
-        if not v[0].isupper():
-            raise ValueError("kind should start with uppercase letter (PascalCase)")
-        return v
+    @property
+    def version(self) -> str:
+        """Extract version from api_version."""
+        if "/" in self.api_version:
+            return self.api_version.rsplit("/", 1)[1]
+        return self.api_version
 
     class Config:
         # Allow arbitrary types for filters
@@ -89,27 +124,22 @@ class WatchResourceConfig(BaseModel):
 class MapConfig(BaseModel):
     """Configuration for HAProxy map files."""
 
-    template: str = Field(..., description="Jinja2 template for the map content")
-    compiled_template: Optional[Template] = Field(
-        None,
-        description="Compiled Jinja2 template (internal use)",
-        exclude=True,  # Exclude from serialization and schema generation
+    template: NonEmptyStrictStr = Field(
+        ..., description="Jinja2 template for the map content"
     )
 
-    @field_validator("template", mode="before")
-    @classmethod
-    def validate_template(cls, v):
-        # Handle both string templates and Template objects for backward compatibility
-        if isinstance(v, Template):
-            # For tests that pass Template objects directly, extract template string
-            # Template objects don't have source, so we create a dummy template string
-            return "template from Template object"
-        elif isinstance(v, str):
-            if not v:
-                raise ValueError("template must be a non-empty string")
-            return v
+    @cached_property
+    def compiled_template(self) -> Template:
+        """Lazily compile and cache the Jinja2 template."""
+        from .config import get_template_environment
+
+        # For maps, we need to check if we have access to snippets
+        # This will be provided by the parent Config when template snippets are available
+        if hasattr(self, "_parent_config") and self._parent_config:
+            env = get_template_environment(self._parent_config.template_snippets)
         else:
-            raise ValueError("template must be a string or Template object")
+            env = get_template_environment()
+        return env.from_string(self.template)
 
     class Config:
         # Allow Template objects (not JSON serializable but used internally)
@@ -119,30 +149,16 @@ class MapConfig(BaseModel):
 class TemplateSnippet(BaseModel):
     """Reusable template snippet."""
 
-    name: str = Field(..., description="Snippet name for {% include %}")
-    template: str = Field(..., description="Jinja2 template content")
-    compiled_template: Optional[Template] = Field(
-        None,
-        description="Compiled Jinja2 template (internal use)",
-        exclude=True,  # Exclude from serialization and schema generation
-    )
+    name: SnippetName = Field(..., description="Snippet name for {% include %}")
+    template: NonEmptyStrictStr = Field(..., description="Jinja2 template content")
 
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, v):
-        if not v or not isinstance(v, str):
-            raise ValueError("name must be a non-empty string")
-        # Basic validation for template include names
-        if " " in v or "\n" in v:
-            raise ValueError("name cannot contain spaces or newlines")
-        return v
+    @cached_property
+    def compiled_template(self) -> Template:
+        """Lazily compile and cache the Jinja2 template."""
+        from .config import get_template_environment
 
-    @field_validator("template")
-    @classmethod
-    def validate_template(cls, v):
-        if not isinstance(v, str):
-            raise ValueError("template must be a string")
-        return v
+        env = get_template_environment()
+        return env.from_string(self.template)
 
     class Config:
         # Allow Template objects (not JSON serializable but used internally)
@@ -152,19 +168,22 @@ class TemplateSnippet(BaseModel):
 class CertificateConfig(BaseModel):
     """Configuration for TLS certificates."""
 
-    template: str = Field(..., description="Jinja2 template for certificate content")
-    compiled_template: Optional[Template] = Field(
-        None,
-        description="Compiled Jinja2 template (internal use)",
-        exclude=True,  # Exclude from serialization and schema generation
+    template: NonEmptyStrictStr = Field(
+        ..., description="Jinja2 template for certificate content"
     )
 
-    @field_validator("template")
-    @classmethod
-    def validate_template(cls, v):
-        if not v or not isinstance(v, str):
-            raise ValueError("template must be a non-empty string")
-        return v
+    @cached_property
+    def compiled_template(self) -> Template:
+        """Lazily compile and cache the Jinja2 template."""
+        from .config import get_template_environment
+
+        # For certificates, we need to check if we have access to snippets
+        # This will be provided by the parent Config when template snippets are available
+        if hasattr(self, "_parent_config") and self._parent_config:
+            env = get_template_environment(self._parent_config.template_snippets)
+        else:
+            env = get_template_environment()
+        return env.from_string(self.template)
 
     class Config:
         # Allow Template objects (not JSON serializable but used internally)
@@ -175,18 +194,8 @@ class PodSelector(BaseModel):
     """Selector for HAProxy pods."""
 
     match_labels: Dict[str, str] = Field(
-        ..., description="Labels to match HAProxy pods"
+        ..., description="Labels to match HAProxy pods", min_length=1
     )
-
-    @field_validator("match_labels")
-    @classmethod
-    def validate_labels(cls, v):
-        if not v:
-            raise ValueError("match_labels cannot be empty")
-        for key, value in v.items():
-            if not isinstance(key, str) or not isinstance(value, str):
-                raise ValueError("All label keys and values must be strings")
-        return v
 
     class Config:
         frozen = True
@@ -203,33 +212,15 @@ class Config(BaseModel):
     watched_resources: Dict[str, WatchResourceConfig] = Field(
         default_factory=dict, description="Kubernetes resources to watch"
     )
-    maps: Dict[str, MapConfig] = Field(
+    maps: Dict[AbsolutePath, MapConfig] = Field(
         default_factory=dict, description="HAProxy map files"
     )
     template_snippets: Dict[str, TemplateSnippet] = Field(
         default_factory=dict, description="Reusable template snippets"
     )
-    certificates: Dict[str, CertificateConfig] = Field(
+    certificates: Dict[AbsolutePath, CertificateConfig] = Field(
         default_factory=dict, description="TLS certificates"
     )
-
-    @field_validator("maps")
-    @classmethod
-    def validate_map_paths(cls, v):
-        """Validate that map paths are absolute."""
-        for path in v.keys():
-            if not path.startswith("/"):
-                raise ValueError(f"Map path must be absolute: {path}")
-        return v
-
-    @field_validator("certificates")
-    @classmethod
-    def validate_cert_paths(cls, v):
-        """Validate that certificate paths are absolute."""
-        for path in v.keys():
-            if not path.startswith("/"):
-                raise ValueError(f"Certificate path must be absolute: {path}")
-        return v
 
     @field_validator("template_snippets")
     @classmethod
@@ -291,22 +282,44 @@ class Config(BaseModel):
         },
     )
 
+    def model_post_init(self, __context: Any) -> None:
+        """Set up parent relationships for template compilation with snippets."""
+        # Set parent reference for haproxy_config to access snippets
+        if hasattr(self.haproxy_config, "__dict__"):
+            self.haproxy_config.__dict__["_parent_config"] = self
+
+        # Set parent reference for all maps
+        for map_config in self.maps.values():
+            if hasattr(map_config, "__dict__"):
+                map_config.__dict__["_parent_config"] = self
+
+        # Set parent reference for all certificates
+        for cert_config in self.certificates.values():
+            if hasattr(cert_config, "__dict__"):
+                cert_config.__dict__["_parent_config"] = self
+
+    # Backward compatibility helper methods
+    def get_map(self, path: str) -> Optional["MapConfig"]:
+        """Get map configuration by path."""
+        return self.maps.get(path)
+
+    def get_certificate(self, path: str) -> Optional["CertificateConfig"]:
+        """Get certificate configuration by path."""
+        return self.certificates.get(path)
+
+    def get_template_snippet(self, name: str) -> Optional["TemplateSnippet"]:
+        """Get template snippet by name."""
+        return self.template_snippets.get(name)
+
 
 class RenderedMap(BaseModel):
     """Rendered HAProxy map file."""
 
-    path: str = Field(..., description="Absolute path to the map file")
+    path: AbsolutePath = Field(..., description="Absolute path to the map file")
     content: str = Field(..., description="Rendered map content")
     map_config: Optional["MapConfig"] = Field(
         None, description="Source map configuration"
     )
-
-    @field_validator("path")
-    @classmethod
-    def validate_path(cls, v):
-        if not v.startswith("/"):
-            raise ValueError("Map path must be absolute")
-        return v
 
     class Config:
         # Allow arbitrary types for MapConfig
@@ -317,14 +330,7 @@ class RenderedMap(BaseModel):
 class RenderedConfig(BaseModel):
     """Rendered HAProxy configuration."""
 
-    content: str = Field(..., description="Rendered configuration content")
-
-    @field_validator("content")
-    @classmethod
-    def validate_content(cls, v):
-        if not v or not isinstance(v, str):
-            raise ValueError("content must be a non-empty string")
-        return v
+    content: NonEmptyStr = Field(..., description="Rendered configuration content")
 
     class Config:
         frozen = True
@@ -333,15 +339,8 @@ class RenderedConfig(BaseModel):
 class RenderedCertificate(BaseModel):
     """Rendered TLS certificate."""
 
-    path: str = Field(..., description="Absolute path to the certificate file")
+    path: AbsolutePath = Field(..., description="Absolute path to the certificate file")
     content: str = Field(..., description="Rendered certificate content")
-
-    @field_validator("path")
-    @classmethod
-    def validate_path(cls, v):
-        if not v.startswith("/"):
-            raise ValueError("Certificate path must be absolute")
-        return v
 
     class Config:
         frozen = True
@@ -372,9 +371,12 @@ class TemplateContext(BaseModel):
         """Get certificates as a typed collection."""
         return getattr(self, "certificates", {})
 
-    class Config:
+    model_config = ConfigDict(
         # Allow extra fields for extensibility
-        extra = "allow"
+        extra="allow",
+        # Make immutable as expected by tests
+        frozen=True,
+    )
 
 
 class HAProxyConfigContext(BaseModel):
@@ -431,9 +433,6 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
 
         # Use Pydantic parsing for basic validation
         config = Config.model_validate(transformed_data)
-
-        # Now compile templates - this is done post-validation to handle includes
-        _compile_templates_in_config(config)
 
         return config
     except Exception as e:
@@ -532,54 +531,6 @@ def _transform_legacy_config(data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def _compile_templates_in_config(config: Config) -> None:
-    """Compile all templates in the configuration with snippet support."""
-    from jinja2 import TemplateSyntaxError
-    from .config import get_template_environment
-
-    try:
-        # First compile template snippets (they don't depend on other snippets)
-        env = get_template_environment()
-        for snippet in config.template_snippets.values():
-            if not snippet.compiled_template:
-                # Use object.__setattr__ to bypass Pydantic immutability
-                object.__setattr__(
-                    snippet, "compiled_template", env.from_string(snippet.template)
-                )
-
-        # Now compile other templates with snippet support
-        env_with_snippets = get_template_environment(config.template_snippets)
-
-        # Compile haproxy_config template
-        if not config.haproxy_config.compiled_template:
-            object.__setattr__(
-                config.haproxy_config,
-                "compiled_template",
-                env_with_snippets.from_string(config.haproxy_config.template),
-            )
-
-        # Compile map templates
-        for map_config in config.maps.values():
-            if not map_config.compiled_template:
-                object.__setattr__(
-                    map_config,
-                    "compiled_template",
-                    env_with_snippets.from_string(map_config.template),
-                )
-
-        # Compile certificate templates
-        for cert_config in config.certificates.values():
-            if not cert_config.compiled_template:
-                object.__setattr__(
-                    cert_config,
-                    "compiled_template",
-                    env_with_snippets.from_string(cert_config.template),
-                )
-
-    except TemplateSyntaxError as e:
-        raise ValueError(f"Template compilation failed: {e}") from e
-
-
 # =============================================================================
 # JSON Schema Generation and Export
 # =============================================================================
@@ -601,6 +552,8 @@ def export_config_schema(include_examples: bool = True) -> Dict[str, Any]:
     except Exception:
         # Fallback: create a simplified schema manually
         schema = _create_simplified_config_schema()
+        # Preserve examples from the model config
+        schema["json_schema_extra"] = Config.model_config.get("json_schema_extra", {})
 
     if include_examples:
         # Add examples to the schema for better documentation
@@ -616,20 +569,34 @@ def export_all_schemas() -> Dict[str, Any]:
     Returns:
         dict: Dictionary containing schemas for all models
     """
-    return {
-        "Config": Config.model_json_schema(),
-        "WatchResourceConfig": WatchResourceConfig.model_json_schema(),
-        "MapConfig": MapConfig.model_json_schema(),
-        "TemplateSnippet": TemplateSnippet.model_json_schema(),
-        "CertificateConfig": CertificateConfig.model_json_schema(),
-        "PodSelector": PodSelector.model_json_schema(),
-        "ResourceFilter": ResourceFilter.model_json_schema(),
-        "RenderedMap": RenderedMap.model_json_schema(),
-        "RenderedConfig": RenderedConfig.model_json_schema(),
-        "RenderedCertificate": RenderedCertificate.model_json_schema(),
-        "TemplateContext": TemplateContext.model_json_schema(),
-        "HAProxyConfigContext": HAProxyConfigContext.model_json_schema(),
-    }
+    schemas = {}
+    models = [
+        ("Config", Config),
+        ("WatchResourceConfig", WatchResourceConfig),
+        ("MapConfig", MapConfig),
+        ("TemplateSnippet", TemplateSnippet),
+        ("CertificateConfig", CertificateConfig),
+        ("PodSelector", PodSelector),
+        ("ResourceFilter", ResourceFilter),
+        ("RenderedMap", RenderedMap),
+        ("RenderedConfig", RenderedConfig),
+        ("RenderedCertificate", RenderedCertificate),
+        ("TemplateContext", TemplateContext),
+        ("HAProxyConfigContext", HAProxyConfigContext),
+    ]
+
+    for name, model in models:
+        try:
+            schemas[name] = model.model_json_schema(mode="serialization")  # type: ignore[attr-defined]
+        except Exception:
+            # Create a simplified schema for models with non-serializable fields
+            schemas[name] = {
+                "type": "object",
+                "title": name,
+                "description": f"Schema for {name} (simplified due to non-serializable fields)",
+            }
+
+    return schemas
 
 
 def _add_schema_examples(schema: Dict[str, Any]) -> None:
