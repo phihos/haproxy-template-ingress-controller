@@ -246,12 +246,12 @@ class DataplaneClient:
             metrics = get_metrics_collector()
             resilient_operator = get_resilient_operator()
 
-            # Get adaptive timeout from circuit breaker if available and ensure it's configured
-            circuit_name = f"haproxy_validation_{hash(self.base_url)}"
-            circuit_breaker = resilient_operator.get_circuit_breaker(
-                circuit_name, timeout_config=TimeoutConfig(initial_timeout=self.timeout)
+            # Use timeout manager for adaptive timeout adjustment
+            timeout_manager = resilient_operator.get_timeout_manager(
+                f"validation_{hash(self.base_url)}",
+                TimeoutConfig(initial_timeout=self.timeout),
             )
-            adaptive_timeout = circuit_breaker.get_adaptive_timeout() or self.timeout
+            adaptive_timeout = timeout_manager.get_timeout()
 
             caught_error: Optional[Exception] = None
             success: bool = False
@@ -288,10 +288,12 @@ class DataplaneClient:
                     caught_error = e
 
             if success:
+                timeout_manager.record_success()
                 record_span_event("validation_successful")
                 return True
 
             # Failure path
+            timeout_manager.record_failure()
             record_span_event(
                 "validation_failed",
                 {"error": str(caught_error) if caught_error else "validation_failed"},
@@ -401,7 +403,6 @@ class ConfigSynchronizer:
         self.sync_circuit_config = CircuitBreakerConfig(
             failure_threshold=3,
             recovery_timeout=120,  # 2 minutes recovery time
-            success_threshold=2,
         )
 
     @trace_async_function(
@@ -530,27 +531,33 @@ class ConfigSynchronizer:
         self, client: DataplaneClient, instance: HAProxyInstance, config: str
     ) -> bool:
         """Validate configuration on a single instance with circuit breaking."""
-        # Check circuit breaker for this specific instance
         circuit_name = f"validation_{instance.name}"
-        circuit_breaker = self.resilient_operator.get_circuit_breaker(
-            circuit_name, self.sync_circuit_config
+
+        # Wrapper function that treats validation failure as an exception
+        async def validation_operation():
+            is_valid = await client.validate_configuration(config)
+            if not is_valid:
+                raise ValidationError(
+                    f"Configuration validation failed on {instance.name}"
+                )
+            return is_valid
+
+        # Use resilient operation with circuit breaking for validation
+        result = await self.resilient_operator.execute_with_retry(
+            operation=validation_operation,
+            operation_name=f"validate_config_{instance.name}",
+            circuit_breaker_name=circuit_name,
+            retry_policy=RetryPolicy(max_attempts=2, base_delay=1.0),
+            instance_name=instance.name,
         )
 
-        if not circuit_breaker.can_execute():
-            logger.warning(f"Circuit breaker open for validation on {instance.name}")
-            return False
-
-        try:
-            success = await client.validate_configuration(config)
-            if success:
-                circuit_breaker.record_success()
+        if not result.success:
+            if result.error:
+                logger.error(f"Validation error on {instance.name}: {result.error}")
             else:
-                circuit_breaker.record_failure()
-            return success
-        except Exception as e:
-            circuit_breaker.record_failure()
-            logger.error(f"Validation error on {instance.name}: {e}")
-            return False
+                logger.error(f"Configuration validation failed on {instance.name}")
+
+        return result.success
 
     async def _deploy_to_production(
         self, production_instances: List[HAProxyInstance], config: str
