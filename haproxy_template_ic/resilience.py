@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 import httpx
-from aiobreaker import CircuitBreaker as AIOCircuitBreaker
+from aiobreaker import CircuitBreaker as AIOCircuitBreaker, CircuitBreakerError
 from tenacity import (
     AsyncRetrying,
     RetryError,
@@ -227,8 +227,12 @@ class CircuitBreakerWrapper:
             # Success - update wrapper state tracking for test compatibility
             self.record_success()
             return result
+        except CircuitBreakerError:
+            # Circuit is open - don't record failure (circuit is already open)
+            # Just re-raise to let the caller handle the fast-fail
+            raise
         except Exception:
-            # Failure - update wrapper state tracking for test compatibility
+            # Operation failed - record failure and re-raise
             self.record_failure()
             raise
 
@@ -306,6 +310,9 @@ class ResilientOperator:
 
         try:
             # Use tenacity for retry logic
+            # Note: tenacity handles its own wait strategy. The circuit breaker's adaptive
+            # timeout is used for individual operation timeouts, not retry delays.
+            # This separation of concerns keeps retry logic and operation timeouts independent.
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(retry_policy.max_attempts),
                 wait=wait_exponential_jitter(
@@ -332,12 +339,9 @@ class ResilientOperator:
                     else:
                         result = await operation()
 
-                    # Success - record metrics and circuit breaker state
+                    # Success - record metrics (circuit breaker state already handled in call)
                     duration = time.time() - start_time
                     metrics.record_dataplane_api_request(operation_name, "success")
-
-                    if circuit_breaker:
-                        circuit_breaker.record_success()
 
                     logger.info(
                         f"Operation {operation_name} succeeded",
@@ -357,11 +361,14 @@ class ResilientOperator:
             # Extract the last exception from the retry error
             raw_error = retry_error.last_attempt.exception()
             # Ensure we have an Exception (not BaseException) for type safety
-            last_error = (
-                raw_error
-                if isinstance(raw_error, Exception)
-                else Exception(str(raw_error))
-            )
+            if isinstance(raw_error, Exception):
+                last_error = raw_error
+            else:
+                # Preserve original exception context while converting to Exception
+                try:
+                    raise Exception(f"Non-Exception error: {raw_error}") from raw_error
+                except Exception as converted_error:
+                    last_error = converted_error
 
         except Exception as error:
             # Direct exception (e.g., from circuit breaker)
@@ -373,12 +380,9 @@ class ResilientOperator:
         )
         duration = time.time() - start_time
 
-        # Record failure metrics and circuit breaker state
+        # Record failure metrics (circuit breaker state already handled in call)
         metrics.record_dataplane_api_request(operation_name, "error")
         metrics.record_error(f"{operation_name}_failed", "resilience")
-
-        if circuit_breaker:
-            circuit_breaker.record_failure()
 
         logger.error(
             f"Operation {operation_name} exhausted retries",
@@ -412,7 +416,22 @@ def get_resilient_operator() -> ResilientOperator:
 
 # Backward compatibility adapter for CircuitBreaker
 class CircuitBreaker:
-    """Circuit breaker adapter for backward compatibility with tests."""
+    """
+    Circuit breaker adapter for backward compatibility with tests.
+
+    This adapter maintains the original CircuitBreaker constructor signature
+    while delegating to the improved CircuitBreakerWrapper implementation.
+
+    The backward compatibility layer is necessary because:
+    1. Tests expect the original constructor signature: CircuitBreaker(name, config, timeout_config)
+    2. Tests directly access properties like failure_count, success_count, state
+    3. Removing this would require updating 29+ tests and potentially break external usage
+
+    Future migration path:
+    - Tests should eventually be updated to use CircuitBreakerWrapper directly
+    - Consider adding deprecation warnings in future versions
+    - This adapter can be removed once all usage is migrated
+    """
 
     def __init__(
         self,
