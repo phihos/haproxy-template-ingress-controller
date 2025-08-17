@@ -79,6 +79,77 @@ class TestCustomProcessors:
         # Should not quote simple values
         assert "simple=no_spaces" in result
 
+    def test_custom_logfmt_renderer_special_characters(self):
+        """Test custom logfmt renderer handles special characters correctly."""
+        event_dict = {
+            "timestamp": "2025-01-01 12:00:00,000",
+            "level": "INFO",
+            "logger": "test.module",
+            "event": "Test message",
+            "multiline": "line1\nline2\nline3",
+            "with_tabs": "col1\tcol2\tcol3",
+            "with_carriage": "data\rmore_data",
+            "with_quotes": 'value with "quotes" inside',
+            "with_backslashes": "path\\to\\file",
+            "normal": "simple_value",
+        }
+
+        result = custom_logfmt_renderer(None, None, event_dict)
+
+        # Should properly escape newlines
+        assert 'multiline="line1\\nline2\\nline3"' in result
+        # Should properly escape tabs
+        assert 'with_tabs="col1\\tcol2\\tcol3"' in result
+        # Should properly escape carriage returns
+        assert 'with_carriage="data\\rmore_data"' in result
+        # Should properly escape quotes
+        assert 'with_quotes="value with \\"quotes\\" inside"' in result
+        # Should properly escape backslashes
+        assert 'with_backslashes="path\\\\to\\\\file"' in result
+        # Should not quote normal values
+        assert "normal=simple_value" in result
+
+    def test_custom_timestamp_processor_thread_safety(self):
+        """Test timestamp processor captures time consistently."""
+        import time
+
+        # Mock time.time and time.gmtime to verify they're called consistently
+        original_time = time.time
+        original_gmtime = time.gmtime
+
+        mock_time_value = 1640995200.122  # Fixed timestamp with milliseconds
+        mock_time_calls = []
+        mock_gmtime_calls = []
+
+        def mock_time():
+            mock_time_calls.append(mock_time_value)
+            return mock_time_value
+
+        def mock_gmtime(timestamp):
+            mock_gmtime_calls.append(timestamp)
+            return original_gmtime(timestamp)
+
+        try:
+            time.time = mock_time
+            time.gmtime = mock_gmtime
+
+            event_dict = {"event": "test message"}
+            result = custom_timestamp_processor(None, None, event_dict)
+
+            # Should have called time.time() once
+            assert len(mock_time_calls) == 1
+            # Should have called time.gmtime() once with the same timestamp
+            assert len(mock_gmtime_calls) == 1
+            assert mock_gmtime_calls[0] == mock_time_value
+
+            # Should have correct timestamp format with milliseconds
+            assert "timestamp" in result
+            assert result["timestamp"] == "2022-01-01 00:00:00,121"
+
+        finally:
+            time.time = original_time
+            time.gmtime = original_gmtime
+
 
 class TestStructuredLogger:
     """Test cases for StructuredLogger class."""
@@ -193,6 +264,99 @@ class TestContextManagers:
         context_vars = structlog.contextvars.get_contextvars()
         assert "operation_id" not in context_vars
         assert "component" not in context_vars
+
+    def test_concurrent_context_management(self):
+        """Test that context variables work correctly with concurrent operations."""
+        import structlog.contextvars
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Clear any existing context
+        structlog.contextvars.clear_contextvars()
+
+        def worker_function(worker_id: str) -> dict:
+            """Worker function that sets and reads context in a thread."""
+            with operation_context(f"worker-{worker_id}"):
+                with component_context_manager(f"component-{worker_id}"):
+                    # Simulate some work
+                    import time
+
+                    time.sleep(0.01)
+
+                    # Return the context as seen by this worker
+                    return dict(structlog.contextvars.get_contextvars())
+
+        # Run multiple workers concurrently
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [executor.submit(worker_function, str(i)) for i in range(3)]
+
+            results = [future.result() for future in futures]
+
+        # Each worker should have seen its own context
+        for i, result in enumerate(results):
+            assert result["operation_id"] == f"worker-{i}"
+            assert result["component"] == f"component-{i}"
+
+        # Main thread context should be clean
+        context_vars = structlog.contextvars.get_contextvars()
+        assert "operation_id" not in context_vars
+        assert "component" not in context_vars
+
+    def test_resource_context_manager_cleanup(self):
+        """Test that resource context manager properly cleans up all bound variables."""
+        import structlog.contextvars
+
+        # Clear any existing context
+        structlog.contextvars.clear_contextvars()
+
+        # Initially no context
+        context_vars = structlog.contextvars.get_contextvars()
+        assert len(context_vars) == 0
+
+        # Test with all possible parameters
+        with resource_context_manager(
+            resource_type="Service",
+            resource_namespace="test-namespace",
+            resource_name="test-service",
+            custom_field="custom_value",
+            another_field=42,
+        ):
+            context_vars = structlog.contextvars.get_contextvars()
+            assert len(context_vars) == 5
+            assert context_vars["resource_type"] == "Service"
+            assert context_vars["resource_namespace"] == "test-namespace"
+            assert context_vars["resource_name"] == "test-service"
+            assert context_vars["custom_field"] == "custom_value"
+            assert context_vars["another_field"] == 42
+
+        # All context should be cleaned up
+        context_vars = structlog.contextvars.get_contextvars()
+        assert len(context_vars) == 0
+
+    def test_resource_context_manager_partial_parameters(self):
+        """Test resource context manager with only some parameters set."""
+        import structlog.contextvars
+
+        # Clear any existing context
+        structlog.contextvars.clear_contextvars()
+
+        # Test with only resource_type
+        with resource_context_manager(resource_type="Pod"):
+            context_vars = structlog.contextvars.get_contextvars()
+            assert len(context_vars) == 1
+            assert context_vars["resource_type"] == "Pod"
+
+        # Should be cleaned up
+        context_vars = structlog.contextvars.get_contextvars()
+        assert len(context_vars) == 0
+
+        # Test with no parameters (should be no-op)
+        with resource_context_manager():
+            context_vars = structlog.contextvars.get_contextvars()
+            assert len(context_vars) == 0
+
+        # Should still be clean
+        context_vars = structlog.contextvars.get_contextvars()
+        assert len(context_vars) == 0
 
 
 class TestSetupLogging:

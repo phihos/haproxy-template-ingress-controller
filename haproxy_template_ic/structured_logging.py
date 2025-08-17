@@ -42,7 +42,7 @@ def custom_logfmt_renderer(_, __, event_dict):
         for key, value in event_dict.items():
             # Quote values that contain spaces, tabs, newlines, or special characters
             if isinstance(value, str) and any(
-                char in value for char in (" ", "\t", "\n", "\r", '"', "=")
+                char in value for char in (" ", "\t", "\n", "\r", '"', "=", "\\")
             ):
                 # Escape special characters in the value
                 escaped_value = (
