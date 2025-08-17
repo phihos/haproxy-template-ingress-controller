@@ -24,20 +24,15 @@ from haproxy_template_ic.management_socket import (
 )
 from .utils import get_test_reporter, progress_context
 from haproxy_template_ic.config_models import (
-    Config,
     MapConfig,
     HAProxyConfigContext,
     RenderedMap,
-    WatchResourceConfig,
-    PodSelector,
-    TemplateSnippet,
-    CertificateConfig,
-    MapCollection,
-    WatchResourceCollection,
-    TemplateSnippetCollection,
-    CertificateCollection,
+    RenderedConfig,
+    RenderedCertificate,
+    TemplateContext,
+    config_from_dict,
 )
-from jinja2 import Template
+# from jinja2 import Template  # No longer needed - using string templates
 
 
 # =============================================================================
@@ -75,37 +70,38 @@ def test_serialize_state_with_full_config():
     from haproxy_template_ic.__main__ import CliOptions
 
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "haproxy"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=[
-            WatchResourceConfig(kind="Pod", group="", version="v1", id="pods"),
-            WatchResourceConfig(kind="Service", group="", version="v1", id="services"),
-        ],
-        maps=[
-            MapConfig(
-                template=Template(
-                    "server {{ resources.name }} {{ resources.host }}:{{ resources.port }}"
-                ),
-                path="/etc/haproxy/maps/backend.map",
-            )
-        ],
+            "watched_resources": {
+                "pods": {
+                    "api_version": "v1",
+                    "kind": "Pod",
+                    "enable_validation_webhook": False,
+                },
+                "services": {
+                    "api_version": "v1",
+                    "kind": "Service",
+                    "enable_validation_webhook": False,
+                },
+            },
+            "maps": {
+                "/etc/haproxy/maps/backend.map": {
+                    "template": "server {{ resources.name }} {{ resources.host }}:{{ resources.port }}"
+                }
+            },
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
     memo.haproxy_config_context.rendered_maps = [
         RenderedMap(
             path="/etc/haproxy/maps/backend.map",
             content="server web-pod 10.0.1.5:80",
-            map_config=MapConfig(
-                template=Template(
-                    "server {{ resources.name }} {{ resources.host }}:{{ resources.port }}"
-                ),
-                path="/etc/haproxy/maps/backend.map",
-            ),
+            map_config=memo.config.maps["/etc/haproxy/maps/backend.map"],
         )
     ]
     memo.cli_options = CliOptions(
@@ -160,13 +156,11 @@ def test_serialize_state_with_full_config():
 async def test_process_management_command_dump_all():
     """Test dump all command processing."""
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
+        }
     )
 
     server = ManagementSocketServer(memo)
@@ -322,37 +316,31 @@ def test_state_serializer_serialize_cli_options():
 
 
 def test_state_serializer_serialize_config_with_template_source():
-    """Test _serialize_config method with template source availability."""
+    """Test _serialize_config method with maps."""
     memo = MagicMock()
 
-    # Create a template with source attribute
-    template_with_source = Template("test template")
-    template_with_source.source = "test_file.j2"
-
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=[],
-        maps=[MapConfig(template=template_with_source, path="/test/map")],
+            "watched_resources": {},
+            "maps": {
+                "/test/map": {"template": "test template"},
+            },
+        }
     )
 
     serializer = StateSerializer(memo)
     result = serializer._serialize_config()
 
-    assert result["maps"]["/test/map"]["template_source"] == "test_file.j2"
+    assert result["maps"]["/test/map"]["template_source"] == "test template"
 
-    # Test with template without source attribute
-    template_without_source = Template("test template")
-    memo.config.maps.append(
-        MapConfig(template=template_without_source, path="/test/map2")
-    )
+    # Add another map to the config
+    memo.config.maps["/test/map2"] = MapConfig(template="test template 2")
 
     result = serializer._serialize_config()
-    assert result["maps"]["/test/map2"]["template_source"] == "unavailable"
+    assert result["maps"]["/test/map"]["template_source"] == "test template"
+    assert result["maps"]["/test/map2"]["template_source"] == "test template 2"
 
 
 def test_state_serializer_serialize_haproxy_config_context():
@@ -384,25 +372,24 @@ def test_state_serializer_serialize_haproxy_config_context_with_rendered_config(
     """Test _serialize_haproxy_config_context method with rendered config."""
     from haproxy_template_ic.config_models import (
         HAProxyConfigContext,
-        RenderedConfig,
-        Config,
     )
-    from jinja2 import Template
 
     memo = MagicMock()
 
-    # Create a real config and rendered config
-    config = Config(
-        raw={},
-        pod_selector={"match_labels": {}},
-        haproxy_config=Template("global\n    daemon"),
-    )
-
-    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
+    # Create a real rendered config
+    rendered_config = RenderedConfig(content="global\n    daemon")
 
     # Create HAProxyConfigContext with rendered config
     memo.haproxy_config_context = HAProxyConfigContext(
-        rendered_maps=[], rendered_config=rendered_config
+        config=config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+            }
+        ),
+        template_context=TemplateContext(),
+        rendered_maps=[],
+        rendered_config=rendered_config,
     )
 
     serializer = StateSerializer(memo)
@@ -417,24 +404,24 @@ def test_state_serializer_serialize_haproxy_config_context_with_rendered_certifi
     """Test _serialize_haproxy_config_context method with rendered certificates."""
     from haproxy_template_ic.config_models import (
         HAProxyConfigContext,
-        RenderedCertificate,
-        CertificateConfig,
     )
-    from jinja2 import Template
 
     memo = MagicMock()
 
-    # Create a real certificate config and rendered certificate
-    certificate_config = CertificateConfig(
-        template=Template("cert content"), name="test-cert"
-    )
-
+    # Create a real rendered certificate
     rendered_certificate = RenderedCertificate(
-        name="test-cert", content="cert content", certificate_config=certificate_config
+        path="/test/cert", content="cert content"
     )
 
     # Create HAProxyConfigContext with rendered certificate
     memo.haproxy_config_context = HAProxyConfigContext(
+        config=config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+            }
+        ),
+        template_context=TemplateContext(),
         rendered_maps=[],
         rendered_config=None,
         rendered_certificates=[rendered_certificate],
@@ -446,13 +433,14 @@ def test_state_serializer_serialize_haproxy_config_context_with_rendered_certifi
     assert result["rendered_maps"] == {}
     assert result["rendered_config"] is None
     assert result["rendered_certificates"] is not None
-    assert "test-cert" in result["rendered_certificates"]
-    assert result["rendered_certificates"]["test-cert"]["name"] == "test-cert"
-    assert result["rendered_certificates"]["test-cert"]["content"] == "cert content"
-    assert (
-        result["rendered_certificates"]["test-cert"]["certificate_config_name"]
-        == "test-cert"
-    )
+    assert "/test/cert" in result["rendered_certificates"]
+    assert result["rendered_certificates"]["/test/cert"]["name"] == "/test/cert"
+    assert result["rendered_certificates"]["/test/cert"]["content"] == "cert content"
+    # Note: certificate_config_name field was removed in new model
+    # assert (
+    #     result["rendered_certificates"]["test-cert"]["certificate_config_name"]
+    #     == "test-cert"
+    # )
 
 
 def test_state_serializer_serialize_indices_with_actual_indices():
@@ -517,14 +505,22 @@ def test_state_serializer_serialize_exception_handling():
 async def test_process_command_dump_config():
     """Test dump config command specifically."""
     memo = MagicMock()
-    memo.haproxy_config_context = HAProxyConfigContext()
-    memo.haproxy_config_context.rendered_maps = [
-        RenderedMap(
-            path="/test/map",
-            content="test content",
-            map_config=MapConfig(template=Template("test"), path="/test/map"),
-        )
-    ]
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+            }
+        ),
+        template_context=TemplateContext(),
+        rendered_maps=[
+            RenderedMap(
+                path="/test/map",
+                content="test content",
+                map_config=MapConfig(template="test"),
+            )
+        ],
+    )
 
     server = ManagementSocketServer(memo)
     result = await server._process_command("dump config")
@@ -554,23 +550,23 @@ async def test_process_command_dump_config_empty():
 @pytest.mark.asyncio
 async def test_process_command_dump_config_with_rendered_config():
     """Test dump config command with rendered HAProxy config."""
-    from haproxy_template_ic.config_models import RenderedConfig, Config
-    from jinja2 import Template
 
     memo = MagicMock()
 
-    # Create a real config and rendered config
-    config = Config(
-        raw={},
-        pod_selector={"match_labels": {}},
-        haproxy_config=Template("global\n    daemon"),
+    # Create a real rendered config
+    rendered_config = RenderedConfig(content="global\n    daemon")
+
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+            }
+        ),
+        template_context=TemplateContext(),
+        rendered_config=rendered_config,
+        rendered_maps=[],
     )
-
-    rendered_config = RenderedConfig(content="global\n    daemon", config=config)
-
-    memo.haproxy_config_context = HAProxyConfigContext()
-    memo.haproxy_config_context.rendered_config = rendered_config
-    memo.haproxy_config_context.rendered_maps = []
 
     server = ManagementSocketServer(memo)
     result = await server._process_command("dump config")
@@ -587,24 +583,26 @@ async def test_process_command_dump_config_with_rendered_config():
 @pytest.mark.asyncio
 async def test_process_command_dump_config_with_rendered_certificates():
     """Test dump config command with rendered certificates."""
-    from haproxy_template_ic.config_models import RenderedCertificate, CertificateConfig
-    from jinja2 import Template
 
     memo = MagicMock()
 
-    # Create a real certificate config and rendered certificate
-    certificate_config = CertificateConfig(
-        template=Template("cert content"), name="test-cert"
-    )
-
+    # Create a real rendered certificate
     rendered_certificate = RenderedCertificate(
-        name="test-cert", content="cert content", certificate_config=certificate_config
+        path="/test/cert", content="cert content"
     )
 
-    memo.haproxy_config_context = HAProxyConfigContext()
-    memo.haproxy_config_context.rendered_certificates = [rendered_certificate]
-    memo.haproxy_config_context.rendered_maps = []
-    memo.haproxy_config_context.rendered_config = None
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "test"}},
+                "haproxy_config": {"template": "global\n    daemon"},
+            }
+        ),
+        template_context=TemplateContext(),
+        rendered_certificates=[rendered_certificate],
+        rendered_maps=[],
+        rendered_config=None,
+    )
 
     server = ManagementSocketServer(memo)
     result = await server._process_command("dump config")
@@ -613,13 +611,13 @@ async def test_process_command_dump_config_with_rendered_certificates():
     assert result["haproxy_config_context"]["rendered_maps"] == {}
     assert result["haproxy_config_context"]["rendered_config"] is None
     assert result["haproxy_config_context"]["rendered_certificates"] is not None
-    assert "test-cert" in result["haproxy_config_context"]["rendered_certificates"]
+    assert "/test/cert" in result["haproxy_config_context"]["rendered_certificates"]
     assert (
-        result["haproxy_config_context"]["rendered_certificates"]["test-cert"]["name"]
-        == "test-cert"
+        result["haproxy_config_context"]["rendered_certificates"]["/test/cert"]["name"]
+        == "/test/cert"
     )
     assert (
-        result["haproxy_config_context"]["rendered_certificates"]["test-cert"][
+        result["haproxy_config_context"]["rendered_certificates"]["/test/cert"][
             "content"
         ]
         == "cert content"
@@ -672,13 +670,11 @@ async def test_management_socket_server_handle_client_empty_command():
 
     memo = MagicMock()
     # Provide actual config to avoid JSON serialization issues
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
+        }
     )
     memo.cli_options = CliOptions(
         configmap_name="test-config",
@@ -689,7 +685,10 @@ async def test_management_socket_server_handle_client_empty_command():
         structured_logging=False,
         tracing_enabled=False,
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
     memo.config_reload_flag = MagicMock()
     memo.stop_flag = MagicMock()
 
@@ -854,13 +853,11 @@ async def test_management_socket_server_handle_client_unicode_command():
     from haproxy_template_ic.__main__ import CliOptions
 
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
+        }
     )
     memo.cli_options = CliOptions(
         configmap_name="unicode-test",
@@ -871,7 +868,10 @@ async def test_management_socket_server_handle_client_unicode_command():
         structured_logging=False,
         tracing_enabled=False,
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
     memo.config_reload_flag = MagicMock()
     memo.stop_flag = MagicMock()
 
@@ -964,17 +964,19 @@ async def test_management_socket_server_run_cancellation():
 def test_state_serializer_serialize_config_without_maps():
     """Test _serialize_config method with config that has no maps."""
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=[
-            WatchResourceConfig(kind="Pod", group="", version="v1", id="pods")
-        ],
-        maps=[],  # Empty maps
+            "watched_resources": {
+                "pods": {
+                    "api_version": "v1",
+                    "kind": "Pod",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "maps": {},  # Empty maps
+        }
     )
 
     serializer = StateSerializer(memo)
@@ -989,13 +991,11 @@ def test_state_serializer_serialize_config_without_maps():
 async def test_process_command_with_extra_spaces():
     """Test command processing with extra whitespace."""
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
+        }
     )
 
     server = ManagementSocketServer(memo)
@@ -1074,13 +1074,11 @@ def test_state_serializer_with_index_serialization_error():
 async def test_get_command_with_invalid_collection_type():
     """Test get command with invalid collection type."""
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
+        }
     )
 
     server = ManagementSocketServer(memo)
@@ -1095,13 +1093,11 @@ async def test_get_command_with_invalid_collection_type():
 async def test_get_command_missing_args():
     """Test get command with missing arguments."""
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
+        }
     )
 
     server = ManagementSocketServer(memo)
@@ -1116,29 +1112,22 @@ async def test_get_command_missing_args():
 async def test_get_command_for_all_collection_types():
     """Test get command for all collection types with found and not found cases."""
     memo = MagicMock()
-    # Create collections with the custom collection classes
-    maps = MapCollection([MapConfig(path="/test/map", template=Template("test"))])
-    watch_resources = WatchResourceCollection(
-        [WatchResourceConfig(kind="Pod", group="", version="v1", id="pods")]
-    )
-    template_snippets = TemplateSnippetCollection(
-        [TemplateSnippet(name="test-snippet", template=Template("snippet"))]
-    )
-    certificates = CertificateCollection(
-        [CertificateConfig(name="test-cert", template=Template("cert"))]
-    )
-
-    memo.config = Config(
-        raw={
+    # Create config with all collection types
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        maps=maps,
-        watch_resources=watch_resources,
-        template_snippets=template_snippets,
-        certificates=certificates,
+            "maps": {"/test/map": {"template": "test"}},
+            "watched_resources": {
+                "pods": {
+                    "api_version": "v1",
+                    "kind": "Pod",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "template_snippets": {"test-snippet": "snippet"},
+            "certificates": {"/test/cert": {"template": "cert"}},
+        }
     )
 
     server = ManagementSocketServer(memo)
@@ -1174,9 +1163,9 @@ async def test_get_command_for_all_collection_types():
     assert "Template snippet not found" in result["error"]
 
     # Test certificates - found
-    result = await server._process_command("get certificates test-cert")
+    result = await server._process_command("get certificates /test/cert")
     assert "result" in result
-    assert result["result"]["name"] == "test-cert"
+    assert result["result"]["path"] == "/test/cert"
 
     # Test certificates - not found
     result = await server._process_command("get certificates nonexistent")

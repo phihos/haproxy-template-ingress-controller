@@ -297,26 +297,23 @@ class TestWebhookRegistry:
     def mock_config(self):
         """Create a mock operator configuration."""
         config = MagicMock()
-        config.watch_resources = [
-            WatchResourceConfig(
+        config.watched_resources = {
+            "ingresses": WatchResourceConfig(
+                api_version="networking.k8s.io/v1",
                 kind="Ingress",
-                group="networking.k8s.io",
-                version="v1",
                 enable_validation_webhook=True,
             ),
-            WatchResourceConfig(
+            "secrets": WatchResourceConfig(
+                api_version="v1",
                 kind="Secret",
-                group="",
-                version="v1",
                 enable_validation_webhook=True,
             ),
-            WatchResourceConfig(
+            "endpointslices": WatchResourceConfig(
+                api_version="discovery.k8s.io/v1",
                 kind="EndpointSlice",
-                group="discovery.k8s.io",
-                version="v1",
                 enable_validation_webhook=False,  # Disabled
             ),
-        ]
+        }
         return config
 
     @patch("haproxy_template_ic.webhook.kopf.on.validate")
@@ -458,27 +455,25 @@ class TestWebhookRegistrationFunction:
     def mock_config_with_webhooks(self):
         """Create a mock configuration with webhook-enabled resources."""
         config = MagicMock()
-        config.watch_resources = [
-            WatchResourceConfig(
+        config.watched_resources = {
+            "ingresses": WatchResourceConfig(
+                api_version="networking.k8s.io/v1",
                 kind="Ingress",
-                group="networking.k8s.io",
-                version="v1",
                 enable_validation_webhook=True,
             ),
-            WatchResourceConfig(
+            "secrets": WatchResourceConfig(
+                api_version="v1",
                 kind="Secret",
-                group="",
-                version="v1",
                 enable_validation_webhook=False,  # Disabled
             ),
-        ]
+        }
         return config
 
     @pytest.fixture
     def mock_config_without_watch_resources(self):
-        """Create a mock configuration without watch_resources."""
+        """Create a mock configuration without watched_resources."""
         config = MagicMock()
-        del config.watch_resources  # Remove the attribute
+        del config.watched_resources  # Remove the attribute
         return config
 
     @patch("haproxy_template_ic.webhook._webhook_registry")
@@ -493,18 +488,18 @@ class TestWebhookRegistrationFunction:
             group="networking.k8s.io",
             version="v1",
             kind="Ingress",
-            resource_id="ingress",
+            resource_id="ingresses",
         )
 
     @patch("haproxy_template_ic.webhook._webhook_registry")
     def test_register_validation_webhooks_from_config_no_watch_resources(
         self, mock_registry, mock_config_without_watch_resources
     ):
-        """Test webhook registration with missing watch_resources."""
+        """Test webhook registration with missing watched_resources."""
         register_validation_webhooks_from_config(mock_config_without_watch_resources)
 
         # Registry should not be called
-        mock_registry.register_webhooks_from_config.assert_not_called()
+        mock_registry.register_resource_validation_webhook.assert_not_called()
 
 
 class TestWebhookIntegration:
@@ -519,24 +514,23 @@ class TestWebhookIntegration:
 
         # Create configuration
         config = MagicMock()
-        config.watch_resources = [
-            WatchResourceConfig(
+        config.watched_resources = {
+            "ingresses": WatchResourceConfig(
+                api_version="networking.k8s.io/v1",
                 kind="Ingress",
-                group="networking.k8s.io",
-                version="v1",
                 enable_validation_webhook=True,
             )
-        ]
+        }
 
         # Register webhooks
         register_validation_webhooks_from_config(config)
 
-        # Verify webhook was registered (resource_id defaults to kind.lower())
+        # Verify webhook was registered (resource_id is key from watched_resources)
         mock_kopf_validate.assert_called_with(
             "networking.k8s.io",
             "v1",
             "Ingress",
-            id="validate-ingress-networking-k8s-io-v1",
+            id="validate-ingresses-networking-k8s-io-v1",
         )
 
     @patch("haproxy_template_ic.webhook.get_metrics_collector")

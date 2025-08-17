@@ -63,9 +63,13 @@ class StateSerializer:
         if not hasattr(self.memo, "config") or not self.memo.config:
             return config
 
-        # Serialize pod selector - convert dataclass to dict if needed
+        # Serialize pod selector - convert Pydantic model to dict if needed
         pod_selector = self.memo.config.pod_selector
-        if is_dataclass(pod_selector) and not isinstance(pod_selector, type):
+        if hasattr(pod_selector, "model_dump"):
+            # Pydantic model
+            pod_selector = pod_selector.model_dump()
+        elif is_dataclass(pod_selector) and not isinstance(pod_selector, type):
+            # Dataclass (fallback)
             pod_selector = asdict(pod_selector)
         config["pod_selector"] = pod_selector
 
@@ -126,7 +130,7 @@ class StateSerializer:
             context["rendered_maps"][rendered_map.path] = {
                 "path": rendered_map.path,
                 "content": rendered_map.content,
-                "map_config_path": rendered_map.map_config.path,
+                "map_config_path": rendered_map.path,  # Path is the same as rendered_map.path
             }
 
         # Serialize rendered HAProxy config
@@ -139,10 +143,9 @@ class StateSerializer:
         for (
             rendered_certificate
         ) in self.memo.haproxy_config_context.rendered_certificates:
-            context["rendered_certificates"][rendered_certificate.name] = {
-                "name": rendered_certificate.name,
+            context["rendered_certificates"][rendered_certificate.path] = {
+                "name": rendered_certificate.path,
                 "content": rendered_certificate.content,
-                "certificate_config_name": rendered_certificate.certificate_config.name,
             }
 
         return context
@@ -344,17 +347,16 @@ class ManagementSocketServer:
                 rendered_maps[rendered_map.path] = {
                     "path": rendered_map.path,
                     "content": rendered_map.content,
-                    "map_config_path": rendered_map.map_config.path,
+                    "map_config_path": rendered_map.path,  # Path is the same as rendered_map.path
                 }
 
             rendered_certificates: Dict[str, Any] = {}
             for (
                 rendered_certificate
             ) in self.memo.haproxy_config_context.rendered_certificates:
-                rendered_certificates[rendered_certificate.name] = {
-                    "name": rendered_certificate.name,
+                rendered_certificates[rendered_certificate.path] = {
+                    "name": rendered_certificate.path,
                     "content": rendered_certificate.content,
-                    "certificate_config_name": rendered_certificate.certificate_config.name,
                 }
 
             context = {

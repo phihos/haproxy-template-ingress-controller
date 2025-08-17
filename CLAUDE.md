@@ -11,91 +11,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Remove dependency: `uv remove <package>`
 
 ### Testing
-- Run unit tests (fast): `uv run pytest -m "not integration and not acceptance"`
-- Run integration tests: `uv run pytest -m integration`
-- Run e2e tests: `uv run pytest -m acceptance`
-- Run all tests: `uv run pytest tests`
-- Single test file: `uv run pytest tests/unit/test_config.py`
-- With coverage: `uv run pytest --cov=haproxy_template_ic --cov-report=html`
+- **All tests (recommended)**: `uv run pytest -n auto` - parallel execution, up to 5 minutes
+- **Unit tests**: `uv run pytest -m "not integration and not acceptance"`
+- **Integration tests**: `uv run pytest -m integration`
+- **E2E tests**: `uv run pytest -m acceptance`
+- **Coverage**: `uv run pytest --cov=haproxy_template_ic --cov-report=html`
 
-#### Test Structure
+#### Test Structure & Options
 ```
-tests/
-├── unit/           # Fast unit tests (no external dependencies)
-├── integration/    # Docker-based integration tests with real HAProxy instances
-├── e2e/           # End-to-end Kubernetes tests (marked as 'acceptance')
-└── fixtures/      # Test data and configurations
+tests/unit/         # Fast unit tests (no external dependencies)
+tests/integration/  # Docker-based tests with HAProxy instances  
+tests/e2e/         # End-to-end Kubernetes tests (marked 'acceptance')
+tests/fixtures/    # Test data and configurations
 ```
 
-#### Test Options
-- **Integration test debugging**: `uv run pytest -m integration --keep-containers=on-failure`
-- **E2E test debugging**: `uv run pytest -m acceptance --keep-namespaces`
-- **Keep failed namespaces**: `uv run pytest -m acceptance --keep-namespace-on-failure`
-- **Show container logs**: `uv run pytest -m integration --show-container-logs` (use with `-s` for real-time output)
-- **Verbose Docker operations**: `uv run pytest -m integration --verbose-docker` (detailed Docker debugging)
-- **Combined observability**: `uv run pytest -m integration -s --show-container-logs --verbose-docker`
+**Debugging Options:**
+- Integration: `--keep-containers=on-failure --show-container-logs --verbose-docker`
+- E2E: `--keep-namespaces --keep-namespace-on-failure`
+- Use `-s` for real-time output, `-n 0` for serial execution with full progress
 
-#### Test Markers
-- `acceptance`: E2E tests requiring real Kubernetes clusters
-- `integration`: Tests using Docker containers with external dependencies  
-- `asyncio`: Asynchronous tests (automatically applied)
-
-#### Integration Test Observability
-
-Integration tests include comprehensive progress reporting and debugging capabilities:
-
-- **Visual Progress Indicators**: Real-time progress with emojis and phase reporting (🔄 Starting, 📋 Phase, 🐳 Docker operations, ✅ Ready)
-- **Container State Monitoring**: Automatic tracking of Docker container startup, health checks, and service readiness
-- **Port Allocation Tracking**: Clear visibility into which ports are allocated for each test instance
-- **Service Wait Reporting**: Progress indicators while waiting for HAProxy and Dataplane API services to become ready
-- **Failure Diagnostics**: Automatic collection of container logs and troubleshooting information when tests fail
-- **Docker Compose Visibility**: Shows which docker-compose setup each test uses with full file paths
-
-##### Progress Context Usage
-
-Tests use the `progress_context` helper for structured progress reporting:
-
-```python
-from tests.integration.utils.progress import get_test_reporter, progress_context
-
-# In test functions:
-reporter = get_test_reporter()
-with progress_context("test_name", reporter) as progress:
-    progress.phase("SETUP", "Initializing test environment")
-    progress.phase("API_CLIENT_SETUP", "Creating Dataplane API client")
-    progress.phase("VALIDATION", "Validating results")
-```
-
-##### Parallel Test Execution
-
-The progress reporting system supports both serial and parallel execution:
-
-- **Serial execution** (`-n 0`): Full real-time progress output with beautiful formatting
-- **Parallel execution** (`-n auto` or `-n N`): Progress messages appear after test completion via logging
-- **Worker identification**: Each pytest-xdist worker is clearly identified in output
-- **File logging**: Use `--verbose-docker` with parallel execution to create detailed log files per worker
-
-**Important**: Due to pytest-xdist architecture limitations, real-time progress output is only available in serial execution mode. For parallel execution, progress information is captured and displayed after each test completes.
-
-##### Test Progress Options
-
-```bash
-# Basic integration test with minimal output
-uv run pytest -m integration
-
-# Serial execution with real-time progress (recommended for debugging)
-uv run pytest -m integration -s --show-container-logs --verbose-docker
-
-# Parallel execution with post-test progress reporting
-uv run pytest -m integration -n auto --verbose-docker
-
-# Keep containers on failure for manual inspection
-uv run pytest -m integration --keep-containers=on-failure --verbose-docker
-```
-
-#### Test Authentication
-- Integration tests use `admin`/`adminpass` for HAProxy Dataplane API authentication
-- Test configurations use IP addresses (e.g., `127.0.0.1:8001`) instead of hostnames to avoid DNS resolution issues
+#### Integration Test Features
+- **Progress reporting**: Visual indicators, container monitoring, port tracking
+- **Failure diagnostics**: Automatic log collection and troubleshooting
+- **Progress context**: Use `progress_context("test_name", reporter)` for structured reporting
+- **Authentication**: Tests use `admin`/`adminpass`, IP addresses instead of hostnames
 
 ### Code Quality
 - Format code: `uv run ruff format`
@@ -159,78 +98,30 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 
 ### Deployment Architecture
 
-#### Controller Pod Setup
+**Controller Pod** (3 containers):
+- Main controller: watches resources, renders templates (ports: 8080 health, 9090 metrics, 9443 webhook)
+- Validation HAProxy: config validation (port 8081, minimal config)
+- Validation Dataplane API: manages validation instance (port 5556, auth: `admin`/`validationpass`)
 
-The controller runs as a single pod with **3 containers**:
+**Production HAProxy Pods** (2 containers each):
+- HAProxy: production traffic (ports: 80 main, 8404 health - **mandatory**)
+- Dataplane API: receives configs (port 5555, auth: `admin`/`adminpass`)
 
-1. **Main Controller Container**:
-   - Watches Kubernetes resources and renders templates
-   - Exposes health endpoint on port 8080
-   - Metrics endpoint on port 9090  
-   - Optional webhook endpoint on port 9443
-   - Management socket at `/run/haproxy-template-ic/management.sock`
-
-2. **Validation HAProxy Sidecar**:
-   - HAProxy instance for config validation (port 8081)
-   - Uses minimal working config initially
-   - Validates rendered configs before production deployment
-
-3. **Validation Dataplane API Sidecar**:
-   - Dataplane API server on port 5556
-   - Manages validation HAProxy instance
-   - Auth: `admin`/`validationpass`
-
-#### Production HAProxy Pods
-
-Separate deployment of HAProxy pods, each with **2 containers**:
-
-1. **HAProxy Container**:
-   - Serves actual production traffic (port 80)
-   - **Critical**: Must have health endpoint on port 8404 for `/healthz`
-   - Starts with minimal config (no health endpoint)
-   - **Readiness probe initially fails** until controller pushes proper config
-   - Labels: `app=haproxy`, `component=loadbalancer`
-
-2. **Production Dataplane API Container**:
-   - Dataplane API server on port 5555
-   - Receives validated configs from controller
-   - Auth: `admin`/`adminpass`
-
-#### Configuration Flow
-
-1. **Initial State**: Production pods start with minimal config, readiness probe fails
-2. **Validation**: Controller renders config and tests on validation sidecar
-3. **Deployment**: If validation passes, config is pushed to production pods
-4. **Ready State**: Production pods become ready after receiving config with health endpoint
-
-#### Critical Requirements
-
-- **Health Endpoint Mandatory**: HAProxy template MUST include:
-  ```
-  frontend health
-      bind *:8404
-      http-request return status 200 content-type text/plain string "OK" if { path /healthz }
-  ```
-- **Pod Selector Matching**: Production pods must have labels matching ConfigMap's `pod_selector.match_labels`
-- **Shared Volumes**: Each pod needs emptyDir volumes for config, maps, and certificates
-- **Validation First**: All configs tested on validation sidecars before production deployment
+**Flow**: Initial → Validation → Deployment → Ready
+**Critical**: Health endpoint required, pod selector matching, shared volumes, validation-first
 
 #### Port Reference
-
-**Controller Pod Ports**:
-- `8080`: Health endpoint (`/healthz`)
-- `9090`: Prometheus metrics endpoint (`/metrics`)
-- `9443`: Webhook validation endpoint (when enabled)
-- `5556`: Validation Dataplane API
-- `8081`: Validation HAProxy instance
-
-**Production HAProxy Pod Ports**:
-- `80`: HAProxy main traffic (HTTP/HTTPS)
-- `8404`: HAProxy health endpoint (`/healthz`) - **mandatory**
-- `5555`: Production Dataplane API
-
-**Development/Testing**:
-- Test configurations use ports `8001-8003` for dummy backend servers
+| Component | Port | Purpose | Notes |
+|-----------|------|---------|-------|
+| Controller | 8080 | Health (`/healthz`) | |
+| Controller | 9090 | Metrics (`/metrics`) | |
+| Controller | 9443 | Webhook validation | Optional |
+| Validation HAProxy | 8081 | Config validation | |
+| Validation API | 5556 | Manages validation | `admin`/`validationpass` |
+| Production HAProxy | 80 | Main traffic | HTTP/HTTPS |
+| Production HAProxy | 8404 | Health (`/healthz`) | **Mandatory** |
+| Production API | 5555 | Config deployment | `admin`/`adminpass` |
+| Testing | 8001-8003 | Dummy backends | Dev/test only |
 
 ### Current Implementation Status
 
@@ -248,135 +139,54 @@ Separate deployment of HAProxy pods, each with **2 containers**:
 
 ## Webhook Validation System
 
-The controller includes validating admission webhooks that prevent faulty resources from being applied to your cluster, providing immediate feedback on configuration errors and maintaining system stability.
+Validating admission webhooks prevent faulty resources from being applied, providing immediate feedback on configuration errors.
 
-### Features
-
-- **ConfigMap Validation**: Validates HAProxy Template IC ConfigMaps before admission to the cluster
-- **YAML Syntax Validation**: Ensures ConfigMap contains valid YAML configuration
-- **Template Validation**: Validates Jinja2 template syntax in maps, configs, and certificates  
-- **Resource Reference Validation**: Checks that referenced Kubernetes resources are properly structured
-- **Per-Resource Control**: Enable/disable validation for specific watched resource types
-- **Automatic Certificate Management**: Uses mounted TLS certificates or generates self-signed certificates
-
-### Configuration
-
-Enable webhook validation using environment variables or CLI flags:
-
-```bash
-# Enable webhook validation
-export WEBHOOK_ENABLED=true
-export WEBHOOK_PORT=9443
-
-# Or via CLI
-uv run haproxy-template-ic --configmap-name=my-config --webhook-enabled --webhook-port=9443
-```
-
-### Per-Resource Validation
-
-Control webhook validation for specific watched resources:
-
-```yaml
-watched_resources:
-  ingresses:
-    api_version: networking.k8s.io/v1
-    kind: Ingress
-    enable_validation_webhook: true  # Enable validation for Ingresses
-  
-  services:
-    api_version: v1
-    kind: Service  
-    enable_validation_webhook: false  # Disable validation for Services
-```
-
-### Certificate Management
-
-The webhook server automatically handles TLS certificates:
-
-- **Mounted Certificates**: Uses certificates from `/etc/certs/tls.crt` and `/etc/certs/tls.key` if available
-- **Self-Signed Certificates**: Automatically generates self-signed certificates for development/testing
-- **Production**: Mount proper TLS certificates signed by your cluster's CA or a trusted authority
-
-### Webhook Responses
-
-The webhook provides detailed validation feedback:
-
-- **Success**: Resource is allowed with optional warnings
-- **Failure**: Resource is rejected with specific error messages
-- **Configuration Issues**: Clear error messages about template syntax, YAML structure, or resource references
+**Features**: ConfigMap/YAML/template validation, per-resource control, automatic certificate management
+**Configuration**: `WEBHOOK_ENABLED=true WEBHOOK_PORT=9443` or CLI `--webhook-enabled`
+**Certificates**: Uses mounted TLS or generates self-signed for development
+**Control**: Set `enable_validation_webhook: true/false` per watched resource type
 
 ## ConfigMap Structure
 
-The controller is configured via a Kubernetes ConfigMap with the following structure:
-
-### Basic Configuration
+**Required sections**: `pod_selector`, `haproxy_config`
+**Optional sections**: `watched_resources`, `maps`, `template_snippets`, `certificates`
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: haproxy-template-ic-config
-  namespace: haproxy-template-ic
 data:
   config: |
-    # Pod selector for finding HAProxy instances
     pod_selector:
-      match_labels:
-        app: haproxy
-        component: loadbalancer
-
-    # Resources to watch for changes
+      match_labels: {app: haproxy, component: loadbalancer}
+    
     watched_resources:
-      ingresses:
-        api_version: networking.k8s.io/v1
-        kind: Ingress
-        enable_validation_webhook: true
-      
-      services:
-        api_version: v1
-        kind: Service
-        enable_validation_webhook: false
-
-    # Reusable template snippets
+      ingresses: {api_version: networking.k8s.io/v1, kind: Ingress, enable_validation_webhook: true}
+      services: {api_version: v1, kind: Service, enable_validation_webhook: false}
+    
     template_snippets:
       backend-name: "backend_{{ service_name }}_{{ port }}"
-      health-check: "option httpchk GET /health"
-
-    # HAProxy map files
+    
     maps:
       /etc/haproxy/maps/host.map:
         template: |
           {% for _, ingress in resources.get('ingresses', {}).items() %}
-          {% if ingress.spec and ingress.spec.rules %}
+          {% if ingress.spec.rules %}
           {% for rule in ingress.spec.rules %}
-          {% if rule.host %}
           {{ rule.host }} {{ rule.host }}
-          {% endif %}
-          {% endfor %}
-          {% endif %}
-          {% endfor %}
-
-    # Main HAProxy configuration
+          {% endfor %}{% endif %}{% endfor %}
+    
     haproxy_config:
       template: |
         global
             daemon
-        
         defaults
             mode http
             timeout connect 5000ms
-            timeout client 50000ms
-            timeout server 50000ms
-        
         frontend health
             bind *:8404
-            http-request return status 200 content-type text/plain string "OK" if { path /healthz }
-        
+            http-request return status 200 if { path /healthz }
         frontend main
             bind *:80
             {% include "backend-routing" %}
-
-    # TLS certificates
+    
     certificates:
       /etc/haproxy/certs/tls.pem:
         template: |
@@ -384,38 +194,7 @@ data:
           {% if secret.type == "kubernetes.io/tls" %}
           {{ secret.data.get('tls.crt') | b64decode }}
           {{ secret.data.get('tls.key') | b64decode }}
-          {% endif %}
-          {% endfor %}
-```
-
-### Watched Resources Configuration
-
-Configure which Kubernetes resources the controller should watch:
-
-```yaml
-watched_resources:
-  # Standard Kubernetes resources
-  ingresses:
-    api_version: networking.k8s.io/v1
-    kind: Ingress
-    enable_validation_webhook: true
-
-  services:
-    api_version: v1  
-    kind: Service
-    enable_validation_webhook: false
-
-  # Custom resources
-  httproutes:
-    api_version: gateway.networking.k8s.io/v1beta1
-    kind: HTTPRoute
-    enable_validation_webhook: true
-
-  # ConfigMaps for additional configuration
-  configmaps:
-    api_version: v1
-    kind: ConfigMap
-    enable_validation_webhook: false
+          {% endif %}{% endfor %}
 ```
 
 ## Important Development Notes
@@ -426,439 +205,44 @@ watched_resources:
 - **Pre-commit Hooks**: Automatically enforces code quality standards
 - **Three-tier Testing Strategy**: Fast unit tests + integration tests with Docker + e2e tests with real Kubernetes clusters
 
-## Template Snippet System
+## Template System
 
-The controller supports reusable template snippets using Jinja2's `{% include %}` functionality:
-
-- **Definition**: Define snippets in the `template_snippets` section of the ConfigMap
-- **Usage**: Include snippets in any template (maps, configs, certificates) with `{% include "snippet-name" %}`
-- **Features**: Supports nested includes, template variables, and comprehensive error handling
-- **Implementation**: Custom `SnippetLoader` class extends Jinja2's `BaseLoader` to resolve snippet names
-
-Example:
-```yaml
-template_snippets:
-  backend-name: "backend_{{ service_name }}_{{ port }}"
-  
-maps:
-  /etc/haproxy/maps/backends.map:
-    template: |
-      {% for service in services %}
-      {% include "backend-name" %} server entry here
-      {% endfor %}
-```
-
-Key implementation details:
-- Snippets are parsed before other templates to ensure availability
-- Each template environment includes access to all defined snippets
-- Missing snippet references raise `TemplateNotFound` exceptions with clear error messages
-- Configuration reload recreates snippet environments to prevent caching issues
-
-### Template Variables
-
-Templates have access to the following variables:
-
-- **`resources`**: Dictionary of watched Kubernetes resources organized by type
-  - Access pattern: `{% for key, resource in resources.get('resource_type', {}).items() %}`
-  - Example: `resources.get('ingresses', {})`, `resources.get('secrets', {})`
-- **`namespace`**: Current namespace where the controller is running
-- **Custom variables**: Any additional variables defined in the ConfigMap configuration
-
-Example template variable usage:
-```yaml
-maps:
-  /etc/haproxy/maps/backends.map:
-    template: |
-      # Current namespace: {{ namespace }}
-      {% for _, ingress in resources.get('ingresses', {}).items() %}
-      {% if ingress.metadata.namespace == namespace %}
-      # Process ingress: {{ ingress.metadata.name }}
-      {% endif %}
-      {% endfor %}
-```
-
-### Built-in Template Filters
-
-The controller provides custom Jinja2 filters for common operations:
-
-- **`b64decode`**: Decodes base64-encoded strings (e.g., `{{ secret.data.cert | b64decode }}`)
-- **Standard Jinja2 filters**: All standard filters are available (length, upper, lower, etc.)
-
-Example usage:
-```yaml
-certificates:
-  /etc/haproxy/certs/tls.pem:
-    template: |
-      {% for _, secret in resources.get('secrets', {}).items() %}
-      {% if secret.type == "kubernetes.io/tls" %}
-      {{ secret.data.get('tls.crt') | b64decode }}
-      {{ secret.data.get('tls.key') | b64decode }}
-      {% endif %}
-      {% endfor %}
-```
+**Snippets**: Define in `template_snippets`, use with `{% include "snippet-name" %}`
+**Variables**: `resources` (watched K8s resources), `namespace` (current namespace)
+**Filters**: `b64decode` for base64 strings, plus standard Jinja2 filters
+**Access pattern**: `{% for _, resource in resources.get('resource_type', {}).items() %}`
 
 ## Distributed Tracing
 
-The controller supports distributed tracing with OpenTelemetry for end-to-end observability across the entire template rendering and deployment pipeline. This provides detailed insights into request flows, performance bottlenecks, and error attribution.
+OpenTelemetry tracing for end-to-end observability across template rendering and deployment pipeline.
 
-### Features
-
-- **End-to-end correlation**: Track individual configuration changes from Kubernetes events through template rendering to HAProxy deployment
-- **Performance analysis**: Identify bottlenecks in template rendering, API calls, and deployment operations
-- **Error attribution**: Quickly identify where failures occur in complex workflows with detailed span context
-- **Automatic instrumentation**: Built-in instrumentation for HTTP requests (via HTTPX) and async operations
-- **Multiple exporters**: Support for Jaeger, console output, and other OpenTelemetry-compatible backends
-
-### Configuration
-
-Enable distributed tracing using CLI flags or environment variables:
-
-```bash
-# Enable tracing with CLI flag
-uv run haproxy-template-ic --configmap-name=my-config --tracing-enabled
-
-# Enable tracing with environment variables
-export TRACING_ENABLED=true
-export JAEGER_ENDPOINT=jaeger-collector:14268
-export TRACING_SERVICE_NAME=haproxy-template-ic
-export TRACING_SERVICE_VERSION=1.0.0
-```
-
-Environment variables:
-- `TRACING_ENABLED`: Enable distributed tracing (default: false)
-- `JAEGER_ENDPOINT`: Jaeger collector endpoint (e.g., "jaeger:14268")
-- `TRACING_SERVICE_NAME`: Service name for traces (default: "haproxy-template-ic")
-- `TRACING_SERVICE_VERSION`: Service version for traces (default: "1.0.0")
-- `TRACING_SAMPLE_RATE`: Sampling rate from 0.0 to 1.0 (default: 1.0)
-- `TRACING_CONSOLE_EXPORT`: Enable console trace export for development (default: false)
-
-### Traced Operations
-
-The controller automatically creates spans for key operations:
-
-#### Template Operations
-- **Template rendering**: Individual spans for HAProxy config, maps, and certificates
-- **Template snippet resolution**: Track include operations and nested templates
-- **Configuration validation**: Trace template compilation and variable resolution
-
-#### Dataplane API Operations
-- **Pod discovery**: Track HAProxy instance discovery and filtering
-- **Configuration validation**: Trace validation API calls with retry and circuit breaker context
-- **Configuration deployment**: Track deployment operations with version information
-- **Synchronization workflows**: End-to-end spans for complete sync processes
-
-#### Kubernetes Operations
-- **ConfigMap operations**: Track configuration loading and change detection
-- **Resource watching**: Trace resource index updates and event processing
-- **Namespace operations**: Track namespace detection and resource queries
-
-### Span Attributes and Events
-
-Each span includes rich metadata for debugging and analysis:
-
-```
-Span: render_haproxy_config_template
-├── template.type: "haproxy_config"
-├── template.path: "/etc/haproxy/haproxy.cfg"
-├── template_size: 2048
-├── template_vars_count: 12
-├── operation.category: "template_rendering"
-└── Events:
-    ├── haproxy_config_rendered
-    └── sync_started
-```
-
-```
-Span: dataplane_validate
-├── dataplane.operation: "validate"
-├── dataplane.instance_url: "http://10.244.0.5:5555"
-├── config_size: 2048
-├── operation.category: "dataplane_api"
-└── Events:
-    ├── validation_successful
-    └── circuit_breaker_closed
-```
-
-### Development and Debugging
-
-For local development, enable console tracing to see traces in logs:
-
-```bash
-export TRACING_ENABLED=true
-export TRACING_CONSOLE_EXPORT=true
-uv run haproxy-template-ic --configmap-name=my-config
-```
-
-This outputs structured trace information to the console alongside regular logs.
-
-### Production Deployment
-
-For production deployments with Jaeger:
-
-1. **Deploy Jaeger**: Set up Jaeger collector in your cluster
-2. **Configure endpoint**: Set `JAEGER_ENDPOINT` to your Jaeger collector
-3. **Adjust sampling**: Set `TRACING_SAMPLE_RATE` for appropriate overhead (e.g., 0.1 for 10% sampling)
-4. **Monitor performance**: Use Jaeger UI to analyze traces and identify bottlenecks
-
-Example Kubernetes deployment with tracing:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: haproxy-template-ic
-spec:
-  template:
-    spec:
-      containers:
-      - name: haproxy-template-ic
-        image: haproxy-template-ic:latest
-        env:
-        - name: CONFIGMAP_NAME
-          value: haproxy-template-ic-config
-        - name: TRACING_ENABLED
-          value: "true"
-        - name: JAEGER_ENDPOINT
-          value: jaeger-collector:14268
-        - name: TRACING_SAMPLE_RATE
-          value: "0.1"
-```
-
-### Performance Impact
-
-- **Overhead**: Minimal performance impact when properly configured
-- **Sampling**: Use sampling rates < 1.0 in high-throughput environments
-- **Async export**: Spans are exported asynchronously without blocking operations
-- **Graceful degradation**: Tracing failures don't affect application functionality
+**Configuration**: `TRACING_ENABLED=true`, `JAEGER_ENDPOINT=jaeger:14268`, `--tracing-enabled`
+**Operations traced**: Template rendering, dataplane API, Kubernetes operations, pod discovery
+**Development**: `TRACING_CONSOLE_EXPORT=true` for console output
+**Production**: Use `TRACING_SAMPLE_RATE=0.1` for performance, deploy Jaeger collector
 
 ## Dataplane API Integration
 
-The controller implements full Dataplane API synchronization to deploy rendered configurations to HAProxy instances using the official HAProxy Dataplane API v3 generated client:
+Uses official OpenAPI-generated HAProxy Dataplane API v3 client (218 endpoints, asyncio-compatible, lazy loading).
 
-### Generated Client Implementation
-
-- **Complete API Coverage**: Uses the official OpenAPI-generated client with all 218 API endpoints from HAProxy Dataplane API v3
-- **Asyncio Compatible**: Generated with `--library asyncio` for full async/await support
-- **Built-in Lazy Loading**: Latest OpenAPI Generator includes lazy loading support via `lazy_imports` package, reducing import time from 20+ seconds to under 1 second
-- **Separate Code Structure**: Generated code is kept in `codegen/haproxy_dataplane_v3/` and excluded from linting/coverage
-- **Regeneration Script**: `scripts/regenerate_client.sh` downloads the latest spec and regenerates the client
-  - Supports custom JAR files via `--jar` option for accessing latest features like lazy loading
-  - Built-in lazy loading reduces import time from 20+ seconds to under 1 second when using latest generator
-- **Compatibility Shim**: `codegen/haproxy_dataplane_v3/haproxy_dataplane_v3/models/dict.py` works around OpenAPI Generator v7.14.0 Dict import bug
-
-### Architecture
-
-- **Pod Discovery**: Automatically discovers HAProxy pods using configured label selectors
-- **Validation Sidecars**: Validates configurations on dedicated sidecar instances before production deployment
-- **Production Deployment**: Pushes validated configurations to production HAProxy instances via Dataplane API
-- **Error Handling**: Comprehensive error handling with detailed logging for failed operations
-
-### Key Components
-
-- **`HAProxyPodDiscovery`**: Discovers HAProxy pods matching label selectors, distinguishes validation vs production pods
-- **`DataplaneClient`**: HTTP client for Dataplane API operations (validation, deployment, version retrieval)
-- **`ConfigSynchronizer`**: Orchestrates the complete sync process with validation and deployment phases
-
-### Configuration Requirements
-
-HAProxy pods must be configured with:
-- **Dataplane API enabled**: Default port 5555 (configurable via `haproxy-template-ic/dataplane-port` annotation)
-- **Pod labels**: Must match the `pod_selector.match_labels` in the ConfigMap
-- **Validation sidecars**: Pods labeled with `haproxy-template-ic/role: validation` are used for config validation
-
-### Synchronization Process
-
-1. **Discovery**: Find all HAProxy pods matching the selector
-2. **Separation**: Separate validation sidecars from production instances
-3. **Validation**: Test configuration on validation sidecars first
-4. **Deployment**: Deploy to production instances only after successful validation
-5. **Monitoring**: Log results and track configuration versions
-
-Example pod selector configuration:
-```yaml
-pod_selector:
-  match_labels:
-    app: haproxy
-    component: loadbalancer
-```
-
-### Required Map Templates
-
-The HAProxy configuration references several map files that must be defined in your configuration:
-
-- **`/etc/haproxy/maps/host.map`**: Maps host headers to normalized identifiers for routing
-- **`/etc/haproxy/maps/path-exact.map`**: Maps host+path combinations to backends using exact matching
-- **`/etc/haproxy/maps/path-prefix-exact.map`**: Maps host+path combinations using prefix matching
-- **`/etc/haproxy/maps/path-prefix.map`**: Maps host+path combinations using prefix matching with trailing slash
-
-Example host map template:
-```yaml
-maps:
-  /etc/haproxy/maps/host.map:
-    template: |
-      # Maps host headers to normalized identifiers
-      {% for _, ingress in resources.get('ingresses', {}).items() %}
-      {% if ingress.spec and ingress.spec.rules %}
-      {% for rule in ingress.spec.rules %}
-      {% if rule.host %}
-      {{ rule.host }} {{ rule.host }}
-      {% endif %}
-      {% endfor %}
-      {% endif %}
-      {% endfor %}
-```
-
-### Error Handling
-
-- **Validation failures**: Stop deployment if any validation sidecar rejects the configuration
-- **Network errors**: Retry logic with detailed error reporting
-- **Version tracking**: Each successful deployment tracks the HAProxy configuration version
-- **Partial failures**: Continue deploying to other instances if individual pods fail
+**Components**: `HAProxyPodDiscovery`, `DataplaneClient`, `ConfigSynchronizer`
+**Process**: Discovery → Validation → Deployment → Monitoring
+**Requirements**: Dataplane API enabled (port 5555), matching pod labels, validation sidecars
+**Error handling**: Validation failures stop deployment, retry logic, version tracking
 
 ## Monitoring and Observability
 
-The controller provides comprehensive monitoring capabilities through Prometheus metrics, management socket inspection, and structured logging:
-
-### Structured Logging
-
-The controller uses **structlog**, the industry-standard Python structured logging library, with automatic context injection and correlation:
-
-- **Operation correlation**: Each operation gets a unique ID for tracing across log entries
-- **Component context**: Automatic tagging of log entries by component (operator, dataplane, management)  
-- **Resource context**: Automatic inclusion of Kubernetes resource metadata (type, namespace, name)
-- **JSON output**: Optional structured JSON format for log aggregation systems
-- **Context managers**: Programmatic context management for nested operations
-- **High performance**: Built on structlog's optimized logging pipeline
-
-#### Technology Stack
-
-- **Core Library**: [structlog](https://www.structlog.org/) - The most popular Python structured logging framework
-- **Context Variables**: Uses Python's `contextvars` for async-safe context management
-- **Custom Processors**: Custom structlog processors for backward-compatible output formatting
-- **Zero Overhead**: Minimal performance impact with lazy evaluation and caching
-
-#### Output Formats
-
-**Plain Text Mode** (default): Uses custom logfmt processor that appends context fields in logfmt format to traditional log messages:
-```
-2025-08-15 18:46:20,473 - operator - INFO - 🔄 Config has changed: reloading operation_id=test-op-123 component=operator resource_type=ConfigMap config_diff="{'root': {'values_changed': {'key1': {'old_value': 'old', 'new_value': 'new'}}}}"
-```
-
-**JSON Mode**: Enable with `--structured-logging` or `STRUCTURED_LOGGING=true` for structured JSON output using structlog's built-in JSONRenderer:
-```json
-{
-  "timestamp": "2025-08-15T16:46:20.474216Z",
-  "level": "INFO", 
-  "logger": "operator",
-  "event": "🔄 Config has changed: reloading",
-  "operation_id": "test-op-123",
-  "component": "operator",
-  "resource_type": "ConfigMap",
-  "config_diff": "{'root': {'values_changed': {'key1': {'old_value': 'old', 'new_value': 'new'}}}}"
-}
-```
-
-Both formats preserve all context information without duplication and provide the same API as before while leveraging structlog's robust foundation.
-
-### Prometheus Metrics
-
-The controller exposes metrics on port 9090 (configurable via `--metrics-port` or `METRICS_PORT`):
-
-- **Application metrics**: Version info, uptime, and runtime information
-- **Resource tracking**: Counts of watched Kubernetes resources by type and namespace
-- **Template rendering**: Success/failure counts and timing histograms for all template types
-- **HAProxy instances**: Counts of production and validation pod instances
-- **Dataplane API**: Request counts, timing, and error rates for all API operations
-- **Configuration**: Reload success/failure counts and timing
-- **Management socket**: Connection counts and command execution metrics
-- **Error tracking**: Categorized error counts by component and type
-
-Example metrics:
-```
-# Application info
-haproxy_template_ic_info{version="1.0.0"} 1
-
-# Watched resources
-haproxy_template_ic_watched_resources_total{resource_type="ingresses",namespace="default"} 5
-
-# Template rendering
-haproxy_template_ic_template_renders_total{template_type="haproxy_config",status="success"} 42
-haproxy_template_ic_template_render_duration_seconds{template_type="map"} 0.003
-
-# Dataplane API operations  
-haproxy_template_ic_dataplane_requests_total{operation="validate",status="success"} 15
-haproxy_template_ic_dataplane_duration_seconds{operation="deploy"} 0.125
-```
-
-### Management Socket
-
-The Unix socket at `/run/haproxy-template-ic/management.sock` provides runtime state inspection:
-
-```bash
-# Dump complete operator state
-echo "dump all" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-
-# Dump specific components
-echo "dump indices" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-echo "dump config" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-
-# Get specific configuration elements
-echo "get maps /etc/haproxy/maps/host.map" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-echo "get template_snippets backend-name" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-```
-
-### Deployment Monitoring
-
-For production deployments, consider:
-- ServiceMonitor CRD for Prometheus scraping
-- Grafana dashboards for metrics visualization  
-- Alerting rules for error rates and performance thresholds
-- Log aggregation for detailed troubleshooting
+**Structured Logging**: Uses structlog with operation correlation, component context, JSON output (`STRUCTURED_LOGGING=true`)
+**Prometheus Metrics**: Port 9090, tracks application/resources/templates/dataplane/errors
+**Management Socket**: `/run/haproxy-template-ic/management.sock` for runtime inspection
+- Commands: `dump all|indices|config`, `get maps|template_snippets <name>`
 
 ## Resilience and Reliability
 
-The controller implements comprehensive resilience patterns to handle failures gracefully in production environments:
-
-### Retry Mechanisms
-
-- **Exponential backoff**: Automatic retry with increasing delays to avoid overwhelming failing services
-- **Jitter**: Random delay variations to prevent thundering herd effects
-- **Error categorization**: Different retry strategies based on error types (network, rate limiting, server errors)
-- **Configurable policies**: Customizable retry attempts, delays, and error categories
-
-### Circuit Breaker Pattern
-
-- **Failure detection**: Automatically opens circuits when failure thresholds are exceeded
-- **Fast failure**: Prevents cascading failures by failing fast when services are unavailable
-- **Automatic recovery**: Attempts to close circuits after recovery timeouts
-- **Per-instance isolation**: Individual circuit breakers for each HAProxy instance
-
-### Adaptive Timeouts
-
-- **Dynamic adjustment**: Timeouts increase after failures and decrease after successes  
-- **Per-operation customization**: Different timeout strategies for validation vs deployment
-- **Bounded adaptation**: Minimum and maximum timeout limits prevent extreme values
-- **Integrated monitoring**: Timeout adjustments are tracked via metrics
-
-### Error Recovery Strategies
-
-- **Graceful degradation**: Continue operating with partial functionality when some instances fail
-- **Validation isolation**: Failed validation sidecars don't block deployments to healthy instances  
-- **State consistency**: Configuration versions track successful deployments across instances
-- **Operational visibility**: All resilience events are logged with structured context
-
-Example configuration:
-```python
-retry_policy = RetryPolicy(
-    max_attempts=5,
-    base_delay=2.0,
-    max_delay=30.0,
-    timeout_config=TimeoutConfig(
-        initial_timeout=15.0,
-        max_timeout=60.0
-    )
-)
-```
+**Retry mechanisms**: Exponential backoff, jitter, error categorization, configurable policies
+**Circuit breakers**: Automatic failure detection, fast failure, recovery timeouts, per-instance isolation
+**Adaptive timeouts**: Dynamic adjustment, operation-specific, bounded limits, metrics tracking
+**Error recovery**: Graceful degradation, validation isolation, state consistency, operational visibility
 
 ## Configuration
 
@@ -892,237 +276,37 @@ Follow the style guide in `STYLEGUIDE.md`:
 
 ## Development Workflow
 
-### Standard Feature Development Process
+**Standard Process**: Feature branch → Plan/implement → Test (`uv run pytest -n auto`) → Quality checks → Commit → PR → Review → Merge
 
-When implementing new features or refactoring existing code, follow this standardized workflow:
+**Kind Development**:
+1. Setup: `bash ./scripts/start-dev-env.sh`, build/load image
+2. Test: Run unit/integration/e2e tests with debugging options
+3. Debug: Port-forward management socket, inspect with `dump all`
 
-1. **Create feature branch**:
-   ```bash
-   git checkout -b feature/descriptive-branch-name
-   # or for refactoring:
-   git checkout -b refactor/descriptive-branch-name
-   ```
-
-2. **Plan and implement changes**:
-   - Use TodoWrite tool to create a structured task list for complex tasks
-   - Implement changes incrementally with regular testing
-   - Maintain backward compatibility whenever possible
-   - Run tests frequently during development: `uv run pytest -m "not integration and not acceptance"`
-
-3. **Comprehensive testing**:
-   ```bash
-   # Run all unit tests
-   uv run pytest -m "not integration and not acceptance"
-   
-   # Run integration tests if changes affect external dependencies
-   uv run pytest -m integration
-   
-   # Run acceptance tests for major changes
-   uv run pytest -m acceptance
-   ```
-
-4. **Code quality checks**:
-   ```bash
-   # Format and lint code
-   uv run ruff format
-   uv run ruff check --fix
-   
-   # Type checking (optional but recommended)
-   uv run mypy haproxy_template_ic/
-   ```
-
-5. **Commit changes**:
-   ```bash
-   git add .
-   git commit -m "feat: descriptive commit message following conventional commits"
-   ```
-
-6. **Create pull request**:
-   ```bash
-   git push -u origin feature/descriptive-branch-name
-   gh pr create --title "feat: descriptive title" --body "Detailed description of changes"
-   ```
-
-7. **Address code review feedback**:
-   - Implement suggestions from code review
-   - Push additional commits to the same branch
-   - Re-run tests and quality checks as needed
-
-8. **Merge and cleanup**:
-   - Merge PR when approved
-   - Delete feature branch after successful merge
-   - Update local main branch: `git checkout main && git pull origin main`
-
-### Local Development with kind
-
-1. **Setup development environment**:
-   ```bash
-   # Create kind cluster and deploy controller
-   bash ./scripts/start-dev-env.sh
-   
-   # Build and load image
-   docker build --target production -t haproxy-template-ic:dev .
-   kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev
-   ```
-
-2. **Test changes**:
-   ```bash
-   # Run unit tests first
-   uv run pytest -m "not integration and not acceptance"
-   
-   # Run integration tests with debugging
-   uv run pytest -m integration --keep-containers=on-failure
-   
-   # Run e2e tests  
-   uv run pytest -m acceptance --keep-namespaces
-   ```
-
-3. **Debug with management socket**:
-   ```bash
-   # Port forward to access management socket
-   kubectl port-forward pod/haproxy-template-ic-pod 8080:8080
-   
-   # Inspect operator state
-   echo "dump all" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-   echo "get maps /etc/haproxy/maps/host.map" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-   ```
-
-### Monitoring During Development
-
-1. **View metrics**:
-   ```bash
-   # Port forward metrics endpoint
-   kubectl port-forward pod/haproxy-template-ic-pod 9090:9090
-   curl http://localhost:9090/metrics
-   ```
-
-2. **Enable tracing for debugging**:
-   ```bash
-   # Enable console tracing
-   export TRACING_ENABLED=true
-   export TRACING_CONSOLE_EXPORT=true
-   uv run haproxy-template-ic --configmap-name=my-config
-   ```
-
-3. **Structured logging for debugging**:
-   ```bash
-   # Enable JSON structured logging
-   export STRUCTURED_LOGGING=true
-   uv run haproxy-template-ic --configmap-name=my-config
-   ```
-
-### Webhook Development
-
-1. **Enable webhook validation**:
-   ```bash
-   export WEBHOOK_ENABLED=true
-   export WEBHOOK_PORT=9443
-   uv run haproxy-template-ic --configmap-name=my-config --webhook-enabled
-   ```
-
-2. **Test webhook with kubectl**:
-   ```bash
-   # Try applying a ConfigMap - webhook will validate it
-   kubectl apply -f example-configmap.yaml
-   ```
-
-### Template Development
-
-1. **Test template changes**:
-   - Update ConfigMap with new templates
-   - Watch operator logs for template rendering
-   - Use management socket to inspect rendered output
-
-2. **Debug template errors**:
-   - Check operator logs for Jinja2 template errors  
-   - Use `dump config` management command to see current templates
-   - Test templates with simple variable substitutions first
-
-### Dataplane Integration Testing
-
-1. **Manual Dataplane API testing**:
-   ```bash
-   # Port forward to Dataplane API
-   kubectl port-forward pod/haproxy-pod 5555:5555
-   
-   # Test configuration validation
-   curl -u admin:adminpass -X POST \
-     http://localhost:5555/v3/services/haproxy/configuration/raw \
-     -H "Content-Type: text/plain" \
-     --data-binary "@test-config.cfg"
-   ```
-
-2. **Monitor synchronization**:
-   - Check controller logs for sync operations
-   - View Dataplane API metrics for request counts
-   - Use management socket to see HAProxy instance status
+**Debugging**:
+- Metrics: Port-forward 9090, `curl /metrics`
+- Tracing: `TRACING_ENABLED=true TRACING_CONSOLE_EXPORT=true`
+- Logging: `STRUCTURED_LOGGING=true`
+- Webhooks: `WEBHOOK_ENABLED=true`, test with `kubectl apply`
+- Templates: Watch logs, use `dump config`, test incrementally
+- Dataplane: Port-forward 5555, test with curl
 
 ## Troubleshooting
 
-### Common Issues
-
-- **Test failures**: Check if kind clusters conflict, use `--keep-namespaces` for e2e test debugging
-- **Import errors**: Run `uv sync --group dev` to ensure all dependencies installed
-- **Docker issues**: Ensure user can run Docker commands (add to docker group on Linux)
-- **Kind clusters**: Delete with `kind delete cluster --name <name>` if stuck
-
-### Template Rendering Issues
-
-- **"'Store object' has no attribute 'spec'"**: This error was fixed in the operator by properly converting kopf index stores to resource objects. Templates now correctly access Kubernetes resource attributes.
-- **TemplateNotFound errors**: Ensure snippet names in `{% include %}` directives match those defined in `template_snippets`
-- **Resource access patterns**: Use `{% for key, resource in resources.get('resource_type', {}).items() %}` to access watched resources
-- **"Failed to decode base64 value"**: Ensure base64 data is properly encoded before using the `b64decode` filter
-- **Missing map files**: Ensure all map files referenced in HAProxy config are defined in the `maps` section
-
-### Dataplane API Issues
-
-- **"No HAProxy instances found"**: Check pod selector configuration and ensure HAProxy pods have matching labels
-- **"Pod has no IP address"**: Pods must be in Running state with assigned IP addresses
-- **"Configuration validation failed"**: Check HAProxy config syntax and ensure validation sidecars are accessible
-- **"Connection refused"**: Verify Dataplane API is enabled on port 5555 (or custom port via annotation)
-- **"Configuration deployment failed"**: Check HAProxy logs for configuration errors and network connectivity
-- **"'server web_servers/web2' could not resolve address"**: HAProxy configuration contains unresolvable hostnames in server lines. Use IP addresses (e.g., `127.0.0.1:8001`) instead of domain names in test configurations to avoid DNS resolution errors
+**Common**: Test failures (kind conflicts, use `--keep-namespaces`), import errors (`uv sync --group dev`), Docker permissions
+**Templates**: Use correct resource access patterns, match snippet names, define all referenced maps, use IP addresses not hostnames
+**Dataplane**: Check pod selectors/labels, ensure Running pods with IPs, verify port 5555, check HAProxy config syntax
 
 ## Commit Message Guidelines
 
-Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification for all commit messages:
+Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<type>: <description>`
+**Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `ci`, `perf`
 
-```
-<type>[optional scope]: <description>
+## Development Rules
 
-[optional body]
-
-[optional footer(s)]
-```
-
-**Common types**:
-- `feat:` - New features
-- `fix:` - Bug fixes  
-- `docs:` - Documentation changes
-- `style:` - Code style changes (formatting, missing semicolons, etc.)
-- `refactor:` - Code refactoring without changing functionality
-- `test:` - Adding or updating tests
-- `chore:` - Maintenance tasks, dependency updates
-- `ci:` - CI/CD configuration changes
-- `perf:` - Performance improvements
-
-**Examples**:
-```bash
-feat: add template snippet system with include support
-fix: resolve dataplane API connection timeout issues  
-docs: update deployment architecture documentation
-test: add acceptance tests for webhook validation
-chore: update dependencies to latest versions
-```
-
-## Misc Memories
-
-- Always fix failing tests and checks without asking for confirmation.
-- Always run tests and linters after code changes. Run acceptance tests after major code changes and after completing a task.
-- Always run a test after modifying it.
-- In Python always prefer module-level imports over local imports if having the choice.
-- **NEVER declare a task complete without verifying that all functionality works as intended.** A task is only complete when all tests pass and the functionality can be demonstrated successfully.
-- **Test Updates Are Mandatory**: When refactoring or changing APIs, updating tests is part of the development cycle, not an optional follow-up task. Any API changes must include corresponding test updates in the same work session.
-- **Full Test Suite Must Pass**: Before considering any development task complete, the full test suite must pass. This includes unit tests, integration tests, and acceptance tests where applicable.
-- **NEVER edit generated code (e.g., OpenAPI generator output).** Generated code should be regenerated from source specifications if changes are needed. Keep generated code in a separate directory and exclude it from linting, formatting, and coverage tools.
-- **Integration test progress context naming**: Always use `progress_context` (not `test_progress`) as the function name to avoid pytest's test discovery pattern which would incorrectly identify it as a test function.
+- Always fix failing tests without asking confirmation
+- Run `uv run pytest -n auto` after code changes to verify full test suite passes
+- Update tests as mandatory part of API changes in same session
+- Never edit generated code - regenerate from source specifications
+- Prefer module-level imports over local imports in Python
+- Use `progress_context` (not `test_progress`) to avoid pytest discovery issues

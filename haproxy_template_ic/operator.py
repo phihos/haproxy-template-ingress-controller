@@ -173,8 +173,14 @@ async def handle_configmap_change(
                 )
 
                 new_config = await load_config_from_configmap(event["object"])
-                if memo.config.raw != new_config.raw:
-                    diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
+
+                # Compare model dictionaries to avoid issues with compiled templates and object identity
+                # Use serialization mode to exclude non-serializable fields like compiled templates
+                old_dict = memo.config.model_dump(mode="serialization")
+                new_dict = new_config.model_dump(mode="serialization")
+
+                if old_dict != new_dict:
+                    diff = DeepDiff(old_dict, new_dict, verbose_level=2)
                     diff_str = str(diff)[:500]
                     structured_logger.info(
                         "🔄 Config has changed: reloading", config_diff=diff_str
@@ -264,31 +270,25 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     memo.haproxy_config_context.rendered_config = None
     memo.haproxy_config_context.rendered_certificates.clear()
 
-    # Create a new template context instance each time with config access
-    template_context = TemplateContext(resources=indices, config=memo.config)
+    # Create a new template context instance each time
+    template_context = TemplateContext(
+        resources=indices, namespace=get_current_namespace()
+    )
 
-    # Create template variables from dataclass fields, excluding config reference
+    # Create template variables for rendering
     template_vars = {
         "resources": template_context.resources,
-        "environment": template_context.environment,
-        "cluster_name": template_context.cluster_name,
-        "config_values": template_context.config_values,
-        "get_template_snippet": template_context.get_template_snippet,
-        "get_map_config": template_context.get_map_config,
-        "get_certificate_config": template_context.get_certificate_config,
-        "register_error": template_context.register_error,
-        "get_resources": template_context.get_resources,
-        "iterate_resources": template_context.iterate_resources,
-        "count_resources": template_context.count_resources,
-        "has_resources": template_context.has_resources,
+        "namespace": template_context.namespace,
     }
 
     # Render the HAProxy config template
     try:
         with trace_template_render("haproxy_config"):
             with metrics.time_template_render("haproxy_config"):
-                rendered_content = memo.config.haproxy_config.render(**template_vars)
-        rendered_config = RenderedConfig(content=rendered_content, config=memo.config)
+                rendered_content = memo.config.haproxy_config.compiled_template.render(
+                    **template_vars
+                )
+        rendered_config = RenderedConfig(content=rendered_content)
         memo.haproxy_config_context.rendered_config = rendered_config
         metrics.record_template_render("haproxy_config", "success")
         add_span_attributes(
@@ -341,22 +341,20 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             )
             metrics.record_template_render("certificate", "success")
             add_span_attributes(
-                certificate_name=certificate_config.name,
+                certificate_path=cert_path,
                 certificate_size=len(rendered_content),
             )
-            record_span_event("certificate_rendered", {"name": certificate_config.name})
-            logger.debug(
-                f"✅ Rendered certificate template for {certificate_config.name}"
-            )
+            record_span_event("certificate_rendered", {"path": cert_path})
+            logger.debug(f"✅ Rendered certificate template for {cert_path}")
         except Exception as e:
             metrics.record_template_render("certificate", "error")
             metrics.record_error("template_render_failed", "operator")
             record_span_event(
                 "certificate_render_failed",
-                {"name": certificate_config.name, "error": str(e)},
+                {"path": cert_path, "error": str(e)},
             )
             logger.error(
-                f"❌ Failed to render certificate template for {certificate_config.name}: {e}"
+                f"❌ Failed to render certificate template for {cert_path}: {e}"
             )
 
     # Synchronize rendered configuration with HAProxy instances
@@ -665,7 +663,13 @@ def run_operator_loop(cli_options: Any) -> None:
             stop_flag=stop_flag,
             cli_options=cli_options,
             config_reload_flag=config_reload_flag,
-            haproxy_config_context=HAProxyConfigContext(),
+            haproxy_config_context=HAProxyConfigContext(
+                config=Config(
+                    pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+                    haproxy_config=MapConfig(template="# Initial config"),
+                ),
+                template_context=TemplateContext(),
+            ),
             indices=indexers.indices,
         )
 

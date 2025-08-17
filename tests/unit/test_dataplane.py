@@ -18,9 +18,12 @@ from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
 )
 from haproxy_template_ic.config_models import (
+    Config,
+    MapConfig,
     PodSelector,
     HAProxyConfigContext,
     RenderedConfig,
+    TemplateContext,
 )
 
 
@@ -501,10 +504,14 @@ async def test_config_synchronizer_no_instances():
 
     synchronizer = ConfigSynchronizer(mock_discovery)
 
-    config_context = HAProxyConfigContext()
-    config_context.rendered_config = RenderedConfig(
-        content="global\n    daemon", config=MagicMock()
+    config_context = HAProxyConfigContext(
+        config=Config(
+            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+            haproxy_config=MapConfig(template="# Initial config"),
+        ),
+        template_context=TemplateContext(),
     )
+    config_context.rendered_config = RenderedConfig(content="global\n    daemon")
 
     results = await synchronizer.synchronize_configuration(config_context)
 
@@ -517,7 +524,13 @@ async def test_config_synchronizer_no_rendered_config():
     mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
     synchronizer = ConfigSynchronizer(mock_discovery)
 
-    config_context = HAProxyConfigContext()  # No rendered_config
+    config_context = HAProxyConfigContext(
+        config=Config(
+            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+            haproxy_config=MapConfig(template="# Initial config"),
+        ),
+        template_context=TemplateContext(),
+    )  # No rendered_config
 
     with pytest.raises(
         DataplaneAPIError, match="No rendered HAProxy configuration available"
@@ -544,7 +557,13 @@ async def test_config_synchronizer_validation_failure():
 
     synchronizer = ConfigSynchronizer(mock_discovery)
 
-    config_context = HAProxyConfigContext()
+    config_context = HAProxyConfigContext(
+        config=Config(
+            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+            haproxy_config=MapConfig(template="# Initial config"),
+        ),
+        template_context=TemplateContext(),
+    )
     config_context.rendered_config = RenderedConfig(
         content="global\n    daemon", config=MagicMock()
     )
@@ -587,7 +606,13 @@ async def test_config_synchronizer_successful_sync():
 
     synchronizer = ConfigSynchronizer(mock_discovery)
 
-    config_context = HAProxyConfigContext()
+    config_context = HAProxyConfigContext(
+        config=Config(
+            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+            haproxy_config=MapConfig(template="# Initial config"),
+        ),
+        template_context=TemplateContext(),
+    )
     config_context.rendered_config = RenderedConfig(
         content="global\n    daemon", config=MagicMock()
     )
@@ -612,7 +637,13 @@ async def test_config_synchronizer_build_complete_config():
     mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
     synchronizer = ConfigSynchronizer(mock_discovery)
 
-    config_context = HAProxyConfigContext()
+    config_context = HAProxyConfigContext(
+        config=Config(
+            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+            haproxy_config=MapConfig(template="# Initial config"),
+        ),
+        template_context=TemplateContext(),
+    )
     config_context.rendered_config = RenderedConfig(
         content="global\n    daemon", config=MagicMock()
     )
@@ -627,7 +658,13 @@ def test_config_synchronizer_build_complete_config_no_rendered():
     mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
     synchronizer = ConfigSynchronizer(mock_discovery)
 
-    config_context = HAProxyConfigContext()  # No rendered_config
+    config_context = HAProxyConfigContext(
+        config=Config(
+            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+            haproxy_config=MapConfig(template="# Initial config"),
+        ),
+        template_context=TemplateContext(),
+    )  # No rendered_config
 
     with pytest.raises(
         DataplaneAPIError, match="No rendered HAProxy configuration available"
@@ -734,7 +771,13 @@ async def test_synchronize_configuration_no_validation_sidecars():
 
     synchronizer = ConfigSynchronizer(mock_discovery)
 
-    config_context = HAProxyConfigContext()
+    config_context = HAProxyConfigContext(
+        config=Config(
+            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+            haproxy_config=MapConfig(template="# Initial config"),
+        ),
+        template_context=TemplateContext(),
+    )
     config_context.rendered_config = RenderedConfig(
         content="global\n    daemon", config=MagicMock()
     )
