@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 import kopf
 import yaml
 
-from haproxy_template_ic.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
 
@@ -63,146 +62,69 @@ def _extract_config_data(configmap_data: Dict[str, Any]) -> Optional[str]:
 # =============================================================================
 
 
-class WebhookRegistry:
-    """Manages dynamic registration of validation webhooks based on configuration."""
+# =============================================================================
+# Stateless Webhook Validation Functions
+# =============================================================================
 
-    def __init__(self):
-        self.registered_handlers: Dict[str, Any] = {}
 
-    def register_resource_validation_webhook(
-        self, group: str, version: str, kind: str, resource_id: str
-    ) -> None:
-        """Register a validation webhook for a specific resource type."""
-        handler_key = f"{group}/{version}/{kind}"
+async def _validate_resource_structure(
+    spec: Dict[str, Any], meta: Dict[str, Any], kind: str, warnings: List[str]
+) -> None:
+    """Validate basic resource structure."""
+    # Basic metadata validation
+    if not meta.get("name"):
+        raise kopf.AdmissionError(f"{kind} resource must have a name")
 
-        if handler_key in self.registered_handlers:
-            logger.debug(f"Webhook handler already registered for {handler_key}")
-            return
+    name = meta["name"]
 
-        # Create the validation handler function
-        async def resource_validation_handler(**kwargs: Any) -> None:
-            """Dynamically created validation handler."""
-            metrics = get_metrics_collector()
-
-            try:
-                with metrics.time_webhook_request():
-                    # Extract kopf parameters
-                    warnings = kwargs.get("warnings", [])
-                    spec = kwargs.get("spec", {})
-                    meta = kwargs.get("meta", {})
-
-                    # Handle None values from kopf
-                    if spec is None or meta is None:
-                        logger.debug(
-                            f"Skipping validation - missing spec or meta for {kind}"
-                        )
-                        return
-
-                    # Add resource-specific validation logic here
-                    logger.info(
-                        f"Validating {kind} resource: {meta.get('name', 'unknown')}"
-                    )
-
-                    # For now, we'll add basic structural validation
-                    # In the future, this could include template rendering validation
-                    # or other resource-specific checks
-
-                    await self._validate_resource_structure(spec, meta, kind, warnings)
-
-            except kopf.AdmissionError as e:
-                logger.warning(f"{kind} validation failed: {e}")
-                raise
-            except Exception as e:
-                logger.error(f"Unexpected error in {kind} webhook validation: {e}")
-                raise kopf.AdmissionError(f"Internal validation error: {e}")
-
-        # Build a DNS-1123 compliant handler id for webhook naming
-        safe_group = (group or "core").replace("/", ".").replace("_", "-")
-        safe_version = (version or "v1").replace("_", "-")
-        base_id = resource_id or kind.lower()
-        # only allow lowercase alnum and hyphen in id
-        import re
-
-        safe_base = re.sub(r"[^a-z0-9-]", "-", base_id.lower())
-        handler_id = (
-            f"validate-{safe_base}-{safe_group.replace('.', '-')}-{safe_version}"
+    # Validate name format
+    if not name.replace("-", "").replace(".", "").replace("_", "").isalnum():
+        warnings.append(
+            f"{kind} name '{name}' contains special characters that may cause issues"
         )
 
-        # Register the handler with kopf using a stable, valid id
-        kopf.on.validate(group, version, kind, id=handler_id)(
-            resource_validation_handler
+    # Add kind-specific validations
+    if kind.lower() == "ingress":
+        await _validate_ingress_specific(spec, warnings)
+    elif kind.lower() == "service":
+        await _validate_service_specific(spec, warnings)
+    elif kind.lower() == "secret":
+        await _validate_secret_specific(spec, warnings)
+
+
+async def _validate_ingress_specific(spec: Dict[str, Any], warnings: List[str]) -> None:
+    """Validate Ingress-specific fields."""
+    rules = spec.get("rules", [])
+    if not rules:
+        warnings.append(
+            "Ingress has no rules defined. Add at least one rule with host or path configuration."
         )
 
-        self.registered_handlers[handler_key] = resource_validation_handler
-        logger.info(f"Registered validation webhook for {handler_key}")
-
-    async def _validate_resource_structure(
-        self, spec: Dict[str, Any], meta: Dict[str, Any], kind: str, warnings: List[str]
-    ) -> None:
-        """Validate basic resource structure."""
-        # Basic metadata validation
-        if not meta.get("name"):
-            raise kopf.AdmissionError(f"{kind} resource must have a name")
-
-        name = meta["name"]
-
-        # Validate name format
-        if not name.replace("-", "").replace(".", "").replace("_", "").isalnum():
-            warnings.append(
-                f"{kind} name '{name}' contains special characters that may cause issues"
-            )
-
-        # Add kind-specific validations
-        if kind.lower() == "ingress":
-            await self._validate_ingress_specific(spec, warnings)
-        elif kind.lower() == "service":
-            await self._validate_service_specific(spec, warnings)
-        elif kind.lower() == "secret":
-            await self._validate_secret_specific(spec, warnings)
-
-    async def _validate_ingress_specific(
-        self, spec: Dict[str, Any], warnings: List[str]
-    ) -> None:
-        """Validate Ingress-specific fields."""
-        rules = spec.get("rules", [])
-        if not rules:
-            warnings.append(
-                "Ingress has no rules defined. Add at least one rule with host or path configuration."
-            )
-
-        for i, rule in enumerate(rules):
-            if not rule.get("host") and not rule.get("http"):
-                warnings.append(
-                    f"Ingress rule {i} has neither host nor http configuration"
-                )
-
-    async def _validate_service_specific(
-        self, spec: Dict[str, Any], warnings: List[str]
-    ) -> None:
-        """Validate Service-specific fields."""
-        ports = spec.get("ports", [])
-        if not ports:
-            warnings.append(
-                "Service has no ports defined. Add at least one port configuration with 'port' and 'targetPort'."
-            )
-
-        for i, port in enumerate(ports):
-            if not port.get("port"):
-                raise kopf.AdmissionError(f"Service port {i} is missing 'port' field")
-
-    async def _validate_secret_specific(
-        self, spec: Dict[str, Any], warnings: List[str]
-    ) -> None:
-        """Validate Secret-specific fields."""
-        data = spec.get("data", {})
-        if not data:
-            warnings.append(
-                "Secret has no data entries defined. Add key-value pairs to the 'data' field."
-            )
+    for i, rule in enumerate(rules):
+        if not rule.get("host") and not rule.get("http"):
+            warnings.append(f"Ingress rule {i} has neither host nor http configuration")
 
 
-# Global webhook registry
-_webhook_registry = WebhookRegistry()
+async def _validate_service_specific(spec: Dict[str, Any], warnings: List[str]) -> None:
+    """Validate Service-specific fields."""
+    ports = spec.get("ports", [])
+    if not ports:
+        warnings.append(
+            "Service has no ports defined. Add at least one port configuration with 'port' and 'targetPort'."
+        )
+
+    for i, port in enumerate(ports):
+        if not port.get("port"):
+            raise kopf.AdmissionError(f"Service port {i} is missing 'port' field")
+
+
+async def _validate_secret_specific(spec: Dict[str, Any], warnings: List[str]) -> None:
+    """Validate Secret-specific fields."""
+    data = spec.get("data", {})
+    if not data:
+        warnings.append(
+            "Secret has no data entries defined. Add key-value pairs to the 'data' field."
+        )
 
 
 # =============================================================================
@@ -212,36 +134,40 @@ _webhook_registry = WebhookRegistry()
 # Note: We intentionally do NOT register a blanket ConfigMap webhook as that
 # would make all ConfigMap operations in the cluster dependent on this service.
 # Instead, we only validate specific resources as configured in watch_resources.
+#
+# Webhook registration is handled by the kopf framework based on configuration
+# in the configure_webhook_server function in operator.py. This module provides
+# the stateless validation functions that can be called by webhook handlers.
 
 
 # =============================================================================
-# Configuration-based Webhook Registration
+# Stateless Webhook Configuration
 # =============================================================================
 
 
 def register_validation_webhooks_from_config(operator_config) -> None:
-    """Register validation webhooks based on operator configuration."""
+    """Register validation webhooks based on operator configuration.
+
+    This function is now stateless and does not maintain any global registry.
+    Webhook registration is handled by the kopf framework through the
+    configure_webhook_server function in operator.py.
+
+    This function logs the webhook configuration for visibility but does not
+    perform actual webhook registration to avoid persistence across operator reloads.
+    """
     if not hasattr(operator_config, "watched_resources"):
         logger.debug("No watched_resources configuration found")
         return
 
+    enabled_webhooks = []
     for resource_id, resource_config in operator_config.watched_resources.items():
-        if not resource_config.enable_validation_webhook:
-            logger.debug(f"Validation webhook disabled for {resource_config.kind}")
-            continue
+        if resource_config.enable_validation_webhook:
+            enabled_webhooks.append(f"{resource_config.kind} (id: {resource_id})")
 
-        # Parse group and version from api_version
-        if "/" in resource_config.api_version:
-            group, version = resource_config.api_version.rsplit("/", 1)
-        else:
-            group = ""
-            version = resource_config.api_version
-        kind = resource_config.kind
-
-        logger.info(
-            f"Enabling validation webhook for {resource_config.kind} (id: {resource_id})"
+    if enabled_webhooks:
+        logger.info(f"Webhook validation configured for: {', '.join(enabled_webhooks)}")
+        logger.debug(
+            "Webhook handlers will be registered by kopf framework during server setup"
         )
-
-        _webhook_registry.register_resource_validation_webhook(
-            group=group, version=version, kind=kind, resource_id=resource_id
-        )
+    else:
+        logger.debug("No validation webhooks enabled in configuration")

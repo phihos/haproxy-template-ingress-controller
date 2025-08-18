@@ -356,10 +356,18 @@ def test_rendered_map_is_frozen():
 # TemplateContext Tests
 def test_template_context_creation():
     """Test TemplateContext dataclass creation."""
-    resources = {"test_resource": {"name": "test", "host": "example.com"}}
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+
+    # Create an IndexedResourceCollection for test_resource
+    test_collection = IndexedResourceCollection()
+    test_collection._internal_dict[("default", "test")] = [
+        {"name": "test", "host": "example.com"}
+    ]
+
+    resources = {"test_resource": test_collection}
     context = TemplateContext(resources=resources, namespace="test-namespace")
 
-    assert context.resources == resources
+    assert len(context.resources["test_resource"]) == 1
     assert context.namespace == "test-namespace"
 
 
@@ -373,10 +381,20 @@ def test_template_context_default_resources():
 
 def test_template_context_is_frozen():
     """Test that TemplateContext is immutable."""
-    context = TemplateContext(resources={"pods": {"test-pod": {"name": "test"}}})
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+
+    # Create an IndexedResourceCollection for pods
+    pods_collection = IndexedResourceCollection()
+    pods_collection._internal_dict[("default", "test-pod")] = {"name": "test"}
+
+    context = TemplateContext(resources={"pods": pods_collection})
+
+    # Create a new collection to try replacing
+    new_pods_collection = IndexedResourceCollection()
+    new_pods_collection._internal_dict[("default", "new-pod")] = {"name": "new"}
 
     with pytest.raises(ValidationError):
-        context.resources = {"pods": {"new-pod": {"name": "new"}}}
+        context.resources = {"pods": new_pods_collection}
 
     with pytest.raises(ValidationError):
         context.namespace = "new-namespace"
@@ -690,8 +708,11 @@ def test_template_context_get_methods():
     assert test_config.certificates.get("/nonexistent.pem") is None
 
     # Test basic template context functionality
-    context_basic = TemplateContext(resources={"test": {}})
-    assert context_basic.resources == {"test": {}}
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+
+    test_collection = IndexedResourceCollection()
+    context_basic = TemplateContext(resources={"test": test_collection})
+    assert len(context_basic.resources["test"]) == 0
     assert context_basic.namespace is None
 
 
@@ -1334,43 +1355,63 @@ def test_template_snippet_update_during_config_reload():
 
 def test_template_context_helper_methods():
     """Test the new helper methods for resource access."""
-    # Create a template context with some test resources (using string keys)
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+
+    # Create IndexedResourceCollections for each resource type
+    ingresses_collection = IndexedResourceCollection()
+    ingresses_collection._internal_dict[("default", "ing1")] = {
+        "metadata": {"name": "ing1"}
+    }
+    ingresses_collection._internal_dict[("default", "ing2")] = {
+        "metadata": {"name": "ing2"}
+    }
+
+    services_collection = IndexedResourceCollection()
+    services_collection._internal_dict[("default", "svc1")] = {
+        "metadata": {"name": "svc1"}
+    }
+
+    empty_collection = IndexedResourceCollection()
+
     test_resources = {
-        "ingresses": {
-            "default/ing1": {"metadata": {"name": "ing1"}},
-            "default/ing2": {"metadata": {"name": "ing2"}},
-        },
-        "services": {
-            "default/svc1": {"metadata": {"name": "svc1"}},
-        },
-        "empty_type": {},
+        "ingresses": ingresses_collection,
+        "services": services_collection,
+        "empty_type": empty_collection,
     }
 
     context = TemplateContext(resources=test_resources)
 
     # Test basic resource access
-    assert len(context.resources.get("ingresses", {})) == 2
-    assert len(context.resources.get("services", {})) == 1
-    assert len(context.resources.get("empty_type", {})) == 0
-    assert len(context.resources.get("nonexistent", {})) == 0
+    assert len(context.resources.get("ingresses", IndexedResourceCollection())) == 2
+    assert len(context.resources.get("services", IndexedResourceCollection())) == 1
+    assert len(context.resources.get("empty_type", IndexedResourceCollection())) == 0
+    assert len(context.resources.get("nonexistent", IndexedResourceCollection())) == 0
 
-    # Test resource iteration
-    ingress_items = list(context.resources.get("ingresses", {}).items())
+    # Test resource iteration - now returns tuple keys like (namespace, name)
+    ingress_items = list(
+        context.resources.get("ingresses", IndexedResourceCollection()).items()
+    )
     assert len(ingress_items) == 2
-    assert ingress_items[0][0] == "default/ing1"
-    assert ingress_items[1][0] == "default/ing2"
+    # The keys are now tuples, not strings
+    keys = [item[0] for item in ingress_items]
+    assert ("default", "ing1") in keys
+    assert ("default", "ing2") in keys
 
     # Test resource counting
-    assert len(context.resources.get("ingresses", {})) == 2
-    assert len(context.resources.get("services", {})) == 1
-    assert len(context.resources.get("empty_type", {})) == 0
-    assert len(context.resources.get("nonexistent", {})) == 0
+    assert len(context.resources.get("ingresses", IndexedResourceCollection())) == 2
+    assert len(context.resources.get("services", IndexedResourceCollection())) == 1
+    assert len(context.resources.get("empty_type", IndexedResourceCollection())) == 0
+    assert len(context.resources.get("nonexistent", IndexedResourceCollection())) == 0
 
     # Test resource existence
-    assert bool(context.resources.get("ingresses", {})) is True
-    assert bool(context.resources.get("services", {})) is True
-    assert bool(context.resources.get("empty_type", {})) is False
-    assert bool(context.resources.get("nonexistent", {})) is False
+    assert bool(context.resources.get("ingresses", IndexedResourceCollection())) is True
+    assert bool(context.resources.get("services", IndexedResourceCollection())) is True
+    assert (
+        bool(context.resources.get("empty_type", IndexedResourceCollection())) is False
+    )
+    assert (
+        bool(context.resources.get("nonexistent", IndexedResourceCollection())) is False
+    )
 
 
 def test_template_compilation():
@@ -1582,34 +1623,39 @@ def test_host_map_template_rendering():
 
     config = config_from_dict(config_dict)
 
-    # Create mock ingress resources (using string keys)
-    mock_resources = {
-        "ingresses": {
-            "default/test-ingress": {
-                "metadata": {"name": "test-ingress", "namespace": "default"},
-                "spec": {
-                    "rules": [
-                        {"host": "example.com"},
-                        {"host": "www.example.com"},
-                        {"host": "api.example.com"},
-                    ]
-                },
-            },
-            "production/prod-ingress": {
-                "metadata": {"name": "prod-ingress", "namespace": "production"},
-                "spec": {"rules": [{"host": "prod.example.com"}]},
+    # Create mock ingress resources using IndexedResourceCollection
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+
+    ingresses_collection = IndexedResourceCollection()
+    ingresses_collection._internal_dict[("default", "test-ingress")] = [
+        {
+            "metadata": {"name": "test-ingress", "namespace": "default"},
+            "spec": {
+                "rules": [
+                    {"host": "example.com"},
+                    {"host": "www.example.com"},
+                    {"host": "api.example.com"},
+                ]
             },
         }
-    }
+    ]
+    ingresses_collection._internal_dict[("production", "prod-ingress")] = [
+        {
+            "metadata": {"name": "prod-ingress", "namespace": "production"},
+            "spec": {"rules": [{"host": "prod.example.com"}]},
+        }
+    ]
+
+    mock_resources = {"ingresses": ingresses_collection}
 
     # Create template context
-    context = TemplateContext(resources=mock_resources, config=config)
+    context = TemplateContext(resources=mock_resources)
 
     # Render the host map
     host_map_config = config.maps.get("/etc/haproxy/maps/host.map")
     template_vars = {
         "resources": context.resources,
-        "config": context.config,
+        "namespace": context.namespace,
     }
 
     rendered_content = (
@@ -1662,29 +1708,32 @@ def test_complete_ingress_configuration_with_certificates():
 
     config = config_from_dict(config_dict)
 
-    # Create mock TLS secret
-    mock_resources = {
-        "secrets": {
-            "default/example-tls": {
-                "metadata": {
-                    "name": "example-tls",
-                    "namespace": "default",
-                    "labels": {"haproxy-template-ic/tls": "true"},
-                },
-                "type": "kubernetes.io/tls",
-                "data": {"tls.crt": cert_b64, "tls.key": key_b64},
-            }
+    # Create mock TLS secret using IndexedResourceCollection
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+
+    secrets_collection = IndexedResourceCollection()
+    secrets_collection._internal_dict[("default", "example-tls")] = [
+        {
+            "metadata": {
+                "name": "example-tls",
+                "namespace": "default",
+                "labels": {"haproxy-template-ic/tls": "true"},
+            },
+            "type": "kubernetes.io/tls",
+            "data": {"tls.crt": cert_b64, "tls.key": key_b64},
         }
-    }
+    ]
+
+    mock_resources = {"secrets": secrets_collection}
 
     # Create template context
-    context = TemplateContext(resources=mock_resources, config=config)
+    context = TemplateContext(resources=mock_resources)
 
     # Render the certificate template
     cert_config = config.certificates.get("/etc/haproxy/certs/tls.pem")
     template_vars = {
         "resources": context.resources,
-        "config": context.config,
+        "namespace": context.namespace,
     }
 
     rendered_content = (
