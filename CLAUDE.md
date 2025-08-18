@@ -64,9 +64,6 @@ tests/fixtures/    # Test data and configurations
 
 ### Application
 - Run operator: `uv run haproxy-template-ic run --configmap-name=<name>`
-- Export schema: `uv run haproxy-template-ic schema export config-schema.json`
-- Validate config: `uv run haproxy-template-ic schema validate my-config.yaml`
-- Generate docs: `uv run haproxy-template-ic docs generate CONFIG.md`
 - Management socket: `socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock`
 - Metrics endpoint: `curl http://localhost:9090/metrics` (requires port-forward)
 - Health endpoint: `curl http://localhost:8080/healthz` (requires port-forward)

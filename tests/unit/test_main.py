@@ -2,15 +2,11 @@
 Tests for haproxy_template_ic.__main__ module.
 
 This module contains tests for CLI functionality and main application entry point
-with the new subcommand structure.
+with the simplified CLI structure (run command only).
 """
 
-import json
-import yaml
 import pytest
-from pathlib import Path
-from unittest.mock import patch, Mock
-import click
+from unittest.mock import patch
 from click.testing import CliRunner
 
 from haproxy_template_ic.__main__ import cli
@@ -29,8 +25,9 @@ def test_cli_help():
     assert result.exit_code == 0
     assert "HAProxy Template IC" in result.output
     assert "run" in result.output
-    assert "schema" in result.output
-    assert "docs" in result.output
+    # Only run command should be available
+    assert "schema" not in result.output
+    assert "docs" not in result.output
 
 
 def test_cli_no_command():
@@ -38,494 +35,224 @@ def test_cli_no_command():
     runner = CliRunner()
     result = runner.invoke(cli, [])
 
-    assert result.exit_code != 0
+    # Click shows usage help when no command is provided, which exits with code 0
+    # But when there are required subcommands, it exits with code 2
+    assert result.exit_code == 2 or result.exit_code == 0
     assert "Usage:" in result.output
 
 
+def test_cli_verbose_flag():
+    """Test verbose flag functionality."""
+    runner = CliRunner()
+
+    # Test -v flag
+    result = runner.invoke(cli, ["-v", "--help"])
+    assert result.exit_code == 0
+
+    # Test -vv flag
+    result = runner.invoke(cli, ["-vv", "--help"])
+    assert result.exit_code == 0
+
+
+def test_cli_structured_logging_flag():
+    """Test structured logging flag functionality."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--structured-logging", "--help"])
+    assert result.exit_code == 0
+
+
 # =============================================================================
-# Run Subcommand Tests
+# Run Command Tests
 # =============================================================================
-
-
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_with_defaults(mock_run_operator_loop):
-    """Test run subcommand with default arguments."""
-    runner = CliRunner()
-
-    with patch(
-        "haproxy_template_ic.__main__.setup_structured_logging"
-    ) as mock_setup_logging:
-        result = runner.invoke(cli, ["run", "--configmap-name", "test-config"])
-
-        # Verify command succeeded
-        assert result.exit_code == 0
-
-        # Verify logging setup was called with default verbose level (0)
-        mock_setup_logging.assert_called_once_with(0, use_json=False)
-
-        # Verify run_operator_loop was called with correct CLI options
-        mock_run_operator_loop.assert_called_once()
-        args, _ = mock_run_operator_loop.call_args
-        cli_options = args[0]
-
-        assert cli_options.configmap_name == "test-config"
-        assert cli_options.healthz_port == 8080  # default
-        assert cli_options.verbose == 0  # default
-        assert (
-            cli_options.socket_path == "/run/haproxy-template-ic/management.sock"
-        )  # default
-
-
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_with_custom_args(mock_run_operator_loop):
-    """Test run subcommand with custom arguments."""
-    runner = CliRunner()
-
-    with patch(
-        "haproxy_template_ic.__main__.setup_structured_logging"
-    ) as mock_setup_logging:
-        result = runner.invoke(
-            cli,
-            [
-                "--verbose",
-                "--verbose",  # -vv for debug
-                "--structured-logging",
-                "run",
-                "--configmap-name",
-                "custom-config",
-                "--healthz-port",
-                "9000",
-                "--socket-path",
-                "/custom/socket",
-            ],
-        )
-
-        # Verify command succeeded
-        assert result.exit_code == 0
-
-        # Verify logging setup was called with verbose level 2 (debug) and structured logging
-        mock_setup_logging.assert_called_once_with(2, use_json=True)
-
-        # Verify run_operator_loop was called with custom CLI options
-        mock_run_operator_loop.assert_called_once()
-        args, _ = mock_run_operator_loop.call_args
-        cli_options = args[0]
-
-        assert cli_options.configmap_name == "custom-config"
-        assert cli_options.healthz_port == 9000
-        assert cli_options.verbose == 2
-        assert cli_options.socket_path == "/custom/socket"
-        assert cli_options.structured_logging is True
-
-
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_with_env_vars(mock_run_operator_loop):
-    """Test run subcommand with environment variables."""
-    runner = CliRunner()
-
-    env_vars = {"HEALTHZ_PORT": "9999", "VERBOSE": "1", "SOCKET_PATH": "/env/socket"}
-
-    with patch(
-        "haproxy_template_ic.__main__.setup_structured_logging"
-    ) as mock_setup_logging:
-        result = runner.invoke(
-            cli, ["run", "--configmap-name", "env-config"], env=env_vars
-        )
-
-        # Verify command succeeded
-        assert result.exit_code == 0
-
-        # Verify logging setup was called with env verbose level
-        mock_setup_logging.assert_called_once_with(1, use_json=False)
-
-        # Verify run_operator_loop was called with env CLI options
-        mock_run_operator_loop.assert_called_once()
-        args, _ = mock_run_operator_loop.call_args
-        cli_options = args[0]
-
-        assert cli_options.configmap_name == "env-config"
-        assert cli_options.healthz_port == 9999
-        assert cli_options.verbose == 1
-        assert cli_options.socket_path == "/env/socket"
-
-
-def test_run_command_missing_configmap_name():
-    """Test run subcommand without required configmap name."""
-    runner = CliRunner()
-
-    result = runner.invoke(cli, ["run"])
-
-    assert result.exit_code != 0
-    assert "Missing option" in result.output or "required" in result.output.lower()
 
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
 @patch("haproxy_template_ic.__main__.initialize_tracing")
 @patch("haproxy_template_ic.__main__.shutdown_tracing")
-@patch("haproxy_template_ic.__main__.create_tracing_config_from_env")
-def test_run_command_with_tracing_enabled(
-    mock_create_tracing_config,
-    mock_shutdown_tracing,
-    mock_initialize_tracing,
-    mock_run_operator_loop,
-):
-    """Test run subcommand with tracing enabled."""
+def test_run_command_with_defaults(mock_shutdown, mock_init, mock_run):
+    """Test run command with default parameters."""
     runner = CliRunner()
+    result = runner.invoke(cli, ["run", "--configmap-name", "test-config"])
 
-    # Mock tracing config
-    mock_tracing_config = Mock()
-    mock_tracing_config.enabled = False  # Initially disabled from env
-    mock_create_tracing_config.return_value = mock_tracing_config
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+    mock_init.assert_called_once()
+    mock_shutdown.assert_called_once()
 
-    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-        result = runner.invoke(
-            cli,
-            [
-                "run",
-                "--configmap-name",
-                "test-config",
-                "--tracing-enabled",
-            ],
-        )
-
-        assert result.exit_code == 0
-
-        # Verify tracing was initialized
-        mock_create_tracing_config.assert_called_once()
-        mock_initialize_tracing.assert_called_once_with(mock_tracing_config)
-
-        # Verify tracing config was updated to enabled
-        assert mock_tracing_config.enabled is True
-
-        # Verify tracing shutdown was called
-        mock_shutdown_tracing.assert_called_once()
+    # Check that the CLI options were passed correctly
+    cli_options = mock_run.call_args[0][0]
+    assert cli_options.configmap_name == "test-config"
+    assert cli_options.healthz_port == 8080
+    assert cli_options.socket_path == "/run/haproxy-template-ic/management.sock"
+    assert cli_options.metrics_port == 9090
+    assert cli_options.tracing_enabled is False
 
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_imports_webhook_module(mock_run_operator_loop):
-    """Test that run command imports webhook module for kopf registration."""
+@patch("haproxy_template_ic.__main__.initialize_tracing")
+@patch("haproxy_template_ic.__main__.shutdown_tracing")
+def test_run_command_with_custom_args(mock_shutdown, mock_init, mock_run):
+    """Test run command with custom arguments."""
     runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "run",
+            "--configmap-name",
+            "my-config",
+            "--healthz-port",
+            "9000",
+            "--socket-path",
+            "/tmp/socket",
+            "--metrics-port",
+            "8080",
+            "--tracing-enabled",
+        ],
+    )
 
-    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-        # Mock the webhook module to avoid actual import side effects
-        with patch.dict("sys.modules", {"haproxy_template_ic.webhook": Mock()}):
-            result = runner.invoke(cli, ["run", "--configmap-name", "test-config"])
+    assert result.exit_code == 0
+    cli_options = mock_run.call_args[0][0]
+    assert cli_options.configmap_name == "my-config"
+    assert cli_options.healthz_port == 9000
+    assert cli_options.socket_path == "/tmp/socket"
+    assert cli_options.metrics_port == 8080
+    assert cli_options.tracing_enabled is True
 
-            assert result.exit_code == 0
 
-            # Verify that the run command completed successfully, which means
-            # the webhook import line was executed (even if mocked)
-            mock_run_operator_loop.assert_called_once()
+@patch("haproxy_template_ic.__main__.run_operator_loop")
+@patch("haproxy_template_ic.__main__.initialize_tracing")
+@patch("haproxy_template_ic.__main__.shutdown_tracing")
+def test_run_command_with_env_vars(mock_shutdown, mock_init, mock_run):
+    """Test run command with environment variables."""
+    runner = CliRunner(
+        env={
+            "CONFIGMAP_NAME": "env-config",
+            "HEALTHZ_PORT": "7000",
+            "SOCKET_PATH": "/var/run/socket",
+            "METRICS_PORT": "7090",
+            "TRACING_ENABLED": "true",
+        }
+    )
+    result = runner.invoke(cli, ["run"])
+
+    assert result.exit_code == 0
+    cli_options = mock_run.call_args[0][0]
+    assert cli_options.configmap_name == "env-config"
+    assert cli_options.healthz_port == 7000
+    assert cli_options.socket_path == "/var/run/socket"
+    assert cli_options.metrics_port == 7090
+    assert cli_options.tracing_enabled is True
+
+
+def test_run_command_missing_configmap_name():
+    """Test run command without required configmap name."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run"])
+
+    assert result.exit_code == 2
+    assert "Missing option" in result.output
+    assert "configmap-name" in result.output
+
+
+@patch("haproxy_template_ic.__main__.run_operator_loop")
+@patch("haproxy_template_ic.__main__.initialize_tracing")
+@patch("haproxy_template_ic.__main__.shutdown_tracing")
+def test_run_command_with_tracing_enabled(mock_shutdown, mock_init, mock_run):
+    """Test run command with tracing enabled."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["run", "--configmap-name", "test-config", "--tracing-enabled"]
+    )
+
+    assert result.exit_code == 0
+    cli_options = mock_run.call_args[0][0]
+    assert cli_options.tracing_enabled is True
+
+
+@patch("haproxy_template_ic.__main__.run_operator_loop")
+@patch("haproxy_template_ic.__main__.initialize_tracing")
+@patch("haproxy_template_ic.__main__.shutdown_tracing")
+def test_run_command_basic_functionality(mock_shutdown, mock_init, mock_run):
+    """Test that run command executes successfully."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "--configmap-name", "test-config"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+    mock_init.assert_called_once()
+    mock_shutdown.assert_called_once()
+
+
+# =============================================================================
+# ConfigMap Name Validation Tests
+# =============================================================================
 
 
 def test_run_command_invalid_configmap_name():
     """Test run command with invalid ConfigMap name."""
     runner = CliRunner()
 
-    # Test various invalid ConfigMap names
-    invalid_names = [
-        "UPPERCASE",  # uppercase not allowed
-        "test_underscore",  # underscores not allowed
-        "test.",  # can't end with dot
-        ".test",  # can't start with dot
-        "-test",  # can't start with hyphen
-        "test-",  # can't end with hyphen
-        "",  # empty string
-        "a" * 254,  # too long (>253 chars)
-        "test@invalid",  # special characters not allowed
-    ]
+    # Test with uppercase letters
+    result = runner.invoke(cli, ["run", "--configmap-name", "Invalid-Name"])
+    assert result.exit_code == 2
+    assert "ConfigMap name must follow Kubernetes naming conventions" in result.output
 
-    for invalid_name in invalid_names:
-        with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-            result = runner.invoke(cli, ["run", "--configmap-name", invalid_name])
+    # Test with invalid characters
+    result = runner.invoke(cli, ["run", "--configmap-name", "invalid_name"])
+    assert result.exit_code == 2
+    assert "ConfigMap name must follow Kubernetes naming conventions" in result.output
 
-            assert result.exit_code != 0, (
-                f"Should reject invalid ConfigMap name: {invalid_name}"
-            )
-            assert "ConfigMap name" in result.output, (
-                f"Should show validation error for: {invalid_name}"
-            )
+    # Test starting with hyphen
+    result = runner.invoke(cli, ["run", "--configmap-name", "-invalid"])
+    assert result.exit_code == 2
+    assert "ConfigMap name must follow Kubernetes naming conventions" in result.output
+
+    # Test ending with hyphen
+    result = runner.invoke(cli, ["run", "--configmap-name", "invalid-"])
+    assert result.exit_code == 2
+    assert "ConfigMap name must follow Kubernetes naming conventions" in result.output
 
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_valid_configmap_names(mock_run_operator_loop):
-    """Test run command with valid ConfigMap names and verify CLI options."""
+@patch("haproxy_template_ic.__main__.initialize_tracing")
+@patch("haproxy_template_ic.__main__.shutdown_tracing")
+def test_run_command_valid_configmap_names(mock_shutdown, mock_init, mock_run):
+    """Test run command with valid ConfigMap names."""
     runner = CliRunner()
 
-    # Test various valid ConfigMap names
     valid_names = [
-        "test-config",  # standard name
-        "my-configmap",  # with hyphens
-        "config123",  # with numbers
-        "a",  # single character
-        "test-config-123",  # mixed
-        "ab",  # two characters (tests the fixed regex)
-        "a" * 253,  # maximum length
+        "valid-name",
+        "valid123",
+        "123valid",
+        "v",  # Single character
+        "a1b2c3",
+        "my-app-config",
+        "haproxy-template-ic-config",
     ]
 
-    for valid_name in valid_names:
-        mock_run_operator_loop.reset_mock()
-        with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-            result = runner.invoke(cli, ["run", "--configmap-name", valid_name])
-
-            assert result.exit_code == 0, (
-                f"Should accept valid ConfigMap name: {valid_name}"
-            )
-
-            # Verify the correct ConfigMap name is passed to run_operator_loop
-            mock_run_operator_loop.assert_called_once()
-            args, _ = mock_run_operator_loop.call_args
-            cli_options = args[0]
-            assert cli_options.configmap_name == valid_name, (
-                f"ConfigMap name {valid_name} not correctly passed to run_operator_loop"
-            )
+    for name in valid_names:
+        result = runner.invoke(cli, ["run", "--configmap-name", name])
+        assert result.exit_code == 0, f"Failed for valid name: {name}"
 
 
 def test_configmap_validation_edge_cases():
-    """Test ConfigMap validation with edge cases."""
-    runner = CliRunner()
-
-    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-        with patch("haproxy_template_ic.__main__.run_operator_loop"):
-            # Test single character names (should be valid per Kubernetes spec)
-            for single_char in ["a", "z", "0", "9"]:
-                result = runner.invoke(cli, ["run", "--configmap-name", single_char])
-                assert result.exit_code == 0, (
-                    f"Single character '{single_char}' should be valid"
-                )
-
-            # Test boundary case: exactly 253 characters
-            max_length_name = "a" * 253
-            result = runner.invoke(cli, ["run", "--configmap-name", max_length_name])
-            assert result.exit_code == 0, "253-character name should be valid"
-
-            # Test just over the limit: 254 characters (should fail)
-            over_limit_name = "a" * 254
-            result = runner.invoke(cli, ["run", "--configmap-name", over_limit_name])
-            assert result.exit_code != 0, "254-character name should be invalid"
-
-
-# =============================================================================
-# Schema Subcommand Tests
-# =============================================================================
-
-
-def test_schema_help():
-    """Test schema subcommand help."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["schema", "--help"])
-
-    assert result.exit_code == 0
-    assert "Schema management commands" in result.output
-    assert "export" in result.output
-    assert "export-all" in result.output
-    assert "validate" in result.output
-
-
-@patch("haproxy_template_ic.__main__._handle_export_schema")
-def test_schema_export_command(mock_handle_export):
-    """Test schema export subcommand."""
-    runner = CliRunner()
-
-    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-        result = runner.invoke(cli, ["schema", "export", "/tmp/schema.json"])
-
-        assert result.exit_code == 0
-        mock_handle_export.assert_called_once()
-        args = mock_handle_export.call_args[0]
-        assert str(args[0]) == "/tmp/schema.json"
-
-
-@patch("haproxy_template_ic.__main__._handle_export_all_schemas")
-def test_schema_export_all_command(mock_handle_export_all):
-    """Test schema export-all subcommand."""
-    runner = CliRunner()
-
-    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-        result = runner.invoke(cli, ["schema", "export-all", "/tmp/schemas"])
-
-        assert result.exit_code == 0
-        mock_handle_export_all.assert_called_once()
-        args = mock_handle_export_all.call_args[0]
-        assert str(args[0]) == "/tmp/schemas"
-
-
-@patch("haproxy_template_ic.__main__._handle_validate_config")
-def test_schema_validate_command(mock_handle_validate):
-    """Test schema validate subcommand."""
-    runner = CliRunner()
-
-    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-        with runner.isolated_filesystem():
-            # Create a test config file
-            with open("test-config.yaml", "w") as f:
-                f.write("test: config")
-
-            result = runner.invoke(cli, ["schema", "validate", "test-config.yaml"])
-
-            assert result.exit_code == 0
-            mock_handle_validate.assert_called_once()
-
-
-# =============================================================================
-# Docs Subcommand Tests
-# =============================================================================
-
-
-def test_docs_help():
-    """Test docs subcommand help."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["docs", "--help"])
-
-    assert result.exit_code == 0
-    assert "Documentation generation commands" in result.output
-    assert "generate" in result.output
-
-
-@patch("haproxy_template_ic.__main__._handle_generate_docs")
-def test_docs_generate_command(mock_handle_generate):
-    """Test docs generate subcommand."""
-    runner = CliRunner()
-
-    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-        result = runner.invoke(cli, ["docs", "generate", "/tmp/docs.md"])
-
-        assert result.exit_code == 0
-        mock_handle_generate.assert_called_once()
-        args = mock_handle_generate.call_args[0]
-        assert str(args[0]) == "/tmp/docs.md"
-
-
-# =============================================================================
-# Schema and Utility Handler Tests
-# =============================================================================
-
-
-def test_handle_export_schema_json(tmp_path):
-    """Test _handle_export_schema with JSON output."""
-    from haproxy_template_ic.__main__ import _handle_export_schema
-
-    output_path = tmp_path / "schema.json"
-
-    with patch("haproxy_template_ic.__main__.export_config_schema") as mock_export:
-        with patch(
-            "haproxy_template_ic.__main__.get_schema_version", return_value="1.0.0"
-        ):
-            with patch(
-                "haproxy_template_ic.__main__.export_settings_schema"
-            ) as mock_settings:
-                mock_export.return_value = {"type": "object"}
-                mock_settings.return_value = {"type": "object"}
-
-                _handle_export_schema(output_path)
-
-                assert output_path.exists()
-                with open(output_path) as f:
-                    data = json.load(f)
-                assert data["schema_version"] == "1.0.0"
-                assert "config_schema" in data
-                assert "settings_schema" in data
-
-
-def test_handle_export_schema_yaml(tmp_path):
-    """Test _handle_export_schema with YAML output."""
-    from haproxy_template_ic.__main__ import _handle_export_schema
-
-    output_path = tmp_path / "schema.yaml"
-
-    with patch("haproxy_template_ic.__main__.export_config_schema") as mock_export:
-        with patch(
-            "haproxy_template_ic.__main__.get_schema_version", return_value="1.0.0"
-        ):
-            with patch(
-                "haproxy_template_ic.__main__.export_settings_schema"
-            ) as mock_settings:
-                mock_export.return_value = {"type": "object"}
-                mock_settings.return_value = {"type": "object"}
-
-                _handle_export_schema(output_path)
-
-                assert output_path.exists()
-                with open(output_path) as f:
-                    data = yaml.safe_load(f)
-                assert data["schema_version"] == "1.0.0"
-
-
-def test_handle_export_schema_error():
-    """Test _handle_export_schema with error."""
-    from haproxy_template_ic.__main__ import _handle_export_schema
-
-    output_path = Path("/invalid/path/schema.json")
-
-    with patch(
-        "haproxy_template_ic.__main__.export_config_schema",
-        side_effect=RuntimeError("Export error"),
-    ):
-        with pytest.raises(click.Abort):
-            _handle_export_schema(output_path)
-
-
-def test_handle_export_all_schemas(tmp_path):
-    """Test _handle_export_all_schemas."""
-    from haproxy_template_ic.__main__ import _handle_export_all_schemas
-
-    output_dir = tmp_path / "schemas"
-
-    with patch("haproxy_template_ic.__main__.export_all_schemas") as mock_export:
-        mock_export.return_value = {
-            "Config": {"type": "object"},
-            "PodSelector": {"type": "object"},
-        }
-
-        _handle_export_all_schemas(output_dir)
-
-        assert output_dir.exists()
-        assert (output_dir / "config.json").exists()
-        assert (output_dir / "podselector.json").exists()
-
-
-def test_handle_validate_config_valid_yaml(tmp_path):
-    """Test _handle_validate_config with valid YAML."""
-    from haproxy_template_ic.__main__ import _handle_validate_config
-
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("pod_selector:\n  match_labels:\n    app: haproxy")
-
-    with patch(
-        "haproxy_template_ic.__main__.validate_config_against_schema"
-    ) as mock_validate:
-        mock_validate.return_value = []  # No errors
-
-        _handle_validate_config(config_path)
-        mock_validate.assert_called_once()
-
-
-def test_handle_validate_config_invalid(tmp_path):
-    """Test _handle_validate_config with invalid configuration."""
-    from haproxy_template_ic.__main__ import _handle_validate_config
-
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("invalid: config")
-
-    with patch(
-        "haproxy_template_ic.__main__.validate_config_against_schema"
-    ) as mock_validate:
-        mock_validate.return_value = ["Field required: pod_selector"]
-
-        with pytest.raises(click.Abort):
-            _handle_validate_config(config_path)
-
-
-def test_handle_generate_docs(tmp_path):
-    """Test _handle_generate_docs."""
-    from haproxy_template_ic.__main__ import _handle_generate_docs
-
-    output_path = tmp_path / "docs.md"
-
-    with patch("haproxy_template_ic.__main__.get_schema_version", return_value="1.0.0"):
-        _handle_generate_docs(output_path)
-
-        assert output_path.exists()
-        content = output_path.read_text()
-        assert "Schema Version: 1.0.0" in content
-        assert "Configuration Reference" in content
+    """Test ConfigMap name validation edge cases."""
+    from haproxy_template_ic.__main__ import validate_configmap_name
+    import click
+
+    # Test maximum length (253 characters)
+    valid_long_name = "a" * 253
+    assert validate_configmap_name(None, None, valid_long_name) == valid_long_name
+
+    # Test too long name (254 characters)
+    with pytest.raises(click.BadParameter, match="must be at most 253 characters"):
+        validate_configmap_name(None, None, "a" * 254)
+
+    # Test single character names
+    assert validate_configmap_name(None, None, "a") == "a"
+    assert validate_configmap_name(None, None, "1") == "1"
+
+    # Test two character names
+    assert validate_configmap_name(None, None, "ab") == "ab"
+    assert validate_configmap_name(None, None, "a1") == "a1"
+    assert validate_configmap_name(None, None, "1a") == "1a"

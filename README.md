@@ -265,17 +265,8 @@ The controller supports configuration via CLI options or environment variables:
 haproxy-template-ic run --configmap-name=my-config
 ```
 
-**Utility Commands:**
-```bash
-# Export configuration schema
-haproxy-template-ic schema export config-schema.json
-
-# Validate configuration file  
-haproxy-template-ic schema validate my-config.yaml
-
-# Generate documentation
-haproxy-template-ic docs generate CONFIG.md
-```
+**Configuration Validation:**
+Configuration validation is handled automatically via admission webhooks when resources are applied to Kubernetes. The operator watches for ConfigMap changes and validates configurations at runtime.
 
 | Environment Variable | CLI Option | Default | Description |
 |---------------------|------------|---------|-------------|
