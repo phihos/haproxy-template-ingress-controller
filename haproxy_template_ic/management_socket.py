@@ -56,36 +56,44 @@ class StateSerializer:
         """Serialize configuration from memo."""
         config: Dict[str, Any] = {
             "pod_selector": None,
-            "watch_resources": {},
+            "watched_resources": {},
             "maps": {},
         }
 
         if not hasattr(self.memo, "config") or not self.memo.config:
             return config
 
-        # Serialize pod selector - convert dataclass to dict if needed
+        # Serialize pod selector - convert Pydantic model to dict if needed
         pod_selector = self.memo.config.pod_selector
-        if is_dataclass(pod_selector) and not isinstance(pod_selector, type):
+        if hasattr(pod_selector, "model_dump"):
+            # Pydantic model
+            pod_selector = pod_selector.model_dump()
+        elif is_dataclass(pod_selector) and not isinstance(pod_selector, type):
+            # Dataclass (fallback)
             pod_selector = asdict(pod_selector)
         config["pod_selector"] = pod_selector
 
         # Serialize watch resources
-        for watch_config in self.memo.config.watch_resources:
-            config["watch_resources"][watch_config.id] = {
+        for resource_id, watch_config in self.memo.config.watched_resources.items():
+            # Parse group and version from api_version
+            if "/" in watch_config.api_version:
+                group, version = watch_config.api_version.rsplit("/", 1)
+            else:
+                group = ""
+                version = watch_config.api_version
+
+            config["watched_resources"][resource_id] = {
                 "kind": watch_config.kind,
-                "group": watch_config.group,
-                "version": watch_config.version,
+                "group": group,
+                "version": version,
+                "api_version": watch_config.api_version,
             }
 
         # Serialize maps
-        for map_config in self.memo.config.maps:
-            template_source = "unavailable"
-            if hasattr(map_config.template, "source"):
-                template_source = str(map_config.template.source)
-
-            config["maps"][map_config.path] = {
-                "path": map_config.path,
-                "template_source": template_source,
+        for map_path, map_config in self.memo.config.maps.items():
+            config["maps"][map_path] = {
+                "path": map_path,
+                "template_source": map_config.template,
             }
 
         # Serialize haproxy_config
@@ -122,7 +130,7 @@ class StateSerializer:
             context["rendered_maps"][rendered_map.path] = {
                 "path": rendered_map.path,
                 "content": rendered_map.content,
-                "map_config_path": rendered_map.map_config.path,
+                "map_config_path": rendered_map.path,  # Path is the same as rendered_map.path
             }
 
         # Serialize rendered HAProxy config
@@ -135,10 +143,9 @@ class StateSerializer:
         for (
             rendered_certificate
         ) in self.memo.haproxy_config_context.rendered_certificates:
-            context["rendered_certificates"][rendered_certificate.name] = {
-                "name": rendered_certificate.name,
+            context["rendered_certificates"][rendered_certificate.path] = {
+                "name": rendered_certificate.path,
                 "content": rendered_certificate.content,
-                "certificate_config_name": rendered_certificate.certificate_config.name,
             }
 
         return context
@@ -245,40 +252,46 @@ class ManagementSocketServer:
         elif parts[0] == "get":
             if len(parts) < 3:
                 return {
-                    "error": "Missing arguments. Usage: get <maps|watch_resources|template_snippets|certificates> <identifier>"
+                    "error": "Missing arguments. Usage: get <maps|watched_resources|template_snippets|certificates> <identifier>"
                 }
 
             collection_type = parts[1]
             identifier = parts[2]
 
             if collection_type == "maps":
-                map_config = self.memo.config.maps.by_path(identifier)
+                map_config = self.memo.config.maps.get(identifier)
                 if map_config:
                     return {
                         "result": {
-                            "path": map_config.path,
-                            "template_source": getattr(
-                                map_config.template, "source", "unavailable"
-                            ),
+                            "path": identifier,
+                            "template_source": map_config.template,
                         }
                     }
                 return {"error": f"Map not found: {identifier}"}
 
-            elif collection_type == "watch_resources":
-                watch_config = self.memo.config.watch_resources.by_id(identifier)
+            elif collection_type == "watched_resources":
+                watch_config = self.memo.config.watched_resources.get(identifier)
                 if watch_config:
+                    # Parse group and version from api_version
+                    if "/" in watch_config.api_version:
+                        group, version = watch_config.api_version.rsplit("/", 1)
+                    else:
+                        group = ""
+                        version = watch_config.api_version
+
                     return {
                         "result": {
-                            "id": watch_config.id,
+                            "id": identifier,
                             "kind": watch_config.kind,
-                            "group": watch_config.group,
-                            "version": watch_config.version,
+                            "group": group,
+                            "version": version,
+                            "api_version": watch_config.api_version,
                         }
                     }
                 return {"error": f"Watch resource not found: {identifier}"}
 
             elif collection_type == "template_snippets":
-                snippet = self.memo.config.template_snippets.by_name(identifier)
+                snippet = self.memo.config.template_snippets.get(identifier)
                 if snippet:
                     return {
                         "result": {
@@ -291,14 +304,12 @@ class ManagementSocketServer:
                 return {"error": f"Template snippet not found: {identifier}"}
 
             elif collection_type == "certificates":
-                cert_config = self.memo.config.certificates.by_name(identifier)
+                cert_config = self.memo.config.certificates.get(identifier)
                 if cert_config:
                     return {
                         "result": {
-                            "name": cert_config.name,
-                            "template_source": getattr(
-                                cert_config.template, "source", "unavailable"
-                            ),
+                            "path": identifier,
+                            "template_source": cert_config.template,
                         }
                     }
                 return {"error": f"Certificate not found: {identifier}"}
@@ -306,7 +317,7 @@ class ManagementSocketServer:
             else:
                 return {
                     "error": f"Unknown collection type: {collection_type}. "
-                    f"Available: maps, watch_resources, template_snippets, certificates"
+                    f"Available: maps, watched_resources, template_snippets, certificates"
                 }
 
         else:
@@ -336,17 +347,16 @@ class ManagementSocketServer:
                 rendered_maps[rendered_map.path] = {
                     "path": rendered_map.path,
                     "content": rendered_map.content,
-                    "map_config_path": rendered_map.map_config.path,
+                    "map_config_path": rendered_map.path,  # Path is the same as rendered_map.path
                 }
 
             rendered_certificates: Dict[str, Any] = {}
             for (
                 rendered_certificate
             ) in self.memo.haproxy_config_context.rendered_certificates:
-                rendered_certificates[rendered_certificate.name] = {
-                    "name": rendered_certificate.name,
+                rendered_certificates[rendered_certificate.path] = {
+                    "name": rendered_certificate.path,
                     "content": rendered_certificate.content,
-                    "certificate_config_name": rendered_certificate.certificate_config.name,
                 }
 
             context = {

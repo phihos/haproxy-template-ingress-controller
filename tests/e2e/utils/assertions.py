@@ -29,12 +29,12 @@ def assert_config_structure(config):
     verify_config_contains(config, expected_config)
 
     # Verify required sections exist and have expected nested values
-    assert "watch_resources" in config and "maps" in config
+    assert "watched_resources" in config and "maps" in config
 
-    watch_resources = config["watch_resources"]
-    if "ingresses" in watch_resources:
-        expected_ingress = {"kind": "Ingress", "group": "networking.k8s.io"}
-        verify_config_contains(watch_resources["ingresses"], expected_ingress)
+    watched_resources = config["watched_resources"]
+    if "ingresses" in watched_resources:
+        expected_ingress = {"kind": "Ingress", "api_version": "networking.k8s.io/v1"}
+        verify_config_contains(watched_resources["ingresses"], expected_ingress)
 
 
 def assert_dump_all_response_structure(response):

@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 import kr8s
 from kr8s.objects import Pod
 
-from haproxy_template_ic.config import HAProxyConfigContext, PodSelector
+from haproxy_template_ic.config_models import HAProxyConfigContext, PodSelector
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.resilience import (
     get_resilient_operator,

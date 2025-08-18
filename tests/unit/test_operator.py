@@ -24,20 +24,19 @@ from haproxy_template_ic.operator import (
     initialize_configuration,
     _is_valid_resource,
 )
-from haproxy_template_ic.config import (
+from haproxy_template_ic.config_models import (
     Config,
     MapConfig,
-    MapCollection,
-    CertificateConfig,
-    CertificateCollection,
     PodSelector,
     HAProxyConfigContext,
     RenderedMap,
     RenderedConfig,
     RenderedCertificate,
-    WatchResourceCollection,
+    TemplateContext,
     WatchResourceConfig,
+    config_from_dict,
 )
+from haproxy_template_ic.templating import TemplateRenderer
 from jinja2 import Template
 
 
@@ -114,16 +113,14 @@ def test_trigger_reload():
 
 
 @pytest.mark.asyncio
-async def test_handle_configmap_change_with_change():
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_handle_configmap_change_with_change(mock_get_namespace):
     """Test ConfigMap change handler when change is detected."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = Config(
-        raw={
-            "pod_selector": {"match_labels": {"app": "old"}},
-            "haproxy_config": {"template": "global\n    daemon"},
-        },
         pod_selector=PodSelector(match_labels={"app": "old"}),
-        haproxy_config=Template("global\n    daemon"),
+        haproxy_config=MapConfig(template="global\n    daemon"),
     )
     event = {
         "object": {
@@ -143,12 +140,8 @@ async def test_handle_configmap_change_with_change():
     with patch("haproxy_template_ic.operator.load_config_from_configmap") as mock_load:
         with patch("haproxy_template_ic.operator.trigger_reload") as mock_trigger:
             mock_load.return_value = Config(
-                raw={
-                    "pod_selector": {"match_labels": {"app": "new"}},
-                    "haproxy_config": {"template": "global\n    daemon"},
-                },
                 pod_selector=PodSelector(match_labels={"app": "new"}),
-                haproxy_config=Template("global\n    daemon"),
+                haproxy_config=MapConfig(template="global\n    daemon"),
             )
 
             await handle_configmap_change(
@@ -160,16 +153,14 @@ async def test_handle_configmap_change_with_change():
 
 
 @pytest.mark.asyncio
-async def test_handle_configmap_change_no_change():
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_handle_configmap_change_no_change(mock_get_namespace):
     """Test ConfigMap change handler when no change is detected."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     config = Config(
-        raw={
-            "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": {"template": "global\n    daemon"},
-        },
         pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
+        haproxy_config=MapConfig(template="global\n    daemon"),
     )
     memo.config = config
 
@@ -223,31 +214,36 @@ async def test_update_resource_index():
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_templates_success():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_templates_success(mock_get_namespace, mock_sync):
     """Test successful template rendering."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=WatchResourceCollection(
-            [WatchResourceConfig(kind="Pod", id="pods")]
-        ),
-        maps=MapCollection(
-            [
-                MapConfig(
-                    template=Template(
-                        "{% for key, pod in resources.get('pods', {}).items() %}server {{ pod.metadata.name }} {{ pod.status.podIP }}:80{% endfor %}"
-                    ),
-                    path="/etc/haproxy/maps/backend.map",
-                )
-            ]
-        ),
+            "watched_resources": {
+                "pods": {
+                    "api_version": "v1",
+                    "kind": "Pod",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "maps": {
+                "/etc/haproxy/maps/backend.map": {
+                    "template": "{% for key, pod in resources.get('pods', {}).items() %}server {{ pod.metadata.name }} {{ pod.status.podIP }}:80{% endfor %}"
+                }
+            },
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices with test data
     mock_indices = MagicMock()
@@ -256,7 +252,7 @@ async def test_render_haproxy_templates_success():
     mock_pod.metadata.name = "test-pod"
     mock_pod.status.podIP = "10.0.1.5"
 
-    mock_indices.get.return_value = {("default", "test-pod"): mock_pod}
+    mock_indices.get.return_value = {"default/test-pod": mock_pod}
     memo.indices = mock_indices
 
     logger = MagicMock()
@@ -268,7 +264,6 @@ async def test_render_haproxy_templates_success():
     rendered_config = memo.haproxy_config_context.rendered_config
     assert isinstance(rendered_config, RenderedConfig)
     assert rendered_config.content == "global\n    daemon"
-    assert rendered_config.config == memo.config
 
     # Check that rendered map was added
     assert len(memo.haproxy_config_context.rendered_maps) == 1
@@ -282,35 +277,41 @@ async def test_render_haproxy_templates_success():
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_templates_with_ingress():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_templates_with_ingress(mock_get_namespace, mock_sync):
     """Test template rendering with ingress resources like in example-configmap.yaml."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=WatchResourceCollection(
-            [WatchResourceConfig(kind="Ingress", id="ingresses")]
-        ),
-        maps=MapCollection(
-            [
-                MapConfig(
-                    template=Template(
+            "watched_resources": {
+                "ingresses": {
+                    "api_version": "networking.k8s.io/v1",
+                    "kind": "Ingress",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "maps": {
+                "/etc/haproxy/maps/path-exact.map": {
+                    "template": (
                         "{% for _, ingress in resources.get('ingresses', {}).items() %}"
                         "{% for rule in (ingress.spec.get('rules', []) | selectattr('http', 'defined')) %}"
                         "{{ rule.host }}{{ rule.http.paths[0].path }} backend_name"
                         "{% endfor %}"
                         "{% endfor %}"
-                    ),
-                    path="/etc/haproxy/maps/path-exact.map",
-                )
-            ]
-        ),
+                    )
+                }
+            },
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices with test ingress data
     mock_indices = MagicMock()
@@ -338,7 +339,7 @@ async def test_render_haproxy_templates_with_ingress():
         ]
     }
 
-    mock_indices.get.return_value = {("default", "test-ingress"): mock_ingress}
+    mock_indices.get.return_value = {"default/test-ingress": mock_ingress}
     memo.indices = mock_indices
 
     logger = MagicMock()
@@ -354,42 +355,48 @@ async def test_render_haproxy_templates_with_ingress():
 
 
 @pytest.mark.asyncio
-async def test_kopf_index_store_resource_access():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_kopf_index_store_resource_access(mock_get_namespace, mock_sync):
     """Test that resources from kopf index stores have proper .spec attribute access."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=WatchResourceCollection(
-            [WatchResourceConfig(kind="Ingress", id="ingresses")]
-        ),
-        maps=MapCollection(
-            [
-                MapConfig(
+            "watched_resources": {
+                "ingresses": {
+                    "api_version": "networking.k8s.io/v1",
+                    "kind": "Ingress",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "maps": {
+                "/etc/haproxy/maps/test.map": {
                     # This template pattern was failing with the original error:
                     # "'kopf._core.engines.indexing.Store object' has no attribute 'spec'"
-                    template=Template(
+                    "template": (
                         "{% for _, ingress in resources.get('ingresses', {}).items() %}"
                         "ingress={{ ingress.spec.rules|length }}"
                         "{% endfor %}"
-                    ),
-                    path="/etc/haproxy/maps/test.map",
-                )
-            ]
-        ),
+                    )
+                }
+            },
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock kopf index store with a proper resource object
     mock_indices = MagicMock()
     mock_ingress = MagicMock()
     mock_ingress.spec = {"rules": [{"host": "test.com"}]}
 
-    mock_indices.get.return_value = {("default", "test-ingress"): mock_ingress}
+    mock_indices.get.return_value = {"default/test-ingress": mock_ingress}
     memo.indices = mock_indices
 
     logger = MagicMock()
@@ -409,7 +416,6 @@ def test_jinja2_dict_access_patterns():
     Jinja2 automatically converts dot notation to subscript access,
     so ingress.spec.rules becomes ingress['spec']['rules'] when needed.
     """
-    from jinja2 import Template
 
     # Test data resembling a Kubernetes Ingress resource
     test_data = {
@@ -443,28 +449,31 @@ def test_jinja2_dict_access_patterns():
 
 @pytest.mark.asyncio
 @patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_haproxy_templates_jinja_error(mock_logger, mock_sync):
+async def test_render_haproxy_templates_jinja_error(
+    mock_logger, mock_get_namespace, mock_sync
+):
     """Test template rendering with Jinja error."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=WatchResourceCollection([]),
-        maps=MapCollection(
-            [
-                MapConfig(
-                    template=Template("server {{ undefined_variable.invalid_attr }}"),
-                    path="/etc/haproxy/maps/backend.map",
-                )
-            ]
-        ),
+            "watched_resources": {},
+            "maps": {
+                "/etc/haproxy/maps/backend.map": {
+                    "template": "server {{ undefined_variable.invalid_attr }}"
+                }
+            },
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices
     mock_indices = MagicMock()
@@ -481,26 +490,35 @@ async def test_render_haproxy_templates_jinja_error(mock_logger, mock_sync):
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_config_with_template_variables():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_config_with_template_variables(
+    mock_get_namespace, mock_sync
+):
     """Test HAProxy config rendering with template variables from resources."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {
                 "template": "global\n{% for _, pod in resources.get('pods', {}).items() %}    # Pod: {{ pod.metadata.name }}\n{% endfor %}    daemon"
             },
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template(
-            "global\n{% for _, pod in resources.get('pods', {}).items() %}    # Pod: {{ pod.metadata.name }}\n{% endfor %}    daemon"
-        ),
-        watch_resources=WatchResourceCollection(
-            [WatchResourceConfig(kind="Pod", id="pods")]
-        ),
-        maps=MapCollection([]),
+            "watched_resources": {
+                "pods": {
+                    "api_version": "v1",
+                    "kind": "Pod",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "maps": {},
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices with test data
     mock_indices = MagicMock()
@@ -509,7 +527,7 @@ async def test_render_haproxy_config_with_template_variables():
     mock_pod = MagicMock()
     mock_pod.metadata.name = "test-pod"
 
-    mock_indices.get.return_value = {("default", "test-pod"): mock_pod}
+    mock_indices.get.return_value = {"default/test-pod": mock_pod}
     memo.indices = mock_indices
 
     logger = MagicMock()
@@ -523,27 +541,33 @@ async def test_render_haproxy_config_with_template_variables():
     assert "global\n" in rendered_config.content
     assert "# Pod: test-pod" in rendered_config.content
     assert "daemon" in rendered_config.content
-    assert rendered_config.config == memo.config
 
 
 @pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_haproxy_config_jinja_error(mock_logger):
+async def test_render_haproxy_config_jinja_error(
+    mock_logger, mock_get_namespace, mock_sync
+):
     """Test HAProxy config rendering with Jinja error."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {
                 "template": "global\n    {{ undefined_variable.invalid_attr }}"
             },
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    {{ undefined_variable.invalid_attr }}"),
-        watch_resources=WatchResourceCollection([]),
-        maps=MapCollection([]),
+            "watched_resources": {},
+            "maps": {},
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices
     mock_indices = MagicMock()
@@ -561,36 +585,44 @@ async def test_render_haproxy_config_jinja_error(mock_logger):
 
 
 @pytest.mark.asyncio
-async def test_render_certificates_with_template_variables():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_certificates_with_template_variables(
+    mock_get_namespace, mock_sync
+):
     """Test certificate rendering with template variables from resources."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=WatchResourceCollection(
-            [WatchResourceConfig(kind="Secret", id="secrets")]
-        ),
-        maps=MapCollection([]),
-        certificates=CertificateCollection(
-            [
-                CertificateConfig(
-                    template=Template(
+            "watched_resources": {
+                "secrets": {
+                    "api_version": "v1",
+                    "kind": "Secret",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "maps": {},
+            "certificates": {
+                "/etc/ssl/certs/tls.pem": {
+                    "template": (
                         "{% for _, secret in resources.get('secrets', {}).items() %}"
                         "# Certificate for {{ secret.metadata.name }}\n"
                         "{{ secret.data.get('tls.crt', 'MISSING') }}\n"
                         "{{ secret.data.get('tls.key', 'MISSING') }}\n"
                         "{% endfor %}"
-                    ),
-                    name="tls.pem",
-                )
-            ]
-        ),
+                    )
+                }
+            },
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices with test secret data
     mock_indices = MagicMock()
@@ -600,7 +632,7 @@ async def test_render_certificates_with_template_variables():
     mock_secret.metadata.name = "test-secret"
     mock_secret.data = {"tls.crt": "certificate data", "tls.key": "key data"}
 
-    mock_indices.get.return_value = {("default", "test-secret"): mock_secret}
+    mock_indices.get.return_value = {"default/test-secret": mock_secret}
     memo.indices = mock_indices
 
     logger = MagicMock()
@@ -611,7 +643,7 @@ async def test_render_certificates_with_template_variables():
     assert len(memo.haproxy_config_context.rendered_certificates) == 1
     rendered_certificate = memo.haproxy_config_context.rendered_certificates[0]
     assert isinstance(rendered_certificate, RenderedCertificate)
-    assert rendered_certificate.name == "tls.pem"
+    assert rendered_certificate.path == "/etc/ssl/certs/tls.pem"
     assert "# Certificate for test-secret" in rendered_certificate.content
     assert "certificate data" in rendered_certificate.content
     assert "key data" in rendered_certificate.content
@@ -619,29 +651,32 @@ async def test_render_certificates_with_template_variables():
 
 @pytest.mark.asyncio
 @patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_certificates_jinja_error(mock_logger, mock_sync):
+async def test_render_certificates_jinja_error(
+    mock_logger, mock_get_namespace, mock_sync
+):
     """Test certificate rendering with Jinja error."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=WatchResourceCollection([]),
-        maps=MapCollection([]),
-        certificates=CertificateCollection(
-            [
-                CertificateConfig(
-                    template=Template("{{ undefined_variable.invalid_attr }}"),
-                    name="bad-cert",
-                )
-            ]
-        ),
+            "watched_resources": {},
+            "maps": {},
+            "certificates": {
+                "/etc/ssl/certs/bad-cert.pem": {
+                    "template": "{{ undefined_variable.invalid_attr }}"
+                }
+            },
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices
     mock_indices = MagicMock()
@@ -656,7 +691,7 @@ async def test_render_certificates_jinja_error(mock_logger, mock_sync):
     # Check for certificate error in any of the error calls
     error_messages = [str(call) for call in mock_logger.error.call_args_list]
     assert any(
-        "Failed to render certificate template for bad-cert" in msg
+        "Failed to render certificate template for /etc/ssl/certs/bad-cert.pem" in msg
         for msg in error_messages
     )
     assert len(memo.haproxy_config_context.rendered_certificates) == 0
@@ -856,15 +891,18 @@ async def test_setup_resource_watchers(mock_event, mock_index):
     """Test setup_resource_watchers function."""
     # Create mock memo with watch resources
     memo = MagicMock()
-    watch_resources = WatchResourceCollection(
-        [
-            WatchResourceConfig(kind="Pod", group="", version="v1", id="pods"),
-            WatchResourceConfig(
-                kind="Ingress", group="networking.k8s.io", version="v1", id="ingresses"
-            ),
-        ]
-    )
-    memo.config.watch_resources = watch_resources
+    memo.config.watched_resources = {
+        "pods": WatchResourceConfig(
+            api_version="v1",
+            kind="Pod",
+            enable_validation_webhook=False,
+        ),
+        "ingresses": WatchResourceConfig(
+            api_version="networking.k8s.io/v1",
+            kind="Ingress",
+            enable_validation_webhook=False,
+        ),
+    }
 
     # Mock the decorators to return the original function
     mock_index.return_value = lambda func: func
@@ -944,7 +982,6 @@ async def test_initialize_configuration(
 # TODO: These tests are for JinjaTemplateOperator which was removed
 # def test_jinja_template_operator_give_up_diffing_different():
 #     """Test JinjaTemplateOperator give_up_diffing method with different templates."""
-#     from haproxy_template_ic.config import _make_jinja_template
 
 #     operator = JinjaTemplateOperator()
 
@@ -968,7 +1005,6 @@ async def test_initialize_configuration(
 
 # def test_jinja_template_operator_give_up_diffing_identical():
 #     """Test JinjaTemplateOperator give_up_diffing method with identical templates."""
-#     from haproxy_template_ic.config import _make_jinja_template
 
 #     operator = JinjaTemplateOperator()
 
@@ -991,7 +1027,6 @@ async def test_initialize_configuration(
 
 # def test_deepdiff_with_custom_operator_different_templates():
 #     """Test DeepDiff with custom operator for different templates."""
-#     from haproxy_template_ic.config import _make_jinja_template
 #     from deepdiff import DeepDiff
 
 #     # Create config objects with different templates
@@ -1016,7 +1051,6 @@ async def test_initialize_configuration(
 
 # def test_deepdiff_with_custom_operator_identical_templates():
 #     """Test DeepDiff with custom operator for identical templates."""
-#     from haproxy_template_ic.config import _make_jinja_template
 #     from deepdiff import DeepDiff
 
 #     # Create config objects with identical templates
@@ -1039,7 +1073,6 @@ async def test_initialize_configuration(
 
 # def test_custom_operator_prevents_loader_errors():
 #     """Test that custom operator prevents 'no loader for this environment specified' errors."""
-#     from haproxy_template_ic.config import _make_jinja_template
 #     from deepdiff import DeepDiff
 
 #     # Create templates that could potentially cause loader errors
@@ -1136,22 +1169,33 @@ async def test_fetch_configmap_success():
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_templates_resource_type_edge_cases():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_templates_resource_type_edge_cases(
+    mock_get_namespace, mock_sync
+):
     """Test resource type edge cases in render_haproxy_templates."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=WatchResourceCollection(
-            [WatchResourceConfig(kind="Pod", id="pods")]
-        ),
-        maps=MapCollection([]),
+            "watched_resources": {
+                "pods": {
+                    "api_version": "v1",
+                    "kind": "Pod",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "maps": {},
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock indices with different resource types
     mock_indices = MagicMock()
@@ -1188,22 +1232,31 @@ async def test_render_haproxy_templates_resource_type_edge_cases():
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_templates_missing_index():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_templates_missing_index(mock_get_namespace, mock_sync):
     """Test render_haproxy_templates when indices are missing."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
-    memo.config = Config(
-        raw={
+    memo.config = config_from_dict(
+        {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-        },
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=Template("global\n    daemon"),
-        watch_resources=WatchResourceCollection(
-            [WatchResourceConfig(kind="Pod", id="pods")]
-        ),
-        maps=MapCollection([]),
+            "watched_resources": {
+                "pods": {
+                    "api_version": "v1",
+                    "kind": "Pod",
+                    "enable_validation_webhook": False,
+                }
+            },
+            "maps": {},
+        }
     )
-    memo.haproxy_config_context = HAProxyConfigContext()
+    memo.haproxy_config_context = HAProxyConfigContext(
+        config=memo.config,
+        template_context=TemplateContext(),
+    )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock indices that raise exception when accessing specific id
     mock_indices = MagicMock()
@@ -1464,7 +1517,7 @@ def test_configure_webhook_server_no_webhooks(mock_logger):
     watch_config = MagicMock()
     # Use getattr with default False to simulate the actual code behavior
     watch_config.__dict__["enable_validation_webhook"] = False
-    memo.config.watch_resources = [watch_config]
+    memo.config.watched_resources = {"test": watch_config}
 
     configure_webhook_server(settings, memo)
 
@@ -1487,8 +1540,8 @@ def test_configure_webhook_server_with_existing_certs(
 
     # Mock config with webhook validation enabled
     watch_config = MagicMock()
-    watch_config.__dict__["enable_validation_webhook"] = True
-    memo.config.watch_resources = [watch_config]
+    watch_config.enable_validation_webhook = True
+    memo.config.watched_resources = {"test_resource": watch_config}
 
     # Mock existing certificate files
     def exists_side_effect(path):
@@ -1519,8 +1572,8 @@ def test_configure_webhook_server_self_signed(mock_logger, mock_mkdtemp, mock_ex
 
     # Mock config with webhook validation enabled
     watch_config = MagicMock()
-    watch_config.__dict__["enable_validation_webhook"] = True
-    memo.config.watch_resources = [watch_config]
+    watch_config.enable_validation_webhook = True
+    memo.config.watched_resources = {"test_resource": watch_config}
 
     # Mock no existing certificate files
     mock_exists.return_value = False

@@ -9,13 +9,13 @@ integration works correctly in production-like environments.
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from jinja2 import Template
+# from jinja2 import Template  # No longer needed - using string templates
 
-from haproxy_template_ic.config import (
-    Config,
+from haproxy_template_ic.config_models import (
     HAProxyConfigContext,
-    PodSelector,
     RenderedConfig,
+    TemplateContext,
+    config_from_dict,
 )
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
@@ -190,16 +190,21 @@ class TestConfigSynchronizerIntegration:
 
     def create_mock_config_context(self, config_content: str) -> HAProxyConfigContext:
         """Create a mock HAProxyConfigContext with rendered config."""
-        config = Config(
-            raw={},
-            pod_selector=PodSelector(match_labels={}),
-            haproxy_config=Template(config_content),
+        config = config_from_dict(
+            {
+                "pod_selector": {"match_labels": {"app": "haproxy"}},
+                "haproxy_config": {"template": config_content},
+            }
         )
 
-        rendered_config = RenderedConfig(content=config_content, config=config)
+        rendered_config = RenderedConfig(content=config_content)
 
         return HAProxyConfigContext(
-            rendered_maps=[], rendered_config=rendered_config, rendered_certificates=[]
+            config=config,
+            template_context=TemplateContext(),
+            rendered_maps=[],
+            rendered_config=rendered_config,
+            rendered_certificates=[],
         )
 
     @pytest.mark.asyncio

@@ -32,14 +32,18 @@ from haproxy_template_ic.tracing import (
     record_span_event,
 )
 
-from haproxy_template_ic.config import (
+from haproxy_template_ic.config_models import (
+    Config,
     HAProxyConfigContext,
+    MapConfig,
+    PodSelector,
     RenderedCertificate,
     RenderedConfig,
     RenderedMap,
     TemplateContext,
     config_from_dict,
 )
+from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
     HAProxyPodDiscovery,
@@ -170,8 +174,14 @@ async def handle_configmap_change(
                 )
 
                 new_config = await load_config_from_configmap(event["object"])
-                if memo.config.raw != new_config.raw:
-                    diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
+
+                # Compare model dictionaries to avoid issues with compiled templates and object identity
+                # Use serialization mode to exclude non-serializable fields like compiled templates
+                old_dict = memo.config.model_dump(mode="serialization")
+                new_dict = new_config.model_dump(mode="serialization")
+
+                if old_dict != new_dict:
+                    diff = DeepDiff(old_dict, new_dict, verbose_level=2)
                     diff_str = str(diff)[:500]
                     structured_logger.info(
                         "🔄 Config has changed: reloading", config_diff=diff_str
@@ -205,10 +215,10 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
 
             # Collect all indices from registered watch resources
     indices: Dict[str, Dict[str, Any]] = {}
-    for watch_config in memo.config.watch_resources:
+    for resource_id, watch_config in memo.config.watched_resources.items():
         try:
             # Get the index for this resource type
-            index_data = memo.indices.get(watch_config.id)
+            index_data = memo.indices.get(resource_id)
 
             # Convert kopf index store to a dictionary with resource objects
             # The index_data is a kopf Store object containing resource data
@@ -242,16 +252,16 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
                         )
             else:
                 logger.warning(
-                    f"⚠️ Index data for '{watch_config.id}' is not iterable: {type(index_data)}"
+                    f"⚠️ Index data for '{resource_id}' is not iterable: {type(index_data)}"
                 )
 
-            indices[watch_config.id] = resource_dict
+            indices[resource_id] = resource_dict
             logger.debug(
-                f"📊 Retrieved index '{watch_config.id}' with {len(resource_dict)} items"
+                f"📊 Retrieved index '{resource_id}' with {len(resource_dict)} items"
             )
         except Exception as e:
-            logger.warning(f"⚠️ Could not retrieve index '{watch_config.id}': {e}")
-            indices[watch_config.id] = {}
+            logger.warning(f"⚠️ Could not retrieve index '{resource_id}': {e}")
+            indices[resource_id] = {}
 
     # Record watched resource metrics
     metrics.record_watched_resources(indices)
@@ -261,31 +271,25 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     memo.haproxy_config_context.rendered_config = None
     memo.haproxy_config_context.rendered_certificates.clear()
 
-    # Create a new template context instance each time with config access
-    template_context = TemplateContext(resources=indices, config=memo.config)
+    # Create a new template context instance each time
+    template_context = TemplateContext(
+        resources=indices, namespace=get_current_namespace()
+    )
 
-    # Create template variables from dataclass fields, excluding config reference
+    # Create template variables for rendering
     template_vars = {
         "resources": template_context.resources,
-        "environment": template_context.environment,
-        "cluster_name": template_context.cluster_name,
-        "config_values": template_context.config_values,
-        "get_template_snippet": template_context.get_template_snippet,
-        "get_map_config": template_context.get_map_config,
-        "get_certificate_config": template_context.get_certificate_config,
-        "register_error": template_context.register_error,
-        "get_resources": template_context.get_resources,
-        "iterate_resources": template_context.iterate_resources,
-        "count_resources": template_context.count_resources,
-        "has_resources": template_context.has_resources,
+        "namespace": template_context.namespace,
     }
 
     # Render the HAProxy config template
     try:
         with trace_template_render("haproxy_config"):
             with metrics.time_template_render("haproxy_config"):
-                rendered_content = memo.config.haproxy_config.render(**template_vars)
-        rendered_config = RenderedConfig(content=rendered_content, config=memo.config)
+                rendered_content = memo.template_renderer.render(
+                    memo.config.haproxy_config.template, **template_vars
+                )
+        rendered_config = RenderedConfig(content=rendered_content)
         memo.haproxy_config_context.rendered_config = rendered_config
         metrics.record_template_render("haproxy_config", "success")
         add_span_attributes(
@@ -300,63 +304,58 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
         logger.error(f"❌ Failed to render HAProxy configuration template: {e}")
 
     # Render each map template
-    for map_config in memo.config.maps:
+    for map_path, map_config in memo.config.maps.items():
         try:
-            with trace_template_render("map", map_config.path):
+            with trace_template_render("map", map_path):
                 with metrics.time_template_render("map"):
-                    rendered_content = map_config.template.render(**template_vars)
+                    rendered_content = memo.template_renderer.render(
+                        map_config.template, **template_vars
+                    )
             rendered_map = RenderedMap(
-                path=map_config.path, content=rendered_content, map_config=map_config
+                path=map_path, content=rendered_content, map_config=map_config
             )
             memo.haproxy_config_context.rendered_maps.append(rendered_map)
             metrics.record_template_render("map", "success")
-            add_span_attributes(
-                map_path=map_config.path, map_size=len(rendered_content)
-            )
-            record_span_event("map_rendered", {"path": map_config.path})
-            logger.debug(f"✅ Rendered template for {map_config.path}")
+            add_span_attributes(map_path=map_path, map_size=len(rendered_content))
+            record_span_event("map_rendered", {"path": map_path})
+            logger.debug(f"✅ Rendered template for {map_path}")
         except Exception as e:
             metrics.record_template_render("map", "error")
             metrics.record_error("template_render_failed", "operator")
-            record_span_event(
-                "map_render_failed", {"path": map_config.path, "error": str(e)}
-            )
-            logger.error(f"❌ Failed to render template for {map_config.path}: {e}")
+            record_span_event("map_render_failed", {"path": map_path, "error": str(e)})
+            logger.error(f"❌ Failed to render template for {map_path}: {e}")
 
     # Render each certificate template
-    for certificate_config in memo.config.certificates:
+    for cert_path, certificate_config in memo.config.certificates.items():
         try:
-            with trace_template_render("certificate", certificate_config.name):
+            with trace_template_render("certificate", cert_path):
                 with metrics.time_template_render("certificate"):
-                    rendered_content = certificate_config.template.render(
-                        **template_vars
+                    rendered_content = memo.template_renderer.render(
+                        certificate_config.template, **template_vars
                     )
             rendered_certificate = RenderedCertificate(
-                name=certificate_config.name,
+                path=cert_path,
                 content=rendered_content,
-                certificate_config=certificate_config,
             )
             memo.haproxy_config_context.rendered_certificates.append(
                 rendered_certificate
             )
             metrics.record_template_render("certificate", "success")
             add_span_attributes(
-                certificate_name=certificate_config.name,
+                certificate_path=cert_path,
                 certificate_size=len(rendered_content),
             )
-            record_span_event("certificate_rendered", {"name": certificate_config.name})
-            logger.debug(
-                f"✅ Rendered certificate template for {certificate_config.name}"
-            )
+            record_span_event("certificate_rendered", {"path": cert_path})
+            logger.debug(f"✅ Rendered certificate template for {cert_path}")
         except Exception as e:
             metrics.record_template_render("certificate", "error")
             metrics.record_error("template_render_failed", "operator")
             record_span_event(
                 "certificate_render_failed",
-                {"name": certificate_config.name, "error": str(e)},
+                {"path": cert_path, "error": str(e)},
             )
             logger.error(
-                f"❌ Failed to render certificate template for {certificate_config.name}: {e}"
+                f"❌ Failed to render certificate template for {cert_path}: {e}"
             )
 
     # Synchronize rendered configuration with HAProxy instances
@@ -442,15 +441,15 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
 
 def setup_resource_watchers(memo: Any) -> None:
     """Set up watchers for Kubernetes resources."""
-    resource_count = len(memo.config.watch_resources)
+    resource_count = len(memo.config.watched_resources)
     logger.info(f"👀 Setting up {resource_count} resource watchers...")
 
-    for watch_config in memo.config.watch_resources:
+    for resource_id, watch_config in memo.config.watched_resources.items():
         resource_type = watch_config.kind.lower()
 
         # Set up index and event handler with group/version if specified
-        kwargs = {"id": watch_config.id, "param": watch_config.id}
-        event_kwargs = {"id": f"{watch_config.id}_event"}
+        kwargs = {"id": resource_id, "param": resource_id}
+        event_kwargs = {"id": f"{resource_id}_event"}
 
         if watch_config.group and watch_config.version:
             kwargs.update(
@@ -462,11 +461,11 @@ def setup_resource_watchers(memo: Any) -> None:
 
             api_version = f"{watch_config.group}/{watch_config.version}"
             logger.info(
-                f"🔍 Watching {resource_type} ({api_version}) with id '{watch_config.id}'"
+                f"🔍 Watching {resource_type} ({api_version}) with id '{resource_id}'"
             )
         else:
             logger.info(
-                f"🔍 Watching {resource_type} (core/v1) with id '{watch_config.id}'"
+                f"🔍 Watching {resource_type} (core/v1) with id '{resource_id}'"
             )
 
         kopf.index(resource_type, **kwargs)(update_resource_index)  # type: ignore[arg-type]
@@ -492,6 +491,7 @@ async def initialize_configuration(memo: Any) -> None:
             namespace = get_current_namespace() or "default"
             configmap = await fetch_configmap(configmap_name, namespace)
             memo.config = await load_config_from_configmap(configmap)
+            memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
         metrics.record_config_reload(success=True)
         logger.info("✅ Configuration loaded successfully.")
@@ -542,7 +542,7 @@ def configure_webhook_server(
     # Check if any resources have webhook validation enabled
     has_webhooks = any(
         getattr(watch_config, "enable_validation_webhook", False)
-        for watch_config in memo.config.watch_resources
+        for watch_config in memo.config.watched_resources.values()
     )
 
     if not has_webhooks:
@@ -616,7 +616,14 @@ def create_operator_memo(cli_options: Any) -> Any:
             stop_flag=stop_flag,
             cli_options=cli_options,
             config_reload_flag=config_reload_flag,
-            haproxy_config_context=HAProxyConfigContext(),
+            haproxy_config_context=HAProxyConfigContext(
+                config=Config(
+                    pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+                    haproxy_config=MapConfig(template="# Initial config"),
+                ),
+                template_context=TemplateContext(namespace="default"),
+                rendered_config=None,
+            ),
         ),
         loop,
         stop_flag,
@@ -659,8 +666,16 @@ def run_operator_loop(cli_options: Any) -> None:
             stop_flag=stop_flag,
             cli_options=cli_options,
             config_reload_flag=config_reload_flag,
-            haproxy_config_context=HAProxyConfigContext(),
+            haproxy_config_context=HAProxyConfigContext(
+                config=Config(
+                    pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+                    haproxy_config=MapConfig(template="# Initial config"),
+                ),
+                template_context=TemplateContext(namespace="default"),
+                rendered_config=None,
+            ),
             indices=indexers.indices,
+            template_renderer=None,  # Will be initialized when config is loaded
         )
 
         asyncio.set_event_loop(loop)

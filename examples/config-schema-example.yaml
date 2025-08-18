@@ -1,0 +1,203 @@
+# Example HAProxy Template IC Configuration with Enhanced Pydantic Features
+# This example demonstrates the complete configuration schema with all available options
+
+# Pod selector for finding HAProxy instances
+pod_selector:
+  match_labels:
+    app: haproxy
+    component: loadbalancer
+
+# Main HAProxy configuration template
+haproxy_config:
+  template: |
+    global
+        daemon
+        log stdout local0 info
+        
+    defaults
+        mode http
+        timeout connect 5000ms
+        timeout client 50000ms
+        timeout server 50000ms
+        
+    frontend health
+        bind *:8404
+        http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+        
+    frontend main
+        bind *:80
+        bind *:443 ssl crt /etc/haproxy/certs/
+        
+        # Use maps for dynamic routing
+        use_backend %[req.hdr(host),lower,map(/etc/haproxy/maps/host.map,default)]
+        
+        # Include reusable routing logic
+        {% include "ingress-routing" %}
+
+# Kubernetes resources to watch for changes
+watched_resources:
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    enable_validation_webhook: true
+    resource_filter:
+      namespace_selector:
+        environment: production
+      label_selector:
+        managed-by: haproxy-template-ic
+        
+  services:
+    api_version: v1
+    kind: Service
+    enable_validation_webhook: false
+    
+  endpoints:
+    api_version: v1
+    kind: Endpoints
+    enable_validation_webhook: false
+    
+  configmaps:
+    api_version: v1
+    kind: ConfigMap
+    enable_validation_webhook: true
+    resource_filter:
+      label_selector:
+        haproxy-template-ic/type: config
+
+# HAProxy map files for dynamic routing
+maps:
+  /etc/haproxy/maps/host.map:
+    template: |
+      # Host to backend mapping
+      {% for _, ingress in resources.get('ingresses', {}).items() %}
+      {% if ingress.spec and ingress.spec.rules %}
+      {% for rule in ingress.spec.rules %}
+      {% if rule.host %}
+      {{ rule.host }} backend_{{ rule.host | replace('.', '_') }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      
+      # Default backend
+      default default_backend
+      
+  /etc/haproxy/maps/path-exact.map:
+    template: |
+      # Exact path matching
+      {% for _, ingress in resources.get('ingresses', {}).items() %}
+      {% if ingress.spec and ingress.spec.rules %}
+      {% for rule in ingress.spec.rules %}
+      {% if rule.http and rule.http.paths %}
+      {% for path in rule.http.paths %}
+      {% if path.pathType == "Exact" %}
+      {{ rule.host }}{{ path.path }} {{ path.backend.service.name }}_{{ path.backend.service.port.number }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      
+  /etc/haproxy/maps/path-prefix.map:
+    template: |
+      # Prefix path matching
+      {% for _, ingress in resources.get('ingresses', {}).items() %}
+      {% if ingress.spec and ingress.spec.rules %}
+      {% for rule in ingress.spec.rules %}
+      {% if rule.http and rule.http.paths %}
+      {% for path in rule.http.paths %}
+      {% if path.pathType == "Prefix" %}
+      {{ rule.host }}{{ path.path }} {{ path.backend.service.name }}_{{ path.backend.service.port.number }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+
+# Reusable template snippets
+template_snippets:
+  backend-name:
+    name: backend-name
+    template: "backend_{{ service_name }}_{{ port }}"
+    
+  health-check:
+    name: health-check
+    template: |
+      option httpchk GET /health
+      http-check expect status 200
+      
+  ssl-redirect:
+    name: ssl-redirect
+    template: |
+      redirect scheme https code 301 if !{ ssl_fc }
+      
+  cors-headers:
+    name: cors-headers
+    template: |
+      http-response set-header Access-Control-Allow-Origin "*"
+      http-response set-header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+      http-response set-header Access-Control-Allow-Headers "Content-Type, Authorization"
+      
+  ingress-routing:
+    name: ingress-routing
+    template: |
+      # Dynamic backend definitions from Ingress resources
+      {% for _, ingress in resources.get('ingresses', {}).items() %}
+      {% if ingress.spec and ingress.spec.rules %}
+      {% for rule in ingress.spec.rules %}
+      {% if rule.http and rule.http.paths %}
+      {% for path in rule.http.paths %}
+      
+      backend {% include "backend-name" %} 
+          {% include "health-check" %}
+          {% include "cors-headers" %}
+          
+          # Service endpoints from Kubernetes
+          {% for _, endpoint in resources.get('endpoints', {}).items() %}
+          {% if endpoint.metadata.name == path.backend.service.name %}
+          {% if endpoint.subsets %}
+          {% for subset in endpoint.subsets %}
+          {% if subset.addresses %}
+          {% for address in subset.addresses %}
+          {% for port in subset.ports %}
+          {% if port.port == path.backend.service.port.number %}
+          server {{ address.ip | replace('.', '-') }} {{ address.ip }}:{{ port.port }} check
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endif %}
+          {% endfor %}
+          
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+
+# TLS certificates from Kubernetes Secrets
+certificates:
+  /etc/haproxy/certs/tls.pem:
+    template: |
+      {% for _, secret in resources.get('secrets', {}).items() %}
+      {% if secret.type == "kubernetes.io/tls" %}
+      # Certificate for {{ secret.metadata.name }}
+      {{ secret.data.get('tls.crt') | b64decode }}
+      {{ secret.data.get('tls.key') | b64decode }}
+      
+      {% endif %}
+      {% endfor %}
+      
+  /etc/haproxy/certs/ca-bundle.pem:
+    template: |
+      {% for _, secret in resources.get('secrets', {}).items() %}
+      {% if secret.type == "Opaque" and secret.metadata.labels.get('haproxy-template-ic/ca-bundle') == 'true' %}
+      # CA Bundle from {{ secret.metadata.name }}
+      {{ secret.data.get('ca.crt') | b64decode }}
+      
+      {% endif %}
+      {% endfor %}

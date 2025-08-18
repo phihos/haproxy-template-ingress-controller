@@ -14,7 +14,7 @@ from haproxy_template_ic.webhook import (
     WebhookRegistry,
     register_validation_webhooks_from_config,
 )
-from haproxy_template_ic.config import WatchResourceConfig
+from haproxy_template_ic.config_models import WatchResourceConfig
 
 
 class TestConfigMapValidator:
@@ -91,7 +91,7 @@ class TestConfigMapValidator:
     async def test_validate_config_structure_valid_config(self, validator):
         """Test validation of valid config structure."""
         config_dict = {
-            "watch_resources": [],
+            "watched_resources": {},
             "maps": {},
             "pod_selector": {"match_labels": {"app": "haproxy"}},
         }
@@ -106,7 +106,7 @@ class TestConfigMapValidator:
         warnings = await validator._validate_config_structure(config_dict)
         assert (
             len(warnings) >= 2
-        )  # Should warn about missing pod_selector and watch_resources
+        )  # Should warn about missing pod_selector and watched_resources
 
     @pytest.mark.asyncio
     async def test_validate_templates_valid(self, validator):
@@ -131,7 +131,9 @@ class TestConfigMapValidator:
     async def test_validate_templates_with_snippets(self, validator):
         """Test template validation with snippet includes."""
         config_dict = {
-            "template_snippets": {"test-snippet": "snippet content"},
+            "template_snippets": {
+                "test-snippet": {"name": "test-snippet", "template": "snippet content"}
+            },
             "maps": {
                 "/etc/haproxy/test.map": {"template": "{% include 'test-snippet' %}"}
             },
@@ -142,7 +144,14 @@ class TestConfigMapValidator:
     @pytest.mark.asyncio
     async def test_validate_templates_snippet_syntax_error(self, validator):
         """Test template validation with syntax errors in snippets."""
-        config_dict = {"template_snippets": {"bad-snippet": "{{ invalid syntax %}"}}
+        config_dict = {
+            "template_snippets": {
+                "bad-snippet": {
+                    "name": "bad-snippet",
+                    "template": "{{ invalid syntax %}",
+                }
+            }
+        }
         warnings = await validator._validate_templates(config_dict)
         assert len(warnings) > 0
         assert "Invalid template syntax in snippet" in warnings[0]
@@ -152,7 +161,10 @@ class TestConfigMapValidator:
         """Test template validation with other errors in snippets."""
         config_dict = {
             "template_snippets": {
-                "error-snippet": "{{ 1/0 }}"  # Will cause a runtime error during validation
+                "error-snippet": {
+                    "name": "error-snippet",
+                    "template": "{{ 1/0 }}",
+                }  # Will cause a runtime error during validation
             }
         }
         # This will likely be caught as a general template error
@@ -214,10 +226,11 @@ class TestConfigMapValidator:
             },
             "data": {
                 "config": """
-watch_resources:
-  - kind: Ingress
-    group: networking.k8s.io
-    version: v1
+watched_resources:
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    enable_validation_webhook: false
 pod_selector:
   match_labels:
     app: haproxy
@@ -297,26 +310,23 @@ class TestWebhookRegistry:
     def mock_config(self):
         """Create a mock operator configuration."""
         config = MagicMock()
-        config.watch_resources = [
-            WatchResourceConfig(
+        config.watched_resources = {
+            "ingresses": WatchResourceConfig(
+                api_version="networking.k8s.io/v1",
                 kind="Ingress",
-                group="networking.k8s.io",
-                version="v1",
                 enable_validation_webhook=True,
             ),
-            WatchResourceConfig(
+            "secrets": WatchResourceConfig(
+                api_version="v1",
                 kind="Secret",
-                group="",
-                version="v1",
                 enable_validation_webhook=True,
             ),
-            WatchResourceConfig(
+            "endpointslices": WatchResourceConfig(
+                api_version="discovery.k8s.io/v1",
                 kind="EndpointSlice",
-                group="discovery.k8s.io",
-                version="v1",
                 enable_validation_webhook=False,  # Disabled
             ),
-        ]
+        }
         return config
 
     @patch("haproxy_template_ic.webhook.kopf.on.validate")
@@ -458,27 +468,25 @@ class TestWebhookRegistrationFunction:
     def mock_config_with_webhooks(self):
         """Create a mock configuration with webhook-enabled resources."""
         config = MagicMock()
-        config.watch_resources = [
-            WatchResourceConfig(
+        config.watched_resources = {
+            "ingresses": WatchResourceConfig(
+                api_version="networking.k8s.io/v1",
                 kind="Ingress",
-                group="networking.k8s.io",
-                version="v1",
                 enable_validation_webhook=True,
             ),
-            WatchResourceConfig(
+            "secrets": WatchResourceConfig(
+                api_version="v1",
                 kind="Secret",
-                group="",
-                version="v1",
                 enable_validation_webhook=False,  # Disabled
             ),
-        ]
+        }
         return config
 
     @pytest.fixture
-    def mock_config_without_watch_resources(self):
-        """Create a mock configuration without watch_resources."""
+    def mock_config_without_watched_resources(self):
+        """Create a mock configuration without watched_resources."""
         config = MagicMock()
-        del config.watch_resources  # Remove the attribute
+        del config.watched_resources  # Remove the attribute
         return config
 
     @patch("haproxy_template_ic.webhook._webhook_registry")
@@ -493,18 +501,18 @@ class TestWebhookRegistrationFunction:
             group="networking.k8s.io",
             version="v1",
             kind="Ingress",
-            resource_id="ingress",
+            resource_id="ingresses",
         )
 
     @patch("haproxy_template_ic.webhook._webhook_registry")
-    def test_register_validation_webhooks_from_config_no_watch_resources(
-        self, mock_registry, mock_config_without_watch_resources
+    def test_register_validation_webhooks_from_config_no_watched_resources(
+        self, mock_registry, mock_config_without_watched_resources
     ):
-        """Test webhook registration with missing watch_resources."""
-        register_validation_webhooks_from_config(mock_config_without_watch_resources)
+        """Test webhook registration with missing watched_resources."""
+        register_validation_webhooks_from_config(mock_config_without_watched_resources)
 
         # Registry should not be called
-        mock_registry.register_webhooks_from_config.assert_not_called()
+        mock_registry.register_resource_validation_webhook.assert_not_called()
 
 
 class TestWebhookIntegration:
@@ -519,24 +527,23 @@ class TestWebhookIntegration:
 
         # Create configuration
         config = MagicMock()
-        config.watch_resources = [
-            WatchResourceConfig(
+        config.watched_resources = {
+            "ingresses": WatchResourceConfig(
+                api_version="networking.k8s.io/v1",
                 kind="Ingress",
-                group="networking.k8s.io",
-                version="v1",
                 enable_validation_webhook=True,
             )
-        ]
+        }
 
         # Register webhooks
         register_validation_webhooks_from_config(config)
 
-        # Verify webhook was registered (resource_id defaults to kind.lower())
+        # Verify webhook was registered (resource_id is key from watched_resources)
         mock_kopf_validate.assert_called_with(
             "networking.k8s.io",
             "v1",
             "Ingress",
-            id="validate-ingress-networking-k8s-io-v1",
+            id="validate-ingresses-networking-k8s-io-v1",
         )
 
     @patch("haproxy_template_ic.webhook.get_metrics_collector")
@@ -598,7 +605,7 @@ class TestWebhookErrorHandling:
                 }
             },
             "data": {
-                "config": "watch_resources: []"  # Minimal but invalid config
+                "config": "watched_resources: {}"  # Minimal but valid config
             },
         }
         warnings = []
@@ -667,32 +674,34 @@ class TestWebhookErrorHandling:
         """Test resource reference validation with invalid formats."""
         validator = ConfigMapValidator()
 
-        # Test with invalid watch_resources format
-        config_dict = {"watch_resources": "invalid_string"}
+        # Test with invalid watched_resources format
+        config_dict = {"watched_resources": "invalid_string"}
         warnings = await validator._validate_resource_references(config_dict)
         assert len(warnings) > 0
-        assert "must be a list or dictionary" in warnings[0]
+        assert "must be a dictionary" in warnings[0]
 
         # Test with invalid resource configs
         config_dict = {
-            "watch_resources": [
-                "invalid_resource",  # Should be dict
-                {"kind": "Ingress"},  # Missing group, version
-                {
+            "watched_resources": {
+                "invalid_resource": "not_a_dict",  # Should be dict
+                "missing_fields": {"kind": "Ingress"},  # Missing api_version
+                "invalid_kind": {
                     "kind": 123,
-                    "group": "networking.k8s.io",
-                    "version": "v1",
+                    "api_version": "networking.k8s.io/v1",
                 },  # Invalid kind type
-                {"kind": "Secret", "group": 456, "version": "v1"},  # Invalid group type
-                {
+                "invalid_api_version": {
+                    "kind": "Secret",
+                    "api_version": 456,
+                },  # Invalid api_version type
+                "complete_resource": {
                     "kind": "Service",
-                    "group": "core",
+                    "api_version": "v1",
                     "version": 789,
-                },  # Invalid version type
-            ]
+                },  # Valid resource
+            }
         }
         warnings = await validator._validate_resource_references(config_dict)
-        assert len(warnings) >= 5  # At least one warning per invalid resource
+        assert len(warnings) >= 3  # At least one warning per invalid resource
 
     @pytest.mark.asyncio
     async def test_validate_secret_specific(self):
@@ -720,7 +729,12 @@ class TestWebhookErrorHandling:
 
         # Test with template that causes rendering error during validation
         config_dict = {
-            "template_snippets": {"bad-snippet": "{{ undefined_var }}"},
+            "template_snippets": {
+                "bad-snippet": {
+                    "name": "bad-snippet",
+                    "template": "{{ undefined_var }}",
+                }
+            },
             "maps": {
                 "/etc/haproxy/test.map": {"template": "{% include 'bad-snippet' %}"}
             },
@@ -750,7 +764,7 @@ class TestWebhookErrorHandling:
                         "haproxy-template-ic/config": "true",
                     }
                 },
-                "data": {"config": "watch_resources: []"},
+                "data": {"config": "watched_resources: {}"},
             }
             warnings = []
 
@@ -781,7 +795,11 @@ class TestTemplateValidationEdgeCases:
             "jinja2.Environment.from_string",
             side_effect=Exception("Generic template error"),
         ):
-            config_dict = {"template_snippets": {"error-snippet": "{{ test }}"}}
+            config_dict = {
+                "template_snippets": {
+                    "error-snippet": {"name": "error-snippet", "template": "{{ test }}"}
+                }
+            }
             warnings = await validator._validate_templates(config_dict)
 
             assert len(warnings) > 0
@@ -1018,8 +1036,8 @@ class TestSnippetLoaderCoverage:
             loader.get_source(env, "nonexistent-snippet")
 
 
-class TestWatchResourcesEdgeCases:
-    """Test edge cases for watch_resources validation."""
+class TestWatchedResourcesEdgeCases:
+    """Test edge cases for watched_resources validation."""
 
     @pytest.fixture
     def validator(self):
@@ -1028,7 +1046,7 @@ class TestWatchResourcesEdgeCases:
 
     @pytest.mark.asyncio
     async def test_validate_resource_references_dict_format(self, validator):
-        """Test watch_resources validation with dictionary format."""
+        """Test watched_resources validation with dictionary format."""
         config_dict = {
             "watch_resources": {
                 "ingresses": {
@@ -1046,7 +1064,7 @@ class TestWatchResourcesEdgeCases:
 
     @pytest.mark.asyncio
     async def test_validate_resource_references_list_format(self, validator):
-        """Test watch_resources validation with list format."""
+        """Test watched_resources validation with list format (should fail)."""
         config_dict = {
             "watch_resources": [
                 {"kind": "Ingress", "group": "networking.k8s.io", "version": "v1"},
