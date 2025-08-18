@@ -23,7 +23,6 @@ from haproxy_template_ic.structured_logging import (
     operation_context,
     component_context_manager,
     resource_context_manager,
-    log_kubernetes_event,
 )
 from haproxy_template_ic.tracing import (
     trace_async_function,
@@ -52,9 +51,24 @@ from haproxy_template_ic.dataplane import (
 )
 from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
-from haproxy_template_ic.utils import get_current_namespace
+import os
+from kubernetes import config
 
 logger = get_structured_logger(__name__)
+
+
+def get_current_namespace() -> str:
+    """Get the current Kubernetes namespace."""
+    ns_path = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+    if os.path.exists(ns_path):
+        with open(ns_path) as f:
+            return f.read().strip()
+    try:
+        contexts, active_context = config.list_kube_config_contexts()
+        namespace = active_context["context"].get("namespace", "default")
+        return namespace if isinstance(namespace, str) else "default"
+    except (KeyError, TypeError):
+        return "default"
 
 
 def _is_valid_resource(resource: Any) -> bool:
@@ -164,12 +178,14 @@ async def handle_configmap_change(
                 resource_name=name,
             ):
                 structured_logger = get_structured_logger(__name__)
-                log_kubernetes_event(
-                    structured_logger,
-                    type,
-                    "ConfigMap",
-                    event["object"].get("metadata", {}).get("namespace", "unknown"),
-                    name,
+                structured_logger.info(
+                    f"Kubernetes {type}",
+                    kubernetes_event=type,
+                    resource_type="ConfigMap",
+                    resource_namespace=event["object"]
+                    .get("metadata", {})
+                    .get("namespace", "unknown"),
+                    resource_name=name,
                     operation_id=operation_id,
                 )
 

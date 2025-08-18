@@ -223,3 +223,84 @@ class TemplateRenderer:
     def cache_size(self) -> int:
         """Get the number of cached compiled templates."""
         return len(self._compiled_templates)
+
+    def validate_template(self, template_str: str) -> list[str]:
+        """Validate a template string and return any warnings.
+
+        Args:
+            template_str: Template string to validate
+
+        Returns:
+            List of warning messages (empty if valid)
+        """
+        warnings = []
+        try:
+            self.get_compiled(template_str)
+        except TemplateSyntaxError as e:
+            warnings.append(f"Invalid template syntax: {e}")
+        except TemplateNotFound as e:
+            warnings.append(f"Template snippet not found: {e}")
+        except Exception as e:
+            warnings.append(f"Template error: {e}")
+        return warnings
+
+
+def validate_config_templates(config_dict: dict) -> list[str]:
+    """Validate all templates in a configuration dictionary.
+
+    Args:
+        config_dict: Configuration dictionary to validate
+
+    Returns:
+        List of warning messages (empty if all valid)
+    """
+    warnings = []
+
+    # Extract snippets for validation environment
+    snippets = {}
+    snippets_raw = config_dict.get("template_snippets", {})
+    for snippet_name, snippet_data in snippets_raw.items():
+        if isinstance(snippet_data, dict) and "template" in snippet_data:
+            snippets[snippet_name] = snippet_data["template"]
+        elif isinstance(snippet_data, str):
+            snippets[snippet_name] = snippet_data
+        else:
+            try:
+                snippets[snippet_name] = getattr(
+                    snippet_data, "template", str(snippet_data)
+                )
+            except Exception:
+                snippets[snippet_name] = str(snippet_data)
+
+    renderer = TemplateRenderer(snippets)
+
+    # Validate template snippets
+    for snippet_name, snippet_template in snippets.items():
+        snippet_warnings = renderer.validate_template(snippet_template)
+        for warning in snippet_warnings:
+            warnings.append(f"Snippet '{snippet_name}': {warning}")
+
+    # Validate maps
+    maps = config_dict.get("maps", {})
+    for map_path, map_config in maps.items():
+        if isinstance(map_config, dict) and "template" in map_config:
+            map_warnings = renderer.validate_template(map_config["template"])
+            for warning in map_warnings:
+                warnings.append(f"Map '{map_path}': {warning}")
+
+    # Validate HAProxy config
+    haproxy_config = config_dict.get("haproxy_config", {})
+    if isinstance(haproxy_config, dict) and "template" in haproxy_config:
+        haproxy_warnings = renderer.validate_template(haproxy_config["template"])
+        for warning in haproxy_warnings:
+            warnings.append(f"HAProxy config: {warning}")
+
+    # Validate certificates
+    certificates = config_dict.get("certificates", {})
+    for cert_path, cert_config in certificates.items():
+        if isinstance(cert_config, dict) and "template" in cert_config:
+            cert_warnings = renderer.validate_template(cert_config["template"])
+            for warning in cert_warnings:
+                warnings.append(f"Certificate '{cert_path}': {warning}")
+
+    return warnings

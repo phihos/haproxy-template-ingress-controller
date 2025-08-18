@@ -203,37 +203,3 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
-
-
-# Convenience functions for common operations
-def log_template_operation(
-    logger: StructuredLogger, template_type: str, operation: str, **kwargs: Any
-) -> None:
-    """Log a template operation with structured context."""
-    with resource_context_manager(template_type=template_type):
-        logger.info(f"Template {operation}", template_operation=operation, **kwargs)
-
-
-def log_dataplane_operation(
-    logger: StructuredLogger, operation: str, pod_name: str, **kwargs: Any
-) -> None:
-    """Log a Dataplane API operation with structured context."""
-    with resource_context_manager(pod_name=pod_name):
-        logger.info(
-            f"Dataplane API {operation}", dataplane_operation=operation, **kwargs
-        )
-
-
-def log_kubernetes_event(
-    logger: StructuredLogger,
-    event_type: str,
-    resource_type: str,
-    namespace: str,
-    name: str,
-    **kwargs: Any,
-) -> None:
-    """Log a Kubernetes event with structured context."""
-    with resource_context_manager(
-        resource_type=resource_type, resource_namespace=namespace, resource_name=name
-    ):
-        logger.info(f"Kubernetes {event_type}", kubernetes_event=event_type, **kwargs)

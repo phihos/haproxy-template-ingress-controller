@@ -7,13 +7,13 @@ to the cluster, providing immediate feedback on configuration errors.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-import jinja2
 import kopf
 import yaml
 
 from haproxy_template_ic.config_models import config_from_dict
+from haproxy_template_ic.templating import validate_config_templates
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import (
     trace_async_function,
@@ -69,7 +69,7 @@ class ConfigMapValidator:
             warnings.extend(validation_warnings)
 
             # Validate Jinja2 templates
-            template_warnings = await self._validate_templates(config_dict)
+            template_warnings = validate_config_templates(config_dict)
             warnings.extend(template_warnings)
 
             # Validate resource references
@@ -166,113 +166,6 @@ class ConfigMapValidator:
             warnings.append("pod_selector should contain 'match_labels'")
 
         return warnings
-
-    async def _validate_templates(self, config_dict: Dict[str, Any]) -> List[str]:
-        """Validate all Jinja2 templates in the configuration."""
-        warnings = []
-
-        # Validate template snippets first
-        snippets_raw = config_dict.get("template_snippets", {})
-
-        # Convert TemplateSnippet objects to strings for validation
-        snippets = {}
-        for snippet_name, snippet_data in snippets_raw.items():
-            if isinstance(snippet_data, dict) and "template" in snippet_data:
-                # New format: {"name": "...", "template": "..."}
-                snippets[snippet_name] = snippet_data["template"]
-            elif isinstance(snippet_data, str):
-                # Old format: just the template string
-                snippets[snippet_name] = snippet_data
-            else:
-                # TemplateSnippet object or other format
-                try:
-                    snippets[snippet_name] = getattr(
-                        snippet_data, "template", str(snippet_data)
-                    )
-                except Exception:
-                    snippets[snippet_name] = str(snippet_data)
-
-        snippet_env = self._create_template_environment(snippets)
-
-        for snippet_name, snippet_template in snippets.items():
-            try:
-                snippet_env.from_string(snippet_template)
-            except jinja2.TemplateSyntaxError as e:
-                warnings.append(
-                    f"Invalid template syntax in snippet '{snippet_name}': {e}"
-                )
-            except Exception as e:
-                warnings.append(f"Error in template snippet '{snippet_name}': {e}")
-
-        # Validate maps
-        maps = config_dict.get("maps", {})
-        for map_path, map_config in maps.items():
-            if isinstance(map_config, dict) and "template" in map_config:
-                try:
-                    template_env = self._create_template_environment(snippets)
-                    template_env.from_string(map_config["template"])
-                except jinja2.TemplateSyntaxError as e:
-                    warnings.append(f"Invalid template syntax in map '{map_path}': {e}")
-                except jinja2.TemplateNotFound as e:
-                    warnings.append(
-                        f"Template snippet not found in map '{map_path}': {e}"
-                    )
-                except Exception as e:
-                    warnings.append(f"Error in map template '{map_path}': {e}")
-
-        # Validate HAProxy config
-        haproxy_config = config_dict.get("haproxy_config", {})
-        if isinstance(haproxy_config, dict) and "template" in haproxy_config:
-            try:
-                template_env = self._create_template_environment(snippets)
-                template_env.from_string(haproxy_config["template"])
-            except jinja2.TemplateSyntaxError as e:
-                warnings.append(f"Invalid template syntax in haproxy_config: {e}")
-            except jinja2.TemplateNotFound as e:
-                warnings.append(f"Template snippet not found in haproxy_config: {e}")
-            except Exception as e:
-                warnings.append(f"Error in haproxy_config template: {e}")
-
-        # Validate certificates
-        certificates = config_dict.get("certificates", {})
-        for cert_path, cert_config in certificates.items():
-            if isinstance(cert_config, dict) and "template" in cert_config:
-                try:
-                    template_env = self._create_template_environment(snippets)
-                    template_env.from_string(cert_config["template"])
-                except jinja2.TemplateSyntaxError as e:
-                    warnings.append(
-                        f"Invalid template syntax in certificate '{cert_path}': {e}"
-                    )
-                except jinja2.TemplateNotFound as e:
-                    warnings.append(
-                        f"Template snippet not found in certificate '{cert_path}': {e}"
-                    )
-                except Exception as e:
-                    warnings.append(f"Error in certificate template '{cert_path}': {e}")
-
-        return warnings
-
-    def _create_template_environment(
-        self, snippets: Dict[str, str]
-    ) -> jinja2.Environment:
-        """Create a Jinja2 environment with snippet support for validation."""
-
-        # Simple dict loader for snippets
-        class SnippetLoader(jinja2.BaseLoader):
-            def __init__(self, snippets: Dict[str, str]):
-                self.snippets = snippets
-
-            def get_source(
-                self, environment: jinja2.Environment, template: str
-            ) -> Tuple[str, Optional[str], Optional[Any]]:
-                if template in self.snippets:
-                    return self.snippets[template], None, lambda: True
-                raise jinja2.TemplateNotFound(template)
-
-        return jinja2.Environment(  # nosec B701
-            loader=SnippetLoader(snippets), undefined=jinja2.StrictUndefined
-        )
 
     async def _validate_resource_references(
         self, config_dict: Dict[str, Any]
