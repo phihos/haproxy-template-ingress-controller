@@ -3,11 +3,10 @@
 # =============================================================================
 
 # Standard library imports
-import pickle
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Dict
 
 # Third-party imports
 import kr8s
@@ -32,10 +31,8 @@ from pytest_kind.cluster import KindCluster
 from pytest_shared_session_scope import (
     CleanupToken,
     SetupToken,
-    StoreValueNotExists,
-    shared_session_scope_fixture,
+    shared_session_scope_pickle,
 )
-from pytest_shared_session_scope.store import LocalFileStoreMixin
 
 
 # =============================================================================
@@ -203,37 +200,11 @@ def pytest_runtest_makereport(item, call):
 
 
 # =============================================================================
-# CUSTOM STORE CLASSES
-# =============================================================================
-
-
-class PickleStore(LocalFileStoreMixin):
-    """Store that reads and writes pickle data using the pickle module."""
-
-    def read(self, identifier: str, fixture_values: dict[str, Any]) -> str:
-        """Read data from a file."""
-        path = self._get_path(identifier, fixture_values["tmp_path_factory"])
-        try:
-            with open(path, "rb") as f:
-                # Pickle the 'data' dictionary using the highest protocol available.
-                return pickle.load(f)
-        except FileNotFoundError:
-            raise StoreValueNotExists()
-
-    def write(self, identifier: str, data: str, fixture_values: dict[str, Any]):
-        """Write data to a file."""
-        path = self._get_path(identifier, fixture_values["tmp_path_factory"])
-        with open(path, "wb") as f:
-            # Pickle the 'data' dictionary using the highest protocol available.
-            pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
-
-
-# =============================================================================
 # INFRASTRUCTURE FIXTURES (cluster/docker setup)
 # =============================================================================
 
 
-@shared_session_scope_fixture(PickleStore())
+@shared_session_scope_pickle()
 def kind_cluster(request):
     """
     Provide a Kubernetes kind cluster as test fixture that works with pytest-xdist.
@@ -321,7 +292,7 @@ def docker_client():
     return DockerClient()
 
 
-@shared_session_scope_fixture(PickleStore())
+@shared_session_scope_pickle()
 def container_image(docker_client, project_root_path, kind_cluster, request):
     """
     Build and provide the container image for testing.

@@ -26,16 +26,10 @@ from .utils import (
 # Import for shared session fixtures
 from pytest_shared_session_scope import (
     SetupToken,
-    shared_session_scope_fixture,
+    shared_session_scope_pickle,
 )
 from python_on_whales import DockerClient
 from pathlib import Path
-
-# Import PickleStore from main conftest.py
-import sys
-
-sys.path.append(str(Path(__file__).parent.parent))
-from conftest import PickleStore
 
 
 # Store test results for --keep-containers on-failure
@@ -287,7 +281,7 @@ def docker_cleanup_session(docker_client):
     # No cleanup needed on exit - let Docker handle it
 
 
-@shared_session_scope_fixture(PickleStore())
+@shared_session_scope_pickle()
 def shared_docker_images(request, docker_client, docker_cleanup_session):
     """
     Build Docker images once per test session, shared across pytest-xdist workers.
@@ -299,9 +293,6 @@ def shared_docker_images(request, docker_client, docker_cleanup_session):
     This fixture is only activated for tests that explicitly request it or tests
     marked with 'integration' marker.
     """
-    # Ensure cleanup runs first
-    docker_cleanup_session
-
     images = yield
     if images is SetupToken.FIRST:
         print("\n🐳 Building shared Docker images for integration tests...")
