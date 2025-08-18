@@ -278,6 +278,8 @@ Follow the style guide in `STYLEGUIDE.md`:
 
 **Standard Process**: Feature branch → Plan/implement → Test (`uv run pytest -n auto`) → Quality checks → Commit → PR → Review → Merge
 
+**PR Titles**: Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) format for PR titles as they become the first line of squashed merge commits: `<type>: <description>`
+
 **Kind Development**:
 1. Setup: `bash ./scripts/start-dev-env.sh`, build/load image
 2. Test: Run unit/integration/e2e tests with debugging options
