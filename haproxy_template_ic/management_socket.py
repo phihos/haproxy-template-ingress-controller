@@ -56,7 +56,7 @@ class StateSerializer:
         """Serialize configuration from memo."""
         config: Dict[str, Any] = {
             "pod_selector": None,
-            "watch_resources": {},
+            "watched_resources": {},
             "maps": {},
         }
 
@@ -82,7 +82,7 @@ class StateSerializer:
                 group = ""
                 version = watch_config.api_version
 
-            config["watch_resources"][resource_id] = {
+            config["watched_resources"][resource_id] = {
                 "kind": watch_config.kind,
                 "group": group,
                 "version": version,
@@ -252,7 +252,7 @@ class ManagementSocketServer:
         elif parts[0] == "get":
             if len(parts) < 3:
                 return {
-                    "error": "Missing arguments. Usage: get <maps|watch_resources|template_snippets|certificates> <identifier>"
+                    "error": "Missing arguments. Usage: get <maps|watched_resources|template_snippets|certificates> <identifier>"
                 }
 
             collection_type = parts[1]
@@ -269,7 +269,7 @@ class ManagementSocketServer:
                     }
                 return {"error": f"Map not found: {identifier}"}
 
-            elif collection_type == "watch_resources":
+            elif collection_type == "watched_resources":
                 watch_config = self.memo.config.watched_resources.get(identifier)
                 if watch_config:
                     # Parse group and version from api_version
@@ -317,7 +317,7 @@ class ManagementSocketServer:
             else:
                 return {
                     "error": f"Unknown collection type: {collection_type}. "
-                    f"Available: maps, watch_resources, template_snippets, certificates"
+                    f"Available: maps, watched_resources, template_snippets, certificates"
                 }
 
         else:

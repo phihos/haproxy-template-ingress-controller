@@ -61,7 +61,7 @@ def test_serialize_state_basic():
 
     # Check that config has default values
     assert result["config"]["pod_selector"] is None
-    assert result["config"]["watch_resources"] == {}
+    assert result["config"]["watched_resources"] == {}
     assert result["config"]["maps"] == {}
 
 
@@ -124,8 +124,8 @@ def test_serialize_state_with_full_config():
     result = serialize_state(memo)
 
     assert result["config"]["pod_selector"]["match_labels"] == {"app": "haproxy"}
-    assert "pods" in result["config"]["watch_resources"]
-    assert "services" in result["config"]["watch_resources"]
+    assert "pods" in result["config"]["watched_resources"]
+    assert "services" in result["config"]["watched_resources"]
     assert "/etc/haproxy/maps/backend.map" in result["config"]["maps"]
     assert (
         "/etc/haproxy/maps/backend.map"
@@ -983,7 +983,7 @@ def test_state_serializer_serialize_config_without_maps():
     result = serializer._serialize_config()
 
     assert result["pod_selector"]["match_labels"] == {"app": "test"}
-    assert "pods" in result["watch_resources"]
+    assert "pods" in result["watched_resources"]
     assert result["maps"] == {}
 
 
@@ -1125,7 +1125,9 @@ async def test_get_command_for_all_collection_types():
                     "enable_validation_webhook": False,
                 }
             },
-            "template_snippets": {"test-snippet": "snippet"},
+            "template_snippets": {
+                "test-snippet": {"name": "test-snippet", "template": "snippet"}
+            },
             "certificates": {"/test/cert": {"template": "cert"}},
         }
     )
@@ -1142,13 +1144,13 @@ async def test_get_command_for_all_collection_types():
     assert "error" in result
     assert "Map not found" in result["error"]
 
-    # Test watch_resources - found
-    result = await server._process_command("get watch_resources pods")
+    # Test watched_resources - found
+    result = await server._process_command("get watched_resources pods")
     assert "result" in result
     assert result["result"]["id"] == "pods"
 
-    # Test watch_resources - not found
-    result = await server._process_command("get watch_resources nonexistent")
+    # Test watched_resources - not found
+    result = await server._process_command("get watched_resources nonexistent")
     assert "error" in result
     assert "Watch resource not found" in result["error"]
 

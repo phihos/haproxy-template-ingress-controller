@@ -43,6 +43,7 @@ from haproxy_template_ic.config_models import (
     TemplateContext,
     config_from_dict,
 )
+from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
     HAProxyPodDiscovery,
@@ -285,8 +286,8 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     try:
         with trace_template_render("haproxy_config"):
             with metrics.time_template_render("haproxy_config"):
-                rendered_content = memo.config.haproxy_config.compiled_template.render(
-                    **template_vars
+                rendered_content = memo.template_renderer.render(
+                    memo.config.haproxy_config.template, **template_vars
                 )
         rendered_config = RenderedConfig(content=rendered_content)
         memo.haproxy_config_context.rendered_config = rendered_config
@@ -307,8 +308,8 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
         try:
             with trace_template_render("map", map_path):
                 with metrics.time_template_render("map"):
-                    rendered_content = map_config.compiled_template.render(
-                        **template_vars
+                    rendered_content = memo.template_renderer.render(
+                        map_config.template, **template_vars
                     )
             rendered_map = RenderedMap(
                 path=map_path, content=rendered_content, map_config=map_config
@@ -329,8 +330,8 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
         try:
             with trace_template_render("certificate", cert_path):
                 with metrics.time_template_render("certificate"):
-                    rendered_content = certificate_config.compiled_template.render(
-                        **template_vars
+                    rendered_content = memo.template_renderer.render(
+                        certificate_config.template, **template_vars
                     )
             rendered_certificate = RenderedCertificate(
                 path=cert_path,
@@ -490,6 +491,7 @@ async def initialize_configuration(memo: Any) -> None:
             namespace = get_current_namespace() or "default"
             configmap = await fetch_configmap(configmap_name, namespace)
             memo.config = await load_config_from_configmap(configmap)
+            memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
         metrics.record_config_reload(success=True)
         logger.info("✅ Configuration loaded successfully.")
@@ -671,6 +673,7 @@ def run_operator_loop(cli_options: Any) -> None:
                 template_context=TemplateContext(),
             ),
             indices=indexers.indices,
+            template_renderer=None,  # Will be initialized when config is loaded
         )
 
         asyncio.set_event_loop(loop)

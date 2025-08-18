@@ -357,8 +357,3 @@ def resilient_operation(
         return wrapper
 
     return decorator
-
-
-# Backward compatibility exports - simplified interfaces
-CircuitBreaker = circuit  # Use circuitbreaker directly
-CircuitState = None  # No longer needed with circuitbreaker

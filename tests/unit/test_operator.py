@@ -36,6 +36,7 @@ from haproxy_template_ic.config_models import (
     WatchResourceConfig,
     config_from_dict,
 )
+from haproxy_template_ic.templating import TemplateRenderer
 from jinja2 import Template
 
 
@@ -112,8 +113,10 @@ def test_trigger_reload():
 
 
 @pytest.mark.asyncio
-async def test_handle_configmap_change_with_change():
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_handle_configmap_change_with_change(mock_get_namespace):
     """Test ConfigMap change handler when change is detected."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = Config(
         pod_selector=PodSelector(match_labels={"app": "old"}),
@@ -150,8 +153,10 @@ async def test_handle_configmap_change_with_change():
 
 
 @pytest.mark.asyncio
-async def test_handle_configmap_change_no_change():
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_handle_configmap_change_no_change(mock_get_namespace):
     """Test ConfigMap change handler when no change is detected."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
@@ -209,8 +214,11 @@ async def test_update_resource_index():
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_templates_success():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_templates_success(mock_get_namespace, mock_sync):
     """Test successful template rendering."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -234,6 +242,8 @@ async def test_render_haproxy_templates_success():
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices with test data
     mock_indices = MagicMock()
@@ -267,8 +277,11 @@ async def test_render_haproxy_templates_success():
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_templates_with_ingress():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_templates_with_ingress(mock_get_namespace, mock_sync):
     """Test template rendering with ingress resources like in example-configmap.yaml."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -298,6 +311,7 @@ async def test_render_haproxy_templates_with_ingress():
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices with test ingress data
     mock_indices = MagicMock()
@@ -341,8 +355,11 @@ async def test_render_haproxy_templates_with_ingress():
 
 
 @pytest.mark.asyncio
-async def test_kopf_index_store_resource_access():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_kopf_index_store_resource_access(mock_get_namespace, mock_sync):
     """Test that resources from kopf index stores have proper .spec attribute access."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -372,6 +389,7 @@ async def test_kopf_index_store_resource_access():
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock kopf index store with a proper resource object
     mock_indices = MagicMock()
@@ -431,9 +449,13 @@ def test_jinja2_dict_access_patterns():
 
 @pytest.mark.asyncio
 @patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_haproxy_templates_jinja_error(mock_logger, mock_sync):
+async def test_render_haproxy_templates_jinja_error(
+    mock_logger, mock_get_namespace, mock_sync
+):
     """Test template rendering with Jinja error."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -451,6 +473,7 @@ async def test_render_haproxy_templates_jinja_error(mock_logger, mock_sync):
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices
     mock_indices = MagicMock()
@@ -467,8 +490,13 @@ async def test_render_haproxy_templates_jinja_error(mock_logger, mock_sync):
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_config_with_template_variables():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_config_with_template_variables(
+    mock_get_namespace, mock_sync
+):
     """Test HAProxy config rendering with template variables from resources."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -490,6 +518,7 @@ async def test_render_haproxy_config_with_template_variables():
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices with test data
     mock_indices = MagicMock()
@@ -515,9 +544,14 @@ async def test_render_haproxy_config_with_template_variables():
 
 
 @pytest.mark.asyncio
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_haproxy_config_jinja_error(mock_logger):
+async def test_render_haproxy_config_jinja_error(
+    mock_logger, mock_get_namespace, mock_sync
+):
     """Test HAProxy config rendering with Jinja error."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -533,6 +567,7 @@ async def test_render_haproxy_config_jinja_error(mock_logger):
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices
     mock_indices = MagicMock()
@@ -550,8 +585,13 @@ async def test_render_haproxy_config_jinja_error(mock_logger):
 
 
 @pytest.mark.asyncio
-async def test_render_certificates_with_template_variables():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_certificates_with_template_variables(
+    mock_get_namespace, mock_sync
+):
     """Test certificate rendering with template variables from resources."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -582,6 +622,7 @@ async def test_render_certificates_with_template_variables():
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices with test secret data
     mock_indices = MagicMock()
@@ -610,9 +651,13 @@ async def test_render_certificates_with_template_variables():
 
 @pytest.mark.asyncio
 @patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
 @patch("haproxy_template_ic.operator.logger")
-async def test_render_certificates_jinja_error(mock_logger, mock_sync):
+async def test_render_certificates_jinja_error(
+    mock_logger, mock_get_namespace, mock_sync
+):
     """Test certificate rendering with Jinja error."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -631,6 +676,7 @@ async def test_render_certificates_jinja_error(mock_logger, mock_sync):
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock the indices
     mock_indices = MagicMock()
@@ -936,7 +982,6 @@ async def test_initialize_configuration(
 # TODO: These tests are for JinjaTemplateOperator which was removed
 # def test_jinja_template_operator_give_up_diffing_different():
 #     """Test JinjaTemplateOperator give_up_diffing method with different templates."""
-#     from haproxy_template_ic.config import _make_jinja_template
 
 #     operator = JinjaTemplateOperator()
 
@@ -960,7 +1005,6 @@ async def test_initialize_configuration(
 
 # def test_jinja_template_operator_give_up_diffing_identical():
 #     """Test JinjaTemplateOperator give_up_diffing method with identical templates."""
-#     from haproxy_template_ic.config import _make_jinja_template
 
 #     operator = JinjaTemplateOperator()
 
@@ -983,7 +1027,6 @@ async def test_initialize_configuration(
 
 # def test_deepdiff_with_custom_operator_different_templates():
 #     """Test DeepDiff with custom operator for different templates."""
-#     from haproxy_template_ic.config import _make_jinja_template
 #     from deepdiff import DeepDiff
 
 #     # Create config objects with different templates
@@ -1008,7 +1051,6 @@ async def test_initialize_configuration(
 
 # def test_deepdiff_with_custom_operator_identical_templates():
 #     """Test DeepDiff with custom operator for identical templates."""
-#     from haproxy_template_ic.config import _make_jinja_template
 #     from deepdiff import DeepDiff
 
 #     # Create config objects with identical templates
@@ -1031,7 +1073,6 @@ async def test_initialize_configuration(
 
 # def test_custom_operator_prevents_loader_errors():
 #     """Test that custom operator prevents 'no loader for this environment specified' errors."""
-#     from haproxy_template_ic.config import _make_jinja_template
 #     from deepdiff import DeepDiff
 
 #     # Create templates that could potentially cause loader errors
@@ -1128,8 +1169,13 @@ async def test_fetch_configmap_success():
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_templates_resource_type_edge_cases():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_templates_resource_type_edge_cases(
+    mock_get_namespace, mock_sync
+):
     """Test resource type edge cases in render_haproxy_templates."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -1149,6 +1195,7 @@ async def test_render_haproxy_templates_resource_type_edge_cases():
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock indices with different resource types
     mock_indices = MagicMock()
@@ -1185,8 +1232,11 @@ async def test_render_haproxy_templates_resource_type_edge_cases():
 
 
 @pytest.mark.asyncio
-async def test_render_haproxy_templates_missing_index():
+@patch("haproxy_template_ic.operator.synchronize_with_haproxy_instances")
+@patch("haproxy_template_ic.operator.get_current_namespace")
+async def test_render_haproxy_templates_missing_index(mock_get_namespace, mock_sync):
     """Test render_haproxy_templates when indices are missing."""
+    mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
         {
@@ -1206,6 +1256,7 @@ async def test_render_haproxy_templates_missing_index():
         config=memo.config,
         template_context=TemplateContext(),
     )
+    memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
     # Mock indices that raise exception when accessing specific id
     mock_indices = MagicMock()
@@ -1466,7 +1517,7 @@ def test_configure_webhook_server_no_webhooks(mock_logger):
     watch_config = MagicMock()
     # Use getattr with default False to simulate the actual code behavior
     watch_config.__dict__["enable_validation_webhook"] = False
-    memo.config.watch_resources = [watch_config]
+    memo.config.watched_resources = {"test": watch_config}
 
     configure_webhook_server(settings, memo)
 

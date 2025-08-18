@@ -25,12 +25,13 @@ custom validators, providing better maintainability and standardized error messa
 - Enhanced maintainability using library features
 """
 
-from functools import cached_property
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional, TYPE_CHECKING
 
-from jinja2 import Template
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.types import StringConstraints
+
+if TYPE_CHECKING:
+    pass
 
 
 # =============================================================================
@@ -128,19 +129,6 @@ class MapConfig(BaseModel):
         ..., description="Jinja2 template for the map content"
     )
 
-    @cached_property
-    def compiled_template(self) -> Template:
-        """Lazily compile and cache the Jinja2 template."""
-        from .config import get_template_environment
-
-        # For maps, we need to check if we have access to snippets
-        # This will be provided by the parent Config when template snippets are available
-        if hasattr(self, "_parent_config") and self._parent_config:
-            env = get_template_environment(self._parent_config.template_snippets)
-        else:
-            env = get_template_environment()
-        return env.from_string(self.template)
-
     class Config:
         # Allow Template objects (not JSON serializable but used internally)
         arbitrary_types_allowed = True
@@ -151,14 +139,6 @@ class TemplateSnippet(BaseModel):
 
     name: SnippetName = Field(..., description="Snippet name for {% include %}")
     template: NonEmptyStrictStr = Field(..., description="Jinja2 template content")
-
-    @cached_property
-    def compiled_template(self) -> Template:
-        """Lazily compile and cache the Jinja2 template."""
-        from .config import get_template_environment
-
-        env = get_template_environment()
-        return env.from_string(self.template)
 
     class Config:
         # Allow Template objects (not JSON serializable but used internally)
@@ -171,19 +151,6 @@ class CertificateConfig(BaseModel):
     template: NonEmptyStrictStr = Field(
         ..., description="Jinja2 template for certificate content"
     )
-
-    @cached_property
-    def compiled_template(self) -> Template:
-        """Lazily compile and cache the Jinja2 template."""
-        from .config import get_template_environment
-
-        # For certificates, we need to check if we have access to snippets
-        # This will be provided by the parent Config when template snippets are available
-        if hasattr(self, "_parent_config") and self._parent_config:
-            env = get_template_environment(self._parent_config.template_snippets)
-        else:
-            env = get_template_environment()
-        return env.from_string(self.template)
 
     class Config:
         # Allow Template objects (not JSON serializable but used internally)
@@ -282,35 +249,6 @@ class Config(BaseModel):
         },
     )
 
-    def model_post_init(self, __context: Any) -> None:
-        """Set up parent relationships for template compilation with snippets."""
-        # Set parent reference for haproxy_config to access snippets
-        if hasattr(self.haproxy_config, "__dict__"):
-            self.haproxy_config.__dict__["_parent_config"] = self
-
-        # Set parent reference for all maps
-        for map_config in self.maps.values():
-            if hasattr(map_config, "__dict__"):
-                map_config.__dict__["_parent_config"] = self
-
-        # Set parent reference for all certificates
-        for cert_config in self.certificates.values():
-            if hasattr(cert_config, "__dict__"):
-                cert_config.__dict__["_parent_config"] = self
-
-    # Backward compatibility helper methods
-    def get_map(self, path: str) -> Optional["MapConfig"]:
-        """Get map configuration by path."""
-        return self.maps.get(path)
-
-    def get_certificate(self, path: str) -> Optional["CertificateConfig"]:
-        """Get certificate configuration by path."""
-        return self.certificates.get(path)
-
-    def get_template_snippet(self, name: str) -> Optional["TemplateSnippet"]:
-        """Get template snippet by name."""
-        return self.template_snippets.get(name)
-
 
 class RenderedMap(BaseModel):
     """Rendered HAProxy map file."""
@@ -353,23 +291,6 @@ class TemplateContext(BaseModel):
         default_factory=dict, description="Kubernetes resources organized by type"
     )
     namespace: Optional[str] = Field(None, description="Current namespace")
-
-    # Helper methods that return typed collections
-    def get_watched_resources(self) -> Dict[str, WatchResourceConfig]:
-        """Get watched resources as a typed collection."""
-        return getattr(self, "watched_resources", {})
-
-    def get_maps(self) -> Dict[str, MapConfig]:
-        """Get maps as a typed collection."""
-        return getattr(self, "maps", {})
-
-    def get_template_snippets(self) -> Dict[str, TemplateSnippet]:
-        """Get template snippets as a typed collection."""
-        return getattr(self, "template_snippets", {})
-
-    def get_certificates(self) -> Dict[str, CertificateConfig]:
-        """Get certificates as a typed collection."""
-        return getattr(self, "certificates", {})
 
     model_config = ConfigDict(
         # Allow extra fields for extensibility
@@ -424,111 +345,14 @@ class HAProxyConfigContext(BaseModel):
 def config_from_dict(data: Dict[str, Any]) -> Config:
     """
     Create Config object from dictionary with automatic validation.
-
-    This replaces the manual parsing logic with Pydantic's automatic validation.
     """
     try:
-        # Transform old config format to new Pydantic format
-        transformed_data = _transform_legacy_config(data)
-
-        # Use Pydantic parsing for basic validation
-        config = Config.model_validate(transformed_data)
-
+        # Use Pydantic parsing for validation
+        config = Config.model_validate(data)
         return config
     except Exception as e:
         # Re-raise with more context for debugging
         raise ValueError(f"Configuration validation failed: {e}") from e
-
-
-def _transform_legacy_config(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Transform legacy config format to new Pydantic format."""
-    result = data.copy()
-
-    # Transform template_snippets from dict of name->string to dict of name->TemplateSnippet
-    if "template_snippets" in result:
-        snippets = {}
-        for name, template_str in result["template_snippets"].items():
-            snippets[name] = {
-                "name": name,
-                "template": template_str,
-                "source": template_str,
-            }
-        result["template_snippets"] = snippets
-
-    # Transform maps from dict of path->{template: str} to dict of path->MapConfig
-    if "maps" in result:
-        maps = {}
-        for path, config in result["maps"].items():
-            if isinstance(config, dict) and "template" in config:
-                maps[path] = {"template": config["template"], "path": path}
-            else:
-                maps[path] = {"template": str(config), "path": path}
-        result["maps"] = maps
-
-    # Transform certificates from dict of name->{template: str} to dict of name->CertificateConfig
-    if "certificates" in result:
-        certificates = {}
-        for name, config in result["certificates"].items():
-            if isinstance(config, dict) and "template" in config:
-                certificates[name] = {"template": config["template"], "name": name}
-            else:
-                certificates[name] = {"template": str(config), "name": name}
-        result["certificates"] = certificates
-
-    # Transform haproxy_config from {template: str} to MapConfig format
-    if "haproxy_config" in result:
-        config = result["haproxy_config"]
-        if isinstance(config, dict) and "template" in config:
-            result["haproxy_config"] = {
-                "template": config["template"],
-                "path": "/etc/haproxy/haproxy.cfg",  # Default path
-            }
-        else:
-            result["haproxy_config"] = {
-                "template": str(config),
-                "path": "/etc/haproxy/haproxy.cfg",
-            }
-
-    # Handle watched_resources
-    if "watch_resources" in result:
-        # Convert old field name to new field name
-        result["watched_resources"] = result.pop("watch_resources")
-
-    if "watched_resources" in result:
-        resources = {}
-        watch_data = result["watched_resources"]
-
-        if isinstance(watch_data, dict):
-            # Dict format: {id: {kind: ..., api_version: ...}}
-            for resource_id, config in watch_data.items():
-                if isinstance(config, dict):
-                    # Handle api_version construction from group/version
-                    api_version = config.get("api_version")
-                    if not api_version:
-                        group = config.get("group")
-                        version = config.get("version")
-
-                        # Handle None/empty values
-                        if group is None and version is None:
-                            api_version = "v1"  # Default for core resources
-                        elif group is None or group == "":
-                            api_version = version if version else "v1"
-                        else:
-                            api_version = f"{group}/{version if version else 'v1'}"
-
-                    resources[resource_id] = {
-                        "api_version": api_version,
-                        "kind": config["kind"],
-                        "enable_validation_webhook": config.get(
-                            "enable_validation_webhook", False
-                        ),
-                        "resource_filter": config.get("resource_filter")
-                        or config.get("filter"),
-                    }
-
-        result["watched_resources"] = resources
-
-    return result
 
 
 # =============================================================================
@@ -753,10 +577,6 @@ def _create_simplified_config_schema() -> Dict[str, Any]:
         "additionalProperties": False,
     }
 
-
-# =============================================================================
-# Type aliases for collections (maintains compatibility)
-# =============================================================================
 
 WatchResourceCollection = Dict[str, WatchResourceConfig]
 MapCollection = Dict[str, MapConfig]

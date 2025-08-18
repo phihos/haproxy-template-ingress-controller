@@ -310,3 +310,49 @@ Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<ty
 - Never edit generated code - regenerate from source specifications
 - Prefer module-level imports over local imports in Python
 - Use `progress_context` (not `test_progress`) to avoid pytest discovery issues
+
+## No Backward Compatibility Policy
+
+**CRITICAL**: This project prioritizes clean code over backward compatibility. Always disregard backward compatibility when making improvements.
+
+### Core Principles
+
+- **Clean breaks over compatibility layers**: Remove deprecated APIs immediately, don't add fallback logic
+- **No technical debt accumulation**: Delete old code patterns when introducing new ones
+- **Explicit dependencies only**: Use dependency injection, avoid hidden state and implicit coupling
+- **Forward-looking design**: Design for the future, not the past
+
+### Implementation Guidelines
+
+- **Remove deprecated code immediately**: Don't add "backward compatibility" comments or deprecation warnings
+- **Avoid fallback logic**: No `if old_way: ... else: new_way` patterns
+- **No helper methods for old APIs**: Don't create bridge functions to maintain old interfaces  
+- **Clean test updates**: Update test data formats and API calls to match new patterns
+- **Explicit over implicit**: Prefer `config.create_template_compiler()` over hidden `_parent_config` injection
+
+### Examples of What NOT to Do
+
+```python
+# ❌ Don't add backward compatibility
+def new_method(self, arg):
+    # For backward compatibility with old API...
+    if hasattr(self, "_old_attribute"):
+        return self._old_method(arg)
+    return self._new_implementation(arg)
+
+# ❌ Don't keep deprecated methods
+@deprecated("Use new_method instead")
+def old_method(self, arg):
+    return self.new_method(arg)
+```
+
+### Examples of Clean Approach
+
+```python
+# ✅ Clean replacement - remove old method entirely
+def compile_template(self, compiler: TemplateCompiler) -> Template:
+    """Compile template with explicit dependency injection."""
+    return compiler.compile_template(self.template)
+```
+
+This policy ensures the codebase remains lean, maintainable, and free of technical debt.

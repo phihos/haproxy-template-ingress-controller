@@ -148,9 +148,9 @@ class ConfigMapValidator:
                 "Missing 'pod_selector' section - HAProxy pods may not be discovered"
             )
 
-        if "watch_resources" not in config_dict:
+        if "watched_resources" not in config_dict:
             warnings.append(
-                "Missing 'watch_resources' section - no resources will be watched"
+                "Missing 'watched_resources' section - no resources will be watched"
             )
 
         # Check for at least one template type
@@ -172,7 +172,26 @@ class ConfigMapValidator:
         warnings = []
 
         # Validate template snippets first
-        snippets = config_dict.get("template_snippets", {})
+        snippets_raw = config_dict.get("template_snippets", {})
+
+        # Convert TemplateSnippet objects to strings for validation
+        snippets = {}
+        for snippet_name, snippet_data in snippets_raw.items():
+            if isinstance(snippet_data, dict) and "template" in snippet_data:
+                # New format: {"name": "...", "template": "..."}
+                snippets[snippet_name] = snippet_data["template"]
+            elif isinstance(snippet_data, str):
+                # Old format: just the template string
+                snippets[snippet_name] = snippet_data
+            else:
+                # TemplateSnippet object or other format
+                try:
+                    snippets[snippet_name] = getattr(
+                        snippet_data, "template", str(snippet_data)
+                    )
+                except Exception:
+                    snippets[snippet_name] = str(snippet_data)
+
         snippet_env = self._create_template_environment(snippets)
 
         for snippet_name, snippet_template in snippets.items():
@@ -261,34 +280,29 @@ class ConfigMapValidator:
         """Validate that referenced Kubernetes resources are valid."""
         warnings = []
 
-        watch_resources = config_dict.get("watch_resources", [])
+        watch_resources = config_dict.get("watched_resources", {})
 
-        # Handle both list and dict formats
+        # Only dict format is supported now
         if isinstance(watch_resources, dict):
             # Dict format: resource_name -> resource_config
             resource_items = list(watch_resources.items())
-        elif isinstance(watch_resources, list):
-            # List format: enumerate for resource names
-            resource_items = [
-                (f"resource_{i}", res) for i, res in enumerate(watch_resources)
-            ]
         else:
-            warnings.append("watch_resources must be a list or dictionary")
+            warnings.append("watched_resources must be a dictionary")
             return warnings
 
         for resource_name, resource_config in resource_items:
             if not isinstance(resource_config, dict):
                 warnings.append(
-                    f"Invalid watch_resource '{resource_name}': should be a dictionary"
+                    f"Invalid watched_resource '{resource_name}': should be a dictionary"
                 )
                 continue
 
-            # Validate required fields
-            required_fields = {"kind", "group", "version"}
+            # Validate required fields for new format
+            required_fields = {"kind", "api_version"}
             missing_fields = required_fields - set(resource_config.keys())
             if missing_fields:
                 warnings.append(
-                    f"Watch resource '{resource_name}' missing required fields: {missing_fields}"
+                    f"Watched resource '{resource_name}' missing required fields: {missing_fields}"
                 )
 
             # Validate field values
