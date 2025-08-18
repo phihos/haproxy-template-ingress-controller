@@ -74,34 +74,6 @@ def custom_timestamp_processor(_, __, event_dict):
     return event_dict
 
 
-class StructuredLogger:
-    """Wrapper for enhanced structured logging with context management using structlog."""
-
-    def __init__(self, logger: structlog.BoundLogger) -> None:
-        """Initialize with structlog bound logger."""
-        self.logger = logger
-
-    def debug(self, msg: str, **kwargs: Any) -> None:
-        """Log debug message with context."""
-        self.logger.debug(msg, **kwargs)
-
-    def info(self, msg: str, **kwargs: Any) -> None:
-        """Log info message with context."""
-        self.logger.info(msg, **kwargs)
-
-    def warning(self, msg: str, **kwargs: Any) -> None:
-        """Log warning message with context."""
-        self.logger.warning(msg, **kwargs)
-
-    def error(self, msg: str, **kwargs: Any) -> None:
-        """Log error message with context."""
-        self.logger.error(msg, **kwargs)
-
-    def critical(self, msg: str, **kwargs: Any) -> None:
-        """Log critical message with context."""
-        self.logger.critical(msg, **kwargs)
-
-
 @contextmanager
 def operation_context(operation_id: Optional[str] = None) -> Iterator[str]:
     """Context manager for operation correlation."""
@@ -157,11 +129,9 @@ def resource_context_manager(
             structlog.contextvars.unbind_contextvars(*bound_keys)
 
 
-def get_structured_logger(name: str) -> StructuredLogger:
+def get_structured_logger(name: str):
     """Get a structured logger for the given name."""
-    # Create a structlog logger bound to the name
-    bound_logger = structlog.get_logger(name)
-    return StructuredLogger(bound_logger)
+    return structlog.get_logger(name)
 
 
 def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None:

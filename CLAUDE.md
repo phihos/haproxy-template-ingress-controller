@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Remove dependency: `uv remove <package>`
 
 ### Testing
-- **All tests (recommended)**: `uv run pytest -n auto` - parallel execution, up to 5 minutes
+- **All tests (recommended)**: `uv run pytest -n auto` - parallel execution, up to 8 minutes
 - **Unit tests**: `uv run pytest -m "not integration and not acceptance"`
 - **Integration tests**: `uv run pytest -m integration`
 - **E2E tests**: `uv run pytest -m acceptance`
@@ -308,7 +308,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<ty
 
 - Always fix failing tests without asking confirmation
 - Run `uv run pytest -n auto` after code changes to verify full test suite passes
-- Update tests as mandatory part of API changes in same session
+- Update tests as mandatory part of API changes in same session - test updates are NOT an afterthought
 - Never edit generated code - regenerate from source specifications
 - Prefer module-level imports over local imports in Python
 - Use `progress_context` (not `test_progress`) to avoid pytest discovery issues
