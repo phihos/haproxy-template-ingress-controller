@@ -5,6 +5,7 @@ This module provides the CLI interface with proper subcommand structure
 for clear separation between operator mode and utility commands.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,12 +85,37 @@ def cli(
     setup_structured_logging(verbose, use_json=structured_logging)
 
 
+def validate_configmap_name(
+    _ctx: click.Context, _param: click.Parameter, value: str
+) -> str:
+    """Validate ConfigMap name follows Kubernetes naming conventions.
+
+    Kubernetes names must:
+    - Be lowercase
+    - Contain only alphanumeric characters and hyphens
+    - Start and end with alphanumeric characters
+    - Be at most 253 characters long
+    """
+    if len(value) > 253:
+        raise click.BadParameter("ConfigMap name must be at most 253 characters long")
+
+    # Kubernetes allows single characters, but let's be more explicit about the pattern
+    if not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", value):
+        raise click.BadParameter(
+            "ConfigMap name must follow Kubernetes naming conventions: "
+            "lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric"
+        )
+
+    return value
+
+
 @cli.command()
 @click.option(
     "-c",
     "--configmap-name",
     envvar="CONFIGMAP_NAME",
     required=True,
+    callback=validate_configmap_name,
     help="Name of the Kubernetes ConfigMap used for configuration.",
 )
 @click.option(
@@ -325,24 +351,144 @@ def _handle_generate_docs(output_path: Path) -> None:
     """Handle documentation generation command."""
 
     try:
+        schema_version = get_schema_version()
         doc_content = f"""# HAProxy Template IC Configuration Reference
 
-Schema Version: {get_schema_version()}
+Schema Version: {schema_version}
 
-This document provides reference for configuring HAProxy Template IC.
+This document provides comprehensive reference for configuring HAProxy Template IC.
+
+## Quick Start
+
+### Running the Operator
+```bash
+haproxy-template-ic run --configmap-name=my-config
+```
+
+### Configuration Management
+```bash
+# Export schema for IDE autocompletion
+haproxy-template-ic schema export config-schema.json
+
+# Validate configuration before deployment
+haproxy-template-ic schema validate my-config.yaml
+
+# Generate fresh documentation
+haproxy-template-ic docs generate CONFIG.md
+```
 
 ## Configuration Schema
 
-The main configuration is provided via a Kubernetes ConfigMap.
+The main configuration is provided via a Kubernetes ConfigMap with the following structure:
 
-For detailed schema information, use: `haproxy-template-ic schema export config-schema.json`
+### Required Sections
+- `pod_selector`: Selects target HAProxy pods
+- `haproxy_config`: Main HAProxy configuration template
+
+### Optional Sections
+- `watched_resources`: Kubernetes resources to watch
+- `maps`: HAProxy map file templates
+- `template_snippets`: Reusable template components
+- `certificates`: Certificate file templates
+
+### Example ConfigMap
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-template-ic-config
+data:
+  config: |
+    pod_selector:
+      match_labels:
+        app: haproxy
+        component: loadbalancer
+    
+    watched_resources:
+      ingresses:
+        api_version: networking.k8s.io/v1
+        kind: Ingress
+        enable_validation_webhook: true
+    
+    template_snippets:
+      backend-name: "backend_{{{{ service_name }}}}_{{{{ port }}}}"
+    
+    maps:
+      /etc/haproxy/maps/host.map:
+        template: |
+          {{%- for _, ingress in resources.get('ingresses', {{}}).items() %}}
+          {{%- if ingress.spec.rules %}}
+          {{%- for rule in ingress.spec.rules %}}
+          {{{{ rule.host }}}} {{{{ rule.host }}}}
+          {{%- endfor %}}{{%- endif %}}{{%- endfor %}}
+    
+    haproxy_config:
+      template: |
+        global
+            daemon
+        defaults
+            mode http
+            timeout connect 5000ms
+        frontend health
+            bind *:8404
+            http-request return status 200 if {{{{ path /healthz }}}}
+        frontend main
+            bind *:80
+            {{%- include "backend-routing" %}}
+```
+
+## Environment Variables
+
+All CLI options can be configured via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONFIGMAP_NAME` | *Required* | ConfigMap name (must follow Kubernetes naming conventions) |
+| `VERBOSE` | `0` | Log level (0=WARNING, 1=INFO, 2=DEBUG) |
+| `STRUCTURED_LOGGING` | `false` | Enable JSON logging output |
+| `HEALTHZ_PORT` | `8080` | Health check endpoint port |
+| `METRICS_PORT` | `9090` | Prometheus metrics port |
+| `SOCKET_PATH` | `/run/haproxy-template-ic/management.sock` | Management socket path |
+| `WEBHOOK_ENABLED` | `false` | Enable admission webhooks |
+| `TRACING_ENABLED` | `false` | Enable distributed tracing |
 
 ## Validation
 
-Configuration can be validated using:
+Configuration files can be validated before deployment:
 
 ```bash
+# Validate YAML configuration
 haproxy-template-ic schema validate my-config.yaml
+
+# Validate JSON configuration  
+haproxy-template-ic schema validate config.json
+```
+
+## Schema Export
+
+Export schemas for tooling integration:
+
+```bash
+# Export main schema (JSON or YAML)
+haproxy-template-ic schema export config-schema.json
+haproxy-template-ic schema export config-schema.yaml
+
+# Export all model schemas
+haproxy-template-ic schema export-all ./schemas/
+```
+
+## Template System
+
+HAProxy Template IC uses Jinja2 templating with special features:
+
+- **Template snippets**: Reusable components with `{{%- include "snippet-name" %}}`
+- **Resource access**: `{{{{ resources.get('resource_type', {{}}) }}}}`  
+- **Filters**: `{{{{ secret.data.tls_crt | b64decode }}}}`
+- **Environment variables**: Available in template context
+
+For detailed schema information and examples, export the full schema using:
+```bash
+haproxy-template-ic schema export config-schema.json
 ```
 """
         output_path.parent.mkdir(parents=True, exist_ok=True)

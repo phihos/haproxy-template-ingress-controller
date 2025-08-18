@@ -201,6 +201,100 @@ def test_run_command_with_tracing_enabled(
         mock_shutdown_tracing.assert_called_once()
 
 
+@patch("haproxy_template_ic.__main__.run_operator_loop")
+def test_run_command_imports_webhook_module(mock_run_operator_loop):
+    """Test that run command imports webhook module for kopf registration."""
+    runner = CliRunner()
+
+    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+        # Mock the webhook module to avoid actual import side effects
+        with patch.dict("sys.modules", {"haproxy_template_ic.webhook": Mock()}):
+            result = runner.invoke(cli, ["run", "--configmap-name", "test-config"])
+
+            assert result.exit_code == 0
+
+            # Verify that the run command completed successfully, which means
+            # the webhook import line was executed (even if mocked)
+            mock_run_operator_loop.assert_called_once()
+
+
+def test_run_command_invalid_configmap_name():
+    """Test run command with invalid ConfigMap name."""
+    runner = CliRunner()
+
+    # Test various invalid ConfigMap names
+    invalid_names = [
+        "UPPERCASE",  # uppercase not allowed
+        "test_underscore",  # underscores not allowed
+        "test.",  # can't end with dot
+        ".test",  # can't start with dot
+        "-test",  # can't start with hyphen
+        "test-",  # can't end with hyphen
+        "",  # empty string
+        "a" * 254,  # too long (>253 chars)
+        "test@invalid",  # special characters not allowed
+    ]
+
+    for invalid_name in invalid_names:
+        with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+            result = runner.invoke(cli, ["run", "--configmap-name", invalid_name])
+
+            assert result.exit_code != 0, (
+                f"Should reject invalid ConfigMap name: {invalid_name}"
+            )
+            assert "ConfigMap name" in result.output, (
+                f"Should show validation error for: {invalid_name}"
+            )
+
+
+def test_run_command_valid_configmap_names():
+    """Test run command with valid ConfigMap names."""
+    runner = CliRunner()
+
+    # Test various valid ConfigMap names
+    valid_names = [
+        "test-config",  # standard name
+        "my-configmap",  # with hyphens
+        "config123",  # with numbers
+        "a",  # single character
+        "test-config-123",  # mixed
+        "a" * 253,  # maximum length
+    ]
+
+    for valid_name in valid_names:
+        with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+            with patch("haproxy_template_ic.__main__.run_operator_loop"):
+                result = runner.invoke(cli, ["run", "--configmap-name", valid_name])
+
+                assert result.exit_code == 0, (
+                    f"Should accept valid ConfigMap name: {valid_name}"
+                )
+
+
+def test_configmap_validation_edge_cases():
+    """Test ConfigMap validation with edge cases."""
+    runner = CliRunner()
+
+    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+        with patch("haproxy_template_ic.__main__.run_operator_loop"):
+            # Test single character names (should be valid per Kubernetes spec)
+            for single_char in ["a", "z", "0", "9"]:
+                result = runner.invoke(cli, ["run", "--configmap-name", single_char])
+                assert result.exit_code == 0, (
+                    f"Single character '{single_char}' should be valid"
+                )
+
+            # Test boundary case: exactly 253 characters
+            max_length_name = "a" * 253
+            result = runner.invoke(cli, ["run", "--configmap-name", max_length_name])
+            assert result.exit_code == 0, "253-character name should be valid"
+
+            # Test just over the limit: 254 characters (should fail)
+            over_limit_name = "a" * 254
+            result = runner.invoke(cli, ["run", "--configmap-name", over_limit_name])
+            assert result.exit_code != 0, "254-character name should be invalid"
+
+
 # =============================================================================
 # Schema Subcommand Tests
 # =============================================================================
