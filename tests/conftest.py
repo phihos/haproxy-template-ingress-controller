@@ -568,6 +568,9 @@ def haproxy_production_pods(k8s_client, k8s_namespace, request):
 global
     stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
     
+userlist dataplaneapi
+    user admin password adminpass
+    
 defaults
     mode http
     timeout connect 5000ms
@@ -670,7 +673,7 @@ backend servers
                                 "--reload-delay",
                                 "2",
                                 "--userlist",
-                                "controller",
+                                "dataplaneapi",
                             ],
                             "env": [
                                 {"name": "DATAPLANE_API_USER", "value": "admin"},
@@ -820,6 +823,9 @@ def controller_with_validation_sidecar(
 global
     stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
     
+userlist dataplaneapi
+    user admin password adminpass
+    
 defaults
     mode http
     timeout connect 5000ms
@@ -854,6 +860,7 @@ backend validation_backend
                 {
                     "name": "haproxy-template-ic",
                     "image": container_image.repo_tags[0],
+                    "args": ["run"],
                     "ports": [
                         {"containerPort": 8080, "name": "healthz"},
                         {"containerPort": 9443, "name": "webhook"}
@@ -956,11 +963,11 @@ backend validation_backend
                         "--reload-delay",
                         "1",
                         "--userlist",
-                        "validation",
+                        "dataplaneapi",
                     ],
                     "env": [
                         {"name": "DATAPLANE_API_USER", "value": "admin"},
-                        {"name": "DATAPLANE_API_PASSWORD", "value": "validationpass"},
+                        {"name": "DATAPLANE_API_PASSWORD", "value": "adminpass"},
                     ],
                 },
             ],
@@ -1039,7 +1046,7 @@ def validation_dataplane_client(controller_with_validation_sidecar):
 
     return httpx.AsyncClient(
         base_url=f"http://{pod_ip}:5556",
-        auth=("admin", "validationpass"),
+        auth=("admin", "adminpass"),
         timeout=30.0,
     )
 

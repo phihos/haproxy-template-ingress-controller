@@ -7,7 +7,10 @@ resource watchers, configuration management, and the main operator loop.
 
 import asyncio
 import logging
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from haproxy_template_ic.__main__ import CliOptions
 
 import kopf
 import uvloop
@@ -635,7 +638,7 @@ def create_operator_memo(cli_options: Any) -> Any:
 # =============================================================================
 
 
-def run_operator_loop(cli_options: Any) -> None:
+def run_operator_loop(cli_options: "CliOptions") -> None:
     """Run the main operator loop with config reload capability."""
     # Initialize metrics on first run
     metrics = get_metrics_collector()

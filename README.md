@@ -204,7 +204,8 @@ EOF
 
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-template-ic-config" \
-  --env="VERBOSE=1"
+  --env="VERBOSE=1" \
+  -- run
 
 # Check status
 kubectl logs -f haproxy-template-ic
@@ -259,17 +260,25 @@ kubectl exec -it haproxy-template-ic -- \
 
 The controller supports configuration via CLI options or environment variables:
 
+**Running the Operator:**
+```bash
+haproxy-template-ic run --configmap-name=my-config
+```
+
+**Configuration Validation:**
+Configuration validation is handled automatically via admission webhooks when resources are applied to Kubernetes. The operator watches for ConfigMap changes and validates configurations at runtime.
+
 | Environment Variable | CLI Option | Default | Description |
 |---------------------|------------|---------|-------------|
-| `CONFIGMAP_NAME` | `--configmap-name` | *Required* | ConfigMap name containing controller configuration |
+| `CONFIGMAP_NAME` | `run --configmap-name` | *Required* | ConfigMap name containing controller configuration |
 | `VERBOSE` | `--verbose` | `0` | Logging verbosity (0=WARNING, 1=INFO, 2=DEBUG) |
 | `STRUCTURED_LOGGING` | `--structured-logging` | `false` | Enable JSON structured logging output |
-| `HEALTHZ_PORT` | `--healthz-port` | `8080` | Controller health check endpoint port |
-| `METRICS_PORT` | `--metrics-port` | `9090` | Prometheus metrics endpoint port |
-| `SOCKET_PATH` | `--socket-path` | `/run/haproxy-template-ic/management.sock` | Management socket path |
-| `WEBHOOK_ENABLED` | `--webhook-enabled` | `false` | Enable validating admission webhooks |
-| `WEBHOOK_PORT` | `--webhook-port` | `9443` | Webhook server port |
-| `TRACING_ENABLED` | `--tracing-enabled` | `false` | Enable OpenTelemetry distributed tracing |
+| `HEALTHZ_PORT` | `run --healthz-port` | `8080` | Controller health check endpoint port |
+| `METRICS_PORT` | `run --metrics-port` | `9090` | Prometheus metrics endpoint port |
+| `SOCKET_PATH` | `run --socket-path` | `/run/haproxy-template-ic/management.sock` | Management socket path |
+| `WEBHOOK_ENABLED` | *(env only)* | `false` | Enable validating admission webhooks |
+| `WEBHOOK_PORT` | *(env only)* | `9443` | Webhook server port |
+| `TRACING_ENABLED` | `run --tracing-enabled` | `false` | Enable OpenTelemetry distributed tracing |
 
 #### Logging Configuration
 
@@ -279,7 +288,8 @@ The controller uses [structlog](https://www.structlog.org/) for high-performance
 ```bash
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-config" \
-  --env="VERBOSE=2"
+  --env="VERBOSE=2" \
+  -- run
 ```
 
 **JSON Mode**: Structured JSON output for log aggregation systems:
@@ -287,7 +297,8 @@ kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-config" \
   --env="STRUCTURED_LOGGING=true" \
-  --env="VERBOSE=1"
+  --env="VERBOSE=1" \
+  -- run
 ```
 
 ### Response Structure

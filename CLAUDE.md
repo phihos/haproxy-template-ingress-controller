@@ -63,7 +63,7 @@ tests/fixtures/    # Test data and configurations
 - Load image to kind: `kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev`
 
 ### Application
-- Run CLI: `uv run haproxy-template-ic --configmap-name=<name>`
+- Run operator: `uv run haproxy-template-ic run --configmap-name=<name>`
 - Management socket: `socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock`
 - Metrics endpoint: `curl http://localhost:9090/metrics` (requires port-forward)
 - Health endpoint: `curl http://localhost:8080/healthz` (requires port-forward)
@@ -143,7 +143,7 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 Validating admission webhooks prevent faulty resources from being applied, providing immediate feedback on configuration errors.
 
 **Features**: ConfigMap/YAML/template validation, per-resource control, automatic certificate management
-**Configuration**: `WEBHOOK_ENABLED=true WEBHOOK_PORT=9443` or CLI `--webhook-enabled`
+**Configuration**: `WEBHOOK_ENABLED=true WEBHOOK_PORT=9443` environment variables or webhook configuration in ConfigMap
 **Certificates**: Uses mounted TLS or generates self-signed for development
 **Control**: Set `enable_validation_webhook: true/false` per watched resource type
 
@@ -249,7 +249,7 @@ Uses official OpenAPI-generated HAProxy Dataplane API v3 client (218 endpoints, 
 
 The application is configured via:
 - ConfigMap specified by `CONFIGMAP_NAME` environment variable
-- CLI options or environment variables (see `__main__.py`)
+- CLI options (use `haproxy-template-ic run --help` for details) or environment variables
 - Management socket at `/run/haproxy-template-ic/management.sock` (configurable)
 
 Environment variables:
@@ -277,9 +277,17 @@ Follow the style guide in `STYLEGUIDE.md`:
 
 ## Development Workflow
 
-**Standard Process**: Feature branch → Plan/implement → Test (`uv run pytest -n auto`) → Quality checks → Commit → PR → Review → Merge
+**Standard Process**: Feature branch → Plan/implement → Test (`uv run pytest -n auto`) → Quality checks → Self-review → Commit → PR → Review → Merge
 
-**PR Titles**: Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) format for PR titles as they become the first line of squashed merge commits: `<type>: <description>`
+**CRITICAL**: Having all tests including unit, integration, and acceptance tests pass reliably is mandatory before merging a PR. The full test suite (`timeout 480 uv run pytest -n auto`) must complete successfully without any failures or flaky tests.
+
+**Self-Review Step**: After all changes have been made but before committing, Claude should proactively review its own changes using the `code-reviewer` agent and act on any resulting suggestions to ensure code quality and catch potential issues early.
+
+**PR Management**:
+- Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) format for PR titles as they become the first line of squashed merge commits: `<type>: <description>`
+- **CRITICAL**: After pushing new commits to an existing PR branch, ALWAYS update the PR description to reflect the changes using `gh pr edit <PR_NUMBER> --body "updated description"`
+- PR descriptions should comprehensively describe the current state of all changes, not just the original changes
+- When addressing code review feedback, add a summary of what was fixed/changed in response to the review
 
 **Kind Development**:
 1. Setup: `bash ./scripts/start-dev-env.sh`, build/load image
