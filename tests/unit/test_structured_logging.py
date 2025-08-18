@@ -2,19 +2,20 @@
 Tests for haproxy_template_ic.structured_logging module.
 
 This module contains tests for structured logging functionality including
-context management, JSON formatting, and correlation features.
+autolog and observe decorators, JSON formatting, and context injection.
 """
 
 import json
 import logging
+import asyncio
 from io import StringIO
 from unittest.mock import patch
-
 
 import structlog
 from haproxy_template_ic.structured_logging import (
     setup_structured_logging,
-    logging_context,
+    autolog,
+    observe,
 )
 
 
@@ -48,9 +49,12 @@ class TestStructuredLogger:
         logger.error("Error message")
         logger.critical("Critical message")
 
-    def test_context_aware_logging(self):
-        """Test that structured logger respects context."""
-        # Setup JSON logging to capture structured output
+
+class TestAutologDecorator:
+    """Test cases for @autolog decorator functionality."""
+
+    def test_autolog_with_sync_function(self):
+        """Test @autolog decorator with synchronous function."""
         setup_structured_logging(verbose_level=1, use_json=True)
 
         # Capture output
@@ -59,175 +63,125 @@ class TestStructuredLogger:
         root_logger = logging.getLogger()
         root_logger.handlers = [handler]
 
-        structured_logger = structlog.get_logger("test_context")
+        @autolog(component="test")
+        def test_function(name: str, value: int):
+            logger = structlog.get_logger(__name__)
+            logger.info("Test message", name=name, value=value)
+            return f"{name}={value}"
 
-        with logging_context(operation_id="test-operation"):
-            structured_logger.info("Test message", custom_field="test_value")
+        result = test_function("param1", 42)
+        assert result == "param1=42"
 
+    def test_autolog_with_async_function(self):
+        """Test @autolog decorator with async function."""
+        setup_structured_logging(verbose_level=1, use_json=True)
+
+        @autolog(component="test")
+        async def async_test_function(name: str):
+            logger = structlog.get_logger(__name__)
+            logger.info("Async test message", name=name)
+            return f"async_{name}"
+
+        async def run_test():
+            result = await async_test_function("test_param")
+            assert result == "async_test_param"
+
+        asyncio.run(run_test())
+
+    def test_autolog_kopf_event_handler_detection(self):
+        """Test @autolog automatically detects kopf event handlers."""
+        setup_structured_logging(verbose_level=1, use_json=True)
+
+        # Capture output
+        stream = StringIO()
+        handler = logging.StreamHandler(stream)
+        root_logger = logging.getLogger()
+        root_logger.handlers = [handler]
+
+        @autolog(component="operator")
+        def handle_configmap_change(event, name, type, **kwargs):
+            logger = structlog.get_logger(__name__)
+            logger.info("ConfigMap changed")
+
+        # Mock kopf event structure
+        mock_event = {
+            "object": {
+                "kind": "ConfigMap",
+                "metadata": {"name": "test-config", "namespace": "default"},
+            }
+        }
+
+        handle_configmap_change(event=mock_event, name="test-config", type="MODIFIED")
+
+        # Verify context was automatically extracted
         output = stream.getvalue().strip()
-        if output:  # Only parse if we got output
+        if output:
             parsed = json.loads(output)
-            assert parsed["operation_id"] == "test-operation"
-            assert parsed["custom_field"] == "test_value"
+            assert parsed["component"] == "operator"
+            assert parsed["resource_type"] == "ConfigMap"
+            assert parsed["resource_name"] == "test-config"
+            assert parsed["resource_namespace"] == "default"
+            assert parsed["kubernetes_event"] == "MODIFIED"
+            assert "operation_id" in parsed
 
-
-class TestContextManagers:
-    """Test cases for context manager functionality."""
-
-    def test_logging_context_auto_generation(self):
+    def test_autolog_operation_id_generation(self):
         """Test automatic operation ID generation."""
-        with logging_context(operation_id=None) as op_id:
-            assert isinstance(op_id, str)
-            assert len(op_id) == 8  # Short UUID
 
-    def test_logging_context_explicit_id(self):
-        """Test explicit operation ID setting."""
-        with logging_context(operation_id="custom-op-id") as op_id:
-            assert op_id == "custom-op-id"
-
-    def test_nested_contexts(self):
-        """Test nested context management."""
-        # Setup JSON logging to capture structured output
-        setup_structured_logging(verbose_level=1, use_json=True)
-
-        # Capture output
-        stream = StringIO()
-        handler = logging.StreamHandler(stream)
-        root_logger = logging.getLogger()
-        root_logger.handlers = [handler]
-
-        structured_logger = structlog.get_logger("test_nested")
-
-        with logging_context(
-            operation_id="outer-op", component="component-a", resource_type="Service"
-        ):
-            structured_logger.info("Nested message")
-
-        output = stream.getvalue().strip()
-        if output:  # Only parse if we got output
-            parsed = json.loads(output)
-            assert parsed["operation_id"] == "outer-op"
-            assert parsed["component"] == "component-a"
-            assert parsed["resource_type"] == "Service"
-
-    def test_context_isolation(self):
-        """Test that contexts are properly isolated."""
-        import structlog.contextvars
-
-        # Clear any existing context
-        structlog.contextvars.clear_contextvars()
-
-        # Initially no context
-        context_vars = structlog.contextvars.get_contextvars()
-        assert "operation_id" not in context_vars
-        assert "component" not in context_vars
-
-        with logging_context(operation_id="test-op"):
+        @autolog()
+        def test_function():
+            # Check that operation_id was set in context
             context_vars = structlog.contextvars.get_contextvars()
-            assert context_vars.get("operation_id") == "test-op"
+            assert "operation_id" in context_vars
+            assert len(context_vars["operation_id"]) == 8
+            return context_vars["operation_id"]
 
-            with logging_context(component="test-component"):
-                context_vars = structlog.contextvars.get_contextvars()
-                assert context_vars.get("component") == "test-component"
+        op_id = test_function()
+        assert isinstance(op_id, str)
+        assert len(op_id) == 8
 
-        # Context should be reset after exiting
-        context_vars = structlog.contextvars.get_contextvars()
-        assert "operation_id" not in context_vars
-        assert "component" not in context_vars
-
-    def test_concurrent_context_management(self):
-        """Test that context variables work correctly with concurrent operations."""
-        import structlog.contextvars
-        from concurrent.futures import ThreadPoolExecutor
-
-        # Clear any existing context
-        structlog.contextvars.clear_contextvars()
-
-        def worker_function(worker_id: str) -> dict:
-            """Worker function that sets and reads context in a thread."""
-            with logging_context(
-                operation_id=f"worker-{worker_id}", component=f"component-{worker_id}"
-            ):
-                # Simulate some work
-                import time
-
-                time.sleep(0.01)
-
-                # Return the context as seen by this worker
-                return dict(structlog.contextvars.get_contextvars())
-
-        # Run multiple workers concurrently
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(worker_function, str(i)) for i in range(3)]
-
-            results = [future.result() for future in futures]
-
-        # Each worker should have seen its own context
-        for i, result in enumerate(results):
-            assert result["operation_id"] == f"worker-{i}"
-            assert result["component"] == f"component-{i}"
-
-        # Main thread context should be clean
-        context_vars = structlog.contextvars.get_contextvars()
-        assert "operation_id" not in context_vars
-        assert "component" not in context_vars
-
-    def test_logging_context_cleanup(self):
-        """Test that resource context manager properly cleans up all bound variables."""
+    def test_autolog_context_cleanup(self):
+        """Test that autolog properly cleans up context variables."""
         import structlog.contextvars
 
         # Clear any existing context
         structlog.contextvars.clear_contextvars()
 
-        # Initially no context
-        context_vars = structlog.contextvars.get_contextvars()
-        assert len(context_vars) == 0
-
-        # Test with all possible parameters
-        with logging_context(
-            resource_type="Service",
-            resource_namespace="test-namespace",
-            resource_name="test-service",
-            custom_field="custom_value",
-            another_field=42,
-        ):
+        @autolog(component="test", resource_type="Pod")
+        def test_function():
             context_vars = structlog.contextvars.get_contextvars()
-            assert len(context_vars) == 5
-            assert context_vars["resource_type"] == "Service"
-            assert context_vars["resource_namespace"] == "test-namespace"
-            assert context_vars["resource_name"] == "test-service"
-            assert context_vars["custom_field"] == "custom_value"
-            assert context_vars["another_field"] == 42
-
-        # All context should be cleaned up
-        context_vars = structlog.contextvars.get_contextvars()
-        assert len(context_vars) == 0
-
-    def test_logging_context_partial_parameters(self):
-        """Test resource context manager with only some parameters set."""
-        import structlog.contextvars
-
-        # Clear any existing context
-        structlog.contextvars.clear_contextvars()
-
-        # Test with only resource_type
-        with logging_context(resource_type="Pod"):
-            context_vars = structlog.contextvars.get_contextvars()
-            assert len(context_vars) == 1
+            assert len(context_vars) >= 2  # At least component and operation_id
+            assert context_vars["component"] == "test"
             assert context_vars["resource_type"] == "Pod"
 
-        # Should be cleaned up
+        # Initially no context
         context_vars = structlog.contextvars.get_contextvars()
         assert len(context_vars) == 0
 
-        # Test with no parameters (should be no-op)
-        with logging_context():
-            context_vars = structlog.contextvars.get_contextvars()
-            assert len(context_vars) == 0
+        test_function()
 
-        # Should still be clean
+        # Context should be cleaned up after function execution
         context_vars = structlog.contextvars.get_contextvars()
         assert len(context_vars) == 0
+
+
+class TestObserveDecorator:
+    """Test cases for @observe decorator functionality."""
+
+    def test_observe_combines_autolog_and_tracing(self):
+        """Test that @observe decorator combines autolog and tracing."""
+        setup_structured_logging(verbose_level=1, use_json=True)
+
+        @observe(component="test", span_name="test_operation")
+        async def test_function(name: str):
+            logger = structlog.get_logger(__name__)
+            logger.info("Test message with tracing", name=name)
+            return f"observed_{name}"
+
+        async def run_test():
+            result = await test_function("test_param")
+            assert result == "observed_test_param"
+
+        asyncio.run(run_test())
 
 
 class TestSetupLogging:
@@ -270,110 +224,181 @@ class TestSetupLogging:
                 assert kwargs["level"] == expected_level
 
 
-class TestConvenienceFunctions:
-    """Test cases for convenience logging functions."""
+class TestErrorHandling:
+    """Test cases for error handling and edge conditions."""
 
-    def test_get_structured_logger(self):
-        """Test structured logger factory function."""
-        setup_structured_logging(verbose_level=1, use_json=False)
+    def test_signature_mismatch_handling(self):
+        """Test that signature mismatch in parameter extraction is handled gracefully."""
+        from haproxy_template_ic.structured_logging import (
+            _extract_context_from_parameters,
+        )
 
-        logger = structlog.get_logger("test.module")
+        def function_with_required_params(required_param: str):
+            return f"called with {required_param}"
 
-        # Verify logger has required logging methods
-        assert hasattr(logger, "debug")
-        assert hasattr(logger, "info")
-        assert hasattr(logger, "warning")
-        assert hasattr(logger, "error")
-        assert hasattr(logger, "critical")
+        # Test direct parameter extraction with mismatched arguments
+        # This should not crash and should return minimal context with operation_id
+        context = _extract_context_from_parameters(
+            function_with_required_params,
+            args=("extra_arg", "another_arg"),  # Wrong number of args
+            kwargs={"wrong_param": "value"},  # Wrong parameter names
+            decorator_kwargs={"component": "test"},
+        )
 
+        # Should return minimal context with operation_id when signature binding fails
+        assert context["component"] == "test"
+        assert "operation_id" in context
+        assert len(context["operation_id"]) == 8  # UUID first 8 chars
 
-class TestIntegration:
-    """Integration tests for structured logging."""
+    def test_malformed_event_object_handling(self):
+        """Test handling of malformed event objects."""
 
-    def test_end_to_end_structured_logging(self):
-        """Test complete structured logging workflow."""
-        # Setup JSON logging
-        setup_structured_logging(verbose_level=1, use_json=True)
+        @autolog(component="operator")
+        def handle_event(event, name, type, **kwargs):
+            context_vars = structlog.contextvars.get_contextvars()
+            return dict(context_vars)
 
-        # Capture output
-        stream = StringIO()
-        handler = logging.StreamHandler(stream)
-        root_logger = logging.getLogger()
-        # Clear existing handlers to avoid interference
-        root_logger.handlers = [handler]
+        # Test with completely malformed event
+        result1 = handle_event(event="not_a_dict", name="test", type="MODIFIED")
+        assert result1["component"] == "operator"
+        assert "operation_id" in result1
 
-        structured_logger = structlog.get_logger("integration_test")
+        # Test with event missing 'object' key
+        result2 = handle_event(event={}, name="test", type="MODIFIED")
+        assert result2["component"] == "operator"
 
-        # Simulate operator workflow with nested contexts
-        with logging_context(operation_id="workflow-123") as op_id:
-            with logging_context(
-                component="operator",
-                resource_type="ConfigMap",
-                resource_namespace="default",
-                resource_name="haproxy-config",
-            ):
-                structured_logger.info(
-                    "Configuration changed",
-                    change_type="template_update",
-                    maps_count=3,
-                )
+        # Test with event object missing 'metadata'
+        result3 = handle_event(
+            event={"object": {"kind": "ConfigMap"}}, name="test", type="MODIFIED"
+        )
+        assert result3["component"] == "operator"
+        assert result3["resource_type"] == "ConfigMap"
 
-            # Log template rendering
-            with logging_context(component="operator", template_type="map"):
-                structured_logger.info(
-                    "Template render",
-                    template_operation="render",
-                    duration=0.042,
-                    success=True,
-                )
+    def test_context_cleanup_on_exception(self):
+        """Test that context is cleaned up even when exceptions occur."""
+        import structlog.contextvars
 
-            # Log Dataplane API call
-            with logging_context(component="operator", pod_name="haproxy-production-1"):
-                structured_logger.info(
-                    "Dataplane API deploy",
-                    dataplane_operation="deploy",
-                    version="1.2.3",
-                )
+        # Clear any existing context
+        structlog.contextvars.clear_contextvars()
 
-        # Parse all log entries
-        output = stream.getvalue().strip()
-        if output:  # Only process if we got output
-            lines = output.split("\n")
-            entries = [json.loads(line) for line in lines if line.strip()]
+        @autolog(component="test", resource_type="Pod")
+        def failing_function():
+            # Check context is set during execution
+            context_vars = structlog.contextvars.get_contextvars()
+            assert context_vars["component"] == "test"
+            assert context_vars["resource_type"] == "Pod"
+            # Then raise an exception
+            raise ValueError("Test exception")
 
-            # Verify all entries have the operation ID
-            for entry in entries:
-                assert entry["operation_id"] == op_id
-                assert entry["component"] == "operator"
+        # Function should raise exception but context should be cleaned up
+        try:
+            failing_function()
+            assert False, "Expected ValueError"
+        except ValueError:
+            pass
 
-            if len(entries) >= 3:  # Check if we have all expected entries
-                # Verify specific log content
-                config_entry = entries[0]
-                assert config_entry["event"] == "Configuration changed"
-                assert config_entry["resource_type"] == "ConfigMap"
-                assert config_entry["change_type"] == "template_update"
+        # Context should be clean after exception
+        context_vars = structlog.contextvars.get_contextvars()
+        assert len(context_vars) == 0
 
-                template_entry = entries[1]
-                assert template_entry["event"] == "Template render"
-                assert template_entry["template_type"] == "map"
-                assert template_entry["duration"] == 0.042
+    def test_observe_decorator_without_tracing(self):
+        """Test observe decorator when tracing module is not available."""
+        from unittest.mock import patch
 
-                dataplane_entry = entries[2]
-                assert dataplane_entry["event"] == "Dataplane API deploy"
-                assert dataplane_entry["pod_name"] == "haproxy-production-1"
-                assert dataplane_entry["version"] == "1.2.3"
+        # Mock the import to fail
+        with patch.dict("sys.modules", {"haproxy_template_ic.tracing": None}):
+            # This should not crash and should fall back to just autolog
+            @observe(component="test", span_name="test_operation")
+            async def test_function(name: str):
+                context_vars = structlog.contextvars.get_contextvars()
+                return dict(context_vars)
+
+            async def run_test():
+                result = await test_function("test_param")
+                assert result["component"] == "test"
+                assert "operation_id" in result
+
+            import asyncio
+
+            asyncio.run(run_test())
+
+    def test_parameter_extraction_with_invalid_signatures(self):
+        """Test parameter extraction handles various invalid signatures."""
+
+        # Function with *args, **kwargs should work fine
+        @autolog(component="flexible")
+        def flexible_function(*args, **kwargs):
+            context_vars = structlog.contextvars.get_contextvars()
+            return dict(context_vars)
+
+        result = flexible_function("any", "args", unexpected_param="value")
+        assert result["component"] == "flexible"
+        assert "operation_id" in result
 
 
 class TestEdgeCases:
-    """Test cases for edge cases and error conditions."""
+    """Test cases for edge cases and boundary conditions."""
 
-    def test_performance_with_many_context_fields(self):
-        """Test logging performance with many context fields."""
-        # Setup structured logging
-        setup_structured_logging(verbose_level=1, use_json=False)
+    def test_autolog_with_many_parameters(self):
+        """Test autolog with functions that have many parameters."""
 
-        logger = structlog.get_logger("performance_test")
+        @autolog(component="test")
+        def complex_function(a, b, c, name=None, namespace=None, event=None, **kwargs):
+            return {"a": a, "b": b, "c": c, "name": name, "namespace": namespace}
 
-        # Test with many context fields - should not raise exceptions
-        with logging_context(**{f"field_{i}": f"value_{i}" for i in range(20)}):
-            logger.info("Performance test with many fields")
+        result = complex_function(1, 2, 3, name="test", namespace="default")
+        assert result["name"] == "test"
+        assert result["namespace"] == "default"
+
+    def test_autolog_context_isolation(self):
+        """Test that autolog contexts are properly isolated between function calls."""
+        import structlog.contextvars
+        from concurrent.futures import ThreadPoolExecutor
+
+        @autolog(component="worker")
+        def worker_function(worker_id: str) -> dict:
+            """Worker function that sets and reads context in a thread."""
+            # Simulate some work
+            import time
+
+            time.sleep(0.01)
+
+            # Return the context as seen by this worker
+            return dict(structlog.contextvars.get_contextvars())
+
+        # Clear any existing context
+        structlog.contextvars.clear_contextvars()
+
+        # Run multiple workers concurrently
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [executor.submit(worker_function, str(i)) for i in range(3)]
+            results = [future.result() for future in futures]
+
+        # Each worker should have seen its own context with unique operation_id
+        operation_ids = [result.get("operation_id") for result in results]
+        assert len(set(operation_ids)) == 3  # All operation IDs should be unique
+
+        # All should have the same component
+        for result in results:
+            assert result["component"] == "worker"
+
+        # Main thread context should be clean
+        context_vars = structlog.contextvars.get_contextvars()
+        assert len(context_vars) == 0
+
+    def test_signature_caching_performance(self):
+        """Test that function signature caching improves performance."""
+        from haproxy_template_ic.structured_logging import _get_function_signature
+
+        def test_function(param1, param2="default"):
+            pass
+
+        # First call should cache the signature
+        sig1 = _get_function_signature(test_function)
+
+        # Second call should use cache
+        sig2 = _get_function_signature(test_function)
+
+        # Should be the same signature object (cached)
+        assert sig1 is sig2
+        # Ensure it doesn't crash and returns the same cached object

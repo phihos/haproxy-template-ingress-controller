@@ -18,7 +18,7 @@ from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
 from kr8s.objects import ConfigMap
 
-from haproxy_template_ic.structured_logging import logging_context
+from haproxy_template_ic.structured_logging import autolog, observe
 from haproxy_template_ic.tracing import (
     trace_async_function,
     trace_template_render,
@@ -157,6 +157,7 @@ def trigger_reload(memo: Any) -> None:
     memo.stop_flag.set_result(None)
 
 
+@autolog(component="operator")
 async def handle_configmap_change(
     memo: Any,
     event: Dict[str, Any],
@@ -166,34 +167,22 @@ async def handle_configmap_change(
     **kwargs: Any,
 ) -> None:
     """Handle ConfigMap change events."""
-    with logging_context(
-        operation_id=None,  # Auto-generate operation ID
-        component="operator",
-        resource_type="ConfigMap",
-        resource_namespace=event["object"].get("metadata", {}).get("namespace"),
-        resource_name=name,
-    ) as operation_id:
-        structured_logger = structlog.get_logger(__name__)
-        structured_logger.info(
-            f"Kubernetes {type}",
-            kubernetes_event=type,
-            operation_id=operation_id,
-        )
+    # Logging context is automatically injected by @autolog decorator
+    structured_logger = structlog.get_logger(__name__)
+    structured_logger.info(f"Kubernetes {type}")
 
-        new_config = await load_config_from_configmap(event["object"])
+    new_config = await load_config_from_configmap(event["object"])
 
-        # Compare model dictionaries to avoid issues with compiled templates and object identity
-        # Use serialization mode to exclude non-serializable fields like compiled templates
-        old_dict = memo.config.model_dump(mode="serialization")
-        new_dict = new_config.model_dump(mode="serialization")
+    # Compare model dictionaries to avoid issues with compiled templates and object identity
+    # Use serialization mode to exclude non-serializable fields like compiled templates
+    old_dict = memo.config.model_dump(mode="serialization")
+    new_dict = new_config.model_dump(mode="serialization")
 
-        if old_dict != new_dict:
-            diff = DeepDiff(old_dict, new_dict, verbose_level=2)
-            diff_str = str(diff)[:500]
-            structured_logger.info(
-                "🔄 Config has changed: reloading", config_diff=diff_str
-            )
-            trigger_reload(memo)
+    if old_dict != new_dict:
+        diff = DeepDiff(old_dict, new_dict, verbose_level=2)
+        diff_str = str(diff)[:500]
+        structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
+        trigger_reload(memo)
 
 
 async def update_resource_index(
@@ -209,17 +198,18 @@ async def update_resource_index(
     return {(namespace, name): dict(body)}
 
 
-@trace_async_function(
+@observe(
+    component="operator",
     span_name="render_haproxy_templates",
-    attributes={"operation.category": "template_rendering"},
+    trace_attributes={"operation.category": "template_rendering"},
 )
 async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     """Render all HAProxy templates with current context data."""
-    with logging_context(operation_id=None, component="operator") as operation_id:
-        logger.debug("Rendering HAProxy templates", operation_id=operation_id)
-        metrics = get_metrics_collector()
+    # Logging context and tracing automatically injected by @observe decorator
+    logger.debug("Rendering HAProxy templates")
+    metrics = get_metrics_collector()
 
-        # Collect all indices from registered watch resources
+    # Collect all indices from registered watch resources
     indices: Dict[str, Dict[str, Any]] = {}
     for resource_id, watch_config in memo.config.watched_resources.items():
         try:
