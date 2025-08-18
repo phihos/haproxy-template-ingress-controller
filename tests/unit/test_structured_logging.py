@@ -224,8 +224,120 @@ class TestSetupLogging:
                 assert kwargs["level"] == expected_level
 
 
+class TestErrorHandling:
+    """Test cases for error handling and edge conditions."""
+
+    def test_signature_mismatch_handling(self):
+        """Test that signature mismatch in parameter extraction is handled gracefully."""
+        from haproxy_template_ic.structured_logging import (
+            _extract_context_from_parameters,
+        )
+
+        def function_with_required_params(required_param: str):
+            return f"called with {required_param}"
+
+        # Test direct parameter extraction with mismatched arguments
+        # This should not crash and should return minimal context with operation_id
+        context = _extract_context_from_parameters(
+            function_with_required_params,
+            args=("extra_arg", "another_arg"),  # Wrong number of args
+            kwargs={"wrong_param": "value"},  # Wrong parameter names
+            decorator_kwargs={"component": "test"},
+        )
+
+        # Should return minimal context with operation_id when signature binding fails
+        assert context["component"] == "test"
+        assert "operation_id" in context
+        assert len(context["operation_id"]) == 8  # UUID first 8 chars
+
+    def test_malformed_event_object_handling(self):
+        """Test handling of malformed event objects."""
+
+        @autolog(component="operator")
+        def handle_event(event, name, type, **kwargs):
+            context_vars = structlog.contextvars.get_contextvars()
+            return dict(context_vars)
+
+        # Test with completely malformed event
+        result1 = handle_event(event="not_a_dict", name="test", type="MODIFIED")
+        assert result1["component"] == "operator"
+        assert "operation_id" in result1
+
+        # Test with event missing 'object' key
+        result2 = handle_event(event={}, name="test", type="MODIFIED")
+        assert result2["component"] == "operator"
+
+        # Test with event object missing 'metadata'
+        result3 = handle_event(
+            event={"object": {"kind": "ConfigMap"}}, name="test", type="MODIFIED"
+        )
+        assert result3["component"] == "operator"
+        assert result3["resource_type"] == "ConfigMap"
+
+    def test_context_cleanup_on_exception(self):
+        """Test that context is cleaned up even when exceptions occur."""
+        import structlog.contextvars
+
+        # Clear any existing context
+        structlog.contextvars.clear_contextvars()
+
+        @autolog(component="test", resource_type="Pod")
+        def failing_function():
+            # Check context is set during execution
+            context_vars = structlog.contextvars.get_contextvars()
+            assert context_vars["component"] == "test"
+            assert context_vars["resource_type"] == "Pod"
+            # Then raise an exception
+            raise ValueError("Test exception")
+
+        # Function should raise exception but context should be cleaned up
+        try:
+            failing_function()
+            assert False, "Expected ValueError"
+        except ValueError:
+            pass
+
+        # Context should be clean after exception
+        context_vars = structlog.contextvars.get_contextvars()
+        assert len(context_vars) == 0
+
+    def test_observe_decorator_without_tracing(self):
+        """Test observe decorator when tracing module is not available."""
+        from unittest.mock import patch
+
+        # Mock the import to fail
+        with patch.dict("sys.modules", {"haproxy_template_ic.tracing": None}):
+            # This should not crash and should fall back to just autolog
+            @observe(component="test", span_name="test_operation")
+            async def test_function(name: str):
+                context_vars = structlog.contextvars.get_contextvars()
+                return dict(context_vars)
+
+            async def run_test():
+                result = await test_function("test_param")
+                assert result["component"] == "test"
+                assert "operation_id" in result
+
+            import asyncio
+
+            asyncio.run(run_test())
+
+    def test_parameter_extraction_with_invalid_signatures(self):
+        """Test parameter extraction handles various invalid signatures."""
+
+        # Function with *args, **kwargs should work fine
+        @autolog(component="flexible")
+        def flexible_function(*args, **kwargs):
+            context_vars = structlog.contextvars.get_contextvars()
+            return dict(context_vars)
+
+        result = flexible_function("any", "args", unexpected_param="value")
+        assert result["component"] == "flexible"
+        assert "operation_id" in result
+
+
 class TestEdgeCases:
-    """Test cases for edge cases and error conditions."""
+    """Test cases for edge cases and boundary conditions."""
 
     def test_autolog_with_many_parameters(self):
         """Test autolog with functions that have many parameters."""
@@ -273,3 +385,20 @@ class TestEdgeCases:
         # Main thread context should be clean
         context_vars = structlog.contextvars.get_contextvars()
         assert len(context_vars) == 0
+
+    def test_signature_caching_performance(self):
+        """Test that function signature caching improves performance."""
+        from haproxy_template_ic.structured_logging import _get_function_signature
+
+        def test_function(param1, param2="default"):
+            pass
+
+        # First call should cache the signature
+        sig1 = _get_function_signature(test_function)
+
+        # Second call should use cache
+        sig2 = _get_function_signature(test_function)
+
+        # Should be the same signature object (cached)
+        assert sig1 is sig2
+        # Ensure it doesn't crash and returns the same cached object

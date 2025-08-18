@@ -9,6 +9,7 @@ using the industry-standard structlog library.
 import logging
 import functools
 import inspect
+from functools import lru_cache
 from typing import Any, List, Callable, TypeVar, Awaitable, Dict
 from uuid import uuid4
 
@@ -21,16 +22,27 @@ F = TypeVar("F", bound=Callable[..., Any])
 AsyncF = TypeVar("AsyncF", bound=Callable[..., Awaitable[Any]])
 
 
+@lru_cache(maxsize=128)
+def _get_function_signature(func: Callable) -> inspect.Signature:
+    """Get cached function signature for performance."""
+    return inspect.signature(func)
+
+
 def _extract_context_from_parameters(
     func: Callable, args: tuple, kwargs: dict, decorator_kwargs: dict
 ) -> Dict[str, Any]:
     """Extract logging context from function parameters using smart detection."""
     context = decorator_kwargs.copy()
 
-    # Get function signature
-    sig = inspect.signature(func)
-    bound_args = sig.bind_partial(*args, **kwargs)
-    bound_args.apply_defaults()
+    # Get function signature with error handling
+    try:
+        sig = _get_function_signature(func)
+        bound_args = sig.bind_partial(*args, **kwargs)
+        bound_args.apply_defaults()
+    except (TypeError, ValueError):
+        # If signature binding fails, return minimal context with operation_id
+        context.setdefault("operation_id", str(uuid4())[:8])
+        return {k: v for k, v in context.items() if v is not None}
 
     # Smart parameter detection for kopf event handlers
     if "event" in bound_args.arguments:
@@ -54,14 +66,8 @@ def _extract_context_from_parameters(
         # This looks like a kopf event handler
         context.setdefault("kubernetes_event", bound_args.arguments["type"])
 
-    # Infer resource_type from function name patterns
-    func_name = func.__name__.lower()
-    if "configmap" in func_name:
-        context.setdefault("resource_type", "ConfigMap")
-    elif "pod" in func_name:
-        context.setdefault("resource_type", "Pod")
-    elif "service" in func_name:
-        context.setdefault("resource_type", "Service")
+    # Note: Removed fragile function name inference as per code review
+    # Resource types should come from event objects or explicit decorator parameters
 
     # Auto-generate operation_id if not provided
     if "operation_id" not in context:
@@ -145,18 +151,22 @@ def observe(**decorator_kwargs: Any) -> Callable[[AsyncF], AsyncF]:
         # Apply autolog first
         autolog_func = autolog(**decorator_kwargs)(func)
 
-        # Then apply tracing
-        from haproxy_template_ic.tracing import trace_async_function
+        # Then apply tracing with error handling
+        try:
+            from haproxy_template_ic.tracing import trace_async_function
 
-        # Extract tracing-specific args
-        span_name = decorator_kwargs.get("span_name")
-        trace_attrs = decorator_kwargs.get("trace_attributes", {})
+            # Extract tracing-specific args
+            span_name = decorator_kwargs.get("span_name")
+            trace_attrs = decorator_kwargs.get("trace_attributes", {})
 
-        traced_func = trace_async_function(span_name=span_name, attributes=trace_attrs)(
-            autolog_func
-        )
+            traced_func = trace_async_function(
+                span_name=span_name, attributes=trace_attrs
+            )(autolog_func)
 
-        return traced_func  # type: ignore[return-value]
+            return traced_func  # type: ignore[return-value]
+        except ImportError:
+            # If tracing module is unavailable, return just the autolog version
+            return autolog_func  # type: ignore[return-value]
 
     return decorator
 
