@@ -7,43 +7,158 @@ using the industry-standard structlog library.
 """
 
 import logging
-from contextlib import contextmanager
-from typing import Any, Optional, Iterator, List
+import functools
+import inspect
+from typing import Any, List, Callable, TypeVar, Awaitable, Dict
 from uuid import uuid4
 
 import structlog
 import structlog.contextvars
 
 
-# LogContext dataclass removed - using contextvars directly for context management
+# Type variables for decorators
+F = TypeVar("F", bound=Callable[..., Any])
+AsyncF = TypeVar("AsyncF", bound=Callable[..., Awaitable[Any]])
 
 
-@contextmanager
-def logging_context(**kwargs: Any) -> Iterator[Optional[str]]:
-    """Universal context manager for structured logging.
+def _extract_context_from_parameters(
+    func: Callable, args: tuple, kwargs: dict, decorator_kwargs: dict
+) -> Dict[str, Any]:
+    """Extract logging context from function parameters using smart detection."""
+    context = decorator_kwargs.copy()
 
-    Supports all context types:
-    - operation_id (generates UUID if None)
-    - component
-    - resource_type, resource_namespace, resource_name
-    - Any additional fields
+    # Get function signature
+    sig = inspect.signature(func)
+    bound_args = sig.bind_partial(*args, **kwargs)
+    bound_args.apply_defaults()
+
+    # Smart parameter detection for kopf event handlers
+    if "event" in bound_args.arguments:
+        event = bound_args.arguments["event"]
+        if isinstance(event, dict) and "object" in event:
+            metadata = event.get("object", {}).get("metadata", {})
+            context.setdefault("resource_namespace", metadata.get("namespace"))
+
+            # Infer resource_type from event structure
+            if "kind" in event.get("object", {}):
+                context.setdefault("resource_type", event["object"]["kind"])
+
+    # Use function parameter values as context
+    if "name" in bound_args.arguments:
+        context.setdefault("resource_name", bound_args.arguments["name"])
+
+    if "namespace" in bound_args.arguments:
+        context.setdefault("resource_namespace", bound_args.arguments["namespace"])
+
+    if "type" in bound_args.arguments and "event" in bound_args.arguments:
+        # This looks like a kopf event handler
+        context.setdefault("kubernetes_event", bound_args.arguments["type"])
+
+    # Infer resource_type from function name patterns
+    func_name = func.__name__.lower()
+    if "configmap" in func_name:
+        context.setdefault("resource_type", "ConfigMap")
+    elif "pod" in func_name:
+        context.setdefault("resource_type", "Pod")
+    elif "service" in func_name:
+        context.setdefault("resource_type", "Service")
+
+    # Auto-generate operation_id if not provided
+    if "operation_id" not in context:
+        context["operation_id"] = str(uuid4())[:8]
+
+    # Remove None values to avoid cluttering logs
+    return {k: v for k, v in context.items() if v is not None}
+
+
+def autolog(**decorator_kwargs: Any) -> Callable[[F], F]:
+    """Decorator for automatic logging context injection.
+
+    Automatically extracts context from function parameters and provides
+    structured logging without boilerplate. Detects kopf event handlers,
+    resource operations, and more.
+
+    Args:
+        **decorator_kwargs: Override context values (component, etc.)
     """
-    # Handle special case for operation_id generation
-    if "operation_id" in kwargs and kwargs["operation_id"] is None:
-        kwargs["operation_id"] = str(uuid4())[:8]
 
-    # Remove None/empty values to avoid cluttering logs
-    context = {k: v for k, v in kwargs.items() if v is not None}
-    bound_keys = list(context.keys())
+    def decorator(func: F) -> F:
+        if inspect.iscoroutinefunction(func):
 
-    if bound_keys:
-        structlog.contextvars.bind_contextvars(**context)
-    try:
-        # Return operation_id for backward compatibility with operation_context
-        yield context.get("operation_id")
-    finally:
-        if bound_keys:
-            structlog.contextvars.unbind_contextvars(*bound_keys)
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                context = _extract_context_from_parameters(
+                    func, args, kwargs, decorator_kwargs
+                )
+                bound_keys = list(context.keys())
+
+                # Context ready for structured logging
+
+                if bound_keys:
+                    structlog.contextvars.bind_contextvars(**context)
+
+                try:
+                    # Call the original function - it now has clean business logic
+                    return await func(*args, **kwargs)
+                finally:
+                    if bound_keys:
+                        structlog.contextvars.unbind_contextvars(*bound_keys)
+
+            return async_wrapper  # type: ignore[return-value]
+        else:
+
+            @functools.wraps(func)
+            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                context = _extract_context_from_parameters(
+                    func, args, kwargs, decorator_kwargs
+                )
+                bound_keys = list(context.keys())
+
+                # Context ready for structured logging
+
+                if bound_keys:
+                    structlog.contextvars.bind_contextvars(**context)
+
+                try:
+                    # Call the original function - it now has clean business logic
+                    return func(*args, **kwargs)
+                finally:
+                    if bound_keys:
+                        structlog.contextvars.unbind_contextvars(*bound_keys)
+
+            return sync_wrapper  # type: ignore[return-value]
+
+    return decorator
+
+
+def observe(**decorator_kwargs: Any) -> Callable[[AsyncF], AsyncF]:
+    """Decorator combining autolog + tracing for complete observability.
+
+    Provides both structured logging context and distributed tracing
+    in a single decorator. Perfect for functions that need full observability.
+
+    Args:
+        **decorator_kwargs: Context overrides and tracing attributes
+    """
+
+    def decorator(func: AsyncF) -> AsyncF:
+        # Apply autolog first
+        autolog_func = autolog(**decorator_kwargs)(func)
+
+        # Then apply tracing
+        from haproxy_template_ic.tracing import trace_async_function
+
+        # Extract tracing-specific args
+        span_name = decorator_kwargs.get("span_name")
+        trace_attrs = decorator_kwargs.get("trace_attributes", {})
+
+        traced_func = trace_async_function(span_name=span_name, attributes=trace_attrs)(
+            autolog_func
+        )
+
+        return traced_func  # type: ignore[return-value]
+
+    return decorator
 
 
 def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None:
