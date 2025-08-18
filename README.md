@@ -259,17 +259,34 @@ kubectl exec -it haproxy-template-ic -- \
 
 The controller supports configuration via CLI options or environment variables:
 
+**Running the Operator:**
+```bash
+haproxy-template-ic run --configmap-name=my-config
+```
+
+**Utility Commands:**
+```bash
+# Export configuration schema
+haproxy-template-ic schema export config-schema.json
+
+# Validate configuration file  
+haproxy-template-ic schema validate my-config.yaml
+
+# Generate documentation
+haproxy-template-ic docs generate CONFIG.md
+```
+
 | Environment Variable | CLI Option | Default | Description |
 |---------------------|------------|---------|-------------|
-| `CONFIGMAP_NAME` | `--configmap-name` | *Required* | ConfigMap name containing controller configuration |
+| `CONFIGMAP_NAME` | `run --configmap-name` | *Required* | ConfigMap name containing controller configuration |
 | `VERBOSE` | `--verbose` | `0` | Logging verbosity (0=WARNING, 1=INFO, 2=DEBUG) |
 | `STRUCTURED_LOGGING` | `--structured-logging` | `false` | Enable JSON structured logging output |
-| `HEALTHZ_PORT` | `--healthz-port` | `8080` | Controller health check endpoint port |
-| `METRICS_PORT` | `--metrics-port` | `9090` | Prometheus metrics endpoint port |
-| `SOCKET_PATH` | `--socket-path` | `/run/haproxy-template-ic/management.sock` | Management socket path |
-| `WEBHOOK_ENABLED` | `--webhook-enabled` | `false` | Enable validating admission webhooks |
-| `WEBHOOK_PORT` | `--webhook-port` | `9443` | Webhook server port |
-| `TRACING_ENABLED` | `--tracing-enabled` | `false` | Enable OpenTelemetry distributed tracing |
+| `HEALTHZ_PORT` | `run --healthz-port` | `8080` | Controller health check endpoint port |
+| `METRICS_PORT` | `run --metrics-port` | `9090` | Prometheus metrics endpoint port |
+| `SOCKET_PATH` | `run --socket-path` | `/run/haproxy-template-ic/management.sock` | Management socket path |
+| `WEBHOOK_ENABLED` | *(env only)* | `false` | Enable validating admission webhooks |
+| `WEBHOOK_PORT` | *(env only)* | `9443` | Webhook server port |
+| `TRACING_ENABLED` | `run --tracing-enabled` | `false` | Enable OpenTelemetry distributed tracing |
 
 #### Logging Configuration
 

@@ -61,7 +61,7 @@ dev = [
 ]
 
 [project.scripts]
-haproxy-template-ic = "haproxy_template_ic.__main__:main"
+haproxy-template-ic = "haproxy_template_ic.__main__:cli"
 
 [tool.uv]
 package = true
