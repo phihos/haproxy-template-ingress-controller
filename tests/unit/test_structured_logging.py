@@ -12,7 +12,6 @@ from unittest.mock import patch
 
 
 from haproxy_template_ic.structured_logging import (
-    StructuredLogger,
     get_structured_logger,
     setup_structured_logging,
     operation_context,
@@ -149,7 +148,7 @@ class TestCustomProcessors:
 
 
 class TestStructuredLogger:
-    """Test cases for StructuredLogger class."""
+    """Test cases for structured logger functionality."""
 
     def test_logger_creation(self):
         """Test structured logger creation."""
@@ -157,9 +156,12 @@ class TestStructuredLogger:
         setup_structured_logging(verbose_level=1, use_json=False)
 
         logger = get_structured_logger("test")
-        assert isinstance(logger, StructuredLogger)
-        # The logger might be a BoundLoggerLazyProxy or BoundLogger
-        assert hasattr(logger.logger, "info")  # Check it has logging methods
+        # Verify logger has required logging methods
+        assert hasattr(logger, "debug")
+        assert hasattr(logger, "info")
+        assert hasattr(logger, "warning")
+        assert hasattr(logger, "error")
+        assert hasattr(logger, "critical")
 
     def test_logging_methods(self):
         """Test all logging level methods work."""
@@ -405,9 +407,12 @@ class TestConvenienceFunctions:
 
         logger = get_structured_logger("test.module")
 
-        assert isinstance(logger, StructuredLogger)
-        # The underlying logger should be a structlog bound logger (could be lazy proxy)
-        assert hasattr(logger.logger, "info")  # Check it has logging methods
+        # Verify logger has required logging methods
+        assert hasattr(logger, "debug")
+        assert hasattr(logger, "info")
+        assert hasattr(logger, "warning")
+        assert hasattr(logger, "error")
+        assert hasattr(logger, "critical")
 
 
 class TestIntegration:
