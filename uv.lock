@@ -1587,16 +1587,16 @@ wheels = [
 
 [[package]]
 name = "pytest-shared-session-scope"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
     { name = "pytest" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/73/ab/54860af6b49a59653dd5d12fa3b42514c410ee708ab8d47b01eee4f1781c/pytest_shared_session_scope-0.4.0.tar.gz", hash = "sha256:30da6ced4c734bb7cdbc10310da754ca9c8ae75c1384ceb3eda82fa76db647d2", size = 24009, upload-time = "2024-09-22T14:06:43.077Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/64/680ad3cad5e6eb98aaadc360839e337bfc028492c6f9da007fa8a37739fc/pytest_shared_session_scope-0.5.0.tar.gz", hash = "sha256:1d3979d1ed5ade17943ee352b60ca8cd7db2e7ac309d516f3f88e46b1b475c66", size = 28736, upload-time = "2025-08-17T15:20:58.867Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/ca/c13adedbd72debe817a62bdacfeb3cc93ae7dde37b20dda90b543835bfbe/pytest_shared_session_scope-0.4.0-py3-none-any.whl", hash = "sha256:583508332f0ffdf306fb50487893e4bd4f893caf21778b7b0ea9fad6767fecce", size = 10189, upload-time = "2024-09-22T14:06:41.764Z" },
+    { url = "https://files.pythonhosted.org/packages/42/e5/9d287b50df77febd9572f9e6ae4663672ed62f7473cad7af727413b8d919/pytest_shared_session_scope-0.5.0-py3-none-any.whl", hash = "sha256:c5f7140a6e0e780a053bdff181ec7313750921ab4ccc56d68a4f797a7f345462", size = 12995, upload-time = "2025-08-17T15:20:57.512Z" },
 ]
 
 [[package]]
