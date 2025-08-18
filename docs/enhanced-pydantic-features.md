@@ -47,13 +47,13 @@ Generate comprehensive JSON schemas for configuration validation and documentati
 
 ```bash
 # Export main configuration schema
-haproxy-template-ic --export-schema config-schema.json
+haproxy-template-ic schema export config-schema.json
 
 # Export all model schemas to directory
-haproxy-template-ic --export-all-schemas ./schemas/
+haproxy-template-ic schema export-all ./schemas/
 
 # Generate human-readable documentation
-haproxy-template-ic --generate-docs config-reference.md
+haproxy-template-ic docs generate config-reference.md
 ```
 
 ### 2. Environment Variable Configuration
@@ -78,7 +78,7 @@ Validate configuration files against schemas before deployment:
 
 ```bash
 # Validate a configuration file
-haproxy-template-ic --validate-config my-config.yaml
+haproxy-template-ic schema validate my-config.yaml
 
 # The validator will report:
 # ✅ Validation success with warnings (if any)
@@ -139,7 +139,7 @@ API_KEY=your-secret-key     # Stored as SecretStr (not logged)
 
 ### Schema Export Options
 
-1. **Main Configuration Schema** (`--export-schema`):
+1. **Main Configuration Schema** (`schema export`):
    - Complete schema for ConfigMap configuration
    - Includes examples and validation rules
    - Supports JSON and YAML output formats
@@ -171,10 +171,10 @@ Validate configuration files before applying to cluster:
 
 ```bash
 # Validate YAML configuration
-haproxy-template-ic --validate-config config.yaml
+haproxy-template-ic schema validate config.yaml
 
 # Validate JSON configuration
-haproxy-template-ic --validate-config config.json
+haproxy-template-ic schema validate config.json
 ```
 
 ### Validation Features
@@ -214,7 +214,7 @@ haproxy-template-ic --validate-config config.json
 Generate comprehensive configuration documentation:
 
 ```bash
-haproxy-template-ic --generate-docs config-reference.md
+haproxy-template-ic docs generate config-reference.md
 ```
 
 ### Generated Documentation Includes
@@ -244,7 +244,7 @@ Export schemas for IDE integration:
 
 ```bash
 # Generate schema for IDE autocompletion
-haproxy-template-ic --export-schema ide-schema.json
+haproxy-template-ic schema export ide-schema.json
 
 # Configure your IDE to use the schema for YAML files
 # Example for VS Code in .vscode/settings.json:
@@ -263,7 +263,7 @@ Validate configurations in CI/CD pipelines:
 # GitHub Actions example
 - name: Validate HAProxy Configuration
   run: |
-    haproxy-template-ic --validate-config k8s/configmap.yaml
+    haproxy-template-ic schema validate k8s/configmap.yaml
     if [ $? -ne 0 ]; then
       echo "Configuration validation failed"
       exit 1
@@ -277,11 +277,11 @@ Use schemas for configuration management:
 ```bash
 # Validate all configuration files
 find . -name "*.yaml" -path "*/haproxy-template-ic/*" \
-  -exec haproxy-template-ic --validate-config {} \;
+  -exec haproxy-template-ic schema validate {} \;
 
 # Generate documentation for all environments
 for env in dev staging prod; do
-  haproxy-template-ic --generate-docs "docs/${env}-config.md"
+  haproxy-template-ic docs generate "docs/${env}-config.md"
 done
 ```
 
@@ -336,7 +336,7 @@ export TRACING_ENABLED=true
 
 ```bash
 # In your deployment script
-haproxy-template-ic --validate-config config.yaml || exit 1
+haproxy-template-ic schema validate config.yaml || exit 1
 kubectl apply -f config.yaml
 ```
 
@@ -344,7 +344,7 @@ kubectl apply -f config.yaml
 
 ```bash
 # Update documentation when configuration changes
-haproxy-template-ic --generate-docs docs/configuration.md
+haproxy-template-ic docs generate docs/configuration.md
 git add docs/configuration.md
 git commit -m "Update configuration documentation"
 ```
@@ -361,7 +361,7 @@ haproxy-template-ic --export-all-schemas schemas/
 
 ```bash
 # Regular validation in monitoring
-haproxy-template-ic --validate-config current-config.yaml
+haproxy-template-ic schema validate current-config.yaml
 if [ $? -ne 0 ]; then
   # Alert on configuration issues
   echo "Configuration validation failed" | mail admin@company.com
@@ -422,12 +422,12 @@ HAProxy Template IC has migrated from custom validators to Pydantic's built-in v
 
 1. **Export Current Schema**:
    ```bash
-   haproxy-template-ic --export-schema current-schema.json
+   haproxy-template-ic schema export current-schema.json
    ```
 
 2. **Validate Existing Configurations**:
    ```bash
-   haproxy-template-ic --validate-config existing-config.yaml
+   haproxy-template-ic schema validate existing-config.yaml
    ```
 
 3. **Address Validation Issues**:
@@ -448,7 +448,7 @@ When schemas change:
 
 1. **Check Schema Version**:
    ```bash
-   haproxy-template-ic --export-schema | jq '.schema_version'
+   haproxy-template-ic schema export /dev/stdout | jq '.schema_version'
    ```
 
 2. **Update Configurations**:
@@ -458,7 +458,7 @@ When schemas change:
 
 3. **Test Thoroughly**:
    ```bash
-   haproxy-template-ic --validate-config updated-config.yaml
+   haproxy-template-ic schema validate updated-config.yaml
    ```
 
 ## Troubleshooting
@@ -490,6 +490,6 @@ python -c "from haproxy_template_ic.settings import get_application_settings; pr
 python -c "from haproxy_template_ic.settings import validate_environment_config; print(validate_environment_config())"
 
 # Export minimal schema for debugging
-haproxy-template-ic --export-schema debug-schema.json
+haproxy-template-ic schema export debug-schema.json
 cat debug-schema.json | jq '.config_schema.properties | keys'
 ```

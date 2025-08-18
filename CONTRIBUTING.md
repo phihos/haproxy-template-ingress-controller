@@ -54,7 +54,7 @@ The project follows a modular architecture with clear separation of concerns:
 
 ```
 haproxy_template_ic/
-├── __main__.py          # CLI interface and application entry point
+├── __main__.py          # CLI interface with subcommands and application entry point
 ├── operator.py          # Kubernetes operator logic (kopf-based)
 ├── config.py           # Configuration data structures and validation  
 ├── management_socket.py # Unix socket server for state inspection
@@ -65,7 +65,7 @@ haproxy_template_ic/
 
 | Module | Purpose | Key Technologies |
 |--------|---------|------------------|
-| `__main__.py` | CLI interface, argument parsing, application startup | `click`, `logging` |
+| `__main__.py` | CLI interface with subcommands, argument parsing, application startup | `click` |
 | `operator.py` | Kubernetes event handling, resource watching, template rendering | `kopf`, `kr8s`, `jinja2`, `uvloop` |
 | `config.py` | Configuration validation, Jinja2 template compilation, template snippet system | `jinja2`, `dataclasses`, custom `SnippetLoader` |
 | `management_socket.py` | State serialization, Unix socket server, debugging interface | `asyncio`, `json`, `pathlib` |
