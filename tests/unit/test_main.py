@@ -285,3 +285,16 @@ def test_version_command():
     assert "haproxy-template-ic" in result.output
     # Should contain either version number or "(development)"
     assert "0.1.0" in result.output or "(development)" in result.output
+
+
+@patch("haproxy_template_ic.__main__.metadata.version")
+def test_version_command_development_fallback(mock_version):
+    """Test version command fallback when package not found."""
+    from haproxy_template_ic.__main__ import PackageNotFoundError
+
+    mock_version.side_effect = PackageNotFoundError()
+    runner = CliRunner()
+    result = runner.invoke(cli, ["version"])
+
+    assert result.exit_code == 0
+    assert "haproxy-template-ic (development)" in result.output

@@ -8,6 +8,7 @@ for clear separation between operator mode and utility commands.
 import re
 from dataclasses import dataclass
 from importlib import metadata
+from importlib.metadata import PackageNotFoundError
 
 import click
 
@@ -184,7 +185,7 @@ def version() -> None:
     try:
         app_version = metadata.version("haproxy-template-ic")
         click.echo(f"haproxy-template-ic {app_version}")
-    except metadata.PackageNotFoundError:
+    except PackageNotFoundError:
         click.echo("haproxy-template-ic (development)")
 
 
