@@ -90,17 +90,17 @@ def validate_configmap_name(
 ) -> str:
     """Validate ConfigMap name follows Kubernetes naming conventions.
 
-    Kubernetes names must:
+    Kubernetes names must follow DNS-1123 subdomain specification:
     - Be lowercase
     - Contain only alphanumeric characters and hyphens
     - Start and end with alphanumeric characters
-    - Be at most 253 characters long
+    - Be at most 253 characters long (DNS-1123 limit)
     """
     if len(value) > 253:
         raise click.BadParameter("ConfigMap name must be at most 253 characters long")
 
-    # Kubernetes allows single characters, but let's be more explicit about the pattern
-    if not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", value):
+    # Fixed regex: allows single chars and properly handles 2+ character names
+    if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", value):
         raise click.BadParameter(
             "ConfigMap name must follow Kubernetes naming conventions: "
             "lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric"

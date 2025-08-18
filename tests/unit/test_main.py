@@ -247,8 +247,9 @@ def test_run_command_invalid_configmap_name():
             )
 
 
-def test_run_command_valid_configmap_names():
-    """Test run command with valid ConfigMap names."""
+@patch("haproxy_template_ic.__main__.run_operator_loop")
+def test_run_command_valid_configmap_names(mock_run_operator_loop):
+    """Test run command with valid ConfigMap names and verify CLI options."""
     runner = CliRunner()
 
     # Test various valid ConfigMap names
@@ -258,17 +259,26 @@ def test_run_command_valid_configmap_names():
         "config123",  # with numbers
         "a",  # single character
         "test-config-123",  # mixed
+        "ab",  # two characters (tests the fixed regex)
         "a" * 253,  # maximum length
     ]
 
     for valid_name in valid_names:
+        mock_run_operator_loop.reset_mock()
         with patch("haproxy_template_ic.__main__.setup_structured_logging"):
-            with patch("haproxy_template_ic.__main__.run_operator_loop"):
-                result = runner.invoke(cli, ["run", "--configmap-name", valid_name])
+            result = runner.invoke(cli, ["run", "--configmap-name", valid_name])
 
-                assert result.exit_code == 0, (
-                    f"Should accept valid ConfigMap name: {valid_name}"
-                )
+            assert result.exit_code == 0, (
+                f"Should accept valid ConfigMap name: {valid_name}"
+            )
+
+            # Verify the correct ConfigMap name is passed to run_operator_loop
+            mock_run_operator_loop.assert_called_once()
+            args, _ = mock_run_operator_loop.call_args
+            cli_options = args[0]
+            assert cli_options.configmap_name == valid_name, (
+                f"ConfigMap name {valid_name} not correctly passed to run_operator_loop"
+            )
 
 
 def test_configmap_validation_edge_cases():
