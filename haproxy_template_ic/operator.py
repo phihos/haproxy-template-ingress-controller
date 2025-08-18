@@ -18,12 +18,7 @@ from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
 from kr8s.objects import ConfigMap
 
-from haproxy_template_ic.structured_logging import (
-    get_structured_logger,
-    operation_context,
-    component_context_manager,
-    resource_context_manager,
-)
+from haproxy_template_ic.structured_logging import logging_context
 from haproxy_template_ic.tracing import (
     trace_async_function,
     trace_template_render,
@@ -53,8 +48,9 @@ from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
 import os
 from kubernetes import config
+import structlog
 
-logger = get_structured_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def get_current_namespace() -> str:
@@ -170,39 +166,34 @@ async def handle_configmap_change(
     **kwargs: Any,
 ) -> None:
     """Handle ConfigMap change events."""
-    with operation_context() as operation_id:
-        with component_context_manager("operator"):
-            with resource_context_manager(
-                resource_type="ConfigMap",
-                resource_namespace=event["object"].get("metadata", {}).get("namespace"),
-                resource_name=name,
-            ):
-                structured_logger = get_structured_logger(__name__)
-                structured_logger.info(
-                    f"Kubernetes {type}",
-                    kubernetes_event=type,
-                    resource_type="ConfigMap",
-                    resource_namespace=event["object"]
-                    .get("metadata", {})
-                    .get("namespace", "unknown"),
-                    resource_name=name,
-                    operation_id=operation_id,
-                )
+    with logging_context(
+        operation_id=None,  # Auto-generate operation ID
+        component="operator",
+        resource_type="ConfigMap",
+        resource_namespace=event["object"].get("metadata", {}).get("namespace"),
+        resource_name=name,
+    ) as operation_id:
+        structured_logger = structlog.get_logger(__name__)
+        structured_logger.info(
+            f"Kubernetes {type}",
+            kubernetes_event=type,
+            operation_id=operation_id,
+        )
 
-                new_config = await load_config_from_configmap(event["object"])
+        new_config = await load_config_from_configmap(event["object"])
 
-                # Compare model dictionaries to avoid issues with compiled templates and object identity
-                # Use serialization mode to exclude non-serializable fields like compiled templates
-                old_dict = memo.config.model_dump(mode="serialization")
-                new_dict = new_config.model_dump(mode="serialization")
+        # Compare model dictionaries to avoid issues with compiled templates and object identity
+        # Use serialization mode to exclude non-serializable fields like compiled templates
+        old_dict = memo.config.model_dump(mode="serialization")
+        new_dict = new_config.model_dump(mode="serialization")
 
-                if old_dict != new_dict:
-                    diff = DeepDiff(old_dict, new_dict, verbose_level=2)
-                    diff_str = str(diff)[:500]
-                    structured_logger.info(
-                        "🔄 Config has changed: reloading", config_diff=diff_str
-                    )
-                    trigger_reload(memo)
+        if old_dict != new_dict:
+            diff = DeepDiff(old_dict, new_dict, verbose_level=2)
+            diff_str = str(diff)[:500]
+            structured_logger.info(
+                "🔄 Config has changed: reloading", config_diff=diff_str
+            )
+            trigger_reload(memo)
 
 
 async def update_resource_index(
@@ -224,12 +215,11 @@ async def update_resource_index(
 )
 async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     """Render all HAProxy templates with current context data."""
-    with operation_context() as operation_id:
-        with component_context_manager("operator"):
-            logger.debug("Rendering HAProxy templates", operation_id=operation_id)
-            metrics = get_metrics_collector()
+    with logging_context(operation_id=None, component="operator") as operation_id:
+        logger.debug("Rendering HAProxy templates", operation_id=operation_id)
+        metrics = get_metrics_collector()
 
-            # Collect all indices from registered watch resources
+        # Collect all indices from registered watch resources
     indices: Dict[str, Dict[str, Any]] = {}
     for resource_id, watch_config in memo.config.watched_resources.items():
         try:
