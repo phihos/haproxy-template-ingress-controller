@@ -18,49 +18,86 @@ logger = logging.getLogger(__name__)
 
 def serialize_state(memo: Any) -> Dict[str, Any]:
     """Serialize the application's internal state to a JSON-serializable dictionary."""
+    state = {}
+    errors = []
+
+    # Serialize config with specific error handling
     try:
-        state = {
-            "config": memo.config.model_dump(mode="json")
-            if hasattr(memo, "config") and memo.config
-            else {},
-            "haproxy_config_context": memo.haproxy_config_context.model_dump(
+        if hasattr(memo, "config") and memo.config:
+            state["config"] = memo.config.model_dump(mode="json")
+        else:
+            state["config"] = {}
+    except (AttributeError, TypeError, ValueError, RuntimeError) as e:
+        errors.append(f"config serialization: {e}")
+        state["config"] = {}
+
+    # Serialize HAProxy config context with specific error handling
+    try:
+        if hasattr(memo, "haproxy_config_context") and memo.haproxy_config_context:
+            state["haproxy_config_context"] = memo.haproxy_config_context.model_dump(
                 mode="json"
             )
-            if hasattr(memo, "haproxy_config_context") and memo.haproxy_config_context
-            else {},
-            "metadata": {
-                "configmap_name": getattr(memo.cli_options, "configmap_name", None)
-                if hasattr(memo, "cli_options")
-                else None,
-                "has_config_reload_flag": hasattr(memo, "config_reload_flag"),
-                "has_stop_flag": hasattr(memo, "stop_flag"),
-            },
-            "cli_options": {
+        else:
+            state["haproxy_config_context"] = {}
+    except (AttributeError, TypeError, ValueError, RuntimeError) as e:
+        errors.append(f"haproxy_config_context serialization: {e}")
+        state["haproxy_config_context"] = {}
+
+    # Serialize metadata with specific error handling
+    try:
+        state["metadata"] = {
+            "configmap_name": getattr(memo.cli_options, "configmap_name", None)
+            if hasattr(memo, "cli_options")
+            else None,
+            "has_config_reload_flag": hasattr(memo, "config_reload_flag"),
+            "has_stop_flag": hasattr(memo, "stop_flag"),
+        }
+    except (AttributeError, TypeError) as e:
+        errors.append(f"metadata serialization: {e}")
+        state["metadata"] = {"configmap_name": None}
+
+    # Serialize CLI options with specific error handling
+    try:
+        if hasattr(memo, "cli_options") and memo.cli_options:
+            state["cli_options"] = {
                 "configmap_name": memo.cli_options.configmap_name,
                 "healthz_port": memo.cli_options.healthz_port,
                 "verbose": memo.cli_options.verbose,
                 "socket_path": memo.cli_options.socket_path,
             }
-            if hasattr(memo, "cli_options") and memo.cli_options
-            else {},
-            "indices": {
-                name: dict(getattr(memo, name))
-                for name in dir(memo)
-                if name.endswith("_index")
+        else:
+            state["cli_options"] = {}
+    except (AttributeError, TypeError) as e:
+        errors.append(f"cli_options serialization: {e}")
+        state["cli_options"] = {}
+
+    # Serialize indices with specific error handling
+    try:
+        indices = {}
+        for name in dir(memo):
+            if (
+                name.endswith("_index")
                 and not name.startswith("_")
                 and hasattr(getattr(memo, name), "items")
-            },
-        }
-        return state
-    except Exception as e:
-        return {
-            "error": f"Failed to serialize state: {str(e)}",
-            "metadata": {
-                "configmap_name": getattr(memo.cli_options, "configmap_name", None)
-                if hasattr(memo, "cli_options")
-                else None
-            },
-        }
+            ):
+                try:
+                    indices[name] = dict(getattr(memo, name))
+                except (TypeError, ValueError) as e:
+                    errors.append(f"index '{name}' serialization: {e}")
+                    indices[name] = {}
+        state["indices"] = indices
+    except (AttributeError, TypeError) as e:
+        errors.append(f"indices serialization: {e}")
+        state["indices"] = {}
+
+    # Add any serialization errors to the response
+    if errors:
+        state["serialization_errors"] = errors
+        logger.warning(
+            f"State serialization encountered {len(errors)} errors: {errors}"
+        )
+
+    return state
 
 
 class ManagementSocketServer:

@@ -4,8 +4,13 @@ Tests for haproxy_template_ic.__main__ module.
 This module contains tests for CLI functionality and main application entry point.
 """
 
+import json
+import yaml
+import pytest
+from pathlib import Path
 from unittest.mock import patch, Mock
 import logging
+import click
 from click.testing import CliRunner
 
 from haproxy_template_ic.__main__ import setup_logging, main
@@ -405,3 +410,270 @@ def test_setup_logging_negative_level():
     with patch("logging.basicConfig") as mock_basic_config:
         setup_logging(-1)  # Negative level
         mock_basic_config.assert_called_once_with(level=logging.DEBUG)
+
+
+# =============================================================================
+# Schema Command Handler Tests
+# =============================================================================
+
+
+def test_main_cli_missing_configmap_name():
+    """Test main CLI command without required configmap name."""
+    runner = CliRunner()
+
+    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+        result = runner.invoke(main, [])
+
+        assert result.exit_code != 0
+        assert "Missing option" in result.output
+        assert "configmap-name" in result.output
+
+
+@patch("haproxy_template_ic.__main__._handle_export_schema")
+def test_main_cli_export_schema(mock_handle_export):
+    """Test main CLI with --export-schema option."""
+    runner = CliRunner()
+
+    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+        result = runner.invoke(main, ["--export-schema", "/tmp/schema.json"])
+
+        assert result.exit_code == 0
+        mock_handle_export.assert_called_once()
+        args = mock_handle_export.call_args[0]
+        assert str(args[0]) == "/tmp/schema.json"
+
+
+@patch("haproxy_template_ic.__main__._handle_export_all_schemas")
+def test_main_cli_export_all_schemas(mock_handle_export_all):
+    """Test main CLI with --export-all-schemas option."""
+    runner = CliRunner()
+
+    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+        result = runner.invoke(main, ["--export-all-schemas", "/tmp/schemas"])
+
+        assert result.exit_code == 0
+        mock_handle_export_all.assert_called_once()
+        args = mock_handle_export_all.call_args[0]
+        assert str(args[0]) == "/tmp/schemas"
+
+
+@patch("haproxy_template_ic.__main__._handle_validate_config")
+def test_main_cli_validate_config(mock_handle_validate):
+    """Test main CLI with --validate-config option."""
+    runner = CliRunner()
+
+    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+        with runner.isolated_filesystem():
+            # Create a test config file
+            with open("test-config.yaml", "w") as f:
+                f.write("test: config")
+
+            result = runner.invoke(main, ["--validate-config", "test-config.yaml"])
+
+            assert result.exit_code == 0
+            mock_handle_validate.assert_called_once()
+
+
+@patch("haproxy_template_ic.__main__._handle_generate_docs")
+def test_main_cli_generate_docs(mock_handle_generate):
+    """Test main CLI with --generate-docs option."""
+    runner = CliRunner()
+
+    with patch("haproxy_template_ic.__main__.setup_structured_logging"):
+        result = runner.invoke(main, ["--generate-docs", "/tmp/docs.md"])
+
+        assert result.exit_code == 0
+        mock_handle_generate.assert_called_once()
+        args = mock_handle_generate.call_args[0]
+        assert str(args[0]) == "/tmp/docs.md"
+
+
+def test_handle_export_schema_json(tmp_path):
+    """Test _handle_export_schema with JSON output."""
+    from haproxy_template_ic.__main__ import _handle_export_schema
+
+    output_path = tmp_path / "schema.json"
+
+    with patch("haproxy_template_ic.__main__.export_config_schema") as mock_export:
+        with patch(
+            "haproxy_template_ic.__main__.get_schema_version", return_value="1.0.0"
+        ):
+            with patch(
+                "haproxy_template_ic.__main__.export_settings_schema"
+            ) as mock_settings:
+                mock_export.return_value = {"type": "object"}
+                mock_settings.return_value = {"type": "object"}
+
+                _handle_export_schema(output_path)
+
+                assert output_path.exists()
+                with open(output_path) as f:
+                    data = json.load(f)
+                assert data["schema_version"] == "1.0.0"
+                assert "config_schema" in data
+                assert "settings_schema" in data
+
+
+def test_handle_export_schema_yaml(tmp_path):
+    """Test _handle_export_schema with YAML output."""
+    from haproxy_template_ic.__main__ import _handle_export_schema
+
+    output_path = tmp_path / "schema.yaml"
+
+    with patch("haproxy_template_ic.__main__.export_config_schema") as mock_export:
+        with patch(
+            "haproxy_template_ic.__main__.get_schema_version", return_value="1.0.0"
+        ):
+            with patch(
+                "haproxy_template_ic.__main__.export_settings_schema"
+            ) as mock_settings:
+                mock_export.return_value = {"type": "object"}
+                mock_settings.return_value = {"type": "object"}
+
+                _handle_export_schema(output_path)
+
+                assert output_path.exists()
+                with open(output_path) as f:
+                    data = yaml.safe_load(f)
+                assert data["schema_version"] == "1.0.0"
+
+
+def test_handle_export_schema_error():
+    """Test _handle_export_schema with error."""
+    from haproxy_template_ic.__main__ import _handle_export_schema
+
+    output_path = Path("/invalid/path/schema.json")
+
+    with patch(
+        "haproxy_template_ic.__main__.export_config_schema",
+        side_effect=RuntimeError("Export error"),
+    ):
+        with pytest.raises(click.Abort):
+            _handle_export_schema(output_path)
+
+
+def test_handle_export_all_schemas(tmp_path):
+    """Test _handle_export_all_schemas."""
+    from haproxy_template_ic.__main__ import _handle_export_all_schemas
+
+    output_dir = tmp_path / "schemas"
+
+    with patch("haproxy_template_ic.__main__.export_all_schemas") as mock_export:
+        mock_export.return_value = {
+            "Config": {"type": "object"},
+            "PodSelector": {"type": "object"},
+        }
+
+        _handle_export_all_schemas(output_dir)
+
+        assert output_dir.exists()
+        assert (output_dir / "config.json").exists()
+        assert (output_dir / "podselector.json").exists()
+
+
+def test_handle_export_all_schemas_error():
+    """Test _handle_export_all_schemas with error."""
+    from haproxy_template_ic.__main__ import _handle_export_all_schemas
+
+    output_dir = Path("/invalid/path")
+
+    with patch(
+        "haproxy_template_ic.__main__.export_all_schemas",
+        side_effect=RuntimeError("Export error"),
+    ):
+        with pytest.raises(click.Abort):
+            _handle_export_all_schemas(output_dir)
+
+
+def test_handle_validate_config_valid_yaml(tmp_path):
+    """Test _handle_validate_config with valid YAML."""
+    from haproxy_template_ic.__main__ import _handle_validate_config
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("pod_selector:\n  match_labels:\n    app: haproxy")
+
+    with patch(
+        "haproxy_template_ic.__main__.validate_config_against_schema"
+    ) as mock_validate:
+        mock_validate.return_value = []  # No errors
+
+        _handle_validate_config(config_path)
+        mock_validate.assert_called_once()
+
+
+def test_handle_validate_config_valid_json(tmp_path):
+    """Test _handle_validate_config with valid JSON."""
+    from haproxy_template_ic.__main__ import _handle_validate_config
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"pod_selector": {"match_labels": {"app": "haproxy"}}}')
+
+    with patch(
+        "haproxy_template_ic.__main__.validate_config_against_schema"
+    ) as mock_validate:
+        mock_validate.return_value = []  # No errors
+
+        _handle_validate_config(config_path)
+        mock_validate.assert_called_once()
+
+
+def test_handle_validate_config_invalid(tmp_path):
+    """Test _handle_validate_config with invalid configuration."""
+    from haproxy_template_ic.__main__ import _handle_validate_config
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("invalid: config")
+
+    with patch(
+        "haproxy_template_ic.__main__.validate_config_against_schema"
+    ) as mock_validate:
+        mock_validate.return_value = ["Field required: pod_selector"]
+
+        with pytest.raises(click.Abort):
+            _handle_validate_config(config_path)
+
+
+def test_handle_validate_config_unsupported_format(tmp_path):
+    """Test _handle_validate_config with unsupported file format."""
+    from haproxy_template_ic.__main__ import _handle_validate_config
+
+    config_path = tmp_path / "config.txt"
+    config_path.write_text("config data")
+
+    with pytest.raises(click.Abort):
+        _handle_validate_config(config_path)
+
+
+def test_handle_validate_config_file_error():
+    """Test _handle_validate_config with file read error."""
+    from haproxy_template_ic.__main__ import _handle_validate_config
+
+    config_path = Path("/nonexistent/config.yaml")
+
+    with pytest.raises(click.Abort):
+        _handle_validate_config(config_path)
+
+
+def test_handle_generate_docs(tmp_path):
+    """Test _handle_generate_docs."""
+    from haproxy_template_ic.__main__ import _handle_generate_docs
+
+    output_path = tmp_path / "docs.md"
+
+    with patch("haproxy_template_ic.__main__.get_schema_version", return_value="1.0.0"):
+        _handle_generate_docs(output_path)
+
+        assert output_path.exists()
+        content = output_path.read_text()
+        assert "Schema Version: 1.0.0" in content
+        assert "Configuration Reference" in content
+
+
+def test_handle_generate_docs_error():
+    """Test _handle_generate_docs with error."""
+    from haproxy_template_ic.__main__ import _handle_generate_docs
+
+    output_path = Path("/invalid/path/docs.md")
+
+    with pytest.raises(click.Abort):
+        _handle_generate_docs(output_path)

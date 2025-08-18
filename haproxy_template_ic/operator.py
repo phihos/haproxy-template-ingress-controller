@@ -402,7 +402,11 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
         )
 
         # Create synchronizer and perform sync
-        synchronizer = ConfigSynchronizer(pod_discovery)
+        auth = (
+            memo.config.dataplane_auth.username,
+            memo.config.dataplane_auth.password,
+        )
+        synchronizer = ConfigSynchronizer(pod_discovery, dataplane_auth=auth)
         results = await synchronizer.synchronize_configuration(
             memo.haproxy_config_context
         )

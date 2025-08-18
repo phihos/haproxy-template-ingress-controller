@@ -178,7 +178,10 @@ class DataplaneClient:
     """Wrapper around the generated HAProxy Dataplane API v3 client."""
 
     def __init__(
-        self, base_url: str, timeout: float = 30.0, auth: Optional[tuple] = None
+        self,
+        base_url: str,
+        timeout: float = 30.0,
+        auth: tuple[str, str] = ("admin", "adminpass"),
     ):
         """
         Initialize the client.
@@ -195,7 +198,7 @@ class DataplaneClient:
 
         self.base_url = normalized_url
         self.timeout = timeout
-        self.auth = auth or ("admin", "adminpass")  # Default auth
+        self.auth = auth
 
         # Defer configuration creation until first use
         self._configuration = None
@@ -338,8 +341,13 @@ class DataplaneClient:
 class ConfigSynchronizer:
     """Orchestrates configuration synchronization across HAProxy instances."""
 
-    def __init__(self, pod_discovery: HAProxyPodDiscovery):
+    def __init__(
+        self,
+        pod_discovery: HAProxyPodDiscovery,
+        dataplane_auth: tuple[str, str] = ("admin", "adminpass"),
+    ):
         self.pod_discovery = pod_discovery
+        self.dataplane_auth = dataplane_auth
 
     @trace_async_function(
         span_name="synchronize_configuration",
@@ -439,9 +447,8 @@ class ConfigSynchronizer:
 
         validation_tasks = []
         for instance in validation_instances:
-            # Determine auth based on instance type
-            auth = ("admin", "adminpass")
-            client = DataplaneClient(instance.dataplane_url, auth=auth)
+            # Use configured auth for validation instances
+            client = DataplaneClient(instance.dataplane_url, auth=self.dataplane_auth)
             task = asyncio.create_task(
                 self._validate_instance(client, instance, config)
             )
@@ -485,6 +492,9 @@ class ConfigSynchronizer:
                         )
                     return True
             return False  # Should never reach here but satisfies mypy
+        except ValidationError:
+            # Re-raise ValidationError as it indicates a configuration problem
+            raise
         except Exception as e:
             logger.error(f"Validation error on {instance.name}: {e}")
             return False
@@ -499,9 +509,8 @@ class ConfigSynchronizer:
 
         deployment_tasks = []
         for instance in production_instances:
-            # Use default production auth
-            auth = ("admin", "adminpass")
-            client = DataplaneClient(instance.dataplane_url, auth=auth)
+            # Use configured auth for production instances
+            client = DataplaneClient(instance.dataplane_url, auth=self.dataplane_auth)
             task = asyncio.create_task(
                 self._deploy_to_instance(client, instance, config)
             )

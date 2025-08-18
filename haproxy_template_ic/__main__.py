@@ -18,6 +18,13 @@ from haproxy_template_ic.tracing import (
     create_tracing_config_from_env,
     shutdown_tracing,
 )
+from haproxy_template_ic.config_models import (
+    export_config_schema,
+    export_all_schemas,
+    validate_config_against_schema,
+    get_schema_version,
+)
+from haproxy_template_ic.settings import export_settings_schema
 
 
 # =============================================================================
@@ -200,11 +207,6 @@ def _handle_export_schema(output_path: Path) -> None:
     """Handle --export-schema command."""
     import json
     import yaml
-    from haproxy_template_ic.config_models import (
-        export_config_schema,
-        get_schema_version,
-    )
-    from haproxy_template_ic.settings import export_settings_schema
 
     try:
         schema_data = {
@@ -229,7 +231,6 @@ def _handle_export_schema(output_path: Path) -> None:
 def _handle_export_all_schemas(output_dir: Path) -> None:
     """Handle --export-all-schemas command."""
     import json
-    from haproxy_template_ic.config_models import export_all_schemas
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +251,6 @@ def _handle_validate_config(config_path: Path) -> None:
     """Handle --validate-config command."""
     import json
     import yaml
-    from haproxy_template_ic.config_models import validate_config_against_schema
 
     try:
         with open(config_path, "r", encoding="utf-8") as f:
@@ -282,7 +282,6 @@ def _handle_validate_config(config_path: Path) -> None:
 
 def _handle_generate_docs(output_path: Path) -> None:
     """Handle --generate-docs command."""
-    from haproxy_template_ic.config_models import get_schema_version
 
     try:
         doc_content = f"""# HAProxy Template IC Configuration Reference

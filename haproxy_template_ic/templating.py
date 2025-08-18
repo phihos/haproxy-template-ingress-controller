@@ -235,7 +235,10 @@ class TemplateRenderer:
         """
         warnings = []
         try:
-            self.get_compiled(template_str)
+            # Compile the template first
+            compiled_template = self.get_compiled(template_str)
+            # Try to render with empty context to catch TemplateNotFound errors
+            compiled_template.render({})
         except TemplateSyntaxError as e:
             warnings.append(f"Invalid template syntax: {e}")
         except TemplateNotFound as e:
@@ -246,14 +249,7 @@ class TemplateRenderer:
 
 
 def validate_config_templates(config_dict: dict) -> list[str]:
-    """Validate all templates in a configuration dictionary.
-
-    Args:
-        config_dict: Configuration dictionary to validate
-
-    Returns:
-        List of warning messages (empty if all valid)
-    """
+    """Validate all templates in a configuration dictionary."""
     warnings = []
 
     # Extract snippets for validation environment

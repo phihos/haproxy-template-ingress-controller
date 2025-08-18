@@ -168,6 +168,20 @@ class PodSelector(BaseModel):
         frozen = True
 
 
+class DataplaneAuth(BaseModel):
+    """Authentication configuration for HAProxy Dataplane API."""
+
+    username: NonEmptyStr = Field(
+        default="admin", description="Username for Dataplane API"
+    )
+    password: NonEmptyStr = Field(
+        default="adminpass", description="Password for Dataplane API"
+    )
+
+    class Config:
+        frozen = True
+
+
 class Config(BaseModel):
     """Root configuration for HAProxy Template IC."""
 
@@ -187,6 +201,10 @@ class Config(BaseModel):
     )
     certificates: Dict[AbsolutePath, CertificateConfig] = Field(
         default_factory=dict, description="TLS certificates"
+    )
+    dataplane_auth: DataplaneAuth = Field(
+        default_factory=DataplaneAuth,
+        description="Authentication for HAProxy Dataplane API",
     )
 
     @field_validator("template_snippets")

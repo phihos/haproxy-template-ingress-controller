@@ -23,6 +23,7 @@ from haproxy_template_ic.operator import (
     setup_resource_watchers,
     initialize_configuration,
     _is_valid_resource,
+    get_current_namespace,
 )
 from haproxy_template_ic.config_models import (
     Config,
@@ -709,6 +710,8 @@ async def test_synchronize_with_haproxy_instances_success(
     """Test successful HAProxy instance synchronization."""
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
+    memo.config.dataplane_auth.username = "admin"
+    memo.config.dataplane_auth.password = "adminpass"
     memo.haproxy_config_context.rendered_config = RenderedConfig(
         content="global\n    daemon", config=memo.config
     )
@@ -739,7 +742,9 @@ async def test_synchronize_with_haproxy_instances_success(
     mock_discovery_class.assert_called_once_with(
         pod_selector=memo.config.pod_selector, namespace="default"
     )
-    mock_synchronizer_class.assert_called_once_with(mock_discovery)
+    mock_synchronizer_class.assert_called_once_with(
+        mock_discovery, dataplane_auth=("admin", "adminpass")
+    )
     mock_synchronizer.synchronize_configuration.assert_called_once_with(
         memo.haproxy_config_context
     )
@@ -972,6 +977,123 @@ async def test_initialize_configuration(
     mock_fetch_configmap.assert_called_once_with("test-config", "test-namespace")
     mock_load_config.assert_called_once_with(mock_configmap)
     assert memo.config == mock_config
+
+
+class TestGetCurrentNamespace:
+    """Test get_current_namespace function."""
+
+    @patch("os.path.exists")
+    @patch("builtins.open")
+    def test_get_current_namespace_from_file(self, mock_open, mock_exists):
+        """Test namespace detection from service account file."""
+        mock_exists.return_value = True
+        mock_file = MagicMock()
+        mock_file.read.return_value = "test-namespace\n"
+        mock_open.return_value.__enter__.return_value = mock_file
+
+        result = get_current_namespace()
+
+        assert result == "test-namespace"
+        mock_open.assert_called_once_with(
+            "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+        )
+
+    @patch("os.path.exists")
+    @patch("haproxy_template_ic.operator.config.list_kube_config_contexts")
+    def test_get_current_namespace_from_kube_config(
+        self, mock_list_contexts, mock_exists
+    ):
+        """Test namespace detection from kube config."""
+        mock_exists.return_value = False
+        mock_list_contexts.return_value = (
+            [],
+            {"context": {"namespace": "kube-namespace"}},
+        )
+
+        result = get_current_namespace()
+
+        assert result == "kube-namespace"
+
+    @patch("os.path.exists")
+    @patch("haproxy_template_ic.operator.config.list_kube_config_contexts")
+    def test_get_current_namespace_kube_config_error(
+        self, mock_list_contexts, mock_exists
+    ):
+        """Test namespace detection with kube config error."""
+        mock_exists.return_value = False
+        mock_list_contexts.side_effect = KeyError("No context")
+
+        result = get_current_namespace()
+
+        assert result == "default"
+
+    @patch("os.path.exists")
+    @patch("haproxy_template_ic.operator.config.list_kube_config_contexts")
+    def test_get_current_namespace_non_string_namespace(
+        self, mock_list_contexts, mock_exists
+    ):
+        """Test namespace detection with non-string namespace."""
+        mock_exists.return_value = False
+        mock_list_contexts.return_value = (
+            [],
+            {"context": {"namespace": 123}},  # Non-string namespace
+        )
+
+        result = get_current_namespace()
+
+        assert result == "default"
+
+
+class TestSynchronizeErrorPaths:
+    """Test error handling paths in synchronize_with_haproxy_instances."""
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.operator.HAProxyPodDiscovery")
+    @patch("haproxy_template_ic.operator.ConfigSynchronizer")
+    @patch("haproxy_template_ic.operator.get_current_namespace")
+    async def test_synchronize_with_haproxy_instances_validation_sidecar_results(
+        self, mock_get_namespace, mock_synchronizer_class, mock_discovery_class
+    ):
+        """Test synchronization with validation sidecar instances."""
+        memo = MagicMock()
+        memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
+        memo.haproxy_config_context.rendered_config = RenderedConfig(
+            content="global\n    daemon", config=memo.config
+        )
+
+        # Mock dependencies
+        mock_get_namespace.return_value = "default"
+        mock_discovery = MagicMock()
+        mock_discovery_class.return_value = mock_discovery
+
+        mock_synchronizer = MagicMock()
+        mock_synchronizer_class.return_value = mock_synchronizer
+
+        # Mock results with validation sidecars
+        from haproxy_template_ic.dataplane import SyncResult
+
+        mock_production_instance = MagicMock()
+        mock_production_instance.name = "default/haproxy-1"
+        mock_production_instance.is_validation_sidecar = False
+
+        mock_validation_instance = MagicMock()
+        mock_validation_instance.name = "default/haproxy-validation"
+        mock_validation_instance.is_validation_sidecar = True
+
+        success_result = SyncResult(
+            success=True, instance=mock_production_instance, config_version="123"
+        )
+        validation_result = SyncResult(
+            success=True, instance=mock_validation_instance, config_version="123"
+        )
+
+        mock_synchronizer.synchronize_configuration.return_value = [
+            success_result,
+            validation_result,
+        ]
+
+        # Should handle both types of instances
+        await synchronize_with_haproxy_instances(memo)
 
 
 # =============================================================================

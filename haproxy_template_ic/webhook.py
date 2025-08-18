@@ -12,216 +12,50 @@ from typing import Any, Dict, List, Optional
 import kopf
 import yaml
 
-from haproxy_template_ic.config_models import config_from_dict
-from haproxy_template_ic.templating import validate_config_templates
 from haproxy_template_ic.metrics import get_metrics_collector
-from haproxy_template_ic.tracing import (
-    trace_async_function,
-    add_span_attributes,
-    record_span_event,
-    set_span_error,
-)
 
 logger = logging.getLogger(__name__)
 
 
-class ConfigMapValidator:
-    """Validates HAProxy Template IC ConfigMaps."""
+def _is_haproxy_template_ic_configmap(configmap_data: Dict[str, Any]) -> bool:
+    """Check if this ConfigMap is intended for HAProxy Template IC."""
+    # Check for specific labels or annotations that identify our ConfigMaps
+    metadata = configmap_data.get("metadata", {})
+    labels = metadata.get("labels", {})
+    annotations = metadata.get("annotations", {})
 
-    def __init__(self):
-        self.metrics = get_metrics_collector()
+    # Check for our specific labels/annotations
+    if (
+        labels.get("app.kubernetes.io/name") == "haproxy-template-ic"
+        or labels.get("haproxy-template-ic/config") == "true"
+        or "haproxy-template-ic" in annotations
+    ):
+        return True
 
-    @trace_async_function(
-        span_name="validate_configmap",
-        attributes={"operation.category": "webhook_validation"},
-    )
-    async def validate_configmap(
-        self, configmap_data: Dict[str, Any], warnings: List[str]
-    ) -> None:
-        """Validate a HAProxy Template IC ConfigMap. Raises kopf.AdmissionError on failure."""
-        add_span_attributes(
-            configmap_name=configmap_data.get("metadata", {}).get("name", "unknown"),
-            configmap_namespace=configmap_data.get("metadata", {}).get(
-                "namespace", "unknown"
-            ),
-        )
-
+    # Check if the ConfigMap has our expected config structure
+    data = configmap_data.get("data", {})
+    if "config" in data:
         try:
-            # Check if this is a HAProxy Template IC ConfigMap
-            if not self._is_haproxy_template_ic_configmap(configmap_data):
-                # Not our ConfigMap, allow it
-                record_span_event("validation_skipped_not_haproxy_ic")
-                return  # Skip validation for non-HAProxy Template IC ConfigMaps
+            config_dict = yaml.safe_load(data["config"])
+            # Look for HAProxy Template IC specific keys
+            expected_keys = {
+                "pod_selector",
+                "watch_resources",
+                "maps",
+                "haproxy_config",
+                "certificates",
+            }
+            if any(key in config_dict for key in expected_keys):
+                return True
+        except (yaml.YAMLError, TypeError):
+            pass
 
-            # Extract and validate the config data
-            config_yaml = self._extract_config_data(configmap_data)
-            if not config_yaml:
-                raise kopf.AdmissionError("Missing 'config' key in ConfigMap data")
-
-            # Parse YAML configuration
-            try:
-                config_dict = yaml.safe_load(config_yaml)
-            except yaml.YAMLError as e:
-                raise kopf.AdmissionError(f"Invalid YAML in config: {e}")
-
-            # Validate configuration structure
-            validation_warnings = await self._validate_config_structure(config_dict)
-            warnings.extend(validation_warnings)
-
-            # Validate Jinja2 templates
-            template_warnings = validate_config_templates(config_dict)
-            warnings.extend(template_warnings)
-
-            # Validate resource references
-            resource_warnings = await self._validate_resource_references(config_dict)
-            warnings.extend(resource_warnings)
-
-            # Create operator config to catch any structural issues
-            try:
-                config_from_dict(config_dict)
-            except Exception as e:
-                raise kopf.AdmissionError(f"Invalid operator configuration: {e}")
-
-            record_span_event(
-                "validation_successful", {"warnings_count": len(warnings)}
-            )
-
-            logger.info(f"ConfigMap validation passed with {len(warnings)} warnings")
-
-        except kopf.AdmissionError:
-            # Re-raise AdmissionError as-is
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error during validation: {e}")
-            record_span_event("validation_error", {"error": str(e)})
-            set_span_error(e, "Unexpected validation error")
-            raise kopf.AdmissionError(f"Internal validation error: {e}")
-
-    def _is_haproxy_template_ic_configmap(self, configmap_data: Dict[str, Any]) -> bool:
-        """Check if this ConfigMap is intended for HAProxy Template IC."""
-        # Check for specific labels or annotations that identify our ConfigMaps
-        metadata = configmap_data.get("metadata", {})
-        labels = metadata.get("labels", {})
-        annotations = metadata.get("annotations", {})
-
-        # Check for our specific labels/annotations
-        if (
-            labels.get("app.kubernetes.io/name") == "haproxy-template-ic"
-            or labels.get("haproxy-template-ic/config") == "true"
-            or "haproxy-template-ic" in annotations
-        ):
-            return True
-
-        # Check if the ConfigMap has our expected config structure
-        data = configmap_data.get("data", {})
-        if "config" in data:
-            try:
-                config_dict = yaml.safe_load(data["config"])
-                # Look for HAProxy Template IC specific keys
-                expected_keys = {
-                    "pod_selector",
-                    "watch_resources",
-                    "maps",
-                    "haproxy_config",
-                    "certificates",
-                }
-                if any(key in config_dict for key in expected_keys):
-                    return True
-            except (yaml.YAMLError, TypeError):
-                pass
-
-        return False
-
-    def _extract_config_data(self, configmap_data: Dict[str, Any]) -> Optional[str]:
-        """Extract the config data from ConfigMap."""
-        return configmap_data.get("data", {}).get("config")
-
-    async def _validate_config_structure(
-        self, config_dict: Dict[str, Any]
-    ) -> List[str]:
-        """Validate the basic structure of the configuration."""
-        warnings = []
-
-        # Check for required sections
-        if "pod_selector" not in config_dict:
-            warnings.append(
-                "Missing 'pod_selector' section - HAProxy pods may not be discovered"
-            )
-
-        if "watched_resources" not in config_dict:
-            warnings.append(
-                "Missing 'watched_resources' section - no resources will be watched"
-            )
-
-        # Check for at least one template type
-        template_sections = ["maps", "haproxy_config", "certificates"]
-        if not any(section in config_dict for section in template_sections):
-            warnings.append(
-                "No template sections found (maps, haproxy_config, certificates)"
-            )
-
-        # Validate pod selector structure
-        pod_selector = config_dict.get("pod_selector", {})
-        if isinstance(pod_selector, dict) and "match_labels" not in pod_selector:
-            warnings.append("pod_selector should contain 'match_labels'")
-
-        return warnings
-
-    async def _validate_resource_references(
-        self, config_dict: Dict[str, Any]
-    ) -> List[str]:
-        """Validate that referenced Kubernetes resources are valid."""
-        warnings = []
-
-        watch_resources = config_dict.get("watched_resources", {})
-
-        # Only dict format is supported now
-        if isinstance(watch_resources, dict):
-            # Dict format: resource_name -> resource_config
-            resource_items = list(watch_resources.items())
-        else:
-            warnings.append("watched_resources must be a dictionary")
-            return warnings
-
-        for resource_name, resource_config in resource_items:
-            if not isinstance(resource_config, dict):
-                warnings.append(
-                    f"Invalid watched_resource '{resource_name}': should be a dictionary"
-                )
-                continue
-
-            # Validate required fields for new format
-            required_fields = {"kind", "api_version"}
-            missing_fields = required_fields - set(resource_config.keys())
-            if missing_fields:
-                warnings.append(
-                    f"Watched resource '{resource_name}' missing required fields: {missing_fields}"
-                )
-
-            # Validate field values
-            kind = resource_config.get("kind")
-            if kind and not isinstance(kind, str):
-                warnings.append(
-                    f"Watch resource '{resource_name}': 'kind' must be a string"
-                )
-
-            group = resource_config.get("group")
-            if group is not None and not isinstance(group, str):
-                warnings.append(
-                    f"Watch resource '{resource_name}': 'group' must be a string"
-                )
-
-            version = resource_config.get("version")
-            if version and not isinstance(version, str):
-                warnings.append(
-                    f"Watch resource '{resource_name}': 'version' must be a string"
-                )
-
-        return warnings
+    return False
 
 
-# Global validator instance for kopf handlers
-_validator = ConfigMapValidator()
+def _extract_config_data(configmap_data: Dict[str, Any]) -> Optional[str]:
+    """Extract the config data from ConfigMap."""
+    return configmap_data.get("data", {}).get("config")
 
 
 # =============================================================================
@@ -234,7 +68,6 @@ class WebhookRegistry:
 
     def __init__(self):
         self.registered_handlers: Dict[str, Any] = {}
-        self.validator = ConfigMapValidator()
 
     def register_resource_validation_webhook(
         self, group: str, version: str, kind: str, resource_id: str
