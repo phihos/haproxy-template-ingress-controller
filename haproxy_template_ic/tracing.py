@@ -23,9 +23,9 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry.trace import Status, StatusCode
 
-from haproxy_template_ic.structured_logging import get_structured_logger
+import structlog
 
-logger = get_structured_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 AsyncF = TypeVar("AsyncF", bound=Callable[..., Awaitable[Any]])

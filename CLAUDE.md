@@ -11,7 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Remove dependency: `uv remove <package>`
 
 ### Testing
-- **All tests (recommended)**: `uv run pytest -n auto` - parallel execution, up to 8 minutes
+- **Development workflow**: First run unit tests `uv run pytest -m "not integration and not acceptance"`, fix all failures, then run all tests
+- **All tests (recommended)**: `timeout 480 uv run pytest -n auto` - parallel execution, up to 8 minutes (use 480s timeout)
 - **Unit tests**: `uv run pytest -m "not integration and not acceptance"`
 - **Integration tests**: `uv run pytest -m integration`
 - **E2E tests**: `uv run pytest -m acceptance`
