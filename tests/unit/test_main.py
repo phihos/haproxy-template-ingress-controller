@@ -290,7 +290,7 @@ def test_version_command():
 @patch("haproxy_template_ic.__main__.metadata.version")
 def test_version_command_development_fallback(mock_version):
     """Test version command fallback when package not found."""
-    from haproxy_template_ic.__main__ import PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError
 
     mock_version.side_effect = PackageNotFoundError()
     runner = CliRunner()
