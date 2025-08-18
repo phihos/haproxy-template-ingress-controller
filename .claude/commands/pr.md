@@ -27,4 +27,4 @@ Usage: `/pr`
 /pr
 ```
 
-This will either create a new PR or update an existing one, ensuring the PR description comprehensively reflects the current state of all changes in the branch.
+This will either create a new PR or update an existing one, ensuring the PR title and description comprehensively reflects the current state of all changes in the branch.
