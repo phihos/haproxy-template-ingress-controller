@@ -256,3 +256,32 @@ def test_configmap_validation_edge_cases():
     assert validate_configmap_name(None, None, "ab") == "ab"
     assert validate_configmap_name(None, None, "a1") == "a1"
     assert validate_configmap_name(None, None, "1a") == "1a"
+
+    # Test empty string
+    with pytest.raises(click.BadParameter):
+        validate_configmap_name(None, None, "")
+
+    # Test consecutive hyphens (actually allowed by Kubernetes DNS-1123)
+    assert validate_configmap_name(None, None, "valid--name") == "valid--name"
+
+    # Test Unicode/international characters (should fail)
+    with pytest.raises(click.BadParameter):
+        validate_configmap_name(None, None, "café")
+    with pytest.raises(click.BadParameter):
+        validate_configmap_name(None, None, "名前")
+
+
+# =============================================================================
+# Version Command Tests
+# =============================================================================
+
+
+def test_version_command():
+    """Test version command displays version information."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["version"])
+
+    assert result.exit_code == 0
+    assert "haproxy-template-ic" in result.output
+    # Should contain either version number or "(development)"
+    assert "0.1.0" in result.output or "(development)" in result.output

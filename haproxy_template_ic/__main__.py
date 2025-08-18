@@ -7,6 +7,7 @@ for clear separation between operator mode and utility commands.
 
 import re
 from dataclasses import dataclass
+from importlib import metadata
 
 import click
 
@@ -17,6 +18,7 @@ from haproxy_template_ic.tracing import (
     create_tracing_config_from_env,
     shutdown_tracing,
 )
+import haproxy_template_ic.webhook  # Import webhook handlers to register them with kopf  # noqa: F401
 
 
 # =============================================================================
@@ -24,7 +26,7 @@ from haproxy_template_ic.tracing import (
 # =============================================================================
 
 
-@dataclass
+@dataclass(frozen=True)
 class CliOptions:
     """Container for all CLI options."""
 
@@ -110,7 +112,6 @@ def validate_configmap_name(
     help="Name of the Kubernetes ConfigMap used for configuration.",
 )
 @click.option(
-    "-h",
     "--healthz-port",
     envvar="HEALTHZ_PORT",
     default=8080,
@@ -171,13 +172,20 @@ def run(
             tracing_enabled=tracing_enabled,
         )
 
-        # Import webhook handlers to register them with kopf
-        import haproxy_template_ic.webhook  # noqa: F401
-
         run_operator_loop(cli_options)
     finally:
         # Ensure tracing is properly shutdown
         shutdown_tracing()
+
+
+@cli.command()
+def version() -> None:
+    """Display the application version."""
+    try:
+        app_version = metadata.version("haproxy-template-ic")
+        click.echo(f"haproxy-template-ic {app_version}")
+    except metadata.PackageNotFoundError:
+        click.echo("haproxy-template-ic (development)")
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ signal.signal(signal.SIGUSR1, save_signal_handler)
 # Import and run the main module
 os.chdir("/app")
 sys.path.insert(0, "/app/lib/python3.13/site-packages")
-from haproxy_template_ic.__main__ import main  # noqa: E402
+from haproxy_template_ic.__main__ import cli  # noqa: E402
 
 if __name__ == "__main__":
-    main()
+    cli()
