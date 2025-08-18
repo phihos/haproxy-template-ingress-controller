@@ -40,7 +40,7 @@ spec:
             - name: metrics
               containerPort: 9090
             - name: webhook
-              containerPort: 8443
+              containerPort: 9443
           volumeMounts:
             - name: run
               mountPath: /run/haproxy-template-ic
