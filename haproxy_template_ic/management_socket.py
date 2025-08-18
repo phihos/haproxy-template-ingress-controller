@@ -8,7 +8,6 @@ external tools to query the operator's internal state via Unix socket commands.
 import asyncio
 import json
 import logging
-from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -17,189 +16,88 @@ from haproxy_template_ic.metrics import get_metrics_collector
 logger = logging.getLogger(__name__)
 
 
-class DataclassJSONEncoder(json.JSONEncoder):
-    """Custom JSON encoder that handles dataclasses."""
-
-    def default(self, obj):
-        if is_dataclass(obj):
-            return asdict(obj)
-        return super().default(obj)
-
-
-class StateSerializer:
-    """Handles serialization of operator state for management socket responses."""
-
-    def __init__(self, memo: Any) -> None:
-        """Initialize serializer with memo object."""
-        self.memo = memo
-
-    def _get_configmap_name(self) -> Optional[str]:
-        """Extract configmap name from memo's CLI options."""
-        if hasattr(self.memo, "cli_options") and self.memo.cli_options:
-            configmap_name = self.memo.cli_options.configmap_name
-            return configmap_name if isinstance(configmap_name, str) else None
-        return None
-
-    def _serialize_cli_options(self) -> Dict[str, Any]:
-        """Serialize CLI options from memo."""
-        if not hasattr(self.memo, "cli_options") or not self.memo.cli_options:
-            return {}
-
-        return {
-            "configmap_name": self.memo.cli_options.configmap_name,
-            "healthz_port": self.memo.cli_options.healthz_port,
-            "verbose": self.memo.cli_options.verbose,
-            "socket_path": self.memo.cli_options.socket_path,
-        }
-
-    def _serialize_config(self) -> Dict[str, Any]:
-        """Serialize configuration from memo."""
-        config: Dict[str, Any] = {
-            "pod_selector": None,
-            "watched_resources": {},
-            "maps": {},
-        }
-
-        if not hasattr(self.memo, "config") or not self.memo.config:
-            return config
-
-        # Serialize pod selector - convert Pydantic model to dict if needed
-        pod_selector = self.memo.config.pod_selector
-        if hasattr(pod_selector, "model_dump"):
-            # Pydantic model
-            pod_selector = pod_selector.model_dump()
-        elif is_dataclass(pod_selector) and not isinstance(pod_selector, type):
-            # Dataclass (fallback)
-            pod_selector = asdict(pod_selector)
-        config["pod_selector"] = pod_selector
-
-        # Serialize watch resources
-        for resource_id, watch_config in self.memo.config.watched_resources.items():
-            # Parse group and version from api_version
-            if "/" in watch_config.api_version:
-                group, version = watch_config.api_version.rsplit("/", 1)
-            else:
-                group = ""
-                version = watch_config.api_version
-
-            config["watched_resources"][resource_id] = {
-                "kind": watch_config.kind,
-                "group": group,
-                "version": version,
-                "api_version": watch_config.api_version,
-            }
-
-        # Serialize maps
-        for map_path, map_config in self.memo.config.maps.items():
-            config["maps"][map_path] = {
-                "path": map_path,
-                "template_source": map_config.template,
-            }
-
-        # Serialize haproxy_config
-        if (
-            hasattr(self.memo.config, "haproxy_config")
-            and self.memo.config.haproxy_config
-        ):
-            haproxy_template_source = "unavailable"
-            if hasattr(self.memo.config.haproxy_config, "source"):
-                haproxy_template_source = str(self.memo.config.haproxy_config.source)
-
-            config["haproxy_config"] = {
-                "template_source": haproxy_template_source,
-            }
-
-        return config
-
-    def _serialize_haproxy_config_context(self) -> Dict[str, Any]:
-        """Serialize HAProxy configuration context from memo."""
-        context: Dict[str, Any] = {
-            "rendered_maps": {},
-            "rendered_config": None,
-            "rendered_certificates": {},
-        }
-
-        if (
-            not hasattr(self.memo, "haproxy_config_context")
-            or not self.memo.haproxy_config_context
-        ):
-            return context
-
-        # Serialize rendered maps
-        for rendered_map in self.memo.haproxy_config_context.rendered_maps:
-            context["rendered_maps"][rendered_map.path] = {
-                "path": rendered_map.path,
-                "content": rendered_map.content,
-                "map_config_path": rendered_map.path,  # Path is the same as rendered_map.path
-            }
-
-        # Serialize rendered HAProxy config
-        if self.memo.haproxy_config_context.rendered_config:
-            context["rendered_config"] = {
-                "content": self.memo.haproxy_config_context.rendered_config.content,
-            }
-
-        # Serialize rendered certificates
-        for (
-            rendered_certificate
-        ) in self.memo.haproxy_config_context.rendered_certificates:
-            context["rendered_certificates"][rendered_certificate.path] = {
-                "name": rendered_certificate.path,
-                "content": rendered_certificate.content,
-            }
-
-        return context
-
-    def _serialize_indices(self) -> Dict[str, Any]:
-        """Serialize indices from memo."""
-        indices: Dict[str, Any] = {}
-
-        for attr_name in dir(self.memo):
-            if not attr_name.endswith("_index") or attr_name.startswith("_"):
-                continue
-
-            try:
-                index_value = getattr(self.memo, attr_name)
-                if hasattr(index_value, "items"):
-                    indices[attr_name] = dict(index_value)
-            except Exception:
-                indices[attr_name] = "serialization_error"
-
-        return indices
-
-    def _serialize_metadata(self) -> Dict[str, Any]:
-        """Serialize metadata from memo."""
-        return {
-            "configmap_name": self._get_configmap_name(),
-            "has_config_reload_flag": hasattr(self.memo, "config_reload_flag"),
-            "has_stop_flag": hasattr(self.memo, "stop_flag"),
-        }
-
-    def serialize(self) -> Dict[str, Any]:
-        """Serialize the application's internal state to a JSON-serializable
-        dictionary."""
-        try:
-            state = {
-                "config": self._serialize_config(),
-                "haproxy_config_context": self._serialize_haproxy_config_context(),
-                "metadata": self._serialize_metadata(),
-                "cli_options": self._serialize_cli_options(),
-                "indices": self._serialize_indices(),
-            }
-
-            return state
-
-        except Exception as e:
-            return {
-                "error": f"Failed to serialize state: {str(e)}",
-                "metadata": {"configmap_name": self._get_configmap_name()},
-            }
-
-
 def serialize_state(memo: Any) -> Dict[str, Any]:
     """Serialize the application's internal state to a JSON-serializable dictionary."""
-    serializer = StateSerializer(memo)
-    return serializer.serialize()
+    state = {}
+    errors = []
+
+    # Serialize config with specific error handling
+    try:
+        if hasattr(memo, "config") and memo.config:
+            state["config"] = memo.config.model_dump(mode="json")
+        else:
+            state["config"] = {}
+    except (AttributeError, TypeError, ValueError, RuntimeError) as e:
+        errors.append(f"config serialization: {e}")
+        state["config"] = {}
+
+    # Serialize HAProxy config context with specific error handling
+    try:
+        if hasattr(memo, "haproxy_config_context") and memo.haproxy_config_context:
+            state["haproxy_config_context"] = memo.haproxy_config_context.model_dump(
+                mode="json"
+            )
+        else:
+            state["haproxy_config_context"] = {}
+    except (AttributeError, TypeError, ValueError, RuntimeError) as e:
+        errors.append(f"haproxy_config_context serialization: {e}")
+        state["haproxy_config_context"] = {}
+
+    # Serialize metadata with specific error handling
+    try:
+        state["metadata"] = {
+            "configmap_name": getattr(memo.cli_options, "configmap_name", None)
+            if hasattr(memo, "cli_options")
+            else None,
+            "has_config_reload_flag": hasattr(memo, "config_reload_flag"),
+            "has_stop_flag": hasattr(memo, "stop_flag"),
+        }
+    except (AttributeError, TypeError) as e:
+        errors.append(f"metadata serialization: {e}")
+        state["metadata"] = {"configmap_name": None}
+
+    # Serialize CLI options with specific error handling
+    try:
+        if hasattr(memo, "cli_options") and memo.cli_options:
+            state["cli_options"] = {
+                "configmap_name": memo.cli_options.configmap_name,
+                "healthz_port": memo.cli_options.healthz_port,
+                "verbose": memo.cli_options.verbose,
+                "socket_path": memo.cli_options.socket_path,
+            }
+        else:
+            state["cli_options"] = {}
+    except (AttributeError, TypeError) as e:
+        errors.append(f"cli_options serialization: {e}")
+        state["cli_options"] = {}
+
+    # Serialize indices with specific error handling
+    try:
+        indices = {}
+        for name in dir(memo):
+            if (
+                name.endswith("_index")
+                and not name.startswith("_")
+                and hasattr(getattr(memo, name), "items")
+            ):
+                try:
+                    indices[name] = dict(getattr(memo, name))
+                except (TypeError, ValueError) as e:
+                    errors.append(f"index '{name}' serialization: {e}")
+                    indices[name] = {}
+        state["indices"] = indices
+    except (AttributeError, TypeError) as e:
+        errors.append(f"indices serialization: {e}")
+        state["indices"] = {}
+
+    # Add any serialization errors to the response
+    if errors:
+        state["serialization_errors"] = errors
+        logger.warning(
+            f"State serialization encountered {len(errors)} errors: {errors}"
+        )
+
+    return state
 
 
 class ManagementSocketServer:
@@ -258,61 +156,24 @@ class ManagementSocketServer:
             collection_type = parts[1]
             identifier = parts[2]
 
-            if collection_type == "maps":
-                map_config = self.memo.config.maps.get(identifier)
-                if map_config:
-                    return {
-                        "result": {
-                            "path": identifier,
-                            "template_source": map_config.template,
-                        }
-                    }
-                return {"error": f"Map not found: {identifier}"}
+            collections = {
+                "maps": self.memo.config.maps,
+                "watched_resources": self.memo.config.watched_resources,
+                "template_snippets": self.memo.config.template_snippets,
+                "certificates": self.memo.config.certificates,
+            }
 
-            elif collection_type == "watched_resources":
-                watch_config = self.memo.config.watched_resources.get(identifier)
-                if watch_config:
-                    # Parse group and version from api_version
-                    if "/" in watch_config.api_version:
-                        group, version = watch_config.api_version.rsplit("/", 1)
-                    else:
-                        group = ""
-                        version = watch_config.api_version
-
+            if collection_type in collections:
+                item = collections[collection_type].get(identifier)
+                if item:
                     return {
-                        "result": {
-                            "id": identifier,
-                            "kind": watch_config.kind,
-                            "group": group,
-                            "version": version,
-                            "api_version": watch_config.api_version,
-                        }
+                        "result": item.model_dump(mode="json")
+                        if hasattr(item, "model_dump")
+                        else {"id": identifier, "data": str(item)}
                     }
-                return {"error": f"Watch resource not found: {identifier}"}
-
-            elif collection_type == "template_snippets":
-                snippet = self.memo.config.template_snippets.get(identifier)
-                if snippet:
-                    return {
-                        "result": {
-                            "name": snippet.name,
-                            "template_source": getattr(
-                                snippet.template, "source", "unavailable"
-                            ),
-                        }
-                    }
-                return {"error": f"Template snippet not found: {identifier}"}
-
-            elif collection_type == "certificates":
-                cert_config = self.memo.config.certificates.get(identifier)
-                if cert_config:
-                    return {
-                        "result": {
-                            "path": identifier,
-                            "template_source": cert_config.template,
-                        }
-                    }
-                return {"error": f"Certificate not found: {identifier}"}
+                return {
+                    "error": f"{collection_type.rstrip('s').title()} not found: {identifier}"
+                }
 
             else:
                 return {
@@ -325,16 +186,15 @@ class ManagementSocketServer:
 
     def _dump_indices(self) -> Dict[str, Any]:
         """Dump all indices from memo."""
-        indices: Dict[str, Any] = {}
-        for attr_name in dir(self.memo):
-            if attr_name.endswith("_index") and not attr_name.startswith("_"):
-                try:
-                    index_value = getattr(self.memo, attr_name)
-                    if hasattr(index_value, "items"):
-                        indices[attr_name] = dict(index_value)
-                except Exception as e:
-                    indices[attr_name] = f"error: {str(e)}"
-        return {"indices": indices}
+        return {
+            "indices": {
+                name: dict(getattr(self.memo, name))
+                for name in dir(self.memo)
+                if name.endswith("_index")
+                and not name.startswith("_")
+                and hasattr(getattr(self.memo, name), "items")
+            }
+        }
 
     def _dump_config(self) -> Dict[str, Any]:
         """Dump HAProxy configuration context."""
@@ -342,44 +202,18 @@ class ManagementSocketServer:
             hasattr(self.memo, "haproxy_config_context")
             and self.memo.haproxy_config_context
         ):
-            rendered_maps: Dict[str, Any] = {}
-            for rendered_map in self.memo.haproxy_config_context.rendered_maps:
-                rendered_maps[rendered_map.path] = {
-                    "path": rendered_map.path,
-                    "content": rendered_map.content,
-                    "map_config_path": rendered_map.path,  # Path is the same as rendered_map.path
-                }
-
-            rendered_certificates: Dict[str, Any] = {}
-            for (
-                rendered_certificate
-            ) in self.memo.haproxy_config_context.rendered_certificates:
-                rendered_certificates[rendered_certificate.path] = {
-                    "name": rendered_certificate.path,
-                    "content": rendered_certificate.content,
-                }
-
-            context = {
-                "rendered_maps": rendered_maps,
-                "rendered_config": None,
-                "rendered_certificates": rendered_certificates,
-            }
-
-            # Include rendered HAProxy config if available
-            if self.memo.haproxy_config_context.rendered_config:
-                context["rendered_config"] = {
-                    "content": self.memo.haproxy_config_context.rendered_config.content,
-                }
-
-            return {"haproxy_config_context": context}
-        else:
             return {
-                "haproxy_config_context": {
-                    "rendered_maps": {},
-                    "rendered_config": None,
-                    "rendered_certificates": {},
-                }
+                "haproxy_config_context": self.memo.haproxy_config_context.model_dump(
+                    mode="json"
+                )
             }
+        return {
+            "haproxy_config_context": {
+                "rendered_maps": {},
+                "rendered_config": None,
+                "rendered_certificates": {},
+            }
+        }
 
     async def run(self) -> None:
         """Run the management socket server."""
@@ -440,9 +274,7 @@ class ManagementSocketServer:
             response_data = await self._process_command(command_str)
 
             # Send response
-            response = json.dumps(
-                response_data, indent=2, cls=DataclassJSONEncoder
-            ).encode("utf-8")
+            response = json.dumps(response_data, indent=2, default=str).encode("utf-8")
             writer.write(response)
             await writer.drain()
 
@@ -450,9 +282,7 @@ class ManagementSocketServer:
 
         except Exception as e:
             self.logger.error(f"❌ Error handling management socket client: {e}")
-            error_response = json.dumps(
-                {"error": str(e)}, cls=DataclassJSONEncoder
-            ).encode("utf-8")
+            error_response = json.dumps({"error": str(e)}, default=str).encode("utf-8")
             try:
                 writer.write(error_response)
                 await writer.drain()

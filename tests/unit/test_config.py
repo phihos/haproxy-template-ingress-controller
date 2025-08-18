@@ -1697,3 +1697,267 @@ def test_complete_ingress_configuration_with_certificates():
     assert cert_data in rendered_content
     assert key_data in rendered_content
     assert "# Certificate for example-tls in default" in rendered_content
+
+
+# =============================================================================
+# Schema Export and Validation Tests
+# =============================================================================
+
+
+def test_export_config_schema():
+    """Test config schema export function."""
+    from haproxy_template_ic.config_models import export_config_schema
+
+    schema = export_config_schema(include_examples=True)
+
+    assert isinstance(schema, dict)
+    assert "type" in schema
+    assert "properties" in schema
+    assert "required" in schema
+
+    # Check required fields
+    required_fields = schema.get("required", [])
+    assert "pod_selector" in required_fields
+    assert "haproxy_config" in required_fields
+
+
+def test_export_config_schema_without_examples():
+    """Test config schema export without examples."""
+    from haproxy_template_ic.config_models import export_config_schema
+
+    schema = export_config_schema(include_examples=False)
+
+    assert isinstance(schema, dict)
+    assert "type" in schema
+    assert "properties" in schema
+
+
+def test_export_all_schemas():
+    """Test exporting all model schemas."""
+    from haproxy_template_ic.config_models import export_all_schemas
+
+    all_schemas = export_all_schemas()
+
+    assert isinstance(all_schemas, dict)
+    assert "Config" in all_schemas
+    assert "WatchResourceConfig" in all_schemas
+    assert "MapConfig" in all_schemas
+    assert "TemplateSnippet" in all_schemas
+
+    # Each schema should be a valid JSON schema
+    for schema_name, schema in all_schemas.items():
+        assert isinstance(schema, dict)
+        assert "type" in schema
+
+
+def test_validate_config_against_schema_valid():
+    """Test config validation against schema with valid config."""
+    from haproxy_template_ic.config_models import validate_config_against_schema
+
+    config_data = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+    }
+
+    errors = validate_config_against_schema(config_data)
+
+    assert errors == []
+
+
+def test_validate_config_against_schema_invalid():
+    """Test config validation against schema with invalid config."""
+    from haproxy_template_ic.config_models import validate_config_against_schema
+
+    config_data = {
+        "pod_selector": {"match_labels": {}},  # Empty match_labels (invalid)
+    }
+
+    errors = validate_config_against_schema(config_data)
+
+    assert len(errors) > 0
+    assert any("haproxy_config" in error for error in errors)
+
+
+def test_validate_config_against_schema_missing_required():
+    """Test config validation with missing required fields."""
+    from haproxy_template_ic.config_models import validate_config_against_schema
+
+    config_data = {}  # Missing required fields
+
+    errors = validate_config_against_schema(config_data)
+
+    assert len(errors) > 0
+    assert any("pod_selector" in error for error in errors)
+
+
+def test_validate_config_against_schema_exception():
+    """Test config validation with non-validation exception."""
+    from haproxy_template_ic.config_models import validate_config_against_schema
+
+    # Pass a non-dict which should trigger a general exception
+    errors = validate_config_against_schema("not a dict")
+
+    assert len(errors) > 0
+    # The actual error message contains validation type information
+    assert any(
+        "input should be a valid dictionary" in error.lower() for error in errors
+    )
+
+
+def test_get_schema_version():
+    """Test schema version retrieval."""
+    from haproxy_template_ic.config_models import get_schema_version
+
+    version = get_schema_version()
+
+    assert isinstance(version, str)
+    assert version == "1.0.0"
+
+
+# =============================================================================
+# HAProxyConfigContext Helper Method Tests
+# =============================================================================
+
+
+def test_haproxy_config_context_get_rendered_map_by_path():
+    """Test getting rendered map by path."""
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
+    )
+    template_context = TemplateContext()
+
+    map_config = MapConfig(template="test")
+    rendered_map1 = RenderedMap(
+        path="/test1.map", content="content1", map_config=map_config
+    )
+    rendered_map2 = RenderedMap(
+        path="/test2.map", content="content2", map_config=map_config
+    )
+
+    context = HAProxyConfigContext(
+        config=config,
+        template_context=template_context,
+        rendered_maps=[rendered_map1, rendered_map2],
+    )
+
+    # Test finding existing map
+    found_map = context.get_rendered_map_by_path("/test1.map")
+    assert found_map == rendered_map1
+    assert found_map.content == "content1"
+
+    # Test not found
+    not_found = context.get_rendered_map_by_path("/nonexistent.map")
+    assert not_found is None
+
+
+def test_haproxy_config_context_get_rendered_certificate_by_path():
+    """Test getting rendered certificate by path."""
+    config = Config(
+        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
+        haproxy_config=MapConfig(template="global\n    daemon"),
+    )
+    template_context = TemplateContext()
+
+    cert1 = RenderedCertificate(path="/cert1.pem", content="cert1 content")
+    cert2 = RenderedCertificate(path="/cert2.pem", content="cert2 content")
+
+    context = HAProxyConfigContext(
+        config=config,
+        template_context=template_context,
+        rendered_certificates=[cert1, cert2],
+    )
+
+    # Test finding existing certificate
+    found_cert = context.get_rendered_certificate_by_path("/cert1.pem")
+    assert found_cert == cert1
+    assert found_cert.content == "cert1 content"
+
+    # Test not found
+    not_found = context.get_rendered_certificate_by_path("/nonexistent.pem")
+    assert not_found is None
+
+
+# =============================================================================
+# Type Alias and Constraint Tests
+# =============================================================================
+
+
+def test_watch_resource_config_group_property():
+    """Test WatchResourceConfig group property extraction."""
+    # Test with group
+    resource = WatchResourceConfig(api_version="networking.k8s.io/v1", kind="Ingress")
+    assert resource.group == "networking.k8s.io"
+
+    # Test without group (core API)
+    resource = WatchResourceConfig(api_version="v1", kind="Service")
+    assert resource.group == ""
+
+
+def test_watch_resource_config_version_property():
+    """Test WatchResourceConfig version property extraction."""
+    # Test with group
+    resource = WatchResourceConfig(api_version="networking.k8s.io/v1", kind="Ingress")
+    assert resource.version == "v1"
+
+    # Test without group (core API)
+    resource = WatchResourceConfig(api_version="v1", kind="Service")
+    assert resource.version == "v1"
+
+    # Test with version suffix
+    resource = WatchResourceConfig(api_version="apps/v1beta1", kind="Deployment")
+    assert resource.version == "v1beta1"
+
+
+def test_template_snippet_name_validation():
+    """Test TemplateSnippet name validation in config."""
+    from haproxy_template_ic.config_models import TemplateSnippet
+
+    # Test valid snippet creation
+    snippet = TemplateSnippet(name="valid-name", template="test template")
+    assert snippet.name == "valid-name"
+
+    # Test name validation in config
+    config_dict = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "template_snippets": {
+            "test-snippet": {
+                "name": "different-name",  # Doesn't match key
+                "template": "test",
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="must match snippet.name"):
+        config_from_dict(config_dict)
+
+
+def test_resource_filter_creation():
+    """Test ResourceFilter model creation."""
+    from haproxy_template_ic.config_models import ResourceFilter
+
+    # Test with all fields
+    filter_obj = ResourceFilter(
+        namespace_selector={"environment": "production"},
+        label_selector={"app": "web", "version": "v1.0.0"},
+    )
+
+    assert filter_obj.namespace_selector == {"environment": "production"}
+    assert filter_obj.label_selector == {"app": "web", "version": "v1.0.0"}
+
+    # Test with optional fields None
+    filter_obj = ResourceFilter()
+    assert filter_obj.namespace_selector is None
+    assert filter_obj.label_selector is None
+
+
+def test_pod_selector_frozen():
+    """Test that PodSelector is frozen."""
+    from haproxy_template_ic.config_models import PodSelector
+
+    selector = PodSelector(match_labels={"app": "test"})
+
+    # Should not be able to modify (frozen dataclass)
+    with pytest.raises(ValidationError):
+        selector.match_labels = {"app": "modified"}

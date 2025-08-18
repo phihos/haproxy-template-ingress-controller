@@ -1,12 +1,12 @@
 """
-Tests for haproxy_template_ic.dataplane module.
+Unit tests for dataplane functionality.
 
-This module contains tests for HAProxy Dataplane API integration functionality.
+Tests the HAProxy Dataplane API integration including pod discovery,
+client operations, and configuration synchronization.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
-from kr8s.objects import Pod
+from unittest.mock import Mock, AsyncMock, patch
 
 from haproxy_template_ic.dataplane import (
     HAProxyInstance,
@@ -17,882 +17,832 @@ from haproxy_template_ic.dataplane import (
     DataplaneClient,
     ConfigSynchronizer,
 )
-from haproxy_template_ic.config_models import (
-    Config,
-    MapConfig,
-    PodSelector,
-    HAProxyConfigContext,
-    RenderedConfig,
-    TemplateContext,
-)
+from haproxy_template_ic.config_models import PodSelector, HAProxyConfigContext
 
 
-# =============================================================================
-# Test Helpers
-# =============================================================================
+class TestHAProxyInstance:
+    """Test the HAProxyInstance dataclass."""
+
+    def test_haproxy_instance_creation(self):
+        """Test HAProxyInstance creation."""
+        mock_pod = Mock()
+        mock_pod.namespace = "default"
+        mock_pod.name = "haproxy-pod"
+
+        instance = HAProxyInstance(
+            pod=mock_pod,
+            dataplane_url="http://192.168.1.1:5555",
+            is_validation_sidecar=False,
+        )
+
+        assert instance.pod == mock_pod
+        assert instance.dataplane_url == "http://192.168.1.1:5555"
+        assert instance.is_validation_sidecar is False
+
+    def test_haproxy_instance_name_property(self):
+        """Test HAProxyInstance name property."""
+        mock_pod = Mock()
+        mock_pod.namespace = "kube-system"
+        mock_pod.name = "haproxy-loadbalancer"
+
+        instance = HAProxyInstance(
+            pod=mock_pod,
+            dataplane_url="http://192.168.1.1:5555",
+        )
+
+        assert instance.name == "kube-system/haproxy-loadbalancer"
+
+    def test_haproxy_instance_validation_sidecar_default(self):
+        """Test HAProxyInstance validation sidecar default value."""
+        mock_pod = Mock()
+        instance = HAProxyInstance(
+            pod=mock_pod,
+            dataplane_url="http://192.168.1.1:5555",
+        )
+
+        assert instance.is_validation_sidecar is False
 
 
-def setup_fast_resilient_mocks():
-    """Setup mocks to bypass retry delays in tests."""
-    mock_circuit_breaker = MagicMock()
-    mock_circuit_breaker.get_adaptive_timeout.return_value = 0.01
-    mock_circuit_breaker.record_failure = MagicMock()
+class TestSyncResult:
+    """Test the SyncResult dataclass."""
 
-    mock_resilient = MagicMock()
-    mock_resilient.get_circuit_breaker.return_value = mock_circuit_breaker
+    def test_sync_result_success(self):
+        """Test successful SyncResult creation."""
+        mock_instance = Mock()
+        result = SyncResult(
+            success=True,
+            instance=mock_instance,
+            config_version="v123",
+        )
 
-    async def fast_execute_with_retry(operation, **kwargs):
-        try:
-            result_value = await operation()
-            result = MagicMock()
-            result.success = True
-            result.result = result_value
-            result.error = None
-            return result
-        except Exception as e:
-            result = MagicMock()
-            result.success = False
-            result.error = e
-            result.attempt = 1
-            return result
+        assert result.success is True
+        assert result.instance == mock_instance
+        assert result.error is None
+        assert result.config_version == "v123"
 
-    mock_resilient.execute_with_retry = AsyncMock(side_effect=fast_execute_with_retry)
+    def test_sync_result_failure(self):
+        """Test failed SyncResult creation."""
+        mock_instance = Mock()
+        result = SyncResult(
+            success=False,
+            instance=mock_instance,
+            error="Deployment failed",
+        )
 
-    mock_metrics = MagicMock()
-    mock_metrics.time_dataplane_api_operation.return_value.__enter__ = MagicMock()
-    mock_metrics.time_dataplane_api_operation.return_value.__exit__ = MagicMock()
-
-    return mock_resilient, mock_metrics
-
-
-# =============================================================================
-# HAProxyInstance Tests
-# =============================================================================
+        assert result.success is False
+        assert result.instance == mock_instance
+        assert result.error == "Deployment failed"
+        assert result.config_version is None
 
 
-def test_haproxy_instance_creation():
-    """Test HAProxyInstance dataclass creation."""
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "default"
-    mock_pod.name = "haproxy-1"
+class TestDataplaneAPIError:
+    """Test custom exception classes."""
 
-    instance = HAProxyInstance(
-        pod=mock_pod,
-        dataplane_url="http://10.0.1.5:5555",
-        is_validation_sidecar=False,
-    )
+    def test_dataplane_api_error(self):
+        """Test DataplaneAPIError exception."""
+        error = DataplaneAPIError("Test error message")
+        assert str(error) == "Test error message"
 
-    assert instance.pod == mock_pod
-    assert instance.dataplane_url == "http://10.0.1.5:5555"
-    assert instance.is_validation_sidecar is False
-    assert instance.name == "default/haproxy-1"
+    def test_validation_error_inheritance(self):
+        """Test ValidationError inherits from DataplaneAPIError."""
+        error = ValidationError("Validation failed")
+        assert isinstance(error, DataplaneAPIError)
+        assert str(error) == "Validation failed"
 
 
-def test_haproxy_instance_validation_sidecar():
-    """Test HAProxyInstance validation sidecar flag."""
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "test"
-    mock_pod.name = "haproxy-validation"
+class TestHAProxyPodDiscovery:
+    """Test the HAProxyPodDiscovery class."""
 
-    instance = HAProxyInstance(
-        pod=mock_pod,
-        dataplane_url="http://10.0.1.6:5555",
-        is_validation_sidecar=True,
-    )
+    @pytest.fixture
+    def pod_selector(self):
+        """Create a PodSelector for testing."""
+        return PodSelector(match_labels={"app": "haproxy", "component": "loadbalancer"})
 
-    assert instance.is_validation_sidecar is True
-    assert instance.name == "test/haproxy-validation"
+    @pytest.fixture
+    def discovery(self, pod_selector):
+        """Create HAProxyPodDiscovery instance."""
+        return HAProxyPodDiscovery(pod_selector, namespace="default")
 
+    @pytest.fixture
+    def mock_running_pod(self):
+        """Create a mock running pod."""
+        pod = Mock()
+        pod.namespace = "default"
+        pod.name = "haproxy-pod-1"
+        pod.status.phase = "Running"
+        pod.status.pod_ip = "192.168.1.10"
+        pod.metadata = {
+            "labels": {},
+            "annotations": {},
+        }
+        return pod
 
-# =============================================================================
-# SyncResult Tests
-# =============================================================================
+    @pytest.fixture
+    def mock_validation_pod(self):
+        """Create a mock validation sidecar pod."""
+        pod = Mock()
+        pod.namespace = "default"
+        pod.name = "haproxy-validation-pod"
+        pod.status.phase = "Running"
+        pod.status.pod_ip = "192.168.1.11"
+        pod.metadata = {
+            "labels": {"haproxy-template-ic/role": "validation"},
+            "annotations": {},
+        }
+        return pod
 
+    def test_init(self, pod_selector):
+        """Test HAProxyPodDiscovery initialization."""
+        discovery = HAProxyPodDiscovery(pod_selector, namespace="test-namespace")
+        assert discovery.pod_selector == pod_selector
+        assert discovery.namespace == "test-namespace"
 
-def test_sync_result_success():
-    """Test successful SyncResult creation."""
-    mock_pod = MagicMock(spec=Pod)
-    instance = HAProxyInstance(pod=mock_pod, dataplane_url="http://10.0.1.5:5555")
+    def test_init_no_namespace(self, pod_selector):
+        """Test HAProxyPodDiscovery initialization without namespace."""
+        discovery = HAProxyPodDiscovery(pod_selector)
+        assert discovery.pod_selector == pod_selector
+        assert discovery.namespace is None
 
-    result = SyncResult(success=True, instance=instance, config_version="123")
+    @pytest.mark.asyncio
+    @patch("kr8s.get")
+    async def test_discover_instances_success(
+        self, mock_kr8s_get, discovery, mock_running_pod
+    ):
+        """Test successful pod discovery."""
+        mock_kr8s_get.return_value = [mock_running_pod]
 
-    assert result.success is True
-    assert result.instance == instance
-    assert result.error is None
-    assert result.config_version == "123"
-
-
-def test_sync_result_failure():
-    """Test failed SyncResult creation."""
-    mock_pod = MagicMock(spec=Pod)
-    instance = HAProxyInstance(pod=mock_pod, dataplane_url="http://10.0.1.5:5555")
-
-    result = SyncResult(success=False, instance=instance, error="Connection refused")
-
-    assert result.success is False
-    assert result.instance == instance
-    assert result.error == "Connection refused"
-    assert result.config_version is None
-
-
-# =============================================================================
-# HAProxyPodDiscovery Tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_pod_discovery_success():
-    """Test successful pod discovery."""
-    pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    discovery = HAProxyPodDiscovery(pod_selector, namespace="default")
-
-    # Mock kr8s.get
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "default"
-    mock_pod.name = "haproxy-1"
-    mock_pod.status.phase = "Running"
-    mock_pod.status.pod_ip = "10.0.1.5"
-    mock_pod.metadata.get.return_value = {}  # No annotations
-
-    with patch("kr8s.get", return_value=[mock_pod]) as mock_kr8s_get:
         instances = await discovery.discover_instances()
 
-    mock_kr8s_get.assert_called_once_with(
-        "pods", label_selector="app=haproxy", namespace="default"
-    )
+        assert len(instances) == 1
+        assert instances[0].pod == mock_running_pod
+        assert instances[0].dataplane_url == "http://192.168.1.10:5555"
+        assert instances[0].is_validation_sidecar is False
 
-    assert len(instances) == 1
-    instance = instances[0]
-    assert instance.pod == mock_pod
-    assert instance.dataplane_url == "http://10.0.1.5:5555"
-    assert instance.is_validation_sidecar is False
+        mock_kr8s_get.assert_called_once_with(
+            "pods",
+            label_selector="app=haproxy,component=loadbalancer",
+            namespace="default",
+        )
 
+    @pytest.mark.asyncio
+    @patch("kr8s.get")
+    async def test_discover_instances_with_validation_sidecar(
+        self, mock_kr8s_get, discovery, mock_running_pod, mock_validation_pod
+    ):
+        """Test pod discovery with validation sidecar."""
+        mock_kr8s_get.return_value = [mock_running_pod, mock_validation_pod]
 
-@pytest.mark.asyncio
-async def test_pod_discovery_with_validation_sidecar():
-    """Test pod discovery identifying validation sidecars."""
-    pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    discovery = HAProxyPodDiscovery(pod_selector)
-
-    # Mock production pod
-    mock_prod_pod = MagicMock(spec=Pod)
-    mock_prod_pod.namespace = "default"
-    mock_prod_pod.name = "haproxy-prod"
-    mock_prod_pod.status.phase = "Running"
-    mock_prod_pod.status.pod_ip = "10.0.1.5"
-    mock_prod_pod.metadata.get.return_value = {}
-
-    # Mock validation sidecar pod
-    mock_val_pod = MagicMock(spec=Pod)
-    mock_val_pod.namespace = "default"
-    mock_val_pod.name = "haproxy-validation"
-    mock_val_pod.status.phase = "Running"
-    mock_val_pod.status.pod_ip = "10.0.1.6"
-    mock_val_pod.metadata.get.return_value = {"haproxy-template-ic/role": "validation"}
-
-    with patch("kr8s.get", return_value=[mock_prod_pod, mock_val_pod]):
         instances = await discovery.discover_instances()
 
-    assert len(instances) == 2
+        assert len(instances) == 2
 
-    prod_instance = next(i for i in instances if not i.is_validation_sidecar)
-    val_instance = next(i for i in instances if i.is_validation_sidecar)
+        # Find regular and validation instances
+        regular_instance = next(i for i in instances if not i.is_validation_sidecar)
+        validation_instance = next(i for i in instances if i.is_validation_sidecar)
 
-    assert prod_instance.pod == mock_prod_pod
-    assert prod_instance.is_validation_sidecar is False
+        assert regular_instance.pod == mock_running_pod
+        assert validation_instance.pod == mock_validation_pod
+        assert validation_instance.is_validation_sidecar is True
 
-    assert val_instance.pod == mock_val_pod
-    assert val_instance.is_validation_sidecar is True
+    @pytest.mark.asyncio
+    @patch("kr8s.get")
+    async def test_discover_instances_skip_non_running(self, mock_kr8s_get, discovery):
+        """Test pod discovery skips non-running pods."""
+        pending_pod = Mock()
+        pending_pod.namespace = "default"
+        pending_pod.name = "pending-pod"
+        pending_pod.status.phase = "Pending"
 
+        mock_kr8s_get.return_value = [pending_pod]
 
-@pytest.mark.asyncio
-async def test_pod_discovery_skips_non_running_pods():
-    """Test that pod discovery skips non-running pods."""
-    pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    discovery = HAProxyPodDiscovery(pod_selector)
-
-    # Mock pending pod
-    mock_pending_pod = MagicMock(spec=Pod)
-    mock_pending_pod.namespace = "default"
-    mock_pending_pod.name = "haproxy-pending"
-    mock_pending_pod.status.phase = "Pending"
-
-    # Mock running pod
-    mock_running_pod = MagicMock(spec=Pod)
-    mock_running_pod.namespace = "default"
-    mock_running_pod.name = "haproxy-running"
-    mock_running_pod.status.phase = "Running"
-    mock_running_pod.status.pod_ip = "10.0.1.5"
-    mock_running_pod.metadata.get.return_value = {}
-
-    with patch("kr8s.get", return_value=[mock_pending_pod, mock_running_pod]):
         instances = await discovery.discover_instances()
 
-    assert len(instances) == 1
-    assert instances[0].pod == mock_running_pod
+        assert len(instances) == 0
 
+    @pytest.mark.asyncio
+    @patch("kr8s.get")
+    async def test_discover_instances_no_pods(self, mock_kr8s_get, discovery):
+        """Test pod discovery with no matching pods."""
+        mock_kr8s_get.return_value = []
 
-@pytest.mark.asyncio
-async def test_pod_discovery_custom_dataplane_port():
-    """Test pod discovery with custom Dataplane API port."""
-    pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    discovery = HAProxyPodDiscovery(pod_selector)
-
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "default"
-    mock_pod.name = "haproxy-1"
-    mock_pod.status.phase = "Running"
-    mock_pod.status.pod_ip = "10.0.1.5"
-    mock_pod.metadata.get.return_value = {"haproxy-template-ic/dataplane-port": "8080"}
-
-    with patch("kr8s.get", return_value=[mock_pod]):
         instances = await discovery.discover_instances()
 
-    assert len(instances) == 1
-    assert instances[0].dataplane_url == "http://10.0.1.5:8080"
+        assert len(instances) == 0
 
+    @pytest.mark.asyncio
+    @patch("kr8s.get")
+    async def test_discover_instances_kr8s_error(self, mock_kr8s_get, discovery):
+        """Test pod discovery with kr8s error."""
+        mock_kr8s_get.side_effect = RuntimeError("Kubernetes API error")
 
-@pytest.mark.asyncio
-async def test_pod_discovery_no_pod_ip():
-    """Test pod discovery handling pods without IP addresses."""
-    pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    discovery = HAProxyPodDiscovery(pod_selector)
-
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "default"
-    mock_pod.name = "haproxy-1"
-    mock_pod.status.phase = "Running"
-    mock_pod.status.pod_ip = None  # No IP
-
-    with patch("kr8s.get", return_value=[mock_pod]):
-        with pytest.raises(DataplaneAPIError, match="has no IP address"):
-            await discovery.discover_instances()
-
-
-@pytest.mark.asyncio
-async def test_pod_discovery_kr8s_error():
-    """Test pod discovery handling kr8s errors."""
-    pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    discovery = HAProxyPodDiscovery(pod_selector)
-
-    with patch("kr8s.get", side_effect=Exception("Kubernetes error")):
         with pytest.raises(DataplaneAPIError, match="Pod discovery failed"):
             await discovery.discover_instances()
 
+    def test_is_validation_sidecar_true(self, discovery):
+        """Test validation sidecar identification."""
+        pod = Mock()
+        pod.metadata = {"labels": {"haproxy-template-ic/role": "validation"}}
 
-# =============================================================================
-# DataplaneClient Tests
-# =============================================================================
+        assert discovery._is_validation_sidecar(pod) is True
 
+    def test_is_validation_sidecar_false(self, discovery):
+        """Test non-validation sidecar identification."""
+        pod = Mock()
+        pod.metadata = {"labels": {"app": "haproxy"}}
 
-@pytest.mark.asyncio
-async def test_dataplane_client_get_version():
-    """Test DataplaneClient version retrieval."""
-    client = DataplaneClient("http://10.0.1.5:5555/v3")
+        assert discovery._is_validation_sidecar(pod) is False
 
-    # Mock the dataplane classes directly
-    mock_api_client_class = Mock()
-    mock_info_api_class = Mock()
+    def test_is_validation_sidecar_no_labels(self, discovery):
+        """Test sidecar identification with no labels."""
+        pod = Mock()
+        pod.metadata = {}
 
-    # Create proper async context manager mock
-    mock_api_client_instance = AsyncMock()
-    mock_api_client_context = AsyncMock()
-    mock_api_client_context.__aenter__.return_value = mock_api_client_instance
-    mock_api_client_context.__aexit__.return_value = None
-    mock_api_client_class.return_value = mock_api_client_context
+        assert discovery._is_validation_sidecar(pod) is False
 
-    with patch("haproxy_template_ic.dataplane.ApiClient", mock_api_client_class):
-        with patch("haproxy_template_ic.dataplane.InformationApi", mock_info_api_class):
-            # Setup InformationApi instance
-            mock_info_api_instance = AsyncMock()
-            mock_info_api_class.return_value = mock_info_api_instance
+    def test_build_dataplane_url_default_port(self, discovery):
+        """Test dataplane URL building with default port."""
+        pod = Mock()
+        pod.status.pod_ip = "192.168.1.100"
+        pod.metadata = {"annotations": {}}
 
-            # Create a mock response object with the expected attributes
-            mock_response = Mock()
-            mock_response.haproxy = {"version": "2.4.0"}
-            mock_response.api = {"api_version": "3.0"}
-            mock_response.system = {"hostname": "test"}
+        url = discovery._build_dataplane_url(pod)
+        assert url == "http://192.168.1.100:5555"
 
-            mock_info_api_instance.get_info.return_value = mock_response
+    def test_build_dataplane_url_custom_port(self, discovery):
+        """Test dataplane URL building with custom port."""
+        pod = Mock()
+        pod.status.pod_ip = "192.168.1.100"
+        pod.metadata = {"annotations": {"haproxy-template-ic/dataplane-port": "8080"}}
 
-            version_info = await client.get_version()
+        url = discovery._build_dataplane_url(pod)
+        assert url == "http://192.168.1.100:8080"
 
-    # Check that the response includes data from all sources
-    assert "version" in version_info
-    assert "api_version" in version_info
-    assert "hostname" in version_info
+    def test_build_dataplane_url_no_ip(self, discovery):
+        """Test dataplane URL building with no pod IP."""
+        pod = Mock()
+        pod.namespace = "default"
+        pod.name = "test-pod"
+        pod.status.pod_ip = None
+        pod.metadata = {"annotations": {}}
 
-
-@pytest.mark.asyncio
-async def test_dataplane_client_validate_configuration_success():
-    """Test successful configuration validation."""
-    client = DataplaneClient("http://10.0.1.5:5555/v3")
-
-    mock_resilient, mock_metrics = setup_fast_resilient_mocks()
-
-    # Mock the dataplane classes directly
-    mock_api_client_class = Mock()
-    mock_config_api_class = Mock()
-
-    # Create proper async context manager mock
-    mock_api_client_instance = AsyncMock()
-    mock_api_client_context = AsyncMock()
-    mock_api_client_context.__aenter__.return_value = mock_api_client_instance
-    mock_api_client_context.__aexit__.return_value = None
-    mock_api_client_class.return_value = mock_api_client_context
-
-    with patch("haproxy_template_ic.dataplane.ApiClient", mock_api_client_class):
-        with patch(
-            "haproxy_template_ic.dataplane.ConfigurationApi", mock_config_api_class
-        ):
-            with patch(
-                "haproxy_template_ic.dataplane.get_resilient_operator",
-                return_value=mock_resilient,
-            ):
-                with patch(
-                    "haproxy_template_ic.dataplane.get_metrics_collector",
-                    return_value=mock_metrics,
-                ):
-                    # Setup ConfigurationApi instance
-                    mock_config_api_instance = AsyncMock()
-                    mock_config_api_class.return_value = mock_config_api_instance
-
-                    # Mock successful validation (no exception)
-                    mock_config_api_instance.post_ha_proxy_configuration.return_value = None
-
-                    result = await client.validate_configuration("global\n    daemon")
-
-    assert result is True
+        with pytest.raises(DataplaneAPIError, match="has no IP address"):
+            discovery._build_dataplane_url(pod)
 
 
-@pytest.mark.asyncio
-async def test_dataplane_client_validate_configuration_failure():
-    """Test configuration validation failure."""
-    client = DataplaneClient("http://10.0.1.5:5555/v3")
+class TestDataplaneClient:
+    """Test the DataplaneClient class."""
 
-    mock_resilient, mock_metrics = setup_fast_resilient_mocks()
+    @pytest.fixture
+    def client(self):
+        """Create a DataplaneClient instance."""
+        return DataplaneClient(
+            "http://192.168.1.1:5555", timeout=10.0, auth=("admin", "test")
+        )
 
-    # Mock the dataplane classes directly
-    mock_api_client_class = Mock()
-    mock_config_api_class = Mock()
+    def test_init_with_v3_path(self):
+        """Test client initialization with /v3 path."""
+        client = DataplaneClient("http://192.168.1.1:5555/v3")
+        assert client.base_url == "http://192.168.1.1:5555/v3"
 
-    # Create proper async context manager mock
-    mock_api_client_instance = AsyncMock()
-    mock_api_client_context = AsyncMock()
-    mock_api_client_context.__aenter__.return_value = mock_api_client_instance
-    mock_api_client_context.__aexit__.return_value = None
-    mock_api_client_class.return_value = mock_api_client_context
+    def test_init_without_v3_path(self):
+        """Test client initialization without /v3 path."""
+        client = DataplaneClient("http://192.168.1.1:5555")
+        assert client.base_url == "http://192.168.1.1:5555/v3"
 
-    # Create a mock BadRequestException
-    class MockBadRequestException(Exception):
-        def __init__(self, msg):
-            self.body = msg
-            super().__init__(msg)
+    def test_init_default_auth(self):
+        """Test client initialization with default auth."""
+        client = DataplaneClient("http://192.168.1.1:5555")
+        assert client.auth == ("admin", "adminpass")
 
-    with patch("haproxy_template_ic.dataplane.ApiClient", mock_api_client_class):
-        with patch(
-            "haproxy_template_ic.dataplane.ConfigurationApi", mock_config_api_class
-        ):
-            with patch(
-                "haproxy_template_ic.dataplane.BadRequestException",
-                MockBadRequestException,
-            ):
-                with patch(
-                    "haproxy_template_ic.dataplane.get_resilient_operator",
-                    return_value=mock_resilient,
-                ):
-                    with patch(
-                        "haproxy_template_ic.dataplane.get_metrics_collector",
-                        return_value=mock_metrics,
-                    ):
-                        # Setup ConfigurationApi instance
-                        mock_config_api_instance = AsyncMock()
-                        mock_config_api_class.return_value = mock_config_api_instance
+    def test_init_custom_auth(self):
+        """Test client initialization with custom auth."""
+        client = DataplaneClient("http://192.168.1.1:5555", auth=("user", "pass"))
+        assert client.auth == ("user", "pass")
 
-                        # Mock validation failure (BadRequestException)
-                        mock_config_api_instance.post_ha_proxy_configuration.side_effect = MockBadRequestException(
-                            "Validation failed"
-                        )
+    def test_get_configuration_lazy_init(self, client):
+        """Test lazy configuration initialization."""
+        assert client._configuration is None
+        config = client._get_configuration()
+        assert config is not None
+        assert client._configuration is config
 
-                        result = await client.validate_configuration("invalid config")
+        # Second call should return same instance
+        config2 = client._get_configuration()
+        assert config2 is config
 
-    assert result is False
-
-
-@pytest.mark.asyncio
-async def test_dataplane_client_deploy_configuration_success():
-    """Test successful configuration deployment."""
-    client = DataplaneClient("http://10.0.1.5:5555/v3")
-
-    mock_resilient, mock_metrics = setup_fast_resilient_mocks()
-
-    # Mock the dataplane classes directly
-    mock_api_client_class = Mock()
-    mock_config_api_class = Mock()
-
-    # Create proper async context manager mock
-    mock_api_client_instance = AsyncMock()
-    mock_api_client_context = AsyncMock()
-    mock_api_client_context.__aenter__.return_value = mock_api_client_instance
-    mock_api_client_context.__aexit__.return_value = None
-    mock_api_client_class.return_value = mock_api_client_context
-
-    with patch("haproxy_template_ic.dataplane.ApiClient", mock_api_client_class):
-        with patch(
-            "haproxy_template_ic.dataplane.ConfigurationApi", mock_config_api_class
-        ):
-            with patch(
-                "haproxy_template_ic.dataplane.get_resilient_operator",
-                return_value=mock_resilient,
-            ):
-                with patch(
-                    "haproxy_template_ic.dataplane.get_metrics_collector",
-                    return_value=mock_metrics,
-                ):
-                    # Setup ConfigurationApi instance
-                    mock_config_api_instance = AsyncMock()
-                    mock_config_api_class.return_value = mock_config_api_instance
-
-                    # Mock successful deployment
-                    mock_config_api_instance.post_ha_proxy_configuration.return_value = None
-                    mock_config_api_instance.get_configuration_version.return_value = 42
-
-                    version = await client.deploy_configuration("global\n    daemon")
-
-    assert version == "42"
-
-
-@pytest.mark.asyncio
-async def test_dataplane_client_deploy_configuration_failure():
-    """Test configuration deployment failure."""
-    client = DataplaneClient("http://10.0.1.5:5555/v3")
-
-    mock_resilient, mock_metrics = setup_fast_resilient_mocks()
-
-    # Mock the failed result from resilient operator
-    mock_failed_result = Mock()
-    mock_failed_result.success = False
-    mock_failed_result.error = Exception("Deployment failed")
-    mock_failed_result.result = None
-    mock_failed_result.attempt = 3
-    mock_resilient.execute_with_retry.return_value = mock_failed_result
-
-    with patch(
-        "haproxy_template_ic.dataplane.get_resilient_operator",
-        return_value=mock_resilient,
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.ApiClient")
+    @patch("haproxy_template_ic.dataplane.InformationApi")
+    async def test_get_version_success(
+        self, mock_info_api_class, mock_api_client_class, client
     ):
+        """Test successful version retrieval."""
+        # Mock the API response
+        mock_info_response = Mock()
+        mock_info_response.haproxy = {"version": "2.8.0"}
+        mock_info_response.api = {"build_date": "2023-01-01"}
+        mock_info_response.system = {"os": "linux"}
+
+        mock_info_api = AsyncMock()
+        mock_info_api.get_info.return_value = mock_info_response
+        mock_info_api_class.return_value = mock_info_api
+
+        mock_api_client = AsyncMock()
+        mock_api_client.__aenter__ = AsyncMock(return_value=mock_api_client)
+        mock_api_client.__aexit__ = AsyncMock(return_value=None)
+        mock_api_client_class.return_value = mock_api_client
+
+        result = await client.get_version()
+
+        assert result["version"] == "2.8.0"
+        assert result["build_date"] == "2023-01-01"
+        assert result["os"] == "linux"
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.ApiClient")
+    @patch("haproxy_template_ic.dataplane.InformationApi")
+    async def test_get_version_api_exception(
+        self, mock_info_api_class, mock_api_client_class, client
+    ):
+        """Test version retrieval with API exception."""
+        from haproxy_dataplane_v3.exceptions import ApiException
+
+        mock_info_api = AsyncMock()
+        mock_info_api.get_info.side_effect = ApiException("API Error")
+        mock_info_api_class.return_value = mock_info_api
+
+        mock_api_client = AsyncMock()
+        mock_api_client.__aenter__ = AsyncMock(return_value=mock_api_client)
+        mock_api_client.__aexit__ = AsyncMock(return_value=None)
+        mock_api_client_class.return_value = mock_api_client
+
+        with pytest.raises(DataplaneAPIError, match="Failed to get version"):
+            await client.get_version()
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.ApiClient")
+    @patch("haproxy_template_ic.dataplane.ConfigurationApi")
+    async def test_validate_configuration_success(
+        self, mock_config_api_class, mock_api_client_class, client
+    ):
+        """Test successful configuration validation."""
+        mock_config_api = AsyncMock()
+        mock_config_api.post_ha_proxy_configuration.return_value = None
+        mock_config_api_class.return_value = mock_config_api
+
+        mock_api_client = AsyncMock()
+        mock_api_client.__aenter__ = AsyncMock(return_value=mock_api_client)
+        mock_api_client.__aexit__ = AsyncMock(return_value=None)
+        mock_api_client_class.return_value = mock_api_client
+
+        result = await client.validate_configuration("global\n  daemon")
+
+        assert result is True
+        mock_config_api.post_ha_proxy_configuration.assert_called_once()
+        call_args = mock_config_api.post_ha_proxy_configuration.call_args
+        assert call_args.kwargs["only_validate"] is True
+        assert call_args.kwargs["skip_version"] is True
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.ApiClient")
+    @patch("haproxy_template_ic.dataplane.ConfigurationApi")
+    async def test_validate_configuration_bad_request(
+        self, mock_config_api_class, mock_api_client_class, client
+    ):
+        """Test configuration validation with bad request."""
+        from haproxy_dataplane_v3.exceptions import BadRequestException
+
+        mock_config_api = AsyncMock()
+        mock_config_api.post_ha_proxy_configuration.side_effect = BadRequestException(
+            "Invalid config"
+        )
+        mock_config_api_class.return_value = mock_config_api
+
+        mock_api_client = AsyncMock()
+        mock_api_client.__aenter__ = AsyncMock(return_value=mock_api_client)
+        mock_api_client.__aexit__ = AsyncMock(return_value=None)
+        mock_api_client_class.return_value = mock_api_client
+
+        result = await client.validate_configuration("invalid config")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.ApiClient")
+    @patch("haproxy_template_ic.dataplane.ConfigurationApi")
+    async def test_deploy_configuration_success(
+        self, mock_config_api_class, mock_api_client_class, client
+    ):
+        """Test successful configuration deployment."""
+        mock_config_api = AsyncMock()
+        mock_config_api.get_configuration_version.side_effect = [
+            1,
+            2,
+        ]  # Current, then new version
+        mock_config_api.post_ha_proxy_configuration.return_value = None
+        mock_config_api_class.return_value = mock_config_api
+
+        mock_api_client = AsyncMock()
+        mock_api_client.__aenter__ = AsyncMock(return_value=mock_api_client)
+        mock_api_client.__aexit__ = AsyncMock(return_value=None)
+        mock_api_client_class.return_value = mock_api_client
+
+        result = await client.deploy_configuration("global\n  daemon")
+
+        assert result == "2"
+        assert mock_config_api.get_configuration_version.call_count == 2
+        mock_config_api.post_ha_proxy_configuration.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.ApiClient")
+    @patch("haproxy_template_ic.dataplane.ConfigurationApi")
+    async def test_deploy_configuration_with_retry(
+        self, mock_config_api_class, mock_api_client_class, client
+    ):
+        """Test configuration deployment with retry mechanism."""
+        mock_config_api = AsyncMock()
+        mock_config_api.get_configuration_version.side_effect = [1, 2]
+        mock_config_api.post_ha_proxy_configuration.return_value = None
+        mock_config_api_class.return_value = mock_config_api
+
+        mock_api_client = AsyncMock()
+        mock_api_client.__aenter__ = AsyncMock(return_value=mock_api_client)
+        mock_api_client.__aexit__ = AsyncMock(return_value=None)
+        mock_api_client_class.return_value = mock_api_client
+
+        # Mock tenacity to avoid actual retry delays
+        class MockAsyncRetrying:
+            async def __aiter__(self):
+                attempt = Mock()
+                attempt.__enter__ = Mock(return_value=attempt)
+                attempt.__exit__ = Mock(return_value=None)
+                yield attempt
+
         with patch(
-            "haproxy_template_ic.dataplane.get_metrics_collector",
-            return_value=mock_metrics,
+            "haproxy_template_ic.dataplane.AsyncRetrying",
+            return_value=MockAsyncRetrying(),
         ):
+            result = await client.deploy_configuration("global\n  daemon")
+
+        assert result == "2"
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.ApiClient")
+    @patch("haproxy_template_ic.dataplane.ConfigurationApi")
+    async def test_deploy_configuration_bad_request_no_retry(
+        self, mock_config_api_class, mock_api_client_class, client
+    ):
+        """Test configuration deployment with BadRequestException (no retry)."""
+        from haproxy_dataplane_v3.exceptions import BadRequestException
+
+        mock_config_api = AsyncMock()
+        mock_config_api.get_configuration_version.return_value = 1
+        mock_config_api.post_ha_proxy_configuration.side_effect = BadRequestException(
+            "Bad config"
+        )
+        mock_config_api_class.return_value = mock_config_api
+
+        mock_api_client = AsyncMock()
+        mock_api_client.__aenter__ = AsyncMock(return_value=mock_api_client)
+        mock_api_client.__aexit__ = AsyncMock(return_value=None)
+        mock_api_client_class.return_value = mock_api_client
+
+        with pytest.raises(DataplaneAPIError, match="Configuration deployment failed"):
+            await client.deploy_configuration("bad config")
+
+
+class TestConfigSynchronizer:
+    """Test the ConfigSynchronizer class."""
+
+    @pytest.fixture
+    def mock_pod_discovery(self):
+        """Create a mock HAProxyPodDiscovery."""
+        return Mock(spec=HAProxyPodDiscovery)
+
+    @pytest.fixture
+    def synchronizer(self, mock_pod_discovery):
+        """Create a ConfigSynchronizer instance."""
+        return ConfigSynchronizer(mock_pod_discovery)
+
+    @pytest.fixture
+    def mock_config_context(self):
+        """Create a mock HAProxyConfigContext."""
+        context = Mock(spec=HAProxyConfigContext)
+        context.rendered_config = Mock()
+        context.rendered_config.content = "global\n  daemon"
+        return context
+
+    @pytest.fixture
+    def mock_production_instance(self):
+        """Create a mock production HAProxy instance."""
+        instance = Mock(spec=HAProxyInstance)
+        instance.is_validation_sidecar = False
+        instance.dataplane_url = "http://192.168.1.1:5555"
+        instance.name = "default/haproxy-prod"
+        return instance
+
+    @pytest.fixture
+    def mock_validation_instance(self):
+        """Create a mock validation HAProxy instance."""
+        instance = Mock(spec=HAProxyInstance)
+        instance.is_validation_sidecar = True
+        instance.dataplane_url = "http://192.168.1.2:5556"
+        instance.name = "default/haproxy-validation"
+        return instance
+
+    def test_init(self, mock_pod_discovery):
+        """Test ConfigSynchronizer initialization."""
+        synchronizer = ConfigSynchronizer(mock_pod_discovery)
+        assert synchronizer.pod_discovery == mock_pod_discovery
+
+    @pytest.mark.asyncio
+    async def test_synchronize_configuration_no_instances(
+        self, synchronizer, mock_config_context
+    ):
+        """Test synchronization with no discovered instances."""
+        synchronizer.pod_discovery.discover_instances = AsyncMock(return_value=[])
+
+        results = await synchronizer.synchronize_configuration(mock_config_context)
+
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_synchronize_configuration_success(
+        self,
+        synchronizer,
+        mock_config_context,
+        mock_production_instance,
+        mock_validation_instance,
+    ):
+        """Test successful configuration synchronization."""
+        instances = [mock_production_instance, mock_validation_instance]
+        synchronizer.pod_discovery.discover_instances = AsyncMock(
+            return_value=instances
+        )
+
+        # Mock validation success
+        with patch.object(
+            synchronizer, "_validate_with_sidecars", return_value=True
+        ) as mock_validate:
+            with patch.object(synchronizer, "_deploy_to_production") as mock_deploy:
+                mock_deploy.return_value = [
+                    SyncResult(
+                        success=True,
+                        instance=mock_production_instance,
+                        config_version="v1",
+                    )
+                ]
+
+                results = await synchronizer.synchronize_configuration(
+                    mock_config_context
+                )
+
+                assert len(results) == 1
+                assert results[0].success is True
+                mock_validate.assert_called_once_with(
+                    [mock_validation_instance], "global\n  daemon"
+                )
+                mock_deploy.assert_called_once_with(
+                    [mock_production_instance], "global\n  daemon"
+                )
+
+    @pytest.mark.asyncio
+    async def test_synchronize_configuration_validation_failure(
+        self,
+        synchronizer,
+        mock_config_context,
+        mock_production_instance,
+        mock_validation_instance,
+    ):
+        """Test synchronization with validation failure."""
+        instances = [mock_production_instance, mock_validation_instance]
+        synchronizer.pod_discovery.discover_instances = AsyncMock(
+            return_value=instances
+        )
+
+        # Mock validation failure
+        with patch.object(synchronizer, "_validate_with_sidecars", return_value=False):
             with pytest.raises(
-                DataplaneAPIError, match="Configuration deployment failed"
+                ValidationError, match="Configuration validation failed"
             ):
-                await client.deploy_configuration("invalid config")
+                await synchronizer.synchronize_configuration(mock_config_context)
 
-
-# =============================================================================
-# ConfigSynchronizer Tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_config_synchronizer_no_instances():
-    """Test configuration synchronization with no instances found."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    mock_discovery.discover_instances.return_value = []
-
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    config_context = HAProxyConfigContext(
-        config=Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=MapConfig(template="# Initial config"),
-        ),
-        template_context=TemplateContext(),
-    )
-    config_context.rendered_config = RenderedConfig(content="global\n    daemon")
-
-    results = await synchronizer.synchronize_configuration(config_context)
-
-    assert results == []
-
-
-@pytest.mark.asyncio
-async def test_config_synchronizer_no_rendered_config():
-    """Test configuration synchronization with no rendered config."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    config_context = HAProxyConfigContext(
-        config=Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=MapConfig(template="# Initial config"),
-        ),
-        template_context=TemplateContext(),
-    )  # No rendered_config
-
-    with pytest.raises(
-        DataplaneAPIError, match="No rendered HAProxy configuration available"
+    @pytest.mark.asyncio
+    async def test_synchronize_configuration_no_validation_sidecars(
+        self, synchronizer, mock_config_context, mock_production_instance
     ):
-        await synchronizer.synchronize_configuration(config_context)
+        """Test synchronization with no validation sidecars."""
+        instances = [mock_production_instance]  # Only production instances
+        synchronizer.pod_discovery.discover_instances = AsyncMock(
+            return_value=instances
+        )
 
-
-@pytest.mark.asyncio
-async def test_config_synchronizer_validation_failure():
-    """Test configuration synchronization with validation failure."""
-    # Create mock validation instance
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "default"
-    mock_pod.name = "haproxy-validation"
-
-    validation_instance = HAProxyInstance(
-        pod=mock_pod,
-        dataplane_url="http://10.0.1.6:5555",
-        is_validation_sidecar=True,
-    )
-
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    mock_discovery.discover_instances.return_value = [validation_instance]
-
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    config_context = HAProxyConfigContext(
-        config=Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=MapConfig(template="# Initial config"),
-        ),
-        template_context=TemplateContext(),
-    )
-    config_context.rendered_config = RenderedConfig(
-        content="global\n    daemon", config=MagicMock()
-    )
-
-    # Mock validation failure
-    with patch.object(synchronizer, "_validate_with_sidecars", return_value=False):
-        with pytest.raises(ValidationError, match="Configuration validation failed"):
-            await synchronizer.synchronize_configuration(config_context)
-
-
-@pytest.mark.asyncio
-async def test_config_synchronizer_successful_sync():
-    """Test successful configuration synchronization."""
-    # Create mock instances
-    mock_val_pod = MagicMock(spec=Pod)
-    mock_val_pod.namespace = "default"
-    mock_val_pod.name = "haproxy-validation"
-
-    mock_prod_pod = MagicMock(spec=Pod)
-    mock_prod_pod.namespace = "default"
-    mock_prod_pod.name = "haproxy-prod"
-
-    validation_instance = HAProxyInstance(
-        pod=mock_val_pod,
-        dataplane_url="http://10.0.1.6:5555",
-        is_validation_sidecar=True,
-    )
-
-    production_instance = HAProxyInstance(
-        pod=mock_prod_pod,
-        dataplane_url="http://10.0.1.5:5555",
-        is_validation_sidecar=False,
-    )
-
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    mock_discovery.discover_instances.return_value = [
-        validation_instance,
-        production_instance,
-    ]
-
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    config_context = HAProxyConfigContext(
-        config=Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=MapConfig(template="# Initial config"),
-        ),
-        template_context=TemplateContext(),
-    )
-    config_context.rendered_config = RenderedConfig(
-        content="global\n    daemon", config=MagicMock()
-    )
-
-    # Mock successful validation and deployment
-    with patch.object(synchronizer, "_validate_with_sidecars", return_value=True):
         with patch.object(synchronizer, "_deploy_to_production") as mock_deploy:
-            expected_result = SyncResult(
-                success=True, instance=production_instance, config_version="123"
-            )
-            mock_deploy.return_value = [expected_result]
+            mock_deploy.return_value = [
+                SyncResult(
+                    success=True, instance=mock_production_instance, config_version="v1"
+                )
+            ]
 
-            results = await synchronizer.synchronize_configuration(config_context)
+            results = await synchronizer.synchronize_configuration(mock_config_context)
 
-    assert len(results) == 1
-    assert results[0] == expected_result
+            assert len(results) == 1
+            mock_deploy.assert_called_once()
 
+    def test_build_complete_config(self, synchronizer, mock_config_context):
+        """Test building complete configuration."""
+        config = synchronizer._build_complete_config(mock_config_context)
+        assert config == "global\n  daemon"
 
-@pytest.mark.asyncio
-async def test_config_synchronizer_build_complete_config():
-    """Test building complete HAProxy configuration."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
+    def test_build_complete_config_no_rendered_config(self, synchronizer):
+        """Test building configuration with no rendered config."""
+        context = Mock()
+        context.rendered_config = None
 
-    config_context = HAProxyConfigContext(
-        config=Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=MapConfig(template="# Initial config"),
-        ),
-        template_context=TemplateContext(),
-    )
-    config_context.rendered_config = RenderedConfig(
-        content="global\n    daemon", config=MagicMock()
-    )
+        with pytest.raises(
+            DataplaneAPIError, match="No rendered HAProxy configuration"
+        ):
+            synchronizer._build_complete_config(context)
 
-    config = synchronizer._build_complete_config(config_context)
-
-    assert config == "global\n    daemon"
-
-
-def test_config_synchronizer_build_complete_config_no_rendered():
-    """Test building complete config with no rendered config."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    config_context = HAProxyConfigContext(
-        config=Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=MapConfig(template="# Initial config"),
-        ),
-        template_context=TemplateContext(),
-    )  # No rendered_config
-
-    with pytest.raises(
-        DataplaneAPIError, match="No rendered HAProxy configuration available"
+    @pytest.mark.asyncio
+    async def test_validate_with_sidecars_success(
+        self, synchronizer, mock_validation_instance
     ):
-        synchronizer._build_complete_config(config_context)
+        """Test successful validation with sidecars."""
+        validation_instances = [mock_validation_instance]
+        config = "global\n  daemon"
 
+        with patch.object(
+            synchronizer, "_validate_instance", return_value=True
+        ) as mock_validate:
+            result = await synchronizer._validate_with_sidecars(
+                validation_instances, config
+            )
 
-@pytest.mark.asyncio
-async def test_config_synchronizer_validate_instance_success():
-    """Test successful instance validation."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
+            assert result is True
+            mock_validate.assert_called_once()
 
-    mock_client = MagicMock(spec=DataplaneClient)
-    mock_client.validate_configuration.return_value = True
+    @pytest.mark.asyncio
+    async def test_validate_with_sidecars_failure(
+        self, synchronizer, mock_validation_instance
+    ):
+        """Test validation failure with sidecars."""
+        validation_instances = [mock_validation_instance]
+        config = "global\n  daemon"
 
-    mock_pod = MagicMock(spec=Pod)
-    instance = HAProxyInstance(pod=mock_pod, dataplane_url="http://10.0.1.5:5555")
+        with patch.object(synchronizer, "_validate_instance", return_value=False):
+            result = await synchronizer._validate_with_sidecars(
+                validation_instances, config
+            )
 
-    result = await synchronizer._validate_instance(mock_client, instance, "config")
+            assert result is False
 
-    assert result is True
-    mock_client.validate_configuration.assert_called_once_with("config")
+    @pytest.mark.asyncio
+    async def test_validate_with_sidecars_exception(
+        self, synchronizer, mock_validation_instance
+    ):
+        """Test validation with exception."""
+        validation_instances = [mock_validation_instance]
+        config = "global\n  daemon"
 
+        with patch.object(
+            synchronizer, "_validate_instance", side_effect=RuntimeError("Error")
+        ):
+            result = await synchronizer._validate_with_sidecars(
+                validation_instances, config
+            )
 
-@pytest.mark.asyncio
-async def test_config_synchronizer_validate_instance_failure():
-    """Test instance validation with exception."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
+            assert result is False
 
-    mock_client = MagicMock(spec=DataplaneClient)
-    mock_client.validate_configuration.side_effect = Exception("Network error")
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.DataplaneClient")
+    async def test_validate_instance_success(
+        self, mock_client_class, synchronizer, mock_validation_instance
+    ):
+        """Test successful instance validation."""
+        mock_client = AsyncMock()
+        mock_client.validate_configuration.return_value = True
+        mock_client_class.return_value = mock_client
 
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "default"
-    mock_pod.name = "haproxy-1"
+        # Mock tenacity retry
+        class MockAsyncRetrying:
+            async def __aiter__(self):
+                attempt = Mock()
+                attempt.__enter__ = Mock(return_value=attempt)
+                attempt.__exit__ = Mock(return_value=None)
+                yield attempt
 
-    instance = HAProxyInstance(pod=mock_pod, dataplane_url="http://10.0.1.5:5555")
+        with patch(
+            "haproxy_template_ic.dataplane.AsyncRetrying",
+            return_value=MockAsyncRetrying(),
+        ):
+            result = await synchronizer._validate_instance(
+                mock_client, mock_validation_instance, "config"
+            )
 
-    result = await synchronizer._validate_instance(mock_client, instance, "config")
+            assert result is True
 
-    assert result is False
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.DataplaneClient")
+    async def test_validate_instance_failure(
+        self, mock_client_class, synchronizer, mock_validation_instance
+    ):
+        """Test instance validation failure."""
+        mock_client = AsyncMock()
+        mock_client.validate_configuration.return_value = False
+        mock_client_class.return_value = mock_client
 
+        # Mock tenacity retry
+        class MockAsyncRetrying:
+            async def __aiter__(self):
+                attempt = Mock()
+                attempt.__enter__ = Mock(return_value=attempt)
+                attempt.__exit__ = Mock(return_value=None)
+                yield attempt
 
-@pytest.mark.asyncio
-async def test_config_synchronizer_deploy_to_instance_success():
-    """Test successful deployment to instance."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    mock_client = MagicMock(spec=DataplaneClient)
-    mock_client.deploy_configuration.return_value = "123"
-
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "default"
-    mock_pod.name = "haproxy-1"
-
-    instance = HAProxyInstance(pod=mock_pod, dataplane_url="http://10.0.1.5:5555")
-
-    result = await synchronizer._deploy_to_instance(mock_client, instance, "config")
-
-    assert result.success is True
-    assert result.instance == instance
-    assert result.config_version == "123"
-    assert result.error is None
-
-
-@pytest.mark.asyncio
-async def test_config_synchronizer_deploy_to_instance_failure():
-    """Test deployment failure to instance."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    mock_client = MagicMock(spec=DataplaneClient)
-    mock_client.deploy_configuration.side_effect = DataplaneAPIError("Deploy failed")
-
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "default"
-    mock_pod.name = "haproxy-1"
-
-    instance = HAProxyInstance(pod=mock_pod, dataplane_url="http://10.0.1.5:5555")
-
-    result = await synchronizer._deploy_to_instance(mock_client, instance, "config")
-
-    assert result.success is False
-    assert result.instance == instance
-    assert result.config_version is None
-    assert result.error == "Deploy failed"
-
-
-@pytest.mark.asyncio
-async def test_synchronize_configuration_no_validation_sidecars():
-    """Test synchronization when no validation sidecars are found."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-
-    production_instance = HAProxyInstance(
-        pod=MagicMock(spec=Pod),
-        dataplane_url="http://production:8080",
-        is_validation_sidecar=False,
-    )
-
-    mock_discovery.discover_instances.return_value = [production_instance]
-
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    config_context = HAProxyConfigContext(
-        config=Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=MapConfig(template="# Initial config"),
-        ),
-        template_context=TemplateContext(),
-    )
-    config_context.rendered_config = RenderedConfig(
-        content="global\n    daemon", config=MagicMock()
-    )
-
-    # Mock successful deployment to production
-    with patch.object(synchronizer, "_deploy_to_production") as mock_deploy:
-        mock_deploy.return_value = [
-            SyncResult(success=True, instance=production_instance)
-        ]
-
-        results = await synchronizer.synchronize_configuration(config_context)
-
-        assert len(results) == 1
-        assert results[0].success is True
-        # Should log warning about no validation sidecars
-
-
-@pytest.mark.asyncio
-async def test_validate_with_sidecars_logging():
-    """Test that _validate_with_sidecars logs the number of sidecars."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    validation_instances = [
-        HAProxyInstance(
-            pod=MagicMock(spec=Pod),
-            dataplane_url="http://validator1:8080",
-            is_validation_sidecar=True,
-        ),
-        HAProxyInstance(
-            pod=MagicMock(spec=Pod),
-            dataplane_url="http://validator2:8080",
-            is_validation_sidecar=True,
-        ),
-    ]
-
-    config = "global\n    daemon"
-
-    # Mock both _validate_instance calls to succeed
-    with patch.object(
-        synchronizer, "_validate_instance", new_callable=AsyncMock
-    ) as mock_validate:
-        mock_validate.return_value = None
-
-        # This should complete successfully and log about 2 sidecars
-        await synchronizer._validate_with_sidecars(validation_instances, config)
-
-        # Verify _validate_instance was called for both instances
-        assert mock_validate.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_validate_instance_dataplane_error():
-    """Test instance validation with DataplaneAPIError."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    mock_client = MagicMock()
-    mock_client.validate_configuration = AsyncMock(
-        side_effect=DataplaneAPIError("Invalid config")
-    )
-
-    mock_pod = MagicMock(spec=Pod)
-    mock_pod.namespace = "test-ns"
-    mock_pod.name = "test-pod"
-
-    instance = HAProxyInstance(
-        pod=mock_pod, dataplane_url="http://validator:8080", is_validation_sidecar=True
-    )
-    config = "global\n    daemon"
-
-    result = await synchronizer._validate_instance(mock_client, instance, config)
-    assert (
-        result is False
-    )  # Should return False on DataplaneAPIError, not raise ValidationError
-
-
-@pytest.mark.asyncio
-async def test_deploy_to_production_error_handling():
-    """Test production deployment with error handling."""
-    mock_discovery = MagicMock(spec=HAProxyPodDiscovery)
-    synchronizer = ConfigSynchronizer(mock_discovery)
-
-    production_instances = [
-        HAProxyInstance(
-            pod=MagicMock(spec=Pod),
-            dataplane_url="http://prod1:8080",
-            is_validation_sidecar=False,
-        ),
-        HAProxyInstance(
-            pod=MagicMock(spec=Pod),
-            dataplane_url="http://prod2:8080",
-            is_validation_sidecar=False,
-        ),
-    ]
-
-    config = "global\n    daemon"
-
-    # Mock one success and one failure
-    with patch.object(synchronizer, "_deploy_to_instance") as mock_deploy:
-
-        async def side_effect(client, instance, config):
-            if instance == production_instances[0]:
-                return SyncResult(
-                    success=True, instance=instance, config_version="v123"
-                )
-            else:
-                return SyncResult(
-                    success=False, instance=instance, error="Deploy failed"
+        with patch(
+            "haproxy_template_ic.dataplane.AsyncRetrying",
+            return_value=MockAsyncRetrying(),
+        ):
+            with pytest.raises(ValidationError):
+                await synchronizer._validate_instance(
+                    mock_client, mock_validation_instance, "bad config"
                 )
 
-        mock_deploy.side_effect = side_effect
+    @pytest.mark.asyncio
+    async def test_deploy_to_production_success(
+        self, synchronizer, mock_production_instance
+    ):
+        """Test successful deployment to production."""
+        production_instances = [mock_production_instance]
+        config = "global\n  daemon"
 
-        results = await synchronizer._deploy_to_production(production_instances, config)
+        mock_sync_result = SyncResult(
+            success=True, instance=mock_production_instance, config_version="v1"
+        )
+        with patch.object(
+            synchronizer, "_deploy_to_instance", return_value=mock_sync_result
+        ):
+            results = await synchronizer._deploy_to_production(
+                production_instances, config
+            )
 
-        assert len(results) == 2
-        assert results[0].success is True
-        assert results[1].success is False
+            assert len(results) == 1
+            assert results[0].success is True
+
+    @pytest.mark.asyncio
+    async def test_deploy_to_production_with_exception(
+        self, synchronizer, mock_production_instance
+    ):
+        """Test deployment to production with exception."""
+        production_instances = [mock_production_instance]
+        config = "global\n  daemon"
+
+        with patch.object(
+            synchronizer,
+            "_deploy_to_instance",
+            side_effect=RuntimeError("Deploy error"),
+        ):
+            results = await synchronizer._deploy_to_production(
+                production_instances, config
+            )
+
+            assert len(results) == 1
+            assert results[0].success is False
+            assert "Deploy error" in results[0].error
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.DataplaneClient")
+    async def test_deploy_to_instance_success(
+        self, mock_client_class, synchronizer, mock_production_instance
+    ):
+        """Test successful deployment to single instance."""
+        mock_client = AsyncMock()
+        mock_client.deploy_configuration.return_value = "v123"
+        mock_client_class.return_value = mock_client
+
+        result = await synchronizer._deploy_to_instance(
+            mock_client, mock_production_instance, "config"
+        )
+
+        assert result.success is True
+        assert result.config_version == "v123"
+        assert result.instance == mock_production_instance
+
+    @pytest.mark.asyncio
+    @patch("haproxy_template_ic.dataplane.DataplaneClient")
+    async def test_deploy_to_instance_failure(
+        self, mock_client_class, synchronizer, mock_production_instance
+    ):
+        """Test deployment failure to single instance."""
+        mock_client = AsyncMock()
+        mock_client.deploy_configuration.side_effect = RuntimeError("Deploy failed")
+        mock_client_class.return_value = mock_client
+
+        result = await synchronizer._deploy_to_instance(
+            mock_client, mock_production_instance, "config"
+        )
+
+        assert result.success is False
+        assert "Deploy failed" in result.error
+        assert result.instance == mock_production_instance

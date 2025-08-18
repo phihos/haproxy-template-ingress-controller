@@ -168,6 +168,20 @@ class PodSelector(BaseModel):
         frozen = True
 
 
+class DataplaneAuth(BaseModel):
+    """Authentication configuration for HAProxy Dataplane API."""
+
+    username: NonEmptyStr = Field(
+        default="admin", description="Username for Dataplane API"
+    )
+    password: NonEmptyStr = Field(
+        default="adminpass", description="Password for Dataplane API"
+    )
+
+    class Config:
+        frozen = True
+
+
 class Config(BaseModel):
     """Root configuration for HAProxy Template IC."""
 
@@ -187,6 +201,10 @@ class Config(BaseModel):
     )
     certificates: Dict[AbsolutePath, CertificateConfig] = Field(
         default_factory=dict, description="TLS certificates"
+    )
+    dataplane_auth: DataplaneAuth = Field(
+        default_factory=DataplaneAuth,
+        description="Authentication for HAProxy Dataplane API",
     )
 
     @field_validator("template_snippets")
@@ -361,115 +379,30 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
 
 
 def export_config_schema(include_examples: bool = True) -> Dict[str, Any]:
-    """
-    Export the JSON schema for the main Config model.
-
-    Args:
-        include_examples: Whether to include example values in the schema
-
-    Returns:
-        dict: JSON schema for the Config model
-    """
-    try:
-        # Generate schema in 'serialization' mode to exclude non-serializable fields
-        schema = Config.model_json_schema(mode="serialization")
-    except Exception:
-        # Fallback: create a simplified schema manually
-        schema = _create_simplified_config_schema()
-        # Preserve examples from the model config
-        schema["json_schema_extra"] = Config.model_config.get("json_schema_extra", {})
-
-    if include_examples:
-        # Add examples to the schema for better documentation
-        _add_schema_examples(schema)
-
-    return schema
+    """Export the JSON schema for the main Config model."""
+    return Config.model_json_schema(mode="serialization")
 
 
 def export_all_schemas() -> Dict[str, Any]:
-    """
-    Export JSON schemas for all configuration models.
-
-    Returns:
-        dict: Dictionary containing schemas for all models
-    """
-    schemas = {}
+    """Export JSON schemas for all configuration models."""
     models = [
-        ("Config", Config),
-        ("WatchResourceConfig", WatchResourceConfig),
-        ("MapConfig", MapConfig),
-        ("TemplateSnippet", TemplateSnippet),
-        ("CertificateConfig", CertificateConfig),
-        ("PodSelector", PodSelector),
-        ("ResourceFilter", ResourceFilter),
-        ("RenderedMap", RenderedMap),
-        ("RenderedConfig", RenderedConfig),
-        ("RenderedCertificate", RenderedCertificate),
-        ("TemplateContext", TemplateContext),
-        ("HAProxyConfigContext", HAProxyConfigContext),
+        Config,
+        WatchResourceConfig,
+        MapConfig,
+        TemplateSnippet,
+        CertificateConfig,
+        PodSelector,
+        ResourceFilter,
+        RenderedMap,
+        RenderedConfig,
+        RenderedCertificate,
+        TemplateContext,
+        HAProxyConfigContext,
     ]
-
-    for name, model in models:
-        try:
-            schemas[name] = model.model_json_schema(mode="serialization")  # type: ignore[attr-defined]
-        except Exception:
-            # Create a simplified schema for models with non-serializable fields
-            schemas[name] = {
-                "type": "object",
-                "title": name,
-                "description": f"Schema for {name} (simplified due to non-serializable fields)",
-            }
-
-    return schemas
-
-
-def _add_schema_examples(schema: Dict[str, Any]) -> None:
-    """Add example values to schema properties for documentation."""
-    properties = schema.get("properties", {})
-
-    # Add examples for main configuration sections
-    if "pod_selector" in properties:
-        properties["pod_selector"]["example"] = {
-            "match_labels": {"app": "haproxy", "component": "loadbalancer"}
-        }
-
-    if "watched_resources" in properties:
-        properties["watched_resources"]["example"] = {
-            "ingresses": {
-                "api_version": "networking.k8s.io/v1",
-                "kind": "Ingress",
-                "enable_validation_webhook": True,
-            },
-            "services": {
-                "api_version": "v1",
-                "kind": "Service",
-                "enable_validation_webhook": False,
-            },
-        }
-
-    if "maps" in properties:
-        properties["maps"]["example"] = {
-            "/etc/haproxy/maps/host.map": {
-                "template": "{% for _, ingress in resources.get('ingresses', {}).items() %}\n{% if ingress.spec and ingress.spec.rules %}\n{% for rule in ingress.spec.rules %}\n{% if rule.host %}\n{{ rule.host }} {{ rule.host }}\n{% endif %}\n{% endfor %}\n{% endif %}\n{% endfor %}"
-            }
-        }
-
-    if "template_snippets" in properties:
-        properties["template_snippets"]["example"] = {
-            "backend-name": {
-                "name": "backend-name",
-                "template": "backend_{{ service_name }}_{{ port }}",
-            },
-            "health-check": {
-                "name": "health-check",
-                "template": "option httpchk GET /health",
-            },
-        }
-
-    if "haproxy_config" in properties:
-        properties["haproxy_config"]["example"] = {
-            "template": 'global\n    daemon\n\ndefaults\n    mode http\n    timeout connect 5000ms\n    timeout client 50000ms\n    timeout server 50000ms\n\nfrontend health\n    bind *:8404\n    http-request return status 200 content-type text/plain string "OK" if { path /healthz }\n\nfrontend main\n    bind *:80\n    {% include "backend-routing" %}'
-        }
+    return {
+        model.__name__: model.model_json_schema(mode="serialization")  # type: ignore[attr-defined]
+        for model in models
+    }
 
 
 def validate_config_against_schema(config_data: Dict[str, Any]) -> List[str]:
@@ -508,74 +441,6 @@ def get_schema_version() -> str:
     """
     # This can be used for schema migration and compatibility checking
     return "1.0.0"
-
-
-def _create_simplified_config_schema() -> Dict[str, Any]:
-    """Create a simplified schema manually when automatic generation fails."""
-    return {
-        "type": "object",
-        "properties": {
-            "pod_selector": {
-                "type": "object",
-                "properties": {
-                    "match_labels": {
-                        "type": "object",
-                        "additionalProperties": {"type": "string"},
-                    }
-                },
-                "required": ["match_labels"],
-            },
-            "haproxy_config": {
-                "type": "object",
-                "properties": {"template": {"type": "string"}},
-                "required": ["template"],
-            },
-            "watched_resources": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                        "api_version": {"type": "string"},
-                        "kind": {"type": "string"},
-                        "enable_validation_webhook": {
-                            "type": "boolean",
-                            "default": True,
-                        },
-                    },
-                    "required": ["api_version", "kind"],
-                },
-            },
-            "maps": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {"template": {"type": "string"}},
-                    "required": ["template"],
-                },
-            },
-            "template_snippets": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "template": {"type": "string"},
-                    },
-                    "required": ["name", "template"],
-                },
-            },
-            "certificates": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {"template": {"type": "string"}},
-                    "required": ["template"],
-                },
-            },
-        },
-        "required": ["pod_selector", "haproxy_config"],
-        "additionalProperties": False,
-    }
 
 
 WatchResourceCollection = Dict[str, WatchResourceConfig]

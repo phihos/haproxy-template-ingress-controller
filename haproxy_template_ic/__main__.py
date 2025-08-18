@@ -7,7 +7,7 @@ This module provides the CLI interface and application startup logic.
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, cast, Literal
+from typing import Optional
 
 import click
 
@@ -18,6 +18,13 @@ from haproxy_template_ic.tracing import (
     create_tracing_config_from_env,
     shutdown_tracing,
 )
+from haproxy_template_ic.config_models import (
+    export_config_schema,
+    export_all_schemas,
+    validate_config_against_schema,
+    get_schema_version,
+)
+from haproxy_template_ic.settings import export_settings_schema
 
 
 # =============================================================================
@@ -59,7 +66,7 @@ def setup_logging(verbose_level: int) -> None:
     "-c",
     "--configmap-name",
     envvar="CONFIGMAP_NAME",
-    required=True,
+    required=False,
     help="Name of the Kubernetes ConfigMap used for configuration.",
 )
 @click.option(
@@ -157,6 +164,14 @@ def main(
         _handle_generate_docs(Path(generate_docs))
         return
 
+    # Check required configmap_name for operator mode
+    if not configmap_name:
+        click.echo(
+            "❌ Error: Missing option '-c' / '--configmap-name' (required for operator mode).",
+            err=True,
+        )
+        raise click.Abort()
+
     # Initialize distributed tracing
     tracing_config = create_tracing_config_from_env()
     tracing_config.enabled = tracing_enabled or tracing_config.enabled
@@ -190,19 +205,23 @@ def main(
 
 def _handle_export_schema(output_path: Path) -> None:
     """Handle --export-schema command."""
-    from haproxy_template_ic.schema_export import export_schema_to_file
-
-    # Determine format from file extension
-    format_str = "yaml" if output_path.suffix.lower() in [".yaml", ".yml"] else "json"
-    format_literal = cast(Literal["json", "yaml"], format_str)
+    import json
+    import yaml
 
     try:
-        export_schema_to_file(
-            output_path=output_path,
-            format=format_literal,
-            include_examples=True,
-            include_settings=True,
-        )
+        schema_data = {
+            "schema_version": get_schema_version(),
+            "config_schema": export_config_schema(include_examples=True),
+            "settings_schema": export_settings_schema(),
+        }
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            if output_path.suffix.lower() in [".yaml", ".yml"]:
+                yaml.dump(schema_data, f, default_flow_style=False, sort_keys=False)
+            else:
+                json.dump(schema_data, f, indent=2, ensure_ascii=False)
+
         click.echo(f"✅ Configuration schema exported to {output_path}")
     except Exception as e:
         click.echo(f"❌ Failed to export schema: {e}", err=True)
@@ -211,10 +230,17 @@ def _handle_export_schema(output_path: Path) -> None:
 
 def _handle_export_all_schemas(output_dir: Path) -> None:
     """Handle --export-all-schemas command."""
-    from haproxy_template_ic.schema_export import export_all_schemas_to_directory
+    import json
 
     try:
-        export_all_schemas_to_directory(output_dir=output_dir, format="json")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        all_schemas = export_all_schemas()
+
+        for schema_name, schema_data in all_schemas.items():
+            schema_path = output_dir / f"{schema_name.lower()}.json"
+            with open(schema_path, "w", encoding="utf-8") as f:
+                json.dump(schema_data, f, indent=2, ensure_ascii=False)
+
         click.echo(f"✅ All schemas exported to {output_dir}")
     except Exception as e:
         click.echo(f"❌ Failed to export schemas: {e}", err=True)
@@ -223,30 +249,30 @@ def _handle_export_all_schemas(output_dir: Path) -> None:
 
 def _handle_validate_config(config_path: Path) -> None:
     """Handle --validate-config command."""
-    from haproxy_template_ic.schema_export import validate_config_file
+    import json
+    import yaml
 
     try:
-        result = validate_config_file(config_path)
+        with open(config_path, "r", encoding="utf-8") as f:
+            if config_path.suffix.lower() in [".yaml", ".yml"]:
+                config_data = yaml.safe_load(f)
+            elif config_path.suffix.lower() == ".json":
+                config_data = json.load(f)
+            else:
+                click.echo(
+                    f"❌ Unsupported file format: {config_path.suffix}", err=True
+                )
+                raise click.Abort()
 
-        if result["valid"]:
+        errors = validate_config_against_schema(config_data)
+
+        if not errors:
             click.echo(f"✅ Configuration file {config_path} is valid")
-
-            # Show warnings if any
-            if result["warnings"]:
-                click.echo("\n⚠️  Warnings:")
-                for warning in result["warnings"]:
-                    click.echo(f"  - {warning}")
         else:
             click.echo(f"❌ Configuration file {config_path} is invalid")
             click.echo("\nErrors:")
-            for error in result["errors"]:
+            for error in errors:
                 click.echo(f"  - {error}")
-
-            if result["warnings"]:
-                click.echo("\nWarnings:")
-                for warning in result["warnings"]:
-                    click.echo(f"  - {warning}")
-
             raise click.Abort()
 
     except Exception as e:
@@ -256,10 +282,32 @@ def _handle_validate_config(config_path: Path) -> None:
 
 def _handle_generate_docs(output_path: Path) -> None:
     """Handle --generate-docs command."""
-    from haproxy_template_ic.schema_export import generate_config_documentation
 
     try:
-        generate_config_documentation(output_path=output_path, include_examples=True)
+        doc_content = f"""# HAProxy Template IC Configuration Reference
+
+Schema Version: {get_schema_version()}
+
+This document provides reference for configuring HAProxy Template IC.
+
+## Configuration Schema
+
+The main configuration is provided via a Kubernetes ConfigMap.
+
+For detailed schema information, use: `haproxy-template-ic --export-schema config-schema.json`
+
+## Validation
+
+Configuration can be validated using:
+
+```bash
+haproxy-template-ic --validate-config my-config.yaml
+```
+"""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(doc_content)
+
         click.echo(f"✅ Configuration documentation generated at {output_path}")
     except Exception as e:
         click.echo(f"❌ Failed to generate documentation: {e}", err=True)

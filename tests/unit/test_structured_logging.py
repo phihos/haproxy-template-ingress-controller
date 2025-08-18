@@ -18,9 +18,6 @@ from haproxy_template_ic.structured_logging import (
     operation_context,
     component_context_manager,
     resource_context_manager,
-    log_template_operation,
-    log_dataplane_operation,
-    log_kubernetes_event,
     custom_logfmt_renderer,
     custom_timestamp_processor,
 )
@@ -412,94 +409,6 @@ class TestConvenienceFunctions:
         # The underlying logger should be a structlog bound logger (could be lazy proxy)
         assert hasattr(logger.logger, "info")  # Check it has logging methods
 
-    def test_log_template_operation(self):
-        """Test template operation logging helper."""
-        # Setup JSON logging to capture structured output
-        setup_structured_logging(verbose_level=1, use_json=True)
-
-        # Capture output
-        stream = StringIO()
-        handler = logging.StreamHandler(stream)
-        root_logger = logging.getLogger()
-        root_logger.handlers = [handler]
-
-        structured_logger = get_structured_logger("test_template")
-
-        log_template_operation(
-            structured_logger,
-            template_type="haproxy_config",
-            operation="render",
-            duration=0.123,
-        )
-
-        output = stream.getvalue().strip()
-        if output:  # Only parse if we got output
-            parsed = json.loads(output)
-            assert parsed["event"] == "Template render"
-            assert parsed["template_type"] == "haproxy_config"
-            assert parsed["template_operation"] == "render"
-            assert parsed["duration"] == 0.123
-
-    def test_log_dataplane_operation(self):
-        """Test Dataplane API operation logging helper."""
-        # Setup JSON logging to capture structured output
-        setup_structured_logging(verbose_level=1, use_json=True)
-
-        # Capture output
-        stream = StringIO()
-        handler = logging.StreamHandler(stream)
-        root_logger = logging.getLogger()
-        root_logger.handlers = [handler]
-
-        structured_logger = get_structured_logger("test_dataplane")
-
-        log_dataplane_operation(
-            structured_logger,
-            operation="validate",
-            pod_name="haproxy-pod-1",
-            status="success",
-        )
-
-        output = stream.getvalue().strip()
-        if output:  # Only parse if we got output
-            parsed = json.loads(output)
-            assert parsed["event"] == "Dataplane API validate"
-            assert parsed["pod_name"] == "haproxy-pod-1"
-            assert parsed["dataplane_operation"] == "validate"
-            assert parsed["status"] == "success"
-
-    def test_log_kubernetes_event(self):
-        """Test Kubernetes event logging helper."""
-        # Setup JSON logging to capture structured output
-        setup_structured_logging(verbose_level=1, use_json=True)
-
-        # Capture output
-        stream = StringIO()
-        handler = logging.StreamHandler(stream)
-        root_logger = logging.getLogger()
-        root_logger.handlers = [handler]
-
-        structured_logger = get_structured_logger("test_k8s")
-
-        log_kubernetes_event(
-            structured_logger,
-            event_type="MODIFIED",
-            resource_type="Ingress",
-            namespace="default",
-            name="test-ingress",
-            reason="ConfigChanged",
-        )
-
-        output = stream.getvalue().strip()
-        if output:  # Only parse if we got output
-            parsed = json.loads(output)
-            assert parsed["event"] == "Kubernetes MODIFIED"
-            assert parsed["resource_type"] == "Ingress"
-            assert parsed["resource_namespace"] == "default"
-            assert parsed["resource_name"] == "test-ingress"
-            assert parsed["kubernetes_event"] == "MODIFIED"
-            assert parsed["reason"] == "ConfigChanged"
-
 
 class TestIntegration:
     """Integration tests for structured logging."""
@@ -534,21 +443,21 @@ class TestIntegration:
                     )
 
                 # Log template rendering
-                log_template_operation(
-                    structured_logger,
-                    template_type="map",
-                    operation="render",
-                    duration=0.042,
-                    success=True,
-                )
+                with resource_context_manager(template_type="map"):
+                    structured_logger.info(
+                        "Template render",
+                        template_operation="render",
+                        duration=0.042,
+                        success=True,
+                    )
 
                 # Log Dataplane API call
-                log_dataplane_operation(
-                    structured_logger,
-                    operation="deploy",
-                    pod_name="haproxy-production-1",
-                    version="1.2.3",
-                )
+                with resource_context_manager(pod_name="haproxy-production-1"):
+                    structured_logger.info(
+                        "Dataplane API deploy",
+                        dataplane_operation="deploy",
+                        version="1.2.3",
+                    )
 
         # Parse all log entries
         output = stream.getvalue().strip()
