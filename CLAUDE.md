@@ -282,6 +282,8 @@ Follow the style guide in `STYLEGUIDE.md`:
 
 **Standard Process**: Feature branch → Plan/implement → Test (`uv run pytest -n auto`) → Quality checks → Self-review → Commit → PR → Review → Merge
 
+**CRITICAL**: Having all tests including unit, integration, and acceptance tests pass reliably is mandatory before merging a PR. The full test suite (`timeout 480 uv run pytest -n auto`) must complete successfully without any failures or flaky tests.
+
 **Self-Review Step**: After all changes have been made but before committing, Claude should proactively review its own changes using the `code-reviewer` agent and act on any resulting suggestions to ensure code quality and catch potential issues early.
 
 **PR Management**:

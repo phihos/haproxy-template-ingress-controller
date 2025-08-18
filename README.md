@@ -204,7 +204,8 @@ EOF
 
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-template-ic-config" \
-  --env="VERBOSE=1"
+  --env="VERBOSE=1" \
+  -- run
 
 # Check status
 kubectl logs -f haproxy-template-ic
@@ -296,7 +297,8 @@ The controller uses [structlog](https://www.structlog.org/) for high-performance
 ```bash
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-config" \
-  --env="VERBOSE=2"
+  --env="VERBOSE=2" \
+  -- run
 ```
 
 **JSON Mode**: Structured JSON output for log aggregation systems:
@@ -304,7 +306,8 @@ kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-config" \
   --env="STRUCTURED_LOGGING=true" \
-  --env="VERBOSE=1"
+  --env="VERBOSE=1" \
+  -- run
 ```
 
 ### Response Structure

@@ -149,7 +149,7 @@ kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev
 
 # Deploy for development
 kubectl create configmap haproxy-template-ic-config --from-literal=config="pod_selector: app=test"
-kubectl run haproxy-template-ic --image=haproxy-template-ic:dev --env="CONFIGMAP_NAME=haproxy-template-ic-config"
+kubectl run haproxy-template-ic --image=haproxy-template-ic:dev --env="CONFIGMAP_NAME=haproxy-template-ic-config" -- run
 
 # Access logs and management socket
 kubectl logs -f haproxy-template-ic
@@ -539,7 +539,8 @@ uv run bandit -r haproxy_template_ic/ -f json | jq '.'
 kubectl create configmap haproxy-template-ic-config --from-literal=config="pod_selector: app=test"
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-template-ic-config" \
-  --env="VERBOSE=2"
+  --env="VERBOSE=2" \
+  -- run
 
 # Interactive debugging with management socket
 kubectl exec -it haproxy-template-ic -- \

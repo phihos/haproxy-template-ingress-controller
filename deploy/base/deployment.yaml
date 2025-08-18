@@ -18,6 +18,7 @@ spec:
         - name: controller
           image: ghcr.io/phihos/haproxy-template-ingress-controller:latest
           imagePullPolicy: IfNotPresent
+          args: ["run"]
           env:
             - name: CONFIGMAP_NAME
               value: haproxy-template-ic-config
