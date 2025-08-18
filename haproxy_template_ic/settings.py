@@ -53,24 +53,26 @@ class WebhookSettings(BaseSettings):
 class ApplicationSettings(BaseSettings):
     """Main application settings with environment variable support."""
 
-    # Core configuration
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        env_nested_delimiter="__",
+    )
+
+    # Core configuration - using env in model_config
     configmap_name: str = Field(
-        ...,
-        env="CONFIGMAP_NAME",
-        description="Name of the Kubernetes ConfigMap used for configuration",
+        description="Name of the Kubernetes ConfigMap used for configuration"
     )
 
     # Server ports
     healthz_port: int = Field(
         8080,
-        env="HEALTHZ_PORT",
         ge=1024,
         le=65535,
         description="Port for health check endpoint",
     )
     metrics_port: int = Field(
         9090,
-        env="METRICS_PORT",
         ge=1024,
         le=65535,
         description="Port for Prometheus metrics endpoint",
@@ -79,42 +81,40 @@ class ApplicationSettings(BaseSettings):
     # Logging and debugging
     verbose: int = Field(
         0,
-        env="VERBOSE",
         ge=0,
         le=2,
         description="Verbosity level: 0=WARNING, 1=INFO, 2=DEBUG",
     )
     structured_logging: bool = Field(
         False,
-        env="STRUCTURED_LOGGING",
         description="Enable structured JSON logging output",
     )
 
     # File paths
     socket_path: Path = Field(
         Path("/run/haproxy-template-ic/management.sock"),
-        env="SOCKET_PATH",
         description="Path for management socket to expose internal state",
     )
 
     # Feature flags
     development_mode: bool = Field(
         False,
-        env="DEVELOPMENT_MODE",
         description="Enable development mode with additional debugging",
     )
 
     # Nested settings
     tracing: TracingSettings = Field(
-        default_factory=TracingSettings, description="Distributed tracing configuration"
+        default_factory=lambda: TracingSettings(),  # type: ignore[call-arg]
+        description="Distributed tracing configuration",
     )
     webhook: WebhookSettings = Field(
-        default_factory=WebhookSettings, description="Webhook server configuration"
+        default_factory=lambda: WebhookSettings(),  # type: ignore[call-arg]
+        description="Webhook server configuration",
     )
 
     # Security
     api_key: Optional[SecretStr] = Field(
-        None, env="API_KEY", description="API key for secure operations (if required)"
+        None, description="API key for secure operations (if required)"
     )
 
     @field_validator("socket_path")
@@ -184,7 +184,7 @@ def get_application_settings() -> ApplicationSettings:
     Raises:
         ValidationError: If configuration validation fails
     """
-    return ApplicationSettings()
+    return ApplicationSettings()  # type: ignore[call-arg]
 
 
 def export_settings_schema() -> dict:
@@ -210,7 +210,7 @@ def validate_environment_config() -> tuple[ApplicationSettings, list[str]]:
     warnings = []
 
     try:
-        settings = ApplicationSettings()
+        settings = ApplicationSettings()  # type: ignore[call-arg]
 
         # Check for common configuration issues
         if settings.webhook.enabled and not settings.webhook.cert_dir.exists():
