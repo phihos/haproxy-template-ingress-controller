@@ -13,6 +13,21 @@ image:
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
 
+# Shared HAProxy image configuration for all HAProxy and Dataplane API containers
+haproxyImage:
+  repository: haproxytech/haproxy-alpine
+  tag: "3.1"
+  pullPolicy: IfNotPresent
+
+# Unified dataplane configuration for all instances
+dataplaneConfig:
+  port: 5555
+  username: admin
+  # Environment-specific passwords
+  passwords:
+    production: adminpass
+    validation: validationpass
+
 # Controller configuration
 controller:
   configmapName: haproxy-template-ic-config
@@ -31,6 +46,28 @@ controller:
     jaegerEndpoint: ""  # e.g., "jaeger-collector:14268"
     sampleRate: 1.0
     consoleExport: false
+
+# Validation sidecars configuration  
+validation:
+  enabled: true
+  haproxy:
+    port: 8404
+
+# Production HAProxy configuration
+haproxy:
+  enabled: true
+  replicas: 2
+  ports:
+    http: 80
+    health: 8404
+  service:
+    type: ClusterIP
+    ports:
+      http: 80
+      https: 443
+      health: 8404
+      dataplane: 5555
+  resources: {}
 
 # Validating Admission Webhook configuration
 webhook:
@@ -68,8 +105,8 @@ webhook:
   config:
     pod_selector:
       match_labels:
-        app: haproxy-template-ic
-        release: haproxy-template-ic
+        app: haproxy
+        component: loadbalancer
     watched_resources:
       ingresses:
         api_version: networking.k8s.io/v1
@@ -230,7 +267,7 @@ webhook:
         global
             log stdout len 65536 local0 info
             chroot /var/lib/haproxy
-            stats socket /run/haproxy/admin.sock mode 660 level admin
+            stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
             stats timeout 30s
             user haproxy
             group haproxy

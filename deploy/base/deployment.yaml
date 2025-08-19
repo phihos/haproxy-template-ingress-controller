@@ -47,6 +47,57 @@ spec:
             - name: webhook-certs
               mountPath: /etc/certs
               readOnly: true
+            - name: validation-config
+              mountPath: /etc/haproxy/validation
+        - name: validation-haproxy
+          image: haproxytech/haproxy-alpine:3.1
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/haproxy/startup.sh"]
+          ports:
+            - name: validation
+              containerPort: 8404
+          env:
+            - name: HAPROXY_PASSWORD
+              value: validationpass
+            - name: CONTAINER_TYPE
+              value: haproxy
+          volumeMounts:
+            - name: universal-config
+              mountPath: /opt/haproxy
+            - name: validation-config
+              mountPath: /etc/haproxy
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8404
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        - name: validation-dataplane
+          image: haproxytech/haproxy-alpine:3.1
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/haproxy/startup.sh"]
+          ports:
+            - name: validation-api
+              containerPort: 5555
+          env:
+            - name: HAPROXY_PASSWORD
+              value: validationpass
+            - name: CONTAINER_TYPE
+              value: dataplane
+          volumeMounts:
+            - name: universal-config
+              mountPath: /opt/haproxy
+            - name: validation-config
+              mountPath: /etc/haproxy
+          livenessProbe:
+            httpGet:
+              path: /v3/info
+              port: 5555
+              httpHeaders:
+                - name: Authorization
+                  value: "Basic YWRtaW46dmFsaWRhdGlvbnBhc3M="
+            periodSeconds: 5
+            failureThreshold: 3
       volumes:
         - name: run
           emptyDir: {}
@@ -54,3 +105,9 @@ spec:
           secret:
             secretName: haproxy-template-ic-webhook-tls
             defaultMode: 420
+        - name: validation-config
+          emptyDir: {}
+        - name: universal-config
+          configMap:
+            name: haproxy-universal
+            defaultMode: 0755

@@ -1,0 +1,37 @@
+{{/* Simplified HAProxy ConfigMaps with consolidated scripts */}}
+
+{{/* Production ConfigMap */}}
+{{- if .Values.haproxy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-production-config
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    app: haproxy
+    component: loadbalancer
+data:
+{{- include "haproxy-template-ic.haproxy-scripts" . | nindent 2 }}
+  haproxy-default.cfg: |
+{{- include "haproxy-template-ic.haproxy-config" (dict "Values" .Values "healthPort" .Values.haproxy.ports.health "password" .Values.dataplaneConfig.passwords.production) | nindent 4 }}
+  dataplaneapi-default.yaml: |
+{{- include "haproxy-template-ic.dataplane-config" (dict "Values" .Values "password" .Values.dataplaneConfig.passwords.production) | nindent 4 }}
+---
+{{- end }}
+
+{{/* Validation ConfigMap */}}
+{{- if .Values.validation.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-validation-config
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    component: validation
+data:
+{{- include "haproxy-template-ic.haproxy-scripts" . | nindent 2 }}
+  haproxy-default.cfg: |
+{{- include "haproxy-template-ic.haproxy-config" (dict "Values" .Values "healthPort" .Values.validation.haproxy.port "password" .Values.dataplaneConfig.passwords.validation) | nindent 4 }}
+  dataplaneapi-default.yaml: |
+{{- include "haproxy-template-ic.dataplane-config" (dict "Values" .Values "password" .Values.dataplaneConfig.passwords.validation) | nindent 4 }}
+{{- end }}

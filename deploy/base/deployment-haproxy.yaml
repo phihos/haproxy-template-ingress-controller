@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-production
+  namespace: haproxy-template-ic
+  labels:
+    app: haproxy
+    component: loadbalancer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: haproxy
+      component: loadbalancer
+  template:
+    metadata:
+      labels:
+        app: haproxy
+        component: loadbalancer
+        release: haproxy-template-ic
+    spec:
+      containers:
+        - name: haproxy
+          image: haproxytech/haproxy-alpine:3.1
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/haproxy/startup.sh"]
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+            - name: https
+              containerPort: 443
+              protocol: TCP
+            - name: health
+              containerPort: 8404
+              protocol: TCP
+          env:
+            - name: HAPROXY_PASSWORD
+              value: adminpass
+            - name: CONTAINER_TYPE
+              value: haproxy
+          volumeMounts:
+            - name: universal-config
+              mountPath: /opt/haproxy
+            - name: haproxy-config
+              mountPath: /etc/haproxy
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8404
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8404
+            initialDelaySeconds: 5
+            periodSeconds: 5
+        - name: dataplane
+          image: haproxytech/haproxy-alpine:3.1
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/haproxy/startup.sh"]
+          ports:
+            - name: dataplane-api
+              containerPort: 5555
+              protocol: TCP
+          env:
+            - name: HAPROXY_PASSWORD
+              value: adminpass
+            - name: CONTAINER_TYPE
+              value: dataplane
+          volumeMounts:
+            - name: universal-config
+              mountPath: /opt/haproxy
+            - name: haproxy-config
+              mountPath: /etc/haproxy
+          livenessProbe:
+            httpGet:
+              path: /v3/info
+              port: 5555
+              httpHeaders:
+                - name: Authorization
+                  value: "Basic YWRtaW46YWRtaW5wYXNz"
+            periodSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /v3/info
+              port: 5555
+              httpHeaders:
+                - name: Authorization
+                  value: "Basic YWRtaW46YWRtaW5wYXNz"
+            periodSeconds: 5
+      volumes:
+        - name: haproxy-config
+          emptyDir: {}
+        - name: universal-config
+          configMap:
+            name: haproxy-universal
+            defaultMode: 0755

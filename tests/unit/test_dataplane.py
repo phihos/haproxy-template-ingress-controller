@@ -130,7 +130,7 @@ class TestHAProxyPodDiscovery:
         pod.namespace = "default"
         pod.name = "haproxy-pod-1"
         pod.status.phase = "Running"
-        pod.status.pod_ip = "192.168.1.10"
+        pod.status.podIP = "192.168.1.10"
         pod.metadata = {
             "labels": {},
             "annotations": {},
@@ -144,7 +144,7 @@ class TestHAProxyPodDiscovery:
         pod.namespace = "default"
         pod.name = "haproxy-validation-pod"
         pod.status.phase = "Running"
-        pod.status.pod_ip = "192.168.1.11"
+        pod.status.podIP = "192.168.1.11"
         pod.metadata = {
             "labels": {"haproxy-template-ic/role": "validation"},
             "annotations": {},
@@ -262,7 +262,7 @@ class TestHAProxyPodDiscovery:
     def test_build_dataplane_url_default_port(self, discovery):
         """Test dataplane URL building with default port."""
         pod = Mock()
-        pod.status.pod_ip = "192.168.1.100"
+        pod.status.podIP = "192.168.1.100"
         pod.metadata = {"annotations": {}}
 
         url = discovery._build_dataplane_url(pod)
@@ -271,7 +271,7 @@ class TestHAProxyPodDiscovery:
     def test_build_dataplane_url_custom_port(self, discovery):
         """Test dataplane URL building with custom port."""
         pod = Mock()
-        pod.status.pod_ip = "192.168.1.100"
+        pod.status.podIP = "192.168.1.100"
         pod.metadata = {"annotations": {"haproxy-template-ic/dataplane-port": "8080"}}
 
         url = discovery._build_dataplane_url(pod)
@@ -282,7 +282,7 @@ class TestHAProxyPodDiscovery:
         pod = Mock()
         pod.namespace = "default"
         pod.name = "test-pod"
-        pod.status.pod_ip = None
+        pod.status.podIP = None
         pod.metadata = {"annotations": {}}
 
         with pytest.raises(DataplaneAPIError, match="has no IP address"):

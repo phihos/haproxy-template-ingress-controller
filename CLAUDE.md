@@ -14,9 +14,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Development workflow**: First run unit tests `uv run pytest -m "not integration and not acceptance"`, fix all failures, then run all tests
 - **All tests (recommended)**: `timeout 480 uv run pytest -n auto` - parallel execution, up to 8 minutes (use 480s timeout)
 - **Unit tests**: `uv run pytest -m "not integration and not acceptance"`
-- **Integration tests**: `uv run pytest -m integration`
-- **E2E tests**: `uv run pytest -m acceptance`
+- **Integration tests**: `uv run pytest -m integration` - Docker-based HAProxy testing
+- **E2E tests**: `uv run pytest -m acceptance` - Full Kubernetes cluster testing
 - **Coverage**: `uv run pytest --cov=haproxy_template_ic --cov-report=html`
+- **Performance requirement**: All tests must complete in under 8 minutes for CI/CD pipelines
 
 #### Test Structure & Options
 ```
@@ -30,12 +31,21 @@ tests/fixtures/    # Test data and configurations
 - Integration: `--keep-containers=on-failure --show-container-logs --verbose-docker`
 - E2E: `--keep-namespaces --keep-namespace-on-failure`
 - Use `-s` for real-time output, `-n 0` for serial execution with full progress
+- Serial debugging: `uv run pytest -n 0 -s -v` for step-by-step execution
 
 #### Integration Test Features
+- **Docker containers**: Automated HAProxy + Dataplane API setup with Alpine 3.1
 - **Progress reporting**: Visual indicators, container monitoring, port tracking
 - **Failure diagnostics**: Automatic log collection and troubleshooting
 - **Progress context**: Use `progress_context("test_name", reporter)` for structured reporting
 - **Authentication**: Tests use `admin`/`adminpass`, IP addresses instead of hostnames
+- **Performance validation**: Verifies HAProxy 3.1 startup time under 10 seconds
+
+#### E2E Test Features
+- **Real Kubernetes**: Creates temporary clusters for full system testing
+- **Resource lifecycle**: Tests ConfigMap updates, pod discovery, template rendering
+- **Webhook validation**: Tests admission controllers and error handling
+- **Cleanup automation**: Namespaces and resources automatically removed unless `--keep-namespaces`
 
 ### Code Quality
 - Format code: `uv run ruff format`
@@ -53,20 +63,26 @@ tests/fixtures/    # Test data and configurations
   - Includes compatibility workarounds for known OpenAPI Generator bugs
 
 ### Development Environment
-- Setup dev environment: `bash ./scripts/start-dev-env.sh`
-  - Creates kind cluster and deploys controller with metrics, monitoring, and observability features
-  - Sets up echo server for testing Ingress functionality
-  - Provides comprehensive troubleshooting tips and monitoring access instructions
-- Build production image: `docker build --target production -t haproxy-template-ic:dev .`
-- Build coverage image: `docker build --target coverage -t haproxy-template-ic:coverage .`
-- Create kind cluster: `kind create cluster --name haproxy-template-ic-dev`
-- Load image to kind: `kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev`
+- **Main script**: `bash ./scripts/start-dev-env.sh [COMMAND] [OPTIONS]`
+  - `up`: Start development environment (default)
+  - `down`/`clean`: Delete the kind cluster
+  - `logs`: Follow controller logs
+  - `exec`: Execute shell in controller pod
+  - `restart`: Restart controller deployment
+  - `status`: Show deployment status
+  - Options: `--skip-build`, `--skip-echo`, `--force-rebuild`, `--verbose`, `--watch`, etc.
+- **Manual setup**:
+  - Build production image: `docker build --target production -t haproxy-template-ic:dev .`
+  - Build coverage image: `docker build --target coverage -t haproxy-template-ic:coverage .`
+  - Create kind cluster: `kind create cluster --name haproxy-template-ic-dev`
+  - Load image to kind: `kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev`
 
 ### Application
-- Run operator: `uv run haproxy-template-ic run --configmap-name=<name>`
-- Management socket: `socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock`
-- Metrics endpoint: `curl http://localhost:9090/metrics` (requires port-forward)
-- Health endpoint: `curl http://localhost:8080/healthz` (requires port-forward)
+- **Run operator**: `uv run haproxy-template-ic run --configmap-name=<name>` (or use `version` subcommand)
+- **Management socket**: `socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock`
+- **Monitoring endpoints** (require port-forward):
+  - Metrics: `curl http://localhost:9090/metrics`
+  - Health: `curl http://localhost:8080/healthz`
 
 ## Architecture Overview
 
@@ -102,8 +118,8 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 
 **Controller Pod** (3 containers):
 - Main controller: watches resources, renders templates (ports: 8080 health, 9090 metrics, 9443 webhook)
-- Validation HAProxy: config validation (port 8081, minimal config)
-- Validation Dataplane API: manages validation instance (port 5556, auth: `admin`/`validationpass`)
+- Validation HAProxy: config validation (port 8404, minimal config)
+- Validation Dataplane API: manages validation instance (port 5555, auth: `admin`/`validationpass`)
 
 **Production HAProxy Pods** (2 containers each):
 - HAProxy: production traffic (ports: 80 main, 8404 health - **mandatory**)
@@ -118,8 +134,8 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 | Controller | 8080 | Health (`/healthz`) | |
 | Controller | 9090 | Metrics (`/metrics`) | |
 | Controller | 9443 | Webhook validation | Optional |
-| Validation HAProxy | 8081 | Config validation | |
-| Validation API | 5556 | Manages validation | `admin`/`validationpass` |
+| Validation HAProxy | 8404 | Config validation | |
+| Validation API | 5555 | Manages validation | `admin`/`validationpass` |
 | Production HAProxy | 80 | Main traffic | HTTP/HTTPS |
 | Production HAProxy | 8404 | Health (`/healthz`) | **Mandatory** |
 | Production API | 5555 | Config deployment | `admin`/`adminpass` |
@@ -153,6 +169,14 @@ Validating admission webhooks prevent faulty resources from being applied, provi
 
 **Required sections**: `pod_selector`, `haproxy_config`
 **Optional sections**: `watched_resources`, `maps`, `template_snippets`, `certificates`
+
+### Unified Dataplane Configuration
+
+All dataplane instances now use port 5555 with environment-specific authentication:
+- **Production**: `admin`/`adminpass` (default)  
+- **Validation**: `admin`/`validationpass` (sidecar)
+
+This simplifies configuration management and deployment templates across all environments.
 
 ### Resource Indexing
 
@@ -221,6 +245,24 @@ data:
           {{ secret.data.get('tls.key') | b64decode }}
           {% endif %}{% endfor %}
 ```
+
+## Important Architectural Decisions
+
+### HAProxy Version Requirement: 3.1+ (Critical for Performance)
+**Decision**: All HAProxy containers MUST use `haproxytech/haproxy-alpine:3.1` or newer.
+
+**Rationale**:
+- **Critical startup speed**: Version 3.0 dataplaneapi Go binary has 30-60+ second startup time
+- **Version 3.1 fix**: dataplaneapi starts in 3-5 seconds (10x faster than 3.0)
+- **HAProxy core unaffected**: HAProxy itself starts quickly in both versions, the issue is specifically the dataplaneapi component
+- **Production impact**: Slow dataplaneapi startup causes routing failures during pod moves/restarts  
+- **Distribution agnostic**: The performance issue was version-specific, not distribution-specific
+
+**Do NOT use version 3.0** even though it's the LTS release. The dataplaneapi startup speed regression in 3.0 is critical for ingress controller availability.
+
+**Measured dataplaneapi startup times**:
+- Version 3.0: 30-60+ seconds (requires failureThreshold: 10)
+- Version 3.1+: 3-5 seconds (works with failureThreshold: 3)
 
 ## Important Development Notes
 
@@ -362,9 +404,11 @@ Follow the style guide in `STYLEGUIDE.md`:
 - When addressing code review feedback, add a summary of what was fixed/changed in response to the review
 
 **Kind Development**:
-1. Setup: `bash ./scripts/start-dev-env.sh`, build/load image
-2. Test: Run unit/integration/e2e tests with debugging options
+1. Setup: `bash ./scripts/start-dev-env.sh up`, optionally with `--skip-build` or `--verbose`
+2. Monitor: `bash ./scripts/start-dev-env.sh logs` or `status`
 3. Debug: Port-forward management socket, inspect with `dump all`
+4. Restart: `bash ./scripts/start-dev-env.sh restart` for quick iteration
+5. Clean: `bash ./scripts/start-dev-env.sh down` to remove cluster
 
 **Debugging**:
 - Metrics: Port-forward 9090, `curl /metrics`
@@ -376,9 +420,37 @@ Follow the style guide in `STYLEGUIDE.md`:
 
 ## Troubleshooting
 
-**Common**: Test failures (kind conflicts, use `--keep-namespaces`), import errors (`uv sync --group dev`), Docker permissions
-**Templates**: Use correct resource access patterns, match snippet names, define all referenced maps, use IP addresses not hostnames
-**Dataplane**: Check pod selectors/labels, ensure Running pods with IPs, verify port 5555, check HAProxy config syntax
+### Common Issues
+
+**Test Failures:**
+- Kind conflicts: Use `--keep-namespaces` for debugging, clean with `kind delete cluster`
+- Import errors: Run `uv sync --group dev` to install test dependencies
+- Docker permissions: Ensure Docker daemon accessible without sudo
+
+**Template Issues:**
+- Use correct resource access patterns: `resources.get('type', {}).items()`
+- Match snippet names exactly: `{% include "snippet-name" %}`
+- Define all referenced maps and certificates in ConfigMap
+- Use IP addresses not hostnames in tests (avoid DNS resolution)
+
+**Dataplane API Issues:**
+- Check pod selectors/labels match `pod_selector.match_labels` exactly
+- Ensure pods are Running with assigned IPs before controller starts
+- Verify dataplaneapi port 5555 accessible with correct authentication
+- Check HAProxy config syntax before deployment
+- **Version 3.0**: Increase `failureThreshold: 10` for slow dataplaneapi startup
+- **Version 3.1+**: Use `failureThreshold: 3` for fast startup
+
+**Performance Issues:**
+- HAProxy 3.0: dataplaneapi startup takes 30-60+ seconds
+- HAProxy 3.1+: dataplaneapi startup takes 3-5 seconds
+- Monitor pod startup time with `kubectl get events --sort-by='.firstTimestamp'`
+
+**Configuration Validation:**
+- Use `kubectl apply --dry-run=server` to test webhook validation
+- Check controller logs for template rendering errors
+- Validate Jinja2 syntax with `--webhook-enabled=true`
+- Use management socket `dump config` to inspect rendered templates
 
 ## Commit Message Guidelines
 

@@ -1,0 +1,43 @@
+{{- if .Values.haproxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-haproxy
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    app: haproxy
+    component: loadbalancer
+spec:
+  type: {{ .Values.haproxy.service.type | default "ClusterIP" }}
+  {{- with .Values.haproxy.service.clusterIP }}
+  clusterIP: {{ . }}
+  {{- end }}
+  {{- with .Values.haproxy.service.externalIPs }}
+  externalIPs:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.haproxy.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  {{- with .Values.haproxy.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    app: haproxy
+    component: loadbalancer
+    {{- include "haproxy-template-ic.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.haproxy.service.ports.http | default 80 }}
+      targetPort: {{ .Values.haproxy.ports.http }}
+      protocol: TCP
+    - name: https
+      port: {{ .Values.haproxy.service.ports.https | default 443 }}
+      targetPort: 443
+      protocol: TCP
+    - name: health
+      port: {{ .Values.haproxy.service.ports.health | default 8404 }}
+      targetPort: {{ .Values.haproxy.ports.health }}
+      protocol: TCP
+{{- end }}

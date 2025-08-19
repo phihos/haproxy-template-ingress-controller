@@ -166,7 +166,7 @@ class HAProxyPodDiscovery:
         )
 
         # Use pod IP for direct access
-        pod_ip = pod.status.pod_ip
+        pod_ip = pod.status.podIP
         if not pod_ip:
             raise DataplaneAPIError(f"Pod {pod.namespace}/{pod.name} has no IP address")
 

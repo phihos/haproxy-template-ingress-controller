@@ -272,7 +272,9 @@ def kind_cluster(request):
             # kind command failed, let create() handle cluster creation
             pass
 
-        cluster.create()
+        # Use project root config for admission controllers
+        config_path = request.config.rootpath / "kind-config.yaml"
+        cluster.create(config_file=config_path)
 
     token: CleanupToken = yield cluster
 
@@ -542,6 +544,195 @@ def validating_webhook_config(webhook_certificates, k8s_namespace, k8s_client):
 # =============================================================================
 # PRODUCTION HAPROXY FIXTURES
 # =============================================================================
+
+
+@pytest.fixture
+def haproxy_config_with_health():
+    """Provide HAProxy config template with health endpoint."""
+    return """
+global
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+    
+userlist dataplaneapi
+    user admin password adminpass
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend main
+    bind *:80
+    default_backend servers
+
+frontend health
+    bind *:8404
+    http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+
+backend servers
+    balance roundrobin
+    # Servers configured by controller
+"""
+
+
+@pytest.fixture
+def haproxy_deployment(k8s_client, k8s_namespace, haproxy_config_with_health, request):
+    """
+    Create scalable HAProxy deployment for testing.
+
+    Creates a deployment with configurable replicas (default 2) that matches
+    the controller's pod selector. Each pod has HAProxy + Dataplane API containers.
+
+    Use with parametrize: @pytest.mark.parametrize('haproxy_deployment', [3], indirect=True)
+    """
+    replicas = getattr(request, "param", 2) if hasattr(request, "param") else 2
+
+    from kr8s.objects import Deployment
+
+    deployment = Deployment(
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": "haproxy-production",
+                "namespace": k8s_namespace,
+                "labels": {
+                    "app": "haproxy",
+                    "component": "loadbalancer",
+                },
+            },
+            "spec": {
+                "replicas": replicas,
+                "selector": {
+                    "matchLabels": {
+                        "app": "haproxy",
+                        "component": "loadbalancer",
+                    }
+                },
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "app": "haproxy",
+                            "component": "loadbalancer",
+                            "haproxy-template-ic/role": "production",
+                        },
+                        "annotations": {
+                            "haproxy-template-ic/dataplane-port": "5555",
+                        },
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "haproxy",
+                                "image": "haproxytech/haproxy-debian:3.0",
+                                "ports": [
+                                    {"containerPort": 80, "name": "http"},
+                                    {"containerPort": 8404, "name": "healthz"},
+                                ],
+                                "volumeMounts": [
+                                    {
+                                        "name": "haproxy-config",
+                                        "mountPath": "/usr/local/etc/haproxy",
+                                    },
+                                ],
+                                "command": ["haproxy"],
+                                "args": [
+                                    "-f",
+                                    "/usr/local/etc/haproxy/haproxy.cfg",
+                                    "-W",
+                                ],
+                                "readinessProbe": {
+                                    "httpGet": {
+                                        "path": "/healthz",
+                                        "port": 8404,
+                                    },
+                                    "initialDelaySeconds": 2,
+                                    "periodSeconds": 2,
+                                    "failureThreshold": 5,
+                                },
+                            },
+                            {
+                                "name": "dataplane-api",
+                                "image": "haproxytech/haproxy-debian:3.0",
+                                "ports": [{"containerPort": 5555, "name": "dataplane"}],
+                                "volumeMounts": [
+                                    {
+                                        "name": "haproxy-config",
+                                        "mountPath": "/usr/local/etc/haproxy",
+                                    },
+                                ],
+                                "command": ["dataplaneapi"],
+                                "args": [
+                                    "--host",
+                                    "0.0.0.0",
+                                    "--port",
+                                    "5555",
+                                    "--haproxy-bin",
+                                    "/usr/local/sbin/haproxy",
+                                    "--config-file",
+                                    "/usr/local/etc/haproxy/haproxy.cfg",
+                                    "--reload-cmd",
+                                    "kill -USR2 1",
+                                    "--reload-delay",
+                                    "2",
+                                    "--userlist",
+                                    "dataplaneapi",
+                                ],
+                                "env": [
+                                    {"name": "DATAPLANE_API_USER", "value": "admin"},
+                                    {
+                                        "name": "DATAPLANE_API_PASSWORD",
+                                        "value": "adminpass",
+                                    },
+                                ],
+                            },
+                        ],
+                        "volumes": [
+                            {"name": "haproxy-config", "emptyDir": {}},
+                        ],
+                        "initContainers": [
+                            {
+                                "name": "init-config",
+                                "image": "busybox:1.36",
+                                "command": ["sh", "-c"],
+                                "args": [
+                                    f'echo "{haproxy_config_with_health}" > /usr/local/etc/haproxy/haproxy.cfg'
+                                ],
+                                "volumeMounts": [
+                                    {
+                                        "name": "haproxy-config",
+                                        "mountPath": "/usr/local/etc/haproxy",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+        namespace=k8s_namespace,
+        api=k8s_client,
+    )
+
+    deployment.create()
+
+    # Wait for deployment to be ready
+    import time
+
+    max_wait = 60
+    start_time = time.time()
+    while time.time() - start_time < max_wait:
+        deployment.refresh()
+        if deployment.status.readyReplicas == replicas:
+            break
+        time.sleep(2)
+    else:
+        raise TimeoutError(
+            f"HAProxy deployment did not become ready with {replicas} replicas in time"
+        )
+
+    return deployment
 
 
 @pytest.fixture

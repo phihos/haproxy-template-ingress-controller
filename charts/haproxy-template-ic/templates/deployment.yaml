@@ -113,15 +113,105 @@ spec:
               mountPath: /etc/certs
               readOnly: true
             {{- end }}
+            {{- if .Values.validation.enabled }}
+            - name: validation-config
+              mountPath: /etc/haproxy/validation
+            {{- end }}
             {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+        {{- if .Values.validation.enabled }}
+        - name: validation-haproxy
+          image: "{{ .Values.haproxyImage.repository }}:{{ .Values.haproxyImage.tag }}"
+          imagePullPolicy: {{ .Values.haproxyImage.pullPolicy }}
+          command: ["/usr/local/bin/docker-entrypoint.sh"]
+          ports:
+            - name: validation
+              containerPort: {{ .Values.validation.haproxy.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: validation-config
+              mountPath: /etc/haproxy
+            - name: validation-dataplane-config
+              mountPath: /usr/local/bin/docker-entrypoint.sh
+              subPath: docker-entrypoint.sh
+            - name: validation-dataplane-config
+              mountPath: /usr/local/etc/haproxy-default/haproxy.cfg
+              subPath: haproxy-default.cfg
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.validation.haproxy.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        - name: validation-dataplane
+          image: "{{ .Values.haproxyImage.repository }}:{{ .Values.haproxyImage.tag }}"
+          imagePullPolicy: {{ .Values.haproxyImage.pullPolicy }}
+          command: ["/usr/local/bin/dataplane-entrypoint.sh"]
+          ports:
+            - name: validation-api
+              containerPort: {{ .Values.dataplaneConfig.port }}
+              protocol: TCP
+          env:
+            - name: HAPROXY_USERNAME
+              value: {{ .Values.dataplaneConfig.username | quote }}
+            - name: HAPROXY_PASSWORD
+              value: {{ .Values.dataplaneConfig.passwords.validation | quote }}
+          volumeMounts:
+            - name: validation-config
+              mountPath: /etc/haproxy
+            - name: validation-dataplane-config
+              mountPath: /usr/local/bin/dataplane-entrypoint.sh
+              subPath: dataplane-entrypoint.sh
+            - name: validation-dataplane-config
+              mountPath: /usr/local/etc/dataplane-default/dataplaneapi.yaml
+              subPath: dataplaneapi-default.yaml
+              readOnly: true
+            - name: validation-dataplane-config
+              mountPath: /etc/haproxy/haproxy-socket-reload.sh
+              subPath: haproxy-socket-reload.sh
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /v3/info
+              port: {{ .Values.dataplaneConfig.port }}
+              httpHeaders:
+                - name: Authorization
+                  value: "Basic {{ printf "%s:%s" .Values.dataplaneConfig.username .Values.dataplaneConfig.passwords.validation | b64enc }}"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+        {{- end }}
       volumes:
         {{- if .Values.webhook.enabled }}
         - name: webhook-certs
           secret:
             secretName: {{ include "haproxy-template-ic.fullname" . }}-webhook-tls
             defaultMode: 420
+        {{- end }}
+        {{- if .Values.validation.enabled }}
+        - name: validation-config
+          emptyDir: {}
+        - name: validation-dataplane-config
+          configMap:
+            name: {{ include "haproxy-template-ic.fullname" . }}-validation-config
+            defaultMode: 420
+            items:
+              - key: dataplaneapi-default.yaml
+                path: dataplaneapi-default.yaml
+                mode: 420
+              - key: haproxy-socket-reload.sh
+                path: haproxy-socket-reload.sh
+                mode: 0755
+              - key: docker-entrypoint.sh
+                path: docker-entrypoint.sh
+                mode: 0755
+              - key: dataplane-entrypoint.sh
+                path: dataplane-entrypoint.sh
+                mode: 0755
+              - key: haproxy-default.cfg
+                path: haproxy-default.cfg
+                mode: 420
         {{- end }}
         {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
