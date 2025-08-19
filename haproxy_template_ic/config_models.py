@@ -511,8 +511,33 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
         config = Config.model_validate(data)
         return config
     except Exception as e:
-        # Re-raise with more context for debugging
-        raise ValueError(f"Configuration validation failed: {e}") from e
+        # Provide detailed error context for common configuration issues
+        error_msg = "Configuration validation failed"
+
+        # Check for specific validation error patterns and provide helpful guidance
+        error_str = str(e)
+        if "template_snippets" in error_str and "model_type" in error_str:
+            error_msg += "\n\n🔧 TEMPLATE SNIPPETS FORMAT ERROR:\nYour template_snippets are using the wrong format. Each snippet must be a dictionary with 'name' and 'template' fields.\n\n"
+            error_msg += "❌ INCORRECT FORMAT:\n"
+            error_msg += "template_snippets:\n"
+            error_msg += "  snippet-name: |\n"
+            error_msg += "    template content\n\n"
+            error_msg += "✅ CORRECT FORMAT:\n"
+            error_msg += "template_snippets:\n"
+            error_msg += "  snippet-name:\n"
+            error_msg += "    name: snippet-name\n"
+            error_msg += "    template: |\n"
+            error_msg += "      template content\n\n"
+        elif "watched_resources" in error_str:
+            error_msg += "\n\n🔧 WATCHED RESOURCES ERROR:\nThere's an issue with your watched_resources configuration. Check api_version, kind, and other required fields.\n\n"
+        elif "pod_selector" in error_str:
+            error_msg += "\n\n🔧 POD SELECTOR ERROR:\nYour pod_selector configuration is invalid. Ensure match_labels is a non-empty dictionary.\n\n"
+        elif "haproxy_config" in error_str:
+            error_msg += "\n\n🔧 HAPROXY CONFIG ERROR:\nYour haproxy_config template is invalid. Ensure it contains a valid Jinja2 template string.\n\n"
+
+        error_msg += f"\nDETAILED ERROR:\n{e}"
+
+        raise ValueError(error_msg) from e
 
 
 WatchResourceCollection = Dict[str, WatchResourceConfig]

@@ -330,10 +330,32 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
         resources=indices, namespace=get_current_namespace()
     )
 
+    # Create a list to collect validation errors from templates
+    validation_errors = []
+
+    def register_error(
+        resource_type: str, resource_uid: str, error_message: str
+    ) -> None:
+        """Register a validation error from template processing."""
+        validation_errors.append(
+            {
+                "resource_type": resource_type,
+                "resource_uid": resource_uid,
+                "error": error_message,
+            }
+        )
+        logger.warning(
+            "Template validation error",
+            resource_type=resource_type,
+            resource_uid=resource_uid,
+            error=error_message,
+        )
+
     # Create template variables for rendering
     template_vars = {
         "resources": template_context.resources,
         "namespace": template_context.namespace,
+        "register_error": register_error,
     }
 
     # Render the HAProxy config template
@@ -411,6 +433,13 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             logger.error(
                 f"❌ Failed to render certificate template for {cert_path}: {e}"
             )
+
+    # Log validation errors collected during template rendering
+    if validation_errors:
+        logger.warning(
+            f"Template validation found {len(validation_errors)} errors",
+            errors=validation_errors,
+        )
 
     # Synchronize rendered configuration with HAProxy instances
     await synchronize_with_haproxy_instances(memo)

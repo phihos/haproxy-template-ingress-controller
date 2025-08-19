@@ -38,76 +38,88 @@ data:
         # Index by namespace and app label for cross-resource matching
         index_by: ["metadata.namespace", "metadata.labels['app']"]
     template_snippets:
-      backend-name: |
-        ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+      backend-name:
+        name: backend-name
+        template: |
+          ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
       
-      service-lookup-example: |
-        {# Example of using indexed lookup to find services by app label #}
-        {% set app_label = ingress.metadata.labels.get('app', '') %}
-        {% if app_label %}
-          {% set service = resources.get('services').get_indexed_single(ingress.metadata.namespace, app_label) %}
-          {% if service %}
-            {# Found matching service: {{ service.metadata.name }} #}
-          {% endif %}
-        {% endif %}
-      
-      path-map-entry: |
-        {# Generate map entries for paths matching specified pathTypes #}
-        {# Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
-        {% for _, ingress in resources.get('ingresses', {}).items() %}
-        {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
-        {% for path in (rule.http.get('paths', []) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
-        {{ rule.host }}{{ path.path }} {% include "backend-name" %}{{ suffix }}
-        {% endfor %}
-        {% endfor %}
-        {% endfor %}
-      
-      validate-ingress: |
-        {# Validation snippet for ingress resources #}
-        {% if not ingress.spec %}
-          {% do register_error('ingresses', ingress.metadata.uid, 'Ingress missing spec') %}
-        {% endif %}
-        {% if ingress.spec.rules %}
-          {% for rule in ingress.spec.rules %}
-            {% if not rule.host %}
-              {% do register_error('ingresses', ingress.metadata.uid, 'Ingress rule missing host') %}
+      service-lookup-example:
+        name: service-lookup-example
+        template: |
+          {# Example of using indexed lookup to find services by app label #}
+          {% set app_label = ingress.metadata.labels.get('app', '') %}
+          {% if app_label %}
+            {% set service = resources.get('services').get_indexed_single(ingress.metadata.namespace, app_label) %}
+            {% if service %}
+              {# Found matching service: {{ service.metadata.name }} #}
             {% endif %}
-          {% endfor %}
-        {% endif %}
+          {% endif %}
       
-      backend-servers: |
-        {# Generate backend server entries from EndpointSlice using indexed lookup #}
-        {# This demonstrates O(1) lookup using custom indexing by service name #}
-        {% for endpoint_slice in resources.get('endpoints', {}).get_indexed(service_name) %}
-          {% for endpoint in endpoint_slice.endpoints %}
-            {% for address in endpoint.addresses %}
-        server {{ service_name }}_{{ loop.index }} {{ address }}:{{ port }}
+      path-map-entry:
+        name: path-map-entry
+        template: |
+          {# Generate map entries for paths matching specified pathTypes #}
+          {# Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
+          {% for path in (rule.http.get('paths', []) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
+          {{ rule.host }}{{ path.path }} {% include "backend-name" %}{{ suffix }}
+          {% endfor %}
+          {% endfor %}
+          {% endfor %}
+      
+      validate-ingress:
+        name: validate-ingress
+        template: |
+          {# Validation snippet for ingress resources #}
+          {% if not ingress.spec %}
+            {% do register_error('ingresses', ingress.metadata.uid, 'Ingress missing spec') %}
+          {% endif %}
+          {% if ingress.spec.rules %}
+            {% for rule in ingress.spec.rules %}
+              {% if not rule.host %}
+                {% do register_error('ingresses', ingress.metadata.uid, 'Ingress rule missing host') %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+      
+      backend-servers:
+        name: backend-servers
+        template: |
+          {# Generate backend server entries from EndpointSlice using indexed lookup #}
+          {# This demonstrates O(1) lookup using custom indexing by service name #}
+          {% for endpoint_slice in resources.get('endpoints', {}).get_indexed(service_name) %}
+            {% for endpoint in endpoint_slice.endpoints %}
+              {% for address in endpoint.addresses %}
+          server {{ service_name }}_{{ loop.index }} {{ address }}:{{ port }}
+              {% endfor %}
             {% endfor %}
           {% endfor %}
-        {% endfor %}
       
-      ingress-backends: |
-        {# Generate all backend definitions from ingress resources #}
-        {# Usage: {% include "ingress-backends" %} #}
-        {% for _, ingress in resources.get('ingresses', {}).items() %}
-        {% include "validate-ingress" %}
-        {% if ingress.spec and ingress.spec.rules %}
-        {% for rule in ingress.spec.rules %}
-        {% if rule.http and rule.http.paths %}
-        {% for path in rule.http.paths %}
-        {% if path.backend and path.backend.service %}
-        {% set service_name = path.backend.service.name %}
-        {% set port = path.backend.service.port.number | default(80) %}
-        backend {% include "backend-name" %}
-            balance roundrobin
-            option httpchk GET {{ path.path | default('/') }}
-        {% include "backend-servers" %}
-        {% endif %}
-        {% endfor %}
-        {% endif %}
-        {% endfor %}
-        {% endif %}
-        {% endfor %}
+      ingress-backends:
+        name: ingress-backends
+        template: |
+          {# Generate all backend definitions from ingress resources #}
+          {# Usage: {% include "ingress-backends" %} #}
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% include "validate-ingress" %}
+          {% if ingress.spec and ingress.spec.rules %}
+          {% for rule in ingress.spec.rules %}
+          {% if rule.http and rule.http.paths %}
+          {% for path in rule.http.paths %}
+          {% if path.backend and path.backend.service %}
+          {% set service_name = path.backend.service.name %}
+          {% set port = path.backend.service.port.number | default(80) %}
+          backend {% include "backend-name" %}
+              balance roundrobin
+              option httpchk GET {{ path.path | default('/') }}
+          {% include "backend-servers" %}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
     maps:
       /etc/haproxy/maps/path-exact.map:
         template: |

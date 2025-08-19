@@ -1904,3 +1904,413 @@ def test_run_operator_loop_with_config_reload(
 
                     # Should be called twice (initial + reload)
                     assert mock_kopf_run.call_count == 2
+
+
+# =============================================================================
+# Extended Coverage Tests for Missing Lines
+# =============================================================================
+
+
+def test_extract_nested_field_basic_access():
+    """Test extract_nested_field with basic dot notation access."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    obj = {"metadata": {"name": "test-pod", "namespace": "default"}}
+
+    # Basic field access
+    assert extract_nested_field(obj, "metadata.name") == "test-pod"
+    assert extract_nested_field(obj, "metadata.namespace") == "default"
+
+    # Missing field returns empty string
+    assert extract_nested_field(obj, "metadata.missing") == ""
+    assert extract_nested_field(obj, "spec.containers") == ""
+
+
+def test_extract_nested_field_bracket_notation():
+    """Test extract_nested_field with bracket notation for keys with special chars."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    obj = {
+        "metadata": {
+            "labels": {
+                "kubernetes.io/service-name": "my-service",
+                "app": "web-server",
+                "version": "v1.0",
+            }
+        }
+    }
+
+    # Bracket notation with single quotes
+    assert (
+        extract_nested_field(obj, "metadata.labels['kubernetes.io/service-name']")
+        == "my-service"
+    )
+    assert extract_nested_field(obj, "metadata.labels['app']") == "web-server"
+
+    # Bracket notation with double quotes
+    assert (
+        extract_nested_field(obj, 'metadata.labels["kubernetes.io/service-name"]')
+        == "my-service"
+    )
+    assert extract_nested_field(obj, 'metadata.labels["version"]') == "v1.0"
+
+    # Bracket notation without quotes
+    assert extract_nested_field(obj, "metadata.labels[app]") == "web-server"
+
+    # Missing key in bracket notation
+    assert extract_nested_field(obj, "metadata.labels['missing']") == ""
+
+
+def test_extract_nested_field_malformed_brackets():
+    """Test extract_nested_field with malformed bracket notation."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    obj = {"metadata": {"labels": {"app": "test"}}}
+
+    # Malformed bracket notation should return empty string
+    assert extract_nested_field(obj, "metadata.labels[") == ""
+    assert extract_nested_field(obj, "metadata.labels]") == ""
+    assert extract_nested_field(obj, "metadata.labels['missing") == ""
+    assert extract_nested_field(obj, "metadata.labels[missing']") == ""
+
+    # Test specific ValueError/IndexError paths
+    assert extract_nested_field(obj, "metadata.labels[]") == ""  # Empty brackets
+    assert extract_nested_field(obj, "metadata.labels[no_closing_bracket") == ""
+
+    # Mismatched quotes (should use as-is)
+    obj_with_mismatched = {"metadata": {"labels": {"'key\"": "value"}}}
+    assert (
+        extract_nested_field(obj_with_mismatched, "metadata.labels['key\"]") == "value"
+    )
+
+
+def test_extract_nested_field_non_dict_objects():
+    """Test extract_nested_field with non-dict current values."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    obj = {
+        "metadata": "not-a-dict",
+        "spec": {"containers": ["container1", "container2"]},
+    }
+
+    # Non-dict metadata returns the string value itself
+    assert extract_nested_field(obj, "metadata") == "not-a-dict"
+
+    # But accessing fields on non-dict returns the non-dict as string
+    assert extract_nested_field(obj, "metadata.name") == "not-a-dict"
+
+    # List value converted to string when accessing further
+    assert (
+        extract_nested_field(obj, "spec.containers.name")
+        == "['container1', 'container2']"
+    )
+
+
+def test_extract_nested_field_none_values():
+    """Test extract_nested_field with None values."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    obj = {"metadata": {"name": None, "labels": {"app": None}}}
+
+    # None values should return empty string
+    assert extract_nested_field(obj, "metadata.name") == ""
+    assert extract_nested_field(obj, "metadata.labels.app") == ""
+
+
+@pytest.mark.asyncio
+async def test_update_resource_index_no_memo():
+    """Test update_resource_index without memo object."""
+    import logging
+    from haproxy_template_ic.operator import update_resource_index
+
+    body = {"metadata": {"namespace": "test-ns", "name": "test-resource"}}
+
+    result = await update_resource_index(
+        param="services",
+        namespace="test-ns",
+        name="test-resource",
+        body=body,
+        logger=logging.getLogger(),
+    )
+
+    # Should fallback to default indexing (namespace, name)
+    assert result == {("test-ns", "test-resource"): body}
+
+
+@pytest.mark.asyncio
+async def test_update_resource_index_no_config():
+    """Test update_resource_index with memo but no config."""
+    import logging
+    from haproxy_template_ic.operator import update_resource_index
+
+    # Mock memo without config
+    memo = MagicMock()
+    memo.config = None
+
+    body = {"metadata": {"namespace": "test-ns", "name": "test-resource"}}
+
+    result = await update_resource_index(
+        param="services",
+        namespace="test-ns",
+        name="test-resource",
+        body=body,
+        logger=logging.getLogger(),
+        memo=memo,
+    )
+
+    # Should fallback to default indexing
+    assert result == {("test-ns", "test-resource"): body}
+
+
+@pytest.mark.asyncio
+async def test_update_resource_index_custom_indexing():
+    """Test update_resource_index with custom index_by configuration."""
+    import logging
+    from haproxy_template_ic.operator import update_resource_index
+
+    # Mock memo with watch config
+    memo = MagicMock()
+    watch_config = MagicMock()
+    watch_config.index_by = ["metadata.namespace", "metadata.labels['app']"]
+    memo.config.watched_resources = {"services": watch_config}
+
+    body = {
+        "metadata": {
+            "namespace": "prod",
+            "name": "web-service",
+            "labels": {"app": "frontend"},
+        }
+    }
+
+    result = await update_resource_index(
+        param="services",
+        namespace="prod",
+        name="web-service",
+        body=body,
+        logger=logging.getLogger(),
+        memo=memo,
+    )
+
+    # Should use custom indexing
+    assert result == {("prod", "frontend"): body}
+
+
+@pytest.mark.asyncio
+async def test_update_resource_index_missing_fields():
+    """Test update_resource_index with missing index fields."""
+    import logging
+    from haproxy_template_ic.operator import update_resource_index
+
+    # Mock memo with watch config
+    memo = MagicMock()
+    watch_config = MagicMock()
+    watch_config.index_by = [
+        "metadata.namespace",
+        "metadata.missing",
+        "spec.selector.app",
+    ]
+    memo.config.watched_resources = {"services": watch_config}
+
+    body = {"metadata": {"namespace": "prod", "name": "web-service"}}
+
+    result = await update_resource_index(
+        param="services",
+        namespace="prod",
+        name="web-service",
+        body=body,
+        logger=logging.getLogger(),
+        memo=memo,
+    )
+
+    # Missing fields should result in empty strings
+    assert result == {("prod", "", ""): body}
+
+
+@pytest.mark.asyncio
+async def test_render_haproxy_templates_empty_index():
+    """Test render_haproxy_templates with empty index creating empty collection."""
+    with patch(
+        "haproxy_template_ic.operator.get_current_namespace", return_value="test"
+    ):
+        with patch(
+            "haproxy_template_ic.operator.synchronize_with_haproxy_instances"
+        ) as mock_sync:
+            with patch(
+                "haproxy_template_ic.operator.get_metrics_collector"
+            ) as mock_metrics:
+                mock_metrics.return_value = MagicMock()
+
+                # Create memo with config but no indices
+                memo = MagicMock()
+                memo.config.watched_resources = {"services": MagicMock()}
+                memo.config.maps = {}
+                memo.config.certificates = {}
+                memo.config.haproxy_config.template = "test config"
+                memo.template_renderer.render.return_value = "rendered config"
+                memo.haproxy_config_context = MagicMock()
+                memo.haproxy_config_context.rendered_maps = []
+                memo.haproxy_config_context.rendered_certificates = []
+                memo.indices = {"services": None}  # Empty index
+
+                await render_haproxy_templates(memo)
+
+                # Should handle empty index gracefully
+                mock_sync.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_synchronize_mixed_results_logging():
+    """Test synchronize_with_haproxy_instances with mixed success and failure results."""
+    from haproxy_template_ic.operator import synchronize_with_haproxy_instances
+
+    with patch(
+        "haproxy_template_ic.operator.get_current_namespace", return_value="test"
+    ):
+        with patch(
+            "haproxy_template_ic.operator.get_metrics_collector"
+        ) as mock_metrics:
+            with patch("haproxy_template_ic.operator.HAProxyPodDiscovery"):
+                with patch(
+                    "haproxy_template_ic.operator.ConfigSynchronizer"
+                ) as mock_sync_class:
+                    with patch("haproxy_template_ic.operator.logger") as mock_logger:
+                        # Setup memo
+                        memo = MagicMock()
+                        memo.config.pod_selector = MagicMock()
+                        memo.config.dataplane_auth.username = "admin"
+                        memo.config.dataplane_auth.password = "pass"
+                        memo.haproxy_config_context = MagicMock()
+                        memo.haproxy_config_context.rendered_config = MagicMock()
+
+                        # Mock results with mixed success/failure
+                        result1 = MagicMock()
+                        result1.success = True
+                        result1.instance.name = "instance1"
+                        result1.instance.is_validation_sidecar = False
+
+                        result2 = MagicMock()
+                        result2.success = False
+                        result2.instance.name = "instance2"
+                        result2.instance.is_validation_sidecar = False
+                        result2.error = "Connection failed"
+
+                        result3 = MagicMock()
+                        result3.success = True
+                        result3.instance.name = "validation"
+                        result3.instance.is_validation_sidecar = True
+
+                        mock_synchronizer = mock_sync_class.return_value
+                        mock_synchronizer.synchronize_configuration = AsyncMock(
+                            return_value=[result1, result2, result3]
+                        )
+
+                        mock_metrics_collector = mock_metrics.return_value
+
+                        await synchronize_with_haproxy_instances(memo)
+
+                        # Verify success logging
+                        success_calls = [
+                            call for call in mock_logger.info.call_args_list
+                        ]
+                        assert any(
+                            "Successfully synchronized configuration to 2 HAProxy instances"
+                            in str(call)
+                            for call in success_calls
+                        )
+
+                        # Verify failure logging
+                        error_calls = [
+                            call for call in mock_logger.error.call_args_list
+                        ]
+                        assert any(
+                            "Failed to synchronize configuration to 1 HAProxy instances"
+                            in str(call)
+                            for call in error_calls
+                        )
+                        assert any(
+                            "instance2: Connection failed" in str(call)
+                            for call in error_calls
+                        )
+
+                        # Verify metrics calls
+                        mock_metrics_collector.record_haproxy_instances.assert_called_with(
+                            2, 1
+                        )
+                        assert (
+                            mock_metrics_collector.record_dataplane_api_request.call_count
+                            == 3
+                        )
+                        mock_metrics_collector.record_error.assert_called_with(
+                            "dataplane_deploy_failed", "dataplane"
+                        )
+
+
+def test_configure_webhook_server_ca_file_copying():
+    """Test configure_webhook_server CA file copying functionality."""
+    from haproxy_template_ic.operator import configure_webhook_server
+
+    with patch("os.path.exists") as mock_exists:
+        with patch("tempfile.mkdtemp", return_value="/tmp/webhook-ca-123"):
+            with patch("shutil.copy2") as mock_copy:
+                # Mock certificate files exist, including CA file
+                def exists_side_effect(path):
+                    return path in [
+                        "/tmp/webhook-certs/webhook-cert.pem",
+                        "/tmp/webhook-certs/webhook-key.pem",
+                        "/tmp/webhook-certs/webhook-ca.pem",
+                    ]
+
+                mock_exists.side_effect = exists_side_effect
+
+                # Setup memo with webhook-enabled resources
+                memo = MagicMock()
+                watch_config = MagicMock()
+                watch_config.enable_validation_webhook = True
+                memo.config.watched_resources = {"ingresses": watch_config}
+
+                settings = MagicMock()
+
+                configure_webhook_server(settings, memo)
+
+                # Should copy CA file to writable location
+                mock_copy.assert_called_once_with(
+                    "/tmp/webhook-certs/webhook-ca.pem",
+                    "/tmp/webhook-ca-123/webhook-ca.pem",
+                )
+
+                # Should configure webhook server with copied CA file
+                assert (
+                    settings.admission.server.cadump
+                    == "/tmp/webhook-ca-123/webhook-ca.pem"
+                )
+
+
+def test_configure_webhook_server_no_ca_file():
+    """Test configure_webhook_server without existing CA file."""
+    from haproxy_template_ic.operator import configure_webhook_server
+
+    with patch("os.path.exists") as mock_exists:
+        with patch("tempfile.mkdtemp", return_value="/tmp/webhook-ca-456"):
+            # Mock certificate files exist, but no CA file
+            def exists_side_effect(path):
+                return path in [
+                    "/tmp/webhook-certs/webhook-cert.pem",
+                    "/tmp/webhook-certs/webhook-key.pem",
+                ]
+
+            mock_exists.side_effect = exists_side_effect
+
+            # Setup memo with webhook-enabled resources
+            memo = MagicMock()
+            watch_config = MagicMock()
+            watch_config.enable_validation_webhook = True
+            memo.config.watched_resources = {"ingresses": watch_config}
+
+            settings = MagicMock()
+
+            configure_webhook_server(settings, memo)
+
+            # Should use temp CA file location (fallback)
+            assert (
+                settings.admission.server.cadump == "/tmp/webhook-ca-456/webhook-ca.pem"
+            )

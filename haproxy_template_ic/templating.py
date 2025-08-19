@@ -69,6 +69,7 @@ def get_template_environment(
         autoescape=False,  # HAProxy config shouldn't be HTML-escaped  # nosec B701
         trim_blocks=True,
         lstrip_blocks=True,
+        extensions=["jinja2.ext.do"],  # Enable do extension for {% do %} statements
     )
 
     # Add custom filters
