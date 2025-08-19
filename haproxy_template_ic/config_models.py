@@ -25,9 +25,11 @@ custom validators, providing better maintainability and standardized error messa
 - Enhanced maintainability using library features
 """
 
-from typing import Annotated, Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Annotated, Any, Dict, Iterator, List, Optional, Tuple, TYPE_CHECKING
+import unicodedata
+from collections import defaultdict
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic.types import StringConstraints
 
 if TYPE_CHECKING:
@@ -101,6 +103,10 @@ class WatchResourceConfig(BaseModel):
     )
     resource_filter: Optional[ResourceFilter] = Field(
         None, description="Optional resource filtering"
+    )
+    index_by: List[str] = Field(
+        default_factory=lambda: ["metadata.namespace", "metadata.name"],
+        description="Field paths for index key (dot notation for nested access)",
     )
 
     @property
@@ -302,11 +308,145 @@ class RenderedCertificate(BaseModel):
         frozen = True
 
 
+class IndexedResourceCollection(BaseModel):
+    """O(1) resource lookups by custom index keys."""
+
+    _internal_dict: Dict[Tuple[str, ...], List[Dict[str, Any]]] = PrivateAttr(
+        default_factory=lambda: defaultdict(list)
+    )
+    _max_size: int = PrivateAttr(default=10000)
+
+    @classmethod
+    def from_kopf_index(cls, index: Any) -> "IndexedResourceCollection":
+        """Create from kopf Index."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        collection = cls()
+        if not (hasattr(index, "__getitem__") and hasattr(index, "__iter__")):
+            return collection
+
+        count = 0
+        for key in index:
+            if count >= collection._max_size:
+                logger.warning(f"Size limit reached ({collection._max_size})")
+                break
+            try:
+                normalized_key = collection._normalize_key(key)
+                for resource in index[key]:
+                    if count >= collection._max_size:
+                        break
+                    if collection._validate_resource(resource):
+                        collection._internal_dict[normalized_key].append(resource)
+                        count += 1
+                    else:
+                        logger.warning(
+                            f"Skipping invalid resource with key {normalized_key}"
+                        )
+            except Exception as e:
+                logger.warning(f"Error with key {key}: {e}")
+        return collection
+
+    def get_indexed(self, *args: str) -> List[Dict[str, Any]]:
+        """Get resources by key."""
+        key = self._normalize_key(*args)
+        return self._internal_dict.get(key, [])
+
+    def get_indexed_iter(self, *args: str) -> Iterator[Dict[str, Any]]:
+        yield from self.get_indexed(*args)
+
+    def get_indexed_single(self, *args: str) -> Optional[Dict[str, Any]]:
+        """Get single resource or raise if multiple found."""
+        results = self.get_indexed(*args)
+        if len(results) > 1:
+            import logging
+
+            resource_ids = [self._extract_resource_id(r) for r in results[:3]]
+            error_msg = (
+                f"Multiple resources found for key {args}: {len(results)} matches"
+            )
+            if len(results) > 3:
+                error_msg += f" (showing first 3: {', '.join(resource_ids)})"
+            else:
+                error_msg += f" [{', '.join(resource_ids)}]"
+            logging.getLogger(__name__).error(
+                f"{error_msg}. This may indicate duplicate resources or incorrect indexing configuration."
+            )
+            try:
+                from haproxy_template_ic.tracing import record_span_event
+
+                record_span_event(
+                    "multiple_resources_found",
+                    {
+                        "key": str(args),
+                        "count": len(results),
+                        "resources": resource_ids,
+                    },
+                )
+            except ImportError:
+                pass
+            raise ValueError(error_msg)
+        return results[0] if results else None
+
+    def items(self) -> Iterator[Tuple[Tuple[str, ...], Dict[str, Any]]]:
+        for key, resources in self._internal_dict.items():
+            for resource in resources:
+                yield (key, resource)
+
+    def values(self) -> Iterator[Dict[str, Any]]:
+        for resources in self._internal_dict.values():
+            yield from resources
+
+    def __len__(self) -> int:
+        return sum(len(resources) for resources in self._internal_dict.values())
+
+    def __bool__(self) -> bool:
+        return bool(self._internal_dict)
+
+    def __contains__(self, key: Tuple[str, ...]) -> bool:
+        if isinstance(key, tuple):
+            normalized_key = self._normalize_key(*key)
+        return normalized_key in self._internal_dict
+
+    def keys(self) -> Iterator[Tuple[str, ...]]:
+        return iter(self._internal_dict.keys())
+
+    def _normalize_key(self, *args: Any) -> Tuple[str, ...]:
+        components = (
+            args[0] if len(args) == 1 and isinstance(args[0], (tuple, list)) else args
+        )
+        return tuple(
+            unicodedata.normalize("NFC", str(arg or "").strip()) for arg in components
+        )
+
+    def _validate_resource(self, resource: Any) -> bool:
+        if hasattr(resource, "metadata") and hasattr(resource.metadata, "name"):
+            return bool(getattr(resource.metadata, "name", None))
+        return (
+            isinstance(resource, dict)
+            and isinstance(resource.get("metadata", {}), dict)
+            and bool(resource.get("metadata", {}).get("name", "").strip())
+        )
+
+    def _extract_resource_id(self, resource: Dict[str, Any]) -> str:
+        try:
+            if hasattr(resource, "metadata"):
+                return f"{getattr(resource, 'kind', 'unknown')}:{getattr(resource.metadata, 'namespace', 'unknown')}/{resource.metadata.name}"
+            if isinstance(resource, dict) and "metadata" in resource:
+                metadata = resource["metadata"]
+                return f"{resource.get('kind', 'unknown')}:{metadata.get('namespace', 'unknown')}/{metadata.get('name', 'unknown')}"
+            return "<unknown>"
+        except Exception:
+            return "<error>"
+
+
 class TemplateContext(BaseModel):
     """Context for template rendering."""
 
-    resources: Dict[str, Dict[str, Any]] = Field(
-        default_factory=dict, description="Kubernetes resources organized by type"
+    resources: Dict[str, IndexedResourceCollection] = Field(
+        default_factory=dict,
+        description="Indexed resource collections organized by type",
     )
     namespace: Optional[str] = Field(None, description="Current namespace")
 
@@ -315,6 +455,8 @@ class TemplateContext(BaseModel):
         extra="allow",
         # Make immutable as expected by tests
         frozen=True,
+        # Allow IndexedResourceCollection (not JSON serializable but used internally)
+        arbitrary_types_allowed=True,
     )
 
 
@@ -369,8 +511,33 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
         config = Config.model_validate(data)
         return config
     except Exception as e:
-        # Re-raise with more context for debugging
-        raise ValueError(f"Configuration validation failed: {e}") from e
+        # Provide detailed error context for common configuration issues
+        error_msg = "Configuration validation failed"
+
+        # Check for specific validation error patterns and provide helpful guidance
+        error_str = str(e)
+        if "template_snippets" in error_str and "model_type" in error_str:
+            error_msg += "\n\n🔧 TEMPLATE SNIPPETS FORMAT ERROR:\nYour template_snippets are using the wrong format. Each snippet must be a dictionary with 'name' and 'template' fields.\n\n"
+            error_msg += "❌ INCORRECT FORMAT:\n"
+            error_msg += "template_snippets:\n"
+            error_msg += "  snippet-name: |\n"
+            error_msg += "    template content\n\n"
+            error_msg += "✅ CORRECT FORMAT:\n"
+            error_msg += "template_snippets:\n"
+            error_msg += "  snippet-name:\n"
+            error_msg += "    name: snippet-name\n"
+            error_msg += "    template: |\n"
+            error_msg += "      template content\n\n"
+        elif "watched_resources" in error_str:
+            error_msg += "\n\n🔧 WATCHED RESOURCES ERROR:\nThere's an issue with your watched_resources configuration. Check api_version, kind, and other required fields.\n\n"
+        elif "pod_selector" in error_str:
+            error_msg += "\n\n🔧 POD SELECTOR ERROR:\nYour pod_selector configuration is invalid. Ensure match_labels is a non-empty dictionary.\n\n"
+        elif "haproxy_config" in error_str:
+            error_msg += "\n\n🔧 HAPROXY CONFIG ERROR:\nYour haproxy_config template is invalid. Ensure it contains a valid Jinja2 template string.\n\n"
+
+        error_msg += f"\nDETAILED ERROR:\n{e}"
+
+        raise ValueError(error_msg) from e
 
 
 WatchResourceCollection = Dict[str, WatchResourceConfig]

@@ -17,7 +17,7 @@ rules:
     verbs: [ "get", "list", "watch" ]
   # Webhook permissions
   - apiGroups: [ "admissionregistration.k8s.io" ]
-    resources: [ "validatingadmissionwebhooks" ]
+    resources: [ "validatingwebhookconfigurations", "mutatingwebhookconfigurations" ]
     verbs: [ "get", "list", "watch", "create", "update", "patch", "delete" ]
   # Certificate management permissions for webhook TLS
   - apiGroups: [ "" ]

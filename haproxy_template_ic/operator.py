@@ -7,12 +7,15 @@ resource watchers, configuration management, and the main operator loop.
 
 import asyncio
 import logging
-from typing import Any, Dict, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 if TYPE_CHECKING:
     from haproxy_template_ic.__main__ import CliOptions
 
+import os
+
 import kopf
+import structlog
 import uvloop
 import yaml
 from deepdiff import DeepDiff
@@ -20,14 +23,7 @@ from kopf import set_default_registry
 from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
 from kr8s.objects import ConfigMap
-
-from haproxy_template_ic.structured_logging import autolog, observe
-from haproxy_template_ic.tracing import (
-    trace_async_function,
-    trace_template_render,
-    add_span_attributes,
-    record_span_event,
-)
+from kubernetes import config
 
 from haproxy_template_ic.config_models import (
     Config,
@@ -40,18 +36,22 @@ from haproxy_template_ic.config_models import (
     TemplateContext,
     config_from_dict,
 )
-from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
-    HAProxyPodDiscovery,
     DataplaneAPIError,
+    HAProxyPodDiscovery,
     ValidationError,
 )
 from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
-import os
-from kubernetes import config
-import structlog
+from haproxy_template_ic.structured_logging import autolog, observe
+from haproxy_template_ic.templating import TemplateRenderer
+from haproxy_template_ic.tracing import (
+    add_span_attributes,
+    record_span_event,
+    trace_async_function,
+    trace_template_render,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -188,17 +188,88 @@ async def handle_configmap_change(
         trigger_reload(memo)
 
 
+def extract_nested_field(obj: Dict[str, Any], path: str) -> Any:
+    """Extract field value from nested dict using dot notation.
+
+    Args:
+        obj: The dictionary to extract from
+        path: Dot-separated path (e.g., "metadata.labels['kubernetes.io/service-name']")
+
+    Returns:
+        The field value or empty string if not found
+    """
+    import re
+
+    # Handle bracket notation for dict keys
+    # Convert metadata.labels['kubernetes.io/service-name'] to proper access
+    parts = re.split(r"\.(?![^\[]*\])", path)
+
+    current = obj
+    for part in parts:
+        if "[" in part and "]" in part:
+            try:
+                # Handle bracket notation like labels['key']
+                field_name = part[: part.index("[")]
+                # Secure bracket key extraction with proper quote handling
+                bracket_start = part.index("[") + 1
+                bracket_end = part.index("]")
+                key_with_quotes = part[bracket_start:bracket_end]
+
+                # Handle different quote styles: 'key', "key", or key
+                if key_with_quotes.startswith(('"', "'")) and key_with_quotes.endswith(
+                    ('"', "'")
+                ):
+                    if key_with_quotes[0] == key_with_quotes[-1]:  # Matching quotes
+                        key = key_with_quotes[1:-1]
+                    else:
+                        key = key_with_quotes  # Mismatched quotes, use as-is
+                else:
+                    key = key_with_quotes  # No quotes
+
+                if isinstance(current, dict):
+                    current = current.get(field_name, {})
+                    if isinstance(current, dict):
+                        current = current.get(key, "")
+            except (ValueError, IndexError):
+                # Handle malformed bracket notation gracefully
+                return ""
+        else:
+            # Regular field access
+            if isinstance(current, dict):
+                current = current.get(part, "")
+
+    return str(current) if current is not None else ""
+
+
 async def update_resource_index(
     param: str,
     namespace: str,
     name: str,
     body: Dict[str, Any],
     logger: logging.Logger,
+    memo: Any = None,
     **kwargs_: Any,
-) -> Dict[Tuple[str, str], Dict[str, Any]]:
-    """Update resource index for tracking."""
+) -> Dict[Tuple[str, ...], Dict[str, Any]]:
+    """Update resource index with configurable key."""
     logger.debug(f"📝 Updating index {param} for {namespace}/{name}...")
-    return {(namespace, name): dict(body)}
+
+    # Get the watch config for this resource type
+    if memo and hasattr(memo, "config") and hasattr(memo.config, "watched_resources"):
+        watch_config = memo.config.watched_resources.get(param)
+    else:
+        watch_config = None
+
+    if not watch_config:
+        # Fallback to default indexing (namespace, name)
+        return {(namespace, name): dict(body)}
+
+    # Extract index key values based on configured fields
+    index_values = []
+    for field_path in watch_config.index_by:
+        value = extract_nested_field(body, field_path)
+        index_values.append(value)
+
+    return {tuple(index_values): dict(body)}
 
 
 @observe(
@@ -212,58 +283,42 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     logger.debug("Rendering HAProxy templates")
     metrics = get_metrics_collector()
 
-    # Collect all indices from registered watch resources
-    indices: Dict[str, Dict[str, Any]] = {}
-    for resource_id, watch_config in memo.config.watched_resources.items():
+    # Collect all indices as IndexedResourceCollections
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+
+    indices: Dict[str, IndexedResourceCollection] = {}
+    for resource_id in memo.config.watched_resources:
         try:
             # Get the index for this resource type
             index_data = memo.indices.get(resource_id)
 
-            # Convert kopf index store to a dictionary with resource objects
-            # The index_data is a kopf Store object containing resource data
-            resource_dict = {}
-
-            # Handle case where index_data is a Store object
-            if hasattr(index_data, "items"):
-                # kopf Store objects behave like dictionaries
-                for key, resource_data in index_data.items():
-                    try:
-                        # kopf stores resource data directly as the body/dict
-                        # resource_data should be the actual Kubernetes resource dict
-                        if isinstance(resource_data, dict):
-                            # Accept all dict-like objects (including test mocks)
-                            resource_dict[key] = resource_data
-                        elif hasattr(resource_data, "__dict__") or hasattr(
-                            resource_data, "metadata"
-                        ):
-                            # Object with attributes (mock objects, k8s objects)
-                            resource_dict[key] = resource_data
-                        elif isinstance(resource_data, (list, tuple)) and resource_data:
-                            # Some cases might return lists, take first item
-                            resource_dict[key] = resource_data[0]
-                        else:
-                            logger.warning(
-                                f"⚠️ Unexpected resource type {type(resource_data)} for {key}, skipping"
-                            )
-                    except Exception as e:
-                        logger.warning(
-                            f"⚠️ Failed to process resource {key}: {e}, type: {type(resource_data)}"
-                        )
-            else:
-                logger.warning(
-                    f"⚠️ Index data for '{resource_id}' is not iterable: {type(index_data)}"
+            if index_data:
+                # Create IndexedResourceCollection from kopf Index
+                indices[resource_id] = IndexedResourceCollection.from_kopf_index(
+                    index_data
                 )
+            else:
+                # Create empty collection
+                indices[resource_id] = IndexedResourceCollection()
 
-            indices[resource_id] = resource_dict
             logger.debug(
-                f"📊 Retrieved index '{resource_id}' with {len(resource_dict)} items"
+                f"📊 Retrieved index '{resource_id}' with {len(indices[resource_id])} items"
             )
         except Exception as e:
             logger.warning(f"⚠️ Could not retrieve index '{resource_id}': {e}")
-            indices[resource_id] = {}
+            indices[resource_id] = IndexedResourceCollection()
 
-    # Record watched resource metrics
-    metrics.record_watched_resources(indices)
+    # Record watched resource metrics - convert IndexedResourceCollections to dict format
+    metrics_data = {}
+    for rid, collection in indices.items():
+        # Convert IndexedResourceCollection back to dict format expected by metrics
+        resource_dict = {}
+        for key, resource in collection.items():
+            # Convert tuple key to string for metrics compatibility
+            str_key = "_".join(str(k) for k in key)
+            resource_dict[str_key] = resource
+        metrics_data[rid] = resource_dict
+    metrics.record_watched_resources(metrics_data)
 
     # Clear previous renders
     memo.haproxy_config_context.rendered_maps.clear()
@@ -275,10 +330,32 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
         resources=indices, namespace=get_current_namespace()
     )
 
+    # Create a list to collect validation errors from templates
+    validation_errors = []
+
+    def register_error(
+        resource_type: str, resource_uid: str, error_message: str
+    ) -> None:
+        """Register a validation error from template processing."""
+        validation_errors.append(
+            {
+                "resource_type": resource_type,
+                "resource_uid": resource_uid,
+                "error": error_message,
+            }
+        )
+        logger.warning(
+            "Template validation error",
+            resource_type=resource_type,
+            resource_uid=resource_uid,
+            error=error_message,
+        )
+
     # Create template variables for rendering
     template_vars = {
         "resources": template_context.resources,
         "namespace": template_context.namespace,
+        "register_error": register_error,
     }
 
     # Render the HAProxy config template
@@ -356,6 +433,13 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             logger.error(
                 f"❌ Failed to render certificate template for {cert_path}: {e}"
             )
+
+    # Log validation errors collected during template rendering
+    if validation_errors:
+        logger.warning(
+            f"Template validation found {len(validation_errors)} errors",
+            errors=validation_errors,
+        )
 
     # Synchronize rendered configuration with HAProxy instances
     await synchronize_with_haproxy_instances(memo)

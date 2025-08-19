@@ -9,90 +9,107 @@ data:
       match_labels:
         app: haproxy-template-ic
         release: haproxy-template-ic
-    watch_resources:
+    watched_resources:
       ingresses:
-        group: networking.k8s.io
-        version: v1
+        api_version: networking.k8s.io/v1
         kind: Ingress
         # Enable validation webhook for Ingress resources to prevent faulty configs
         enable_validation_webhook: true
-        filter:
-          field_selector:
-            "spec.ingressClassName": "haproxy-template-ic"
-          namespace_selector:
-            include: ["default", "production", "staging"]
+        # Default indexing by namespace and name for standard iteration
+        index_by: ["metadata.namespace", "metadata.name"]
       endpoints:
-        group: discovery.k8s.io
-        version: v1
+        api_version: discovery.k8s.io/v1
         kind: EndpointSlice
         # Leave validation disabled for critical resources like EndpointSlices
         enable_validation_webhook: false
-        filter:
-          label_selector:
-            "kubernetes.io/service-name": "*"
+        # Custom indexing by service name for O(1) service-to-endpoints matching
+        index_by: ["metadata.labels['kubernetes.io/service-name']"]
       secrets:
-        group: ""
-        version: v1
+        api_version: v1
         kind: Secret
         # Enable validation for TLS secrets to catch certificate issues early
         enable_validation_webhook: true
-        filter:
-          field_selector:
-            "type": "kubernetes.io/tls"
-          label_selector:
-            "haproxy-template-ic/tls": "true"
+        # Index by namespace and type for efficient TLS secret lookup
+        index_by: ["metadata.namespace", "type"]
+      services:
+        api_version: v1
+        kind: Service
+        enable_validation_webhook: false
+        # Index by app label for cross-resource matching with ingresses
+        index_by: ["metadata.namespace", "metadata.labels['app']"]
     template_snippets:
-      backend-name: |
-        ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+      backend-name:
+        name: backend-name
+        template: |
+          ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
       
-      path-map-entry: |
-        {# Generate map entries for paths matching specified pathTypes #}
-        {# Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
-        {% for _, ingress in resources.get('ingresses', {}).items() %}
-        {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
-        {% for path in (rule.http.get('paths', []) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
-        {{ rule.host }}{{ path.path }} {% include "backend-name" %}{{ suffix }}
-        {% endfor %}
-        {% endfor %}
-        {% endfor %}
-      
-      validate-ingress: |
-        {# Validation snippet for ingress resources #}
-        {% if not ingress.spec %}
-          {% do register_error('ingresses', ingress.metadata.uid, 'Ingress missing spec') %}
-        {% endif %}
-        {% if ingress.spec.rules %}
-          {% for rule in ingress.spec.rules %}
-            {% if not rule.host %}
-              {% do register_error('ingresses', ingress.metadata.uid, 'Ingress rule missing host') %}
+      service-lookup-example:
+        name: service-lookup-example
+        template: |
+          {# Example of using indexed lookup to find services by app label #}
+          {% set app_label = ingress.metadata.labels.get('app', '') %}
+          {% if app_label %}
+            {% set service = resources.get('services').get_indexed_single(ingress.metadata.namespace, app_label) %}
+            {% if service %}
+              {# Found matching service: {{ service.metadata.name }} #}
             {% endif %}
-          {% endfor %}
-        {% endif %}
+          {% endif %}
       
-      backend-servers: |
-        {# Generate backend server entries from EndpointSlice #}
-        {% for _, endpoint_slice in resources.get('endpoints', {}).items() %}
-          {% if endpoint_slice.metadata.labels.get('kubernetes.io/service-name') == service_name %}
-            {% for endpoint in endpoint_slice.endpoints %}
-              {% for address in endpoint.addresses %}
-        server {{ service_name }}_{{ loop.index }} {{ address }}:{{ port }}
-              {% endfor %}
+      path-map-entry:
+        name: path-map-entry
+        template: |
+          {# Generate map entries for paths matching specified pathTypes #}
+          {# Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
+          {% for path in (rule.http.get('paths', []) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
+          {{ rule.host }}{{ path.path }} {% include "backend-name" %}{{ suffix }}
+          {% endfor %}
+          {% endfor %}
+          {% endfor %}
+      
+      validate-ingress:
+        name: validate-ingress
+        template: |
+          {# Validation snippet for ingress resources #}
+          {% if not ingress.spec %}
+            {% do register_error('ingresses', ingress.metadata.uid, 'Ingress missing spec') %}
+          {% endif %}
+          {% if ingress.spec.rules %}
+            {% for rule in ingress.spec.rules %}
+              {% if not rule.host %}
+                {% do register_error('ingresses', ingress.metadata.uid, 'Ingress rule missing host') %}
+              {% endif %}
             {% endfor %}
           {% endif %}
-        {% endfor %}
       
-      ingress-backends: |
-        {# Generate all backend definitions from ingress resources #}
-        {# Usage: {% include "ingress-backends" %} #}
-        {% for _, ingress in resources.get('ingresses', {}).items() %}
-        {% include "validate-ingress" %}
-        {% if ingress.spec and ingress.spec.rules %}
-        {% for rule in ingress.spec.rules %}
-        {% if rule.http and rule.http.paths %}
-        {% for path in rule.http.paths %}
-        {% if path.backend and path.backend.service %}
-        {% set service_name = path.backend.service.name %}
-        {% set port = path.backend.service.port.number | default(80) %}
+      backend-servers:
+        name: backend-servers
+        template: |
+          {# Generate backend server entries from EndpointSlice using indexed lookup #}
+          {# This demonstrates O(1) lookup using custom indexing by service name #}
+          {% for endpoint_slice in resources.get('endpoints', {}).get_indexed(service_name) %}
+            {% for endpoint in endpoint_slice.endpoints %}
+              {% for address in endpoint.addresses %}
+          server {{ service_name }}_{{ loop.index }} {{ address }}:{{ port }}
+              {% endfor %}
+            {% endfor %}
+          {% endfor %}
+      
+      ingress-backends:
+        name: ingress-backends
+        template: |
+          {# Generate all backend definitions from ingress resources #}
+          {# Usage: {% include "ingress-backends" %} #}
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% include "validate-ingress" %}
+          {% if ingress.spec and ingress.spec.rules %}
+          {% for rule in ingress.spec.rules %}
+          {% if rule.http and rule.http.paths %}
+          {% for path in rule.http.paths %}
+          {% if path.backend and path.backend.service %}
+          {% set service_name = path.backend.service.name %}
+          {% set port = path.backend.service.port.number | default(80) %}
         backend {% include "backend-name" %}
             balance roundrobin
             option httpchk GET {{ path.path | default('/') }}
@@ -148,9 +165,9 @@ data:
     certificates:
       /etc/haproxy/certs/tls.pem:
         template: |
-          {# Generate combined cert+key file for HAProxy from TLS secrets #}
-          {% for _, secret in resources.get('secrets', {}).items() %}
-          {% if secret.type == "kubernetes.io/tls" and secret.metadata.labels.get('haproxy-template-ic/tls') == 'true' %}
+          {# Generate combined cert+key file for HAProxy from TLS secrets using indexed lookup #}
+          {% for secret in resources.get('secrets', {}).get_indexed('default', 'kubernetes.io/tls') %}
+          {% if secret.metadata.labels.get('haproxy-template-ic/tls') == 'true' %}
           # Certificate for {{ secret.metadata.name }} in {{ secret.metadata.namespace }}
           {{ secret.data.get('tls.crt') | b64decode }}
           {{ secret.data.get('tls.key') | b64decode }}

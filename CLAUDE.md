@@ -75,8 +75,8 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 ### Core Components
 
 - **`haproxy_template_ic/__main__.py`**: CLI interface using Click, application entry point
-- **`haproxy_template_ic/operator.py`**: Kubernetes operator logic using kopf framework
-- **`haproxy_template_ic/config.py`**: Configuration data structures with Jinja2 template compilation
+- **`haproxy_template_ic/operator.py`**: Kubernetes operator logic using kopf framework  
+- **`haproxy_template_ic/config_models.py`**: Pydantic configuration models with IndexedResourceCollection for O(1) resource lookups
 - **`haproxy_template_ic/dataplane.py`**: HAProxy Dataplane API client and synchronization logic
 - **`haproxy_template_ic/webhook.py`**: Validating admission webhook handlers using kopf framework
 - **`haproxy_template_ic/management_socket.py`**: Unix socket server for runtime state inspection
@@ -96,6 +96,7 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 - **uvloop**: High-performance event loop
 - **pytest**: Testing framework with custom markers
 - **prometheus-client**: Metrics collection and exposure for monitoring
+- **pydantic**: Data validation and settings management with type safety
 
 ### Deployment Architecture
 
@@ -137,6 +138,7 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 - ✅ Prometheus metrics collection for comprehensive monitoring
 - ✅ Resilient operations with retry logic, circuit breakers, and adaptive timeouts
 - ✅ Distributed tracing with OpenTelemetry for end-to-end observability
+- ✅ High-performance resource indexing with O(1) lookups using IndexedResourceCollection
 
 ## Webhook Validation System
 
@@ -152,6 +154,15 @@ Validating admission webhooks prevent faulty resources from being applied, provi
 **Required sections**: `pod_selector`, `haproxy_config`
 **Optional sections**: `watched_resources`, `maps`, `template_snippets`, `certificates`
 
+### Resource Indexing
+
+The `index_by` parameter in `watched_resources` configures custom indexing for O(1) resource lookups. Default indexing is by `["metadata.namespace", "metadata.name"]`.
+
+**Advanced indexing examples**:
+- Service by name: `["metadata.labels['kubernetes.io/service-name']"]`
+- Ingress by host: `["spec.rules[0].host"]` 
+- Cross-resource matching: `["metadata.namespace", "metadata.labels['app']"]`
+
 ```yaml
 data:
   config: |
@@ -159,8 +170,21 @@ data:
       match_labels: {app: haproxy, component: loadbalancer}
     
     watched_resources:
-      ingresses: {api_version: networking.k8s.io/v1, kind: Ingress, enable_validation_webhook: true}
-      services: {api_version: v1, kind: Service, enable_validation_webhook: false}
+      ingresses: 
+        api_version: networking.k8s.io/v1
+        kind: Ingress
+        enable_validation_webhook: true
+        index_by: ["metadata.namespace", "metadata.name"]  # Default indexing
+      services: 
+        api_version: v1
+        kind: Service
+        enable_validation_webhook: false
+        index_by: ["metadata.labels['kubernetes.io/service-name']"]  # Custom indexing
+      secrets:
+        api_version: v1
+        kind: Secret
+        enable_validation_webhook: false
+        index_by: ["metadata.namespace", "metadata.labels['app']"]  # Multi-field indexing
     
     template_snippets:
       backend-name: "backend_{{ service_name }}_{{ port }}"
@@ -209,9 +233,56 @@ data:
 ## Template System
 
 **Snippets**: Define in `template_snippets`, use with `{% include "snippet-name" %}`
-**Variables**: `resources` (watched K8s resources), `namespace` (current namespace)
+**Variables**: `resources` (IndexedResourceCollections by type), `namespace` (current namespace)
 **Filters**: `b64decode` for base64 strings, plus standard Jinja2 filters
-**Access pattern**: `{% for _, resource in resources.get('resource_type', {}).items() %}`
+
+### Resource Access Patterns
+
+**Standard iteration** (all resources of a type):
+```jinja2
+{% for _, resource in resources.get('ingresses', {}).items() %}
+  {{ resource.metadata.name }} in {{ resource.metadata.namespace }}
+{% endfor %}
+```
+
+**Indexed lookups** (O(1) performance using `index_by` configuration):
+```jinja2
+{# Get specific resource by index key #}
+{% set service = resources.get('services', {}).get_indexed_single('my-service-name') %}
+{% if service %}
+  Service {{ service.metadata.name }} found
+{% endif %}
+
+{# Get all resources matching index key #}
+{% for resource in resources.get('secrets', {}).get_indexed('default', 'my-app') %}
+  Secret: {{ resource.metadata.name }}
+{% endfor %}
+```
+
+**Cross-resource matching** using custom indexing:
+```jinja2
+{# Match services to ingresses using app labels #}
+{% for _, ingress in resources.get('ingresses', {}).items() %}
+  {% set app_label = ingress.metadata.labels.get('app', '') %}
+  {% if app_label %}
+    {% for service in resources.get('services', {}).get_indexed('default', app_label) %}
+      Ingress {{ ingress.metadata.name }} → Service {{ service.metadata.name }}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+```
+
+**IndexedResourceCollection methods**:
+- `get_indexed(*args)`: Returns list of resources matching index key
+- `get_indexed_iter(*args)`: Returns iterator of resources (memory efficient for large datasets)
+- `get_indexed_single(*args)`: Returns single resource or None (raises error if multiple found)
+- `items()`: Iterate over all indexed resources
+- `values()`: Iterate over resource values only
+
+**Performance considerations**:
+- Use `get_indexed_iter()` for memory efficiency with large result sets
+- Index keys are cached for O(1) lookup performance
+- Resource validation prevents invalid data from being indexed
 
 ## Distributed Tracing
 
@@ -230,6 +301,7 @@ Uses official OpenAPI-generated HAProxy Dataplane API v3 client (218 endpoints, 
 **Process**: Discovery → Validation → Deployment → Monitoring
 **Requirements**: Dataplane API enabled (port 5555), matching pod labels, validation sidecars
 **Error handling**: Validation failures stop deployment, retry logic, version tracking
+**Resource Indexing**: IndexedResourceCollection provides O(1) resource lookups using `from_kopf_index()`
 
 ## Monitoring and Observability
 
