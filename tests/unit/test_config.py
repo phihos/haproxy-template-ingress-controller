@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.config_models import (
     Config,
+    DataplaneAuth,
     WatchResourceConfig,
     MapConfig,
     CertificateConfig,
@@ -18,6 +19,18 @@ from haproxy_template_ic.config_models import (
 from jinja2 import Template
 
 
+def ensure_auth_fields(config_dict):
+    """Helper to ensure config dict has required auth fields for testing."""
+    if "dataplane_auth" not in config_dict:
+        config_dict["dataplane_auth"] = {"username": "admin", "password": "adminpass"}
+    if "validation_auth" not in config_dict:
+        config_dict["validation_auth"] = {
+            "username": "admin",
+            "password": "validationpass",
+        }
+    return config_dict
+
+
 @pytest.mark.parametrize(
     "config_dict,expected_pod_selector,expected_watch_resources_count,expected_maps_count",
     [
@@ -26,6 +39,8 @@ from jinja2 import Template
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
+                "dataplane_auth": {"username": "admin", "password": "adminpass"},
+                "validation_auth": {"username": "admin", "password": "validationpass"},
             },
             {"app": "myapp"},
             0,
@@ -36,6 +51,8 @@ from jinja2 import Template
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
+                "dataplane_auth": {"username": "admin", "password": "adminpass"},
+                "validation_auth": {"username": "admin", "password": "validationpass"},
                 "watched_resources": {},
                 "maps": {},
             },
@@ -48,6 +65,8 @@ from jinja2 import Template
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
+                "dataplane_auth": {"username": "admin", "password": "adminpass"},
+                "validation_auth": {"username": "admin", "password": "validationpass"},
                 "watched_resources": {
                     "ingresses": {
                         "api_version": "networking.k8s.io/v1",
@@ -65,6 +84,8 @@ from jinja2 import Template
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
+                "dataplane_auth": {"username": "admin", "password": "adminpass"},
+                "validation_auth": {"username": "admin", "password": "validationpass"},
                 "maps": {
                     "/etc/haproxy/maps/path-prefix.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
@@ -83,6 +104,8 @@ from jinja2 import Template
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
+                "dataplane_auth": {"username": "admin", "password": "adminpass"},
+                "validation_auth": {"username": "admin", "password": "validationpass"},
                 "watched_resources": {
                     "ingresses": {
                         "api_version": "networking.k8s.io/v1",
@@ -108,7 +131,7 @@ def test_valid_configs(
     expected_maps_count,
 ):
     """Test creating valid configs with various field combinations."""
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     assert isinstance(config, Config)
     assert config.pod_selector.match_labels == expected_pod_selector
@@ -123,6 +146,8 @@ def test_valid_configs(
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
+                "dataplane_auth": {"username": "admin", "password": "adminpass"},
+                "validation_auth": {"username": "admin", "password": "validationpass"},
                 "watched_resources": {
                     "ingresses": {
                         "api_version": "networking.k8s.io/v1",
@@ -140,6 +165,8 @@ def test_valid_configs(
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
+                "dataplane_auth": {"username": "admin", "password": "adminpass"},
+                "validation_auth": {"username": "admin", "password": "validationpass"},
                 "watched_resources": {
                     "services": {"api_version": "v1", "kind": "Service"}
                 },
@@ -150,6 +177,8 @@ def test_valid_configs(
             {
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
+                "dataplane_auth": {"username": "admin", "password": "adminpass"},
+                "validation_auth": {"username": "admin", "password": "validationpass"},
                 "watched_resources": {"pods": {"api_version": "v1", "kind": "Pod"}},
             },
             {"name": "pods", "api_version": "v1", "kind": "Pod"},
@@ -158,7 +187,7 @@ def test_valid_configs(
 )
 def test_watch_resources_structure(config_dict, expected_watch_resource):
     """Test that watched_resources are properly structured as WatchResourceConfig objects."""
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Find the watch resource by key in the dictionary
     target_id = expected_watch_resource["name"]
@@ -231,7 +260,7 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
 )
 def test_maps_structure(config_dict, expected_map):
     """Test that maps are properly structured as MapConfig objects."""
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Find the map config by path in the dictionary
     target_path = expected_map["name"]
@@ -328,7 +357,7 @@ def test_maps_structure(config_dict, expected_map):
 def test_invalid_configs(config_dict):
     """Test that invalid configs raise appropriate exceptions."""
     with pytest.raises(Exception):  # dacite will raise an error for invalid configs
-        config_from_dict(config_dict)
+        config_from_dict(ensure_auth_fields(config_dict.copy()))
 
 
 # RenderedMap Tests
@@ -406,9 +435,13 @@ def test_haproxy_config_context_creation():
     # Create required config and template_context
     from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
 
+    from haproxy_template_ic.config_models import DataplaneAuth
+
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
 
@@ -426,9 +459,13 @@ def test_haproxy_config_context_with_custom_data():
     # Create required config and template_context
     from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
 
+    from haproxy_template_ic.config_models import DataplaneAuth
+
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
 
@@ -443,9 +480,13 @@ def test_haproxy_config_context_mutable():
     """Test that HAProxyConfigContext is mutable (not frozen)."""
     from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
 
+    from haproxy_template_ic.config_models import DataplaneAuth
+
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
 
@@ -481,6 +522,8 @@ def test_haproxy_config_context_with_rendered_config():
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
 
@@ -500,6 +543,8 @@ def test_haproxy_config_context_default_rendered_config():
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
     context = HAProxyConfigContext(config=config, template_context=template_context)
@@ -535,6 +580,8 @@ def test_haproxy_config_context_with_rendered_certificates():
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
 
@@ -558,6 +605,8 @@ def test_haproxy_config_context_default_rendered_certificates():
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
     context = HAProxyConfigContext(config=config, template_context=template_context)
@@ -1057,7 +1106,7 @@ def test_template_snippet_basic_include():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Test that snippet was parsed correctly
     assert len(config.template_snippets) == 1
@@ -1102,7 +1151,7 @@ def test_template_snippet_multiple_includes():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Test all snippets were parsed
     assert len(config.template_snippets) == 3
@@ -1137,7 +1186,7 @@ def test_template_snippet_with_variables():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     map_config = config.maps.get("/etc/haproxy/maps/weighted.map")
     servers = [
@@ -1175,7 +1224,7 @@ def test_template_snippet_nested_includes():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     map_config = config.maps.get("/etc/haproxy/maps/servers.map")
     rendered = (
@@ -1203,7 +1252,7 @@ def test_template_snippet_not_found_error():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     map_config = config.maps.get("/etc/haproxy/maps/error.map")
 
@@ -1226,7 +1275,7 @@ def test_template_snippet_empty_collection():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Should have empty snippet collection
     assert len(config.template_snippets) == 0
@@ -1265,7 +1314,7 @@ def test_template_snippet_complex_example():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Test that all snippets were created
     assert len(config.template_snippets) == 3
@@ -1426,7 +1475,7 @@ def test_template_compilation():
         "maps": {"/test.map": {"template": "{% include 'greeting' %}"}},
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Verify templates are compiled
     renderer = TemplateRenderer.from_config(config)
@@ -1459,7 +1508,7 @@ def test_b64decode_filter():
         "maps": {"/test.map": {"template": f"{{{{ '{encoded}' | b64decode }}}}"}},
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
     result = (
         TemplateRenderer.from_config(config)
         .get_compiled(config.maps["/test.map"].template)
@@ -1621,7 +1670,7 @@ def test_host_map_template_rendering():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Create mock ingress resources using IndexedResourceCollection
     from haproxy_template_ic.config_models import IndexedResourceCollection
@@ -1706,7 +1755,7 @@ def test_complete_ingress_configuration_with_certificates():
         },
     }
 
-    config = config_from_dict(config_dict)
+    config = config_from_dict(ensure_auth_fields(config_dict.copy()))
 
     # Create mock TLS secret using IndexedResourceCollection
     from haproxy_template_ic.config_models import IndexedResourceCollection
@@ -1758,6 +1807,8 @@ def test_haproxy_config_context_get_rendered_map_by_path():
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
 
@@ -1790,6 +1841,8 @@ def test_haproxy_config_context_get_rendered_certificate_by_path():
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
         haproxy_config=MapConfig(template="global\n    daemon"),
+        dataplane_auth=DataplaneAuth(username="admin", password="adminpass"),
+        validation_auth=DataplaneAuth(username="admin", password="validationpass"),
     )
     template_context = TemplateContext()
 
@@ -1864,7 +1917,7 @@ def test_template_snippet_name_validation():
     }
 
     with pytest.raises(ValueError, match="must match snippet.name"):
-        config_from_dict(config_dict)
+        config_from_dict(ensure_auth_fields(config_dict.copy()))
 
 
 def test_resource_filter_creation():

@@ -165,6 +165,8 @@ class TestConfigSynchronizer:
         synchronizer = ConfigSynchronizer(
             production_urls=production_urls,
             validation_url="http://localhost:5555",
+            dataplane_auth=("admin", "adminpass"),
+            validation_auth=("admin", "validationpass"),
         )
         assert synchronizer.production_urls == production_urls
         assert synchronizer.validation_url == "http://localhost:5555"
@@ -175,6 +177,8 @@ class TestConfigSynchronizer:
         synchronizer = ConfigSynchronizer(
             production_urls=["http://192.168.1.1:5555"],
             validation_url="http://localhost:5555",
+            dataplane_auth=("admin", "adminpass"),
+            validation_auth=("admin", "validationpass"),
         )
 
         context = Mock()
@@ -214,6 +218,8 @@ class TestConfigSynchronizerMethods:
         synchronizer = ConfigSynchronizer(
             production_urls=["http://test:5555"],
             validation_url="http://localhost:5555",
+            dataplane_auth=("admin", "adminpass"),
+            validation_auth=("admin", "validationpass"),
         )
 
         context = Mock()
@@ -241,6 +247,8 @@ class TestConfigSynchronizerMethods:
         synchronizer = ConfigSynchronizer(
             production_urls=["http://test1:5555", "http://test2:5555"],
             validation_url="http://localhost:5555",
+            dataplane_auth=("admin", "adminpass"),
+            validation_auth=("admin", "validationpass"),
             deployment_history=deployment_history,
         )
 

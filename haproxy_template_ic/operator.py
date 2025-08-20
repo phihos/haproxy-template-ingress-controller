@@ -94,7 +94,15 @@ def _is_valid_resource(resource: Any) -> bool:
 
     # Objects with dict-like interface or attributes are valid
     if hasattr(resource, "__dict__") or hasattr(resource, "get"):
-        return True
+        try:
+            # Test that we can actually access the data for templating
+            if hasattr(resource, "items"):
+                dict(resource)
+            elif hasattr(resource, "__dict__"):
+                resource.__dict__
+            return True
+        except (TypeError, AttributeError):
+            return False
 
     # Primitives and other types are not valid resources
     return False

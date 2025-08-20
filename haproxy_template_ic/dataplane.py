@@ -431,8 +431,12 @@ class DataplaneClient:
                     stop=stop_after_attempt(5),
                     wait=wait_exponential_jitter(initial=2, max=30),
                     retry=retry_if_exception(
-                        lambda e: isinstance(e, (ApiException, DataplaneAPIError))
-                        and not isinstance(e, BadRequestException)
+                        lambda e: (
+                            isinstance(e, ApiException)
+                            and e.status >= 500  # Server errors only
+                            or isinstance(e, DataplaneAPIError)
+                            and not isinstance(e, ValidationError)
+                        )
                     ),
                 ):
                     with attempt:
@@ -463,9 +467,9 @@ class ConfigSynchronizer:
     def __init__(
         self,
         production_urls: List[str],
-        validation_url: str = "http://localhost:5555",
-        dataplane_auth: tuple[str, str] = ("admin", "adminpass"),
-        validation_auth: tuple[str, str] = ("admin", "validationpass"),
+        validation_url: str,
+        dataplane_auth: tuple[str, str],
+        validation_auth: tuple[str, str],
         deployment_history: Optional[DeploymentHistory] = None,
     ):
         self.production_urls = production_urls

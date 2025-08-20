@@ -177,12 +177,8 @@ class PodSelector(BaseModel):
 class DataplaneAuth(BaseModel):
     """Authentication configuration for HAProxy Dataplane API."""
 
-    username: NonEmptyStr = Field(
-        default="admin", description="Username for Dataplane API"
-    )
-    password: NonEmptyStr = Field(
-        default="adminpass", description="Password for Dataplane API"
-    )
+    username: NonEmptyStr = Field(..., description="Username for Dataplane API")
+    password: NonEmptyStr = Field(..., description="Password for Dataplane API")
 
     class Config:
         frozen = True
@@ -209,7 +205,7 @@ class Config(BaseModel):
         default_factory=dict, description="TLS certificates"
     )
     dataplane_auth: DataplaneAuth = Field(
-        default_factory=DataplaneAuth,
+        ...,
         description="Authentication for HAProxy Dataplane API",
     )
     validation_dataplane_url: str = Field(
@@ -217,10 +213,7 @@ class Config(BaseModel):
         description="URL for validation sidecar Dataplane API",
     )
     validation_auth: DataplaneAuth = Field(
-        default_factory=lambda: DataplaneAuth(
-            username="admin",
-            password="validationpass",  # nosec B106
-        ),
+        ...,
         description="Authentication for validation sidecar Dataplane API",
     )
 
