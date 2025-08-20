@@ -28,6 +28,15 @@ dataplaneConfig:
     production: adminpass
     validation: validationpass
 
+# Credentials configuration for Kubernetes Secret
+credentials:
+  dataplane:
+    username: admin
+    password: adminpass
+  validation:
+    username: admin
+    password: validationpass
+
 # Controller configuration
 controller:
   configmapName: haproxy-template-ic-config

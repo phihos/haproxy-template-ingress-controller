@@ -281,10 +281,18 @@ class DataplaneClient:
     def _get_configuration(self):
         """Lazy initialization of Configuration object."""
         if self._configuration is None:
+            logger.debug(
+                f"Creating Configuration for {self.base_url} with username: {self.auth[0]}"
+            )
             self._configuration = Configuration(
                 host=self.base_url,
                 username=self.auth[0],
                 password=self.auth[1],
+            )
+            # Debug: verify auth settings
+            auth_settings = self._configuration.auth_settings()
+            logger.debug(
+                f"Auth settings for {self.base_url}: {list(auth_settings.keys())}"
             )
         return self._configuration
 
@@ -492,6 +500,9 @@ class ConfigSynchronizer:
 
         # Step 1: Validate at localhost
         logger.info(f"Validating configuration at {self.validation_url}")
+        logger.debug(
+            f"Using validation credentials: username={self.credentials.validation.username}"
+        )
         validation_client = DataplaneClient(
             self.validation_url,
             auth=(
