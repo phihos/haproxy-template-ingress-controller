@@ -3,10 +3,15 @@ kind: Kustomization
 namespace: haproxy-template-ic
 resources:
   - ../../base
+
 images:
   - name: ghcr.io/OWNER/REPO
     newName: haproxy-template-ic
     newTag: dev
+  - name: haproxytech/haproxy-alpine
+    newName: haproxytech/haproxy-alpine
+    newTag: "3.1"
+
 patches:
   - target:
       kind: Deployment

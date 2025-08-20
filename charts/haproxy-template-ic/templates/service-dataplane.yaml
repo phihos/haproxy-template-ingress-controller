@@ -1,0 +1,24 @@
+{{- if .Values.haproxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-haproxy-dataplane
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    app: haproxy
+    component: loadbalancer
+spec:
+  type: {{ .Values.haproxy.dataplane.service.type | default "ClusterIP" }}
+  {{- with .Values.haproxy.dataplane.service.clusterIP }}
+  clusterIP: {{ . }}
+  {{- end }}
+  selector:
+    app: haproxy
+    component: loadbalancer
+    {{- include "haproxy-template-ic.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: dataplane-api
+      port: {{ .Values.haproxy.service.ports.dataplane }}
+      targetPort: {{ .Values.dataplaneConfig.port }}
+      protocol: TCP
+{{- end }}

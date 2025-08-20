@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-universal
+  namespace: haproxy-template-ic
+  labels:
+    app: haproxy-template-ic
+    component: universal-config
+data:
+  startup.sh: |
+    #!/bin/sh
+    set -e
+    
+    echo "Starting HAProxy Universal Script (type: ${CONTAINER_TYPE:-unknown})"
+    
+    # Create required directories
+    mkdir -p /etc/haproxy /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors /etc/haproxy/ssl /etc/haproxy/general /etc/haproxy/spoe
+    mkdir -p /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
+    chown -R haproxy:haproxy /etc/haproxy /var/lib/dataplaneapi 2>/dev/null || true
+    
+    # Generate appropriate config based on container type
+    if [ "$CONTAINER_TYPE" = "dataplane" ]; then
+      echo "Configuring Dataplane API..."
+      sed "s/PASSWORD_TOKEN/${HAPROXY_PASSWORD}/g" \
+          /opt/haproxy/dataplane.template > /etc/haproxy/dataplaneapi.yaml
+      echo "Starting HAProxy Dataplane API..."
+      exec dataplaneapi
+    else
+      echo "Configuring HAProxy..."
+      sed "s/PASSWORD_TOKEN/${HAPROXY_PASSWORD}/g" \
+          /opt/haproxy/haproxy.template > /etc/haproxy/haproxy.cfg
+      echo "Configuration written to /etc/haproxy/haproxy.cfg"
+      echo "Starting HAProxy in master-worker mode..."
+      exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock" -- /etc/haproxy/haproxy.cfg
+    fi
+    
+  haproxy.template: |
+    global
+        stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+
+    userlist dataplaneapi
+        user admin insecure-password PASSWORD_TOKEN
+
+    defaults
+        mode http
+        timeout connect 1s
+        timeout client 1s
+        timeout server 1s
+
+    frontend health
+        bind *:8404
+        http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+        
+  dataplane.template: |
+    config_version: 2
+    name: haproxy-dataplaneapi
+    dataplaneapi:
+      host: 0.0.0.0
+      port: 5555
+      user:
+        - name: admin
+          password: PASSWORD_TOKEN
+          insecure: true
+      transaction:
+        transaction_dir: /var/lib/dataplaneapi/transactions
+        backups_number: 10
+        backups_dir: /var/lib/dataplaneapi/backups
+      resources:
+        maps_dir: /etc/haproxy/maps
+        ssl_certs_dir: /etc/haproxy/ssl
+        general_storage_dir: /etc/haproxy/general
+        spoe_dir: /etc/haproxy/spoe
+    haproxy:
+      config_file: /etc/haproxy/haproxy.cfg
+      haproxy_bin: /usr/local/sbin/haproxy
+      reload:
+        reload_delay: 1
+        reload_cmd: /opt/haproxy/reload.sh
+        restart_cmd: /opt/haproxy/reload.sh
+        reload_strategy: custom
+    log_targets:
+      - log_to: stdout
+        log_level: info
+        log_types:
+        - access
+        - app
+        
+  reload.sh: |
+    #!/bin/sh
+    echo reload | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock

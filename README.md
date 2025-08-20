@@ -18,18 +18,19 @@ This controller enables full Jinja2 templating of HAProxy configurations, map fi
 ## Features
 
 ### Current Implementation
-- ✅ Watch arbitrary Kubernetes resources  
-- ✅ Template HAProxy map files
-- ✅ Template `haproxy.cfg` configuration files
+- ✅ Watch arbitrary Kubernetes resources with custom O(1) indexing
+- ✅ Template HAProxy map files with DRY principle via snippets
+- ✅ Template `haproxy.cfg` configuration files with includes
 - ✅ Template certificate files from Kubernetes Secrets
 - ✅ Template snippet system with `{% include %}` support for reusable components
 - ✅ Access watched resources, environment variables, and CLI arguments from templates
 - ✅ Access target pod metadata (memory limits, labels, annotations, etc.) from templates
 - ✅ Management socket for runtime state inspection
-- ✅ Synchronize rendered templates with running HAProxy instances via Dataplane API
+- ✅ Synchronize rendered templates with running HAProxy instances via unified Dataplane API
 - ✅ Comprehensive observability with Prometheus metrics and OpenTelemetry tracing
 - ✅ Resilient operations with retry logic, circuit breakers, and adaptive timeouts
 - ✅ Validating admission webhooks for ConfigMaps and watched resources
+- ✅ Clean CLI interface with proper subcommands and settings management
 
 ## Architecture
 
@@ -40,19 +41,20 @@ This controller enables full Jinja2 templating of HAProxy configurations, map fi
 #### 1. Controller Pod (Single Pod, 3 Containers)
 - **Main Controller**: Watches resources, renders templates, orchestrates deployment
 - **Validation HAProxy**: Tests configurations before production (port 8081)  
-- **Validation Dataplane API**: Manages validation HAProxy (port 5556)
+- **Validation Dataplane API**: Manages validation HAProxy (port 5555, auth: `admin`/`validationpass`)
 
 #### 2. Production HAProxy Pods (Multiple Pods, 2 Containers Each)
 - **HAProxy Container**: Serves production traffic (port 80), health endpoint (port 8404)
-- **Dataplane API Container**: Receives configs from controller (port 5555)
+- **Dataplane API Container**: Receives configs from controller (port 5555, auth: `admin`/`adminpass`)
 - **Labels**: Must match `pod_selector.match_labels` in ConfigMap
 - **Initial State**: Pods start NOT ready due to missing health endpoint
 
 #### 3. ConfigMap Configuration
 Defines:
 - Pod selector for target HAProxy pods
-- Kubernetes resources to watch  
-- Jinja2 templates for configs, maps, and certificates
+- Kubernetes resources to watch with custom indexing
+- Jinja2 templates for configs, maps, and certificates  
+- Template snippets for reusable components
 - **Critical**: HAProxy template MUST include health endpoint on port 8404
 
 ### Reconciliation Process
@@ -68,6 +70,13 @@ Defines:
 5. **Sync**: Full sync removes undeclared resources from target instances
 
 Timer-based reconciliation prevents config drift during resource stability.
+
+### Key Architectural Features
+
+- **Unified Dataplane Configuration**: All dataplane instances use port 5555 with environment-specific authentication
+- **O(1) Resource Lookups**: Custom indexing enables efficient cross-resource matching via `get_indexed()` methods
+- **Template Consolidation**: DRY principle applied with helper templates and reduced duplication
+- **Clean CLI Structure**: Proper subcommands with `run` for operation and `version` for info
 
 ## Template Snippets
 
@@ -105,6 +114,19 @@ maps:
 - **Validation**: All snippets are validated at configuration load time
 
 See [example-configmap.yaml](example-configmap.yaml) for a comprehensive example using template snippets to generate HAProxy configurations from Kubernetes Ingress resources.
+
+### Recent Improvements
+
+**Architecture Simplification:**
+- **Unified Dataplane Port**: All dataplane instances now use port 5555 (previously mixed 5555/5556)
+- **Environment-Specific Auth**: Production uses `admin`/`adminpass`, validation uses `admin`/`validationpass`
+- **Consolidated Templates**: Helm chart templates use helper functions to reduce duplication
+- **Clean CLI**: Restructured with proper `run` and `version` subcommands
+
+**Performance Critical:**
+- **HAProxy Version 3.1+**: Required for fast dataplaneapi startup (3-5s vs 30-60s in version 3.0)
+- **Alpine 3.1**: Lightweight distribution with proven container performance
+- **Optimized Probes**: Lower failureThreshold due to fast dataplaneapi 3.1 startup
 
 ## Validating Admission Webhooks
 
@@ -205,7 +227,7 @@ EOF
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-template-ic-config" \
   --env="VERBOSE=1" \
-  -- run
+  -- run --configmap-name=haproxy-template-ic-config
 
 # Check status
 kubectl logs -f haproxy-template-ic
@@ -213,6 +235,22 @@ kubectl logs -f haproxy-template-ic
 
 ### Development
 
+**Quick Start:**
+```bash
+# Start development environment  
+./scripts/start-dev-env.sh up
+
+# Follow logs
+./scripts/start-dev-env.sh logs
+
+# Restart after code changes
+./scripts/start-dev-env.sh restart
+
+# Clean up
+./scripts/start-dev-env.sh down
+```
+
+**Manual Development:**
 ```bash
 # Pre-commit setup
 pre-commit install
@@ -228,7 +266,7 @@ uv run ruff check --fix
 uv run mypy haproxy_template_ic/
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development information.
+See [CLAUDE.md](CLAUDE.md) for detailed development information.
 
 ## Management Socket
 
@@ -258,27 +296,37 @@ kubectl exec -it haproxy-template-ic -- \
 
 ### Configuration
 
-The controller supports configuration via CLI options or environment variables:
+### CLI Interface
+
+The controller provides a clean CLI with subcommands:
 
 **Running the Operator:**
 ```bash
+# Start the operator
 haproxy-template-ic run --configmap-name=my-config
+
+# Show version 
+haproxy-template-ic version
+
+# Get help
+haproxy-template-ic --help
+haproxy-template-ic run --help
 ```
 
 **Configuration Validation:**
 Configuration validation is handled automatically via admission webhooks when resources are applied to Kubernetes. The operator watches for ConfigMap changes and validates configurations at runtime.
 
-| Environment Variable | CLI Option | Default | Description |
-|---------------------|------------|---------|-------------|
-| `CONFIGMAP_NAME` | `run --configmap-name` | *Required* | ConfigMap name containing controller configuration |
-| `VERBOSE` | `--verbose` | `0` | Logging verbosity (0=WARNING, 1=INFO, 2=DEBUG) |
-| `STRUCTURED_LOGGING` | `--structured-logging` | `false` | Enable JSON structured logging output |
-| `HEALTHZ_PORT` | `run --healthz-port` | `8080` | Controller health check endpoint port |
-| `METRICS_PORT` | `run --metrics-port` | `9090` | Prometheus metrics endpoint port |
-| `SOCKET_PATH` | `run --socket-path` | `/run/haproxy-template-ic/management.sock` | Management socket path |
-| `WEBHOOK_ENABLED` | *(env only)* | `false` | Enable validating admission webhooks |
-| `WEBHOOK_PORT` | *(env only)* | `9443` | Webhook server port |
-| `TRACING_ENABLED` | `run --tracing-enabled` | `false` | Enable OpenTelemetry distributed tracing |
+| Environment Variable | CLI Option             | Default                                    | Description                                        |
+|----------------------|------------------------|--------------------------------------------|----------------------------------------------------|
+| `CONFIGMAP_NAME`     | `run --configmap-name` | *Required*                                 | ConfigMap name containing controller configuration |
+| `VERBOSE`            | `--verbose`            | `0`                                        | Logging verbosity (0=WARNING, 1=INFO, 2=DEBUG)     |
+| `STRUCTURED_LOGGING` | `--structured-logging` | `false`                                    | Enable JSON structured logging output              |
+| `HEALTHZ_PORT`       | `--healthz-port`       | `8080`                                     | Controller health check endpoint port              |
+| `METRICS_PORT`       | `--metrics-port`       | `9090`                                     | Prometheus metrics endpoint port                   |
+| `SOCKET_PATH`        | `--socket-path`        | `/run/haproxy-template-ic/management.sock` | Management socket path                             |
+| `WEBHOOK_ENABLED`    | *(env only)*           | `false`                                    | Enable validating admission webhooks               |
+| `WEBHOOK_PORT`       | *(env only)*           | `9443`                                     | Webhook server port                                |
+| `TRACING_ENABLED`    | `--tracing-enabled`    | `false`                                    | Enable OpenTelemetry distributed tracing           |
 
 #### Logging Configuration
 
@@ -289,7 +337,7 @@ The controller uses [structlog](https://www.structlog.org/) for high-performance
 kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-config" \
   --env="VERBOSE=2" \
-  -- run
+  -- run --configmap-name=haproxy-config
 ```
 
 **JSON Mode**: Structured JSON output for log aggregation systems:
@@ -298,7 +346,7 @@ kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
   --env="CONFIGMAP_NAME=haproxy-config" \
   --env="STRUCTURED_LOGGING=true" \
   --env="VERBOSE=1" \
-  -- run
+  -- run --configmap-name=haproxy-config
 ```
 
 ### Response Structure

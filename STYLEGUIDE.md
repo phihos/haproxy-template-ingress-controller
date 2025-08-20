@@ -4,6 +4,7 @@ This repository uses modern Python tooling and enforces a consistent, readable c
 
 ## Language and versions
 - Python: target >= 3.13 (see `pyproject.toml`).
+- HAProxy: require version 3.1+ for performance (avoid 3.0 slow dataplaneapi startup).
 - Prefer standard library over third‑party when feasible.
 
 ## Code formatting and linting

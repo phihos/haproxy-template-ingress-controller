@@ -58,3 +58,5 @@ build/
 coverage.xml
 README.md
 tests
+charts
+deploy
