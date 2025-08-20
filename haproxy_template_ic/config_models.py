@@ -212,6 +212,17 @@ class Config(BaseModel):
         default_factory=DataplaneAuth,
         description="Authentication for HAProxy Dataplane API",
     )
+    validation_dataplane_url: str = Field(
+        default="http://localhost:5555",
+        description="URL for validation sidecar Dataplane API",
+    )
+    validation_auth: DataplaneAuth = Field(
+        default_factory=lambda: DataplaneAuth(
+            username="admin",
+            password="validationpass",  # nosec B106
+        ),
+        description="Authentication for validation sidecar Dataplane API",
+    )
 
     @field_validator("template_snippets")
     @classmethod
@@ -318,8 +329,10 @@ class IndexedResourceCollection(BaseModel):
 
     @classmethod
     def from_kopf_index(cls, index: Any) -> "IndexedResourceCollection":
-        """Create from kopf Index."""
+        """Create from kopf Index with automatic Body/Store object conversion."""
         import logging
+
+        from haproxy_template_ic.kopf_utils import normalize_kopf_resource
 
         logger = logging.getLogger(__name__)
 
@@ -337,8 +350,20 @@ class IndexedResourceCollection(BaseModel):
                 for resource in index[key]:
                     if count >= collection._max_size:
                         break
-                    if collection._validate_resource(resource):
-                        collection._internal_dict[normalized_key].append(resource)
+
+                    # Convert Kopf Body objects to regular dictionaries
+                    try:
+                        normalized_resource = normalize_kopf_resource(resource)
+                    except ValueError as e:
+                        logger.warning(
+                            f"Failed to normalize resource with key {normalized_key}: {e}"
+                        )
+                        continue
+
+                    if collection._validate_resource(normalized_resource):
+                        collection._internal_dict[normalized_key].append(
+                            normalized_resource
+                        )
                         count += 1
                     else:
                         logger.warning(

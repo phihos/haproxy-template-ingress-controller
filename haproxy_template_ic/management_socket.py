@@ -9,11 +9,109 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from haproxy_template_ic.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
+
+
+class KopfIndexData(Protocol):
+    """Protocol for Kopf index data structures."""
+
+    def __iter__(self) -> Any: ...
+    def __getitem__(self, key: Any) -> Any: ...
+
+
+# Type aliases for better readability
+ResourceDict = Dict[str, Any]
+SerializationErrors = List[str]
+
+
+def _serialize_resource_collection(resources: Any) -> List[ResourceDict]:
+    """Serialize a resource collection to a list format.
+
+    Args:
+        resources: A resource or collection of resources
+
+    Returns:
+        List representation of the resources
+    """
+    if hasattr(resources, "__iter__") and not isinstance(resources, (str, bytes)):
+        # Convert to list if it's iterable but not a string
+        try:
+            return list(resources)
+        except (TypeError, ValueError):
+            # Fallback for non-listable iterables
+            return [resources]
+    elif isinstance(resources, dict):
+        # Wrap single resource dict in a list
+        return [resources]
+    else:
+        # Fallback for other types - convert to dict-like structure
+        return [{"data": resources}]
+
+
+def _serialize_kopf_index(index_data: KopfIndexData) -> Dict[str, List[ResourceDict]]:
+    """Serialize a Kopf index to a dictionary format.
+
+    Args:
+        index_data: Kopf index data structure implementing KopfIndexData protocol
+
+    Returns:
+        Dictionary with string keys and resource lists as values
+
+    Raises:
+        TypeError: If index_data cannot be serialized
+    """
+    if not (hasattr(index_data, "__iter__") and hasattr(index_data, "__getitem__")):
+        return {}
+
+    serialized_index = {}
+    for key in index_data:
+        resources = index_data[key]
+        serialized_index[str(key)] = _serialize_resource_collection(resources)
+
+    return serialized_index
+
+
+def _serialize_memo_indices(
+    memo: Any,
+) -> Tuple[Dict[str, Dict[str, List[ResourceDict]]], SerializationErrors]:
+    """Serialize all indices from a memo object.
+
+    Args:
+        memo: The memo object containing indices
+
+    Returns:
+        Tuple of (indices_dict, error_list)
+    """
+    indices = {}
+    errors = []
+
+    # Handle new memo.indices dictionary structure
+    if hasattr(memo, "indices") and memo.indices:
+        for name, index_data in memo.indices.items():
+            try:
+                indices[name] = _serialize_kopf_index(index_data)
+            except (TypeError, ValueError, AttributeError) as e:
+                errors.append(f"index '{name}' serialization: {e}")
+                indices[name] = {}
+
+    # Handle legacy _index attributes (backward compatibility)
+    for name in dir(memo):
+        if (
+            name.endswith("_index")
+            and not name.startswith("_")
+            and hasattr(getattr(memo, name), "items")
+        ):
+            try:
+                indices[name] = dict(getattr(memo, name))
+            except (TypeError, ValueError) as e:
+                errors.append(f"legacy index '{name}' serialization: {e}")
+                indices[name] = {}
+
+    return indices, errors
 
 
 def serialize_state(memo: Any) -> Dict[str, Any]:
@@ -73,19 +171,9 @@ def serialize_state(memo: Any) -> Dict[str, Any]:
 
     # Serialize indices with specific error handling
     try:
-        indices = {}
-        for name in dir(memo):
-            if (
-                name.endswith("_index")
-                and not name.startswith("_")
-                and hasattr(getattr(memo, name), "items")
-            ):
-                try:
-                    indices[name] = dict(getattr(memo, name))
-                except (TypeError, ValueError) as e:
-                    errors.append(f"index '{name}' serialization: {e}")
-                    indices[name] = {}
+        indices, index_errors = _serialize_memo_indices(memo)
         state["indices"] = indices
+        errors.extend(index_errors)
     except (AttributeError, TypeError) as e:
         errors.append(f"indices serialization: {e}")
         state["indices"] = {}
@@ -125,7 +213,7 @@ class ManagementSocketServer:
         if parts[0] == "dump":
             if len(parts) < 2:
                 return {
-                    "error": "Missing command name. Usage: dump <all|indices|config>"
+                    "error": "Missing command name. Usage: dump <all|indices|config|deployments>"
                 }
 
             if parts[1] == "all":
@@ -140,17 +228,21 @@ class ManagementSocketServer:
                 metrics.record_management_socket_command("dump_config", "success")
                 return self._dump_config()
 
+            elif parts[1] == "deployments":
+                metrics.record_management_socket_command("dump_deployments", "success")
+                return self._dump_deployments()
+
             else:
                 metrics.record_management_socket_command("dump_unknown", "error")
                 return {
                     "error": f"Unknown dump command: {parts[1]}. "
-                    f"Available: all, indices, config"
+                    f"Available: all, indices, config, deployments"
                 }
 
         elif parts[0] == "get":
             if len(parts) < 3:
                 return {
-                    "error": "Missing arguments. Usage: get <maps|watched_resources|template_snippets|certificates> <identifier>"
+                    "error": "Missing arguments. Usage: get <maps|watched_resources|template_snippets|certificates|deployment> <identifier>"
                 }
 
             collection_type = parts[1]
@@ -163,7 +255,10 @@ class ManagementSocketServer:
                 "certificates": self.memo.config.certificates,
             }
 
-            if collection_type in collections:
+            if collection_type == "deployment":
+                # Handle deployment history lookup
+                return self._get_deployment_history(identifier)
+            elif collection_type in collections:
                 item = collections[collection_type].get(identifier)
                 if item:
                     return {
@@ -178,7 +273,7 @@ class ManagementSocketServer:
             else:
                 return {
                     "error": f"Unknown collection type: {collection_type}. "
-                    f"Available: maps, watched_resources, template_snippets, certificates"
+                    f"Available: maps, watched_resources, template_snippets, certificates, deployment"
                 }
 
         else:
@@ -214,6 +309,27 @@ class ManagementSocketServer:
                 "rendered_certificates": {},
             }
         }
+
+    def _dump_deployments(self) -> Dict[str, Any]:
+        """Dump all deployment history."""
+        if hasattr(self.memo, "deployment_history") and self.memo.deployment_history:
+            return self.memo.deployment_history.to_dict()
+        return {"deployment_history": {}}
+
+    def _get_deployment_history(self, endpoint_url: str) -> Dict[str, Any]:
+        """Get deployment history for a specific endpoint."""
+        if hasattr(self.memo, "deployment_history") and self.memo.deployment_history:
+            history_dict = self.memo.deployment_history.to_dict()
+            deployment_data = history_dict.get("deployment_history", {})
+
+            if endpoint_url in deployment_data:
+                return {"result": deployment_data[endpoint_url]}
+            else:
+                return {
+                    "error": f"No deployment history found for endpoint: {endpoint_url}",
+                    "available_endpoints": list(deployment_data.keys()),
+                }
+        return {"error": "No deployment history available"}
 
     async def run(self) -> None:
         """Run the management socket server."""

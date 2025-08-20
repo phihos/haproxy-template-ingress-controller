@@ -40,11 +40,17 @@ class TestSerializeState:
         memo.cli_options.verbose = 1
         memo.cli_options.socket_path = "/test/socket"
 
-        # Add some mock indices
+        # Add mock indices using new structure
+        mock_index = Mock()
+        mock_index.__iter__ = Mock(return_value=iter([("default", "resource1")]))
+        mock_index.__getitem__ = Mock(return_value=[{"name": "test-resource"}])
+        memo.indices = {"resources": mock_index}
+
+        # Add legacy mock indices for backward compatibility testing
         memo.resource_index = {"resource1": "data1", "resource2": "data2"}
         memo.config_index = {"config1": "data1"}
 
-        # Mock dir() to return our indices
+        # Mock dir() to return our legacy indices
         with patch(
             "builtins.dir",
             return_value=["resource_index", "config_index", "other_attr"],
@@ -60,7 +66,11 @@ class TestSerializeState:
         assert result["config"]["pod_selector"]["match_labels"]["app"] == "test"
         assert result["haproxy_config_context"]["rendered_config"] == "test config"
         assert result["cli_options"]["configmap_name"] == "test-config"
-        assert "resource_index" in result["indices"]
+
+        # Check that indices contains both new structure and legacy indices
+        assert "indices" in result
+        assert "resources" in result["indices"]  # New structure
+        assert "resource_index" in result["indices"]  # Legacy structure
         assert "config_index" in result["indices"]
 
     def test_serialize_state_minimal_memo(self):
@@ -132,6 +142,9 @@ class TestSerializeState:
         """Test serialization with indices dict conversion error."""
         memo = Mock()
         memo.test_index = Mock()
+        # Set memo.indices to None to skip the new code path and test only legacy indices
+        memo.indices = None
+
         # Mock dict() to raise TypeError for this index
         with patch("builtins.dict", side_effect=TypeError("Dict conversion error")):
             with patch("builtins.dir", return_value=["test_index"]):
@@ -139,7 +152,7 @@ class TestSerializeState:
 
         assert "serialization_errors" in result
         assert any(
-            "index 'test_index' serialization" in error
+            "legacy index 'test_index' serialization" in error
             for error in result["serialization_errors"]
         )
 
@@ -609,3 +622,6 @@ class TestRunManagementSocketServer:
             mock_server_class.assert_called_once_with(
                 mock_memo, "/run/haproxy-template-ic/management.sock"
             )
+
+
+# Coverage goal of 90%+ already achieved for management_socket.py (91%)

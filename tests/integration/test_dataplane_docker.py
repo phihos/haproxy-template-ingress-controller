@@ -6,22 +6,11 @@ actual HAProxy and Dataplane API instances, providing confidence that the
 integration works correctly in production-like environments.
 """
 
-from unittest.mock import AsyncMock, Mock
-
 import pytest
-# from jinja2 import Template  # No longer needed - using string templates
 
-from haproxy_template_ic.config_models import (
-    HAProxyConfigContext,
-    RenderedConfig,
-    TemplateContext,
-    config_from_dict,
-)
 from haproxy_template_ic.dataplane import (
-    ConfigSynchronizer,
     DataplaneAPIError,
     DataplaneClient,
-    HAProxyInstance,
     ValidationError,
 )
 from .utils.progress import get_test_reporter, progress_context
@@ -78,11 +67,16 @@ class TestDataplaneClientIntegration:
             client = DataplaneClient(base_url, auth=auth)
 
             progress.phase("CONFIG_VALIDATION", "Validating HAProxy configuration")
-            # Test with valid configuration
-            is_valid = await client.validate_configuration(haproxy_configs["valid"])
+            # Test with valid configuration - should not raise an exception
+            try:
+                await client.validate_configuration(haproxy_configs["valid"])
+                validation_passed = True
+            except Exception as e:
+                validation_passed = False
+                reporter.debug(f"Unexpected validation failure: {e}")
 
             progress.phase("ASSERTION", "Verifying validation result")
-            assert is_valid is True
+            assert validation_passed is True
             reporter.debug("Valid configuration passed validation as expected")
 
     @pytest.mark.asyncio
@@ -98,10 +92,9 @@ class TestDataplaneClientIntegration:
         auth = ("admin", "adminpass")  # Correct auth from HAProxy config
         client = DataplaneClient(base_url, auth=auth)
 
-        # Test with invalid configuration
-        is_valid = await client.validate_configuration(haproxy_configs["invalid"])
-
-        assert is_valid is False
+        # Test with invalid configuration - should raise ValidationError
+        with pytest.raises((ValidationError, DataplaneAPIError)):
+            await client.validate_configuration(haproxy_configs["invalid"])
 
     @pytest.mark.asyncio
     async def test_deploy_configuration(
@@ -158,9 +151,9 @@ class TestDataplaneClientIntegration:
         # Use a non-existent URL
         client = DataplaneClient("http://localhost:59999", timeout=1.0)
 
-        # Should handle network errors gracefully
-        is_valid = await client.validate_configuration("test config")
-        assert is_valid is False
+        # Should handle network errors gracefully - validation should raise exception
+        with pytest.raises(DataplaneAPIError):
+            await client.validate_configuration("test config")
 
         with pytest.raises(DataplaneAPIError):
             await client.deploy_configuration("test config")
@@ -178,193 +171,23 @@ class TestDataplaneClientIntegration:
             base_url, timeout=0.001, auth=auth
         )  # Very short timeout
 
-        # Should handle timeout gracefully
-        is_valid = await client.validate_configuration(haproxy_configs["valid"])
-        # May succeed or fail depending on timing, but shouldn't raise unhandled exception
-        assert isinstance(is_valid, bool)
+        # Should handle timeout gracefully - may succeed or fail depending on timing
+        # but should handle either case without unhandled exceptions
+        try:
+            await client.validate_configuration(haproxy_configs["valid"])
+            # If it succeeds with very short timeout, that's fine
+        except (ValidationError, DataplaneAPIError):
+            # If it fails due to timeout or validation, that's also expected
+            pass
 
 
-@pytest.mark.integration
-class TestConfigSynchronizerIntegration:
-    """Integration tests for ConfigSynchronizer with real Dataplane API."""
-
-    def create_mock_config_context(self, config_content: str) -> HAProxyConfigContext:
-        """Create a mock HAProxyConfigContext with rendered config."""
-        config = config_from_dict(
-            {
-                "pod_selector": {"match_labels": {"app": "haproxy"}},
-                "haproxy_config": {"template": config_content},
-            }
-        )
-
-        rendered_config = RenderedConfig(content=config_content)
-
-        return HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(),
-            rendered_maps=[],
-            rendered_config=rendered_config,
-            rendered_certificates=[],
-        )
-
-    @pytest.mark.asyncio
-    async def test_synchronize_configuration_success(
-        self, mock_haproxy_instances, haproxy_configs
-    ):
-        """Test successful configuration synchronization."""
-        validation_instance, production_instance = mock_haproxy_instances
-
-        # Mock HAProxyPodDiscovery to return our instances
-        mock_discovery = Mock()
-        mock_discovery.discover_instances = AsyncMock(
-            return_value=[validation_instance, production_instance]
-        )
-
-        synchronizer = ConfigSynchronizer(mock_discovery)
-
-        # Create config context with valid configuration
-        config_context = self.create_mock_config_context(haproxy_configs["with_health"])
-
-        # Synchronize configuration
-        results = await synchronizer.synchronize_configuration(config_context)
-
-        # Should have one result for the production instance
-        assert len(results) == 1
-        assert results[0].success is True
-        assert results[0].instance == production_instance
-        assert results[0].config_version is not None
-
-    @pytest.mark.asyncio
-    async def test_synchronize_configuration_validation_failure(
-        self, mock_haproxy_instances, haproxy_configs
-    ):
-        """Test synchronization failure due to validation."""
-        validation_instance, production_instance = mock_haproxy_instances
-
-        mock_discovery = Mock()
-        mock_discovery.discover_instances = AsyncMock(
-            return_value=[validation_instance, production_instance]
-        )
-
-        synchronizer = ConfigSynchronizer(mock_discovery)
-
-        # Create config context with invalid configuration
-        config_context = self.create_mock_config_context(haproxy_configs["invalid"])
-
-        # Should raise ValidationError
-        with pytest.raises(ValidationError, match="Configuration validation failed"):
-            await synchronizer.synchronize_configuration(config_context)
-
-    @pytest.mark.asyncio
-    async def test_synchronize_configuration_no_validation_sidecars(
-        self, mock_haproxy_instances, haproxy_configs
-    ):
-        """Test synchronization when no validation sidecars are available."""
-        _, production_instance = mock_haproxy_instances
-
-        # Only return production instance (no validation)
-        mock_discovery = Mock()
-        mock_discovery.discover_instances = AsyncMock(
-            return_value=[production_instance]
-        )
-
-        synchronizer = ConfigSynchronizer(mock_discovery)
-
-        # Create config context with valid configuration
-        config_context = self.create_mock_config_context(haproxy_configs["with_health"])
-
-        # Should proceed without validation
-        results = await synchronizer.synchronize_configuration(config_context)
-
-        assert len(results) == 1
-        assert results[0].success is True
-
-    @pytest.mark.asyncio
-    async def test_synchronize_configuration_partial_failure(
-        self, mock_haproxy_instances, haproxy_configs
-    ):
-        """Test synchronization with partial deployment failures."""
-        validation_instance, production_instance = mock_haproxy_instances
-
-        # Create a second production instance that will fail
-        failing_pod = Mock()
-        failing_pod.namespace = "test"
-        failing_pod.name = "failing-haproxy"
-
-        failing_instance = HAProxyInstance(
-            pod=failing_pod,
-            dataplane_url="http://localhost:59999/v3",  # Non-existent but valid port
-            is_validation_sidecar=False,
-        )
-
-        mock_discovery = Mock()
-        mock_discovery.discover_instances = AsyncMock(
-            return_value=[validation_instance, production_instance, failing_instance]
-        )
-
-        synchronizer = ConfigSynchronizer(mock_discovery)
-
-        # Create config context with valid configuration
-        config_context = self.create_mock_config_context(haproxy_configs["with_health"])
-
-        # Synchronize configuration
-        results = await synchronizer.synchronize_configuration(config_context)
-
-        # Should have results for both production instances
-        assert len(results) == 2
-
-        # One should succeed, one should fail
-        success_count = sum(1 for r in results if r.success)
-        failure_count = sum(1 for r in results if not r.success)
-
-        assert success_count == 1
-        assert failure_count == 1
-
-    @pytest.mark.asyncio
-    async def test_synchronize_configuration_no_instances(self, haproxy_configs):
-        """Test synchronization when no HAProxy instances are found."""
-        mock_discovery = Mock()
-        mock_discovery.discover_instances = AsyncMock(return_value=[])
-
-        synchronizer = ConfigSynchronizer(mock_discovery)
-
-        config_context = self.create_mock_config_context(haproxy_configs["valid"])
-
-        # Should return empty results
-        results = await synchronizer.synchronize_configuration(config_context)
-        assert len(results) == 0
-
-    @pytest.mark.asyncio
-    async def test_circuit_breaker_behavior(
-        self, mock_haproxy_instances, haproxy_configs
-    ):
-        """Test circuit breaker behavior with failing validation."""
-        validation_instance, production_instance = mock_haproxy_instances
-
-        # Replace validation instance with one that will always fail
-        failing_validation_pod = Mock()
-        failing_validation_pod.namespace = "test"
-        failing_validation_pod.name = "failing-validation"
-
-        failing_validation_instance = HAProxyInstance(
-            pod=failing_validation_pod,
-            dataplane_url="http://localhost:59998/v3",  # Non-existent but valid port
-            is_validation_sidecar=True,
-        )
-
-        mock_discovery = Mock()
-        mock_discovery.discover_instances = AsyncMock(
-            return_value=[failing_validation_instance, production_instance]
-        )
-
-        synchronizer = ConfigSynchronizer(mock_discovery)
-
-        config_context = self.create_mock_config_context(haproxy_configs["valid"])
-
-        # Multiple attempts should trigger circuit breaker
-        for _ in range(3):
-            with pytest.raises(ValidationError):
-                await synchronizer.synchronize_configuration(config_context)
+# NOTE: TestConfigSynchronizerIntegration class has been removed
+# This class was testing the old complex architecture with HAProxyPodDiscovery
+# and HAProxyInstance classes that were removed during simplification.
+# The new simplified architecture is tested through unit tests and E2E tests.
+# ConfigSynchronizer is now tested via unit tests with the simplified API:
+# - Takes production_urls list, validation_url, and auth parameters directly
+# - Returns simple dict with 'successful', 'failed', and 'errors' keys
 
 
 @pytest.mark.integration
@@ -408,9 +231,8 @@ class TestResilienceFeatures:
 
         # Multiple successful operations should work
         for _ in range(3):
-            is_valid = await client.validate_configuration(haproxy_configs["valid"])
-            assert is_valid is True
+            # Should not raise exceptions for valid config
+            await client.validate_configuration(haproxy_configs["valid"])
 
         # Test with slightly more complex config
-        is_valid = await client.validate_configuration(haproxy_configs["with_health"])
-        assert is_valid is True
+        await client.validate_configuration(haproxy_configs["with_health"])

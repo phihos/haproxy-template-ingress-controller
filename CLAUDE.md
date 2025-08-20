@@ -465,6 +465,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<ty
 - Never edit generated code - regenerate from source specifications
 - Prefer module-level imports over local imports in Python
 - Use `progress_context` (not `test_progress`) to avoid pytest discovery issues
+- **No production code solely for tests**: Production code must serve a real feature or operational need. Never add code just to make tests pass. If tests expect something not tied to a feature, fix the tests, not the production code.
 
 ## No Backward Compatibility Policy
 

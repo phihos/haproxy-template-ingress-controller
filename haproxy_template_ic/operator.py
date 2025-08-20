@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from haproxy_template_ic.__main__ import CliOptions
 
 import os
+import re
 
 import kopf
 import structlog
@@ -39,8 +40,9 @@ from haproxy_template_ic.config_models import (
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
     DataplaneAPIError,
-    HAProxyPodDiscovery,
+    DeploymentHistory,
     ValidationError,
+    get_production_urls_from_index,
 )
 from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
@@ -54,6 +56,9 @@ from haproxy_template_ic.tracing import (
 )
 
 logger = structlog.get_logger(__name__)
+
+# Pre-compiled regex pattern for field extraction performance optimization
+_DOT_SPLIT_PATTERN = re.compile(r"\.(?![^\[]*\])")
 
 
 def get_current_namespace() -> str:
@@ -198,11 +203,9 @@ def extract_nested_field(obj: Dict[str, Any], path: str) -> Any:
     Returns:
         The field value or empty string if not found
     """
-    import re
-
     # Handle bracket notation for dict keys
     # Convert metadata.labels['kubernetes.io/service-name'] to proper access
-    parts = re.split(r"\.(?![^\[]*\])", path)
+    parts = _DOT_SPLIT_PATTERN.split(path)
 
     current = obj
     for part in parts:
@@ -289,10 +292,9 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     indices: Dict[str, IndexedResourceCollection] = {}
     for resource_id in memo.config.watched_resources:
         try:
-            # Get the index for this resource type
-            index_data = memo.indices.get(resource_id)
-
-            if index_data:
+            # Get the index for this resource type - access Kopf Store directly
+            if resource_id in memo.indices:
+                index_data = memo.indices[resource_id]
                 # Create IndexedResourceCollection from kopf Index
                 indices[resource_id] = IndexedResourceCollection.from_kopf_index(
                     index_data
@@ -447,6 +449,7 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
 
 async def synchronize_with_haproxy_instances(memo: Any) -> None:
     """Synchronize rendered configuration with HAProxy instances via Dataplane API."""
+    logger.info("🚀 SYNC FUNCTION CALLED - Starting synchronization...")
     metrics = get_metrics_collector()
 
     if not memo.config.pod_selector:
@@ -462,53 +465,91 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
         return
 
     try:
-        # Create pod discovery service
-        current_namespace = get_current_namespace()
-        pod_discovery = HAProxyPodDiscovery(
-            pod_selector=memo.config.pod_selector, namespace=current_namespace
+        # Debug: Log available indices
+        available_indices = (
+            list(memo.indices.keys()) if hasattr(memo, "indices") else []
+        )
+        logger.info(f"🔍 Available indices: {available_indices}")
+
+        # Get indexed HAProxy pods and extract production URLs
+        if "haproxy_pods" not in memo.indices:
+            logger.warning("🔍 HAProxy pods index not found - skipping synchronization")
+            return
+
+        haproxy_pods_store = memo.indices["haproxy_pods"]
+
+        logger.info(f"🔍 HAProxy pods index contains {len(haproxy_pods_store)} entries")
+
+        # Convert Kopf Store to IndexedResourceCollection for clean handling
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(
+            haproxy_pods_store
+        )
+        logger.info(
+            f"🔍 Created IndexedResourceCollection with {len(haproxy_pods_collection)} pods"
         )
 
-        # Create synchronizer and perform sync
-        auth = (
+        production_urls = get_production_urls_from_index(haproxy_pods_collection)
+
+        if not production_urls:
+            logger.warning(
+                "⚠️ No production HAProxy pods found - skipping synchronization"
+            )
+            return
+
+        # Initialize deployment history if not exists
+        if not hasattr(memo, "deployment_history"):
+            memo.deployment_history = DeploymentHistory()
+
+        # Create synchronizer and perform sync with new simplified parameters
+        dataplane_auth = (
             memo.config.dataplane_auth.username,
             memo.config.dataplane_auth.password,
         )
-        synchronizer = ConfigSynchronizer(pod_discovery, dataplane_auth=auth)
-        results = await synchronizer.synchronize_configuration(
-            memo.haproxy_config_context
+        validation_auth = (
+            memo.config.validation_auth.username,
+            memo.config.validation_auth.password,
         )
+
+        synchronizer = ConfigSynchronizer(
+            production_urls=production_urls,
+            validation_url=memo.config.validation_dataplane_url,
+            dataplane_auth=dataplane_auth,
+            validation_auth=validation_auth,
+            deployment_history=memo.deployment_history,
+        )
+
+        results = await synchronizer.sync_configuration(memo.haproxy_config_context)
 
         # Log results and record metrics
-        successful = [r for r in results if r.success]
-        failed = [r for r in results if not r.success]
+        successful_count = results.get("successful", 0)
+        failed_count = results.get("failed", 0)
+        errors = results.get("errors", [])
 
         # Record HAProxy instance counts and sync results
-        production_instances = [
-            r.instance for r in results if not r.instance.is_validation_sidecar
-        ]
-        validation_instances = [
-            r.instance for r in results if r.instance.is_validation_sidecar
-        ]
+        # We have 1 validation instance (fixed localhost URL) and production_urls count for production
         metrics.record_haproxy_instances(
-            len(production_instances), len(validation_instances)
+            len(production_urls),
+            1,  # validation instances = 1 (localhost sidecar)
         )
 
-        if successful:
-            for result in successful:
+        if successful_count > 0:
+            for _ in range(successful_count):
                 metrics.record_dataplane_api_request("deploy", "success")
             logger.info(
-                f"🚀 Successfully synchronized configuration to {len(successful)} HAProxy instances"
+                f"🚀 Successfully synchronized configuration to {successful_count} HAProxy instances"
             )
 
-        if failed:
-            for result in failed:
+        if failed_count > 0:
+            for _ in range(failed_count):
                 metrics.record_dataplane_api_request("deploy", "error")
                 metrics.record_error("dataplane_deploy_failed", "dataplane")
             logger.error(
-                f"❌ Failed to synchronize configuration to {len(failed)} HAProxy instances"
+                f"❌ Failed to synchronize configuration to {failed_count} HAProxy instances"
             )
-            for result in failed:
-                logger.error(f"   - {result.instance.name}: {result.error}")
+            for error in errors:
+                logger.error(f"   - {error}")
 
     except ValidationError as e:
         metrics.record_error("validation_failed", "dataplane")
@@ -524,6 +565,66 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
 # =============================================================================
 # Resource Watchers
 # =============================================================================
+
+
+async def haproxy_pods_index(
+    namespace: str,
+    name: str,
+    body: Dict[str, Any],
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """Index HAProxy pods for efficient discovery."""
+    logger.info(f"📝 Indexing HAProxy pod {namespace}/{name}")
+
+    # Log pod status for debugging
+    pod_ip = body.get("status", {}).get("podIP")
+    phase = body.get("status", {}).get("phase")
+    logger.info(f"🔍 Pod {name} - Phase: {phase}, IP: {pod_ip}")
+
+    # No manual filtering needed - Kopf already filtered by labels
+    # Index by namespace/name for easy lookup
+    return {(namespace, name): body}
+
+
+async def handle_haproxy_pod_create(**kwargs: Any) -> None:
+    """Handle HAProxy pod creation events."""
+    body = kwargs.get("body", {})
+    namespace = kwargs.get("namespace") or body.get("metadata", {}).get(
+        "namespace", "default"
+    )
+    name = kwargs.get("name") or body.get("metadata", {}).get("name", "unknown")
+
+    # No manual filtering needed - Kopf already filtered by labels
+    logger.info(f"🆕 New HAProxy pod created: {namespace}/{name}")
+    # Trigger template re-rendering for the new pod
+    # Note: This will be handled by the template rendering system
+    # The new pod will be available in the index for the next sync
+
+
+def setup_haproxy_pod_indexing(memo: Any) -> None:
+    """Set up HAProxy pod indexing and event handling."""
+    current_namespace = get_current_namespace()
+
+    logger.info("🔍 Setting up HAProxy pod indexing...")
+
+    # Get label selector from config for filtering at API level
+    pod_labels = memo.config.pod_selector.match_labels if memo.config else {}
+    logger.info(f"📋 Using label selector: {pod_labels}")
+
+    # Register HAProxy pod indexing with label filtering
+    kopf.index("pods", id="haproxy_pods", param="haproxy_pods", labels=pod_labels)(
+        haproxy_pods_index
+    )  # type: ignore
+
+    # Register pod creation handler with label filtering (only trigger on create events)
+    kopf.on.create("pods", id="haproxy_pod_create", labels=pod_labels)(
+        handle_haproxy_pod_create
+    )
+
+    logger.info(
+        f"✅ HAProxy pod indexing configured for namespace '{current_namespace}' with labels {pod_labels}"
+    )
 
 
 def setup_resource_watchers(memo: Any) -> None:
@@ -557,6 +658,9 @@ def setup_resource_watchers(memo: Any) -> None:
 
         kopf.index(resource_type, **kwargs)(update_resource_index)  # type: ignore[arg-type]
         kopf.on.event(resource_type, **event_kwargs)(render_haproxy_templates)  # type: ignore[arg-type]
+
+    # Set up HAProxy pod indexing
+    setup_haproxy_pod_indexing(memo)
 
     logger.info("✅ All resource watchers configured successfully")
 
