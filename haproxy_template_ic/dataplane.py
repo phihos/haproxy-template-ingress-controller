@@ -375,7 +375,8 @@ class DataplaneClient:
                         else None,
                         original_error=e,
                     ) from e
-                except (ApiException, Exception) as e:
+                except Exception as e:
+                    # Handle all other exceptions (network errors, timeouts, etc.)
                     record_span_event("validation_failed", {"error": str(e)})
                     set_span_error(e, "Configuration validation failed")
                     logger.error(f"Dataplane API error during validation: {e}")
@@ -433,10 +434,13 @@ class DataplaneClient:
                     wait=wait_exponential_jitter(initial=2, max=30),
                     retry=retry_if_exception(
                         lambda e: (
-                            isinstance(e, ApiException)
-                            and e.status >= 500  # Server errors only
-                            or isinstance(e, DataplaneAPIError)
-                            and not isinstance(e, ValidationError)
+                            (
+                                isinstance(e, ApiException) and e.status >= 500
+                            )  # Server errors only
+                            or (
+                                isinstance(e, DataplaneAPIError)
+                                and not isinstance(e, ValidationError)
+                            )
                         )
                     ),
                 ):

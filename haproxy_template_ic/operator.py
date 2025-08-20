@@ -85,8 +85,17 @@ def _is_valid_resource(resource: Any) -> bool:
     Returns:
         True if the resource is valid for templates, False otherwise
     """
-    # Dictionary resources are always valid
+    # Dictionary resources need basic metadata validation
     if isinstance(resource, dict):
+        # Check for basic Kubernetes resource metadata
+        metadata = resource.get("metadata", {})
+        if not isinstance(metadata, dict):
+            return False
+
+        # Validate essential metadata fields
+        if not metadata.get("name") or not metadata.get("namespace"):
+            return False
+
         return True
 
     # List/tuple resources should be non-empty

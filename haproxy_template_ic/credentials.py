@@ -55,9 +55,9 @@ class Credentials(BaseModel):
             missing = [fields[i] for i, v in enumerate(vals) if v is None]
             raise ValueError(f"Missing/invalid credential fields: {missing}")
 
-        # Create auth objects
-        dataplane_auth = DataplaneAuth(username=vals[0], password=vals[1])
-        validation_auth = DataplaneAuth(username=vals[2], password=vals[3])
+        # Create auth objects - vals are guaranteed to be str after None check
+        dataplane_auth = DataplaneAuth(username=vals[0], password=vals[1])  # type: ignore[arg-type]
+        validation_auth = DataplaneAuth(username=vals[2], password=vals[3])  # type: ignore[arg-type]
 
         return cls(dataplane=dataplane_auth, validation=validation_auth)
 

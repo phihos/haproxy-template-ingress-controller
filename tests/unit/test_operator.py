@@ -1288,7 +1288,10 @@ class TestSynchronizeErrorPaths:
 def test_resource_validation():
     """Test the _is_valid_resource function for type safety."""
     # Valid resources
-    assert _is_valid_resource({"metadata": {"name": "test"}}) is True  # dict
+    assert (
+        _is_valid_resource({"metadata": {"name": "test", "namespace": "default"}})
+        is True
+    )  # dict
     assert (
         _is_valid_resource([{"metadata": {"name": "test"}}]) is True
     )  # non-empty list
@@ -1312,6 +1315,17 @@ def test_resource_validation():
     assert _is_valid_resource(123) is False  # number primitive
     assert _is_valid_resource(None) is False  # None
     assert _is_valid_resource(True) is False  # boolean primitive
+
+    # Invalid dictionary resources (missing required metadata)
+    assert _is_valid_resource({}) is False  # no metadata
+    assert _is_valid_resource({"metadata": {}}) is False  # empty metadata
+    assert (
+        _is_valid_resource({"metadata": {"name": "test"}}) is False
+    )  # missing namespace
+    assert (
+        _is_valid_resource({"metadata": {"namespace": "default"}}) is False
+    )  # missing name
+    assert _is_valid_resource({"metadata": "not-a-dict"}) is False  # metadata not dict
 
 
 # =============================================================================
