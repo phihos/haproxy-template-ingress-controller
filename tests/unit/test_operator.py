@@ -5,40 +5,52 @@ This module contains tests for Kubernetes operator functionality focusing on
 critical paths and edge cases that are likely to detect bugs.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-import yaml
-import kopf
 import asyncio
+import kopf
+import pytest
+import yaml
+from jinja2 import Template
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from haproxy_template_ic.operator import (
-    load_config_from_configmap,
-    fetch_configmap,
-    trigger_reload,
-    handle_configmap_change,
-    update_resource_index,
-    create_operator_memo,
-    render_haproxy_templates,
-    synchronize_with_haproxy_instances,
-    setup_resource_watchers,
-    initialize_configuration,
-    _is_valid_resource,
-    get_current_namespace,
-)
 from haproxy_template_ic.config_models import (
     Config,
+    HAProxyConfigContext,
     MapConfig,
     PodSelector,
-    HAProxyConfigContext,
-    RenderedMap,
-    RenderedConfig,
     RenderedCertificate,
+    RenderedConfig,
+    RenderedMap,
     TemplateContext,
     WatchResourceConfig,
     config_from_dict,
 )
+from haproxy_template_ic.operator import (
+    _is_valid_resource,
+    create_operator_memo,
+    fetch_configmap,
+    get_current_namespace,
+    handle_configmap_change,
+    initialize_configuration,
+    load_config_from_configmap,
+    render_haproxy_templates,
+    setup_resource_watchers,
+    synchronize_with_haproxy_instances,
+    trigger_reload,
+    update_resource_index,
+)
 from haproxy_template_ic.templating import TemplateRenderer
-from jinja2 import Template
+
+
+@pytest.fixture(autouse=True)
+def mock_kubernetes_config():
+    """Mock kubernetes.config module for all tests to avoid CI failures."""
+    with patch("haproxy_template_ic.operator.config") as mock_config:
+        # Set up default mock behavior
+        mock_config.list_kube_config_contexts.return_value = (
+            [],
+            {"context": {"namespace": "default"}},
+        )
+        yield mock_config
 
 
 # =============================================================================
@@ -1026,13 +1038,12 @@ class TestGetCurrentNamespace:
         )
 
     @patch("os.path.exists")
-    @patch("haproxy_template_ic.operator.config.list_kube_config_contexts")
     def test_get_current_namespace_from_kube_config(
-        self, mock_list_contexts, mock_exists
+        self, mock_exists, mock_kubernetes_config
     ):
         """Test namespace detection from kube config."""
         mock_exists.return_value = False
-        mock_list_contexts.return_value = (
+        mock_kubernetes_config.list_kube_config_contexts.return_value = (
             [],
             {"context": {"namespace": "kube-namespace"}},
         )
@@ -1042,26 +1053,26 @@ class TestGetCurrentNamespace:
         assert result == "kube-namespace"
 
     @patch("os.path.exists")
-    @patch("haproxy_template_ic.operator.config.list_kube_config_contexts")
     def test_get_current_namespace_kube_config_error(
-        self, mock_list_contexts, mock_exists
+        self, mock_exists, mock_kubernetes_config
     ):
         """Test namespace detection with kube config error."""
         mock_exists.return_value = False
-        mock_list_contexts.side_effect = KeyError("No context")
+        mock_kubernetes_config.list_kube_config_contexts.side_effect = KeyError(
+            "No context"
+        )
 
         result = get_current_namespace()
 
         assert result == "default"
 
     @patch("os.path.exists")
-    @patch("haproxy_template_ic.operator.config.list_kube_config_contexts")
     def test_get_current_namespace_non_string_namespace(
-        self, mock_list_contexts, mock_exists
+        self, mock_exists, mock_kubernetes_config
     ):
         """Test namespace detection with non-string namespace."""
         mock_exists.return_value = False
-        mock_list_contexts.return_value = (
+        mock_kubernetes_config.list_kube_config_contexts.return_value = (
             [],
             {"context": {"namespace": 123}},  # Non-string namespace
         )
