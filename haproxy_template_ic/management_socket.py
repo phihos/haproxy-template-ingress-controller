@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Protocol, Tuple, Union
 
 from haproxy_template_ic.metrics import get_metrics_collector
 
@@ -17,10 +17,19 @@ logger = logging.getLogger(__name__)
 
 
 class KopfIndexData(Protocol):
-    """Protocol for Kopf index data structures."""
+    """Protocol for Kopf index data structures.
 
-    def __iter__(self) -> Any: ...
-    def __getitem__(self, key: Any) -> Any: ...
+    This protocol defines the interface for Kopf index data structures
+    that can be iterated over and support item access by key.
+    """
+
+    def __iter__(self) -> Iterator[Any]:
+        """Iterate over the index keys."""
+        ...
+
+    def __getitem__(self, key: Any) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        """Get resources by index key."""
+        ...
 
 
 # Type aliases for better readability

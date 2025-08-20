@@ -68,9 +68,16 @@ class TestNormalizeDataplaneUrl:
     def test_normalize_preserves_query_parameters(self):
         """Test that query parameters are preserved."""
         result = normalize_dataplane_url("http://localhost:5555?timeout=30")
-        assert result == "http://localhost:5555?timeout=30/v3"
+        assert result == "http://localhost:5555/v3?timeout=30"
 
     def test_normalize_preserves_fragment(self):
         """Test that URL fragments are preserved."""
         result = normalize_dataplane_url("http://localhost:5555#section")
-        assert result == "http://localhost:5555#section/v3"
+        assert result == "http://localhost:5555/v3#section"
+
+    def test_normalize_preserves_query_and_fragment(self):
+        """Test that both query parameters and fragments are preserved."""
+        result = normalize_dataplane_url(
+            "http://localhost:5555?timeout=30&retry=3#status"
+        )
+        assert result == "http://localhost:5555/v3?timeout=30&retry=3#status"

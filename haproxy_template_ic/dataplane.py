@@ -13,6 +13,7 @@ Uses the complete generated HAProxy Dataplane API v3 client for all operations.
 import logging
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from urllib.parse import urlparse, urlunparse
 
 if TYPE_CHECKING:
     from haproxy_template_ic.config_models import IndexedResourceCollection
@@ -47,28 +48,46 @@ def normalize_dataplane_url(base_url: str) -> str:
     """Normalize a Dataplane API URL to ensure it ends with /v3.
 
     This utility function handles various URL formats and ensures consistent
-    API endpoint formatting for the HAProxy Dataplane API v3.
+    API endpoint formatting for the HAProxy Dataplane API v3. It properly
+    preserves query parameters and fragments while adding /v3 to the path.
 
     Args:
         base_url: The base URL in any of these formats:
             - "http://localhost:5555" -> "http://localhost:5555/v3"
             - "http://localhost:5555/" -> "http://localhost:5555/v3"
             - "http://localhost:5555/v3" -> "http://localhost:5555/v3" (unchanged)
+            - "http://localhost:5555?timeout=30" -> "http://localhost:5555/v3?timeout=30"
             - "https://haproxy.example.com:5555/api" -> "https://haproxy.example.com:5555/api/v3"
 
     Returns:
-        Normalized URL ending with /v3
+        Normalized URL ending with /v3, preserving query parameters and fragments
 
     Example:
         >>> normalize_dataplane_url("http://localhost:5555")
         'http://localhost:5555/v3'
+        >>> normalize_dataplane_url("http://localhost:5555?timeout=30")
+        'http://localhost:5555/v3?timeout=30'
         >>> normalize_dataplane_url("https://api.example.com/haproxy/")
         'https://api.example.com/haproxy/v3'
     """
-    normalized_url = base_url.rstrip("/")
-    if not normalized_url.endswith("/v3"):
-        normalized_url += "/v3"
-    return normalized_url
+    parsed = urlparse(base_url)
+
+    # Handle path normalization
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/v3"):
+        path = f"{path}/v3"
+
+    # Reconstruct the URL with normalized path
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
 
 
 class DataplaneAPIError(Exception):
@@ -306,6 +325,9 @@ class DataplaneClient:
     async def validate_configuration(self, config_content: str) -> None:
         """Validate HAProxy configuration without applying it.
 
+        Note: This method does not retry on failures. Validation failures are typically
+        due to invalid configuration, so retrying would not help.
+
         Raises:
             ValidationError: If configuration validation fails
             DataplaneAPIError: If API communication fails
@@ -366,7 +388,12 @@ class DataplaneClient:
                     ) from e
 
     async def deploy_configuration(self, config_content: str) -> str:
-        """Deploy HAProxy configuration and reload."""
+        """Deploy HAProxy configuration and reload.
+
+        This method includes retry logic for transient failures (network issues,
+        temporary dataplane unavailability), but excludes BadRequestException
+        (invalid configuration) from retries since retrying won't fix config errors.
+        """
         with trace_dataplane_operation("deploy", self.base_url):
             add_span_attributes(
                 config_size=len(config_content), dataplane_url=self.base_url
