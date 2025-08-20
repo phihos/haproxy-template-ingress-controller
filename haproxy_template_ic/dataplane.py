@@ -17,6 +17,7 @@ from urllib.parse import urlparse, urlunparse
 
 if TYPE_CHECKING:
     from haproxy_template_ic.config_models import IndexedResourceCollection
+    from haproxy_template_ic.credentials import Credentials
 
 from haproxy_template_ic.config_models import HAProxyConfigContext
 from haproxy_template_ic.metrics import get_metrics_collector
@@ -468,14 +469,12 @@ class ConfigSynchronizer:
         self,
         production_urls: List[str],
         validation_url: str,
-        dataplane_auth: tuple[str, str],
-        validation_auth: tuple[str, str],
+        credentials: "Credentials",
         deployment_history: Optional[DeploymentHistory] = None,
     ):
         self.production_urls = production_urls
         self.validation_url = validation_url
-        self.dataplane_auth = dataplane_auth
-        self.validation_auth = validation_auth
+        self.credentials = credentials
         self.deployment_history = deployment_history or DeploymentHistory()
 
     async def sync_configuration(
@@ -490,7 +489,11 @@ class ConfigSynchronizer:
         # Step 1: Validate at localhost
         logger.info(f"Validating configuration at {self.validation_url}")
         validation_client = DataplaneClient(
-            self.validation_url, auth=self.validation_auth
+            self.validation_url,
+            auth=(
+                self.credentials.validation.username,
+                self.credentials.validation.password.get_secret_value(),
+            ),
         )
 
         try:
@@ -503,7 +506,13 @@ class ConfigSynchronizer:
         results: Dict[str, Any] = {"successful": 0, "failed": 0, "errors": []}
 
         for url in self.production_urls:
-            client = DataplaneClient(url, auth=self.dataplane_auth)
+            client = DataplaneClient(
+                url,
+                auth=(
+                    self.credentials.dataplane.username,
+                    self.credentials.dataplane.password.get_secret_value(),
+                ),
+            )
             try:
                 version = await client.deploy_configuration(config)
                 self.deployment_history.record(url, version, True)

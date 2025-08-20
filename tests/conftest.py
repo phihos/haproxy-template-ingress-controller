@@ -516,6 +516,29 @@ def webhook_secret(webhook_certificates, k8s_client, k8s_namespace):
 
 
 @pytest.fixture
+def credentials_secret(k8s_client, k8s_namespace):
+    """Create Kubernetes Secret with HAProxy Dataplane API credentials."""
+    manifest = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": "haproxy-template-ic-credentials",
+            "namespace": k8s_namespace,
+        },
+        "type": "Opaque",
+        "stringData": {
+            "dataplane_username": "admin",
+            "dataplane_password": "adminpass",
+            "validation_username": "admin",
+            "validation_password": "validationpass",
+        },
+    }
+    secret = Secret(manifest, namespace=k8s_namespace, api=k8s_client)
+    secret.create()
+    return secret
+
+
+@pytest.fixture
 def validating_webhook_config(webhook_certificates, k8s_namespace, k8s_client):
     """Create ValidatingAdmissionWebhook configuration."""
     from kr8s.objects import APIObject
@@ -1082,7 +1105,7 @@ def haproxy_dataplane_clients(haproxy_production_pods, k8s_namespace):
 
 @pytest.fixture
 def controller_with_validation_sidecar(
-    k8s_client, k8s_namespace, container_image, configmap, request
+    k8s_client, k8s_namespace, container_image, configmap, credentials_secret, request
 ):
     """
     Create and deploy HAProxy template ingress controller with validation sidecar.
@@ -1189,6 +1212,10 @@ backend validation_backend
                     ],
                     "env": [
                         {"name": "CONFIGMAP_NAME", "value": configmap.name},
+                        {
+                            "name": "SECRET_NAME",
+                            "value": "haproxy-template-ic-credentials",
+                        },
                         {"name": "VERBOSE", "value": "2"},
                         {
                             "name": "SOCKET_PATH",

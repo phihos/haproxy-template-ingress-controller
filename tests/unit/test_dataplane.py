@@ -162,11 +162,16 @@ class TestConfigSynchronizer:
     def test_init(self):
         """Test ConfigSynchronizer initialization."""
         production_urls = ["http://192.168.1.1:5555", "http://192.168.1.2:5555"]
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
         synchronizer = ConfigSynchronizer(
             production_urls=production_urls,
             validation_url="http://localhost:5555",
-            dataplane_auth=("admin", "adminpass"),
-            validation_auth=("admin", "validationpass"),
+            credentials=credentials,
         )
         assert synchronizer.production_urls == production_urls
         assert synchronizer.validation_url == "http://localhost:5555"
@@ -174,11 +179,16 @@ class TestConfigSynchronizer:
     @pytest.mark.asyncio
     async def test_sync_configuration_no_rendered_config(self):
         """Test sync with no rendered config."""
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
         synchronizer = ConfigSynchronizer(
             production_urls=["http://192.168.1.1:5555"],
             validation_url="http://localhost:5555",
-            dataplane_auth=("admin", "adminpass"),
-            validation_auth=("admin", "validationpass"),
+            credentials=credentials,
         )
 
         context = Mock()
@@ -215,11 +225,16 @@ class TestConfigSynchronizerMethods:
     @pytest.mark.asyncio
     async def test_sync_configuration_validation_failure(self):
         """Test sync with validation failure."""
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
         synchronizer = ConfigSynchronizer(
             production_urls=["http://test:5555"],
             validation_url="http://localhost:5555",
-            dataplane_auth=("admin", "adminpass"),
-            validation_auth=("admin", "validationpass"),
+            credentials=credentials,
         )
 
         context = Mock()
@@ -244,11 +259,16 @@ class TestConfigSynchronizerMethods:
     async def test_sync_configuration_mixed_results(self):
         """Test sync with mixed success/failure results."""
         deployment_history = DeploymentHistory()
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
         synchronizer = ConfigSynchronizer(
             production_urls=["http://test1:5555", "http://test2:5555"],
             validation_url="http://localhost:5555",
-            dataplane_auth=("admin", "adminpass"),
-            validation_auth=("admin", "validationpass"),
+            credentials=credentials,
             deployment_history=deployment_history,
         )
 

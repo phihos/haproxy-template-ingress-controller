@@ -23,7 +23,7 @@ from deepdiff import DeepDiff
 from kopf import set_default_registry
 from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
-from kr8s.objects import ConfigMap
+from kr8s.objects import ConfigMap, Secret
 from kubernetes import config
 
 from haproxy_template_ic.config_models import (
@@ -48,6 +48,7 @@ from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.structured_logging import autolog, observe
 from haproxy_template_ic.templating import TemplateRenderer
+from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -162,6 +163,23 @@ async def fetch_configmap(name: str, namespace: str) -> Any:
         raise kopf.TemporaryError(f'Failed to retrieve ConfigMap "{name}": {e}') from e
 
 
+@trace_async_function(
+    span_name="fetch_secret", attributes={"operation.category": "kubernetes"}
+)
+async def fetch_secret(name: str, namespace: str) -> Any:
+    """Fetch Secret from Kubernetes cluster."""
+    add_span_attributes(secret_name=name, secret_namespace=namespace)
+    try:
+        result = await Secret.get(name, namespace=namespace)
+        record_span_event("secret_fetched")
+        return result
+    except Exception as e:
+        record_span_event("secret_fetch_failed", {"error": str(e)})
+        raise kopf.PermanentError(
+            f'Failed to retrieve Secret "{name}": {e}. Credentials are mandatory for operation.'
+        ) from e
+
+
 # =============================================================================
 # Event Handlers
 # =============================================================================
@@ -199,6 +217,38 @@ async def handle_configmap_change(
         diff_str = str(diff)[:500]
         structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
         trigger_reload(memo)
+
+
+@autolog(component="operator")
+async def handle_secret_change(
+    memo: Any,
+    event: Dict[str, Any],
+    name: str,
+    type: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
+    """Handle Secret change events."""
+    # Logging context is automatically injected by @autolog decorator
+    structured_logger = structlog.get_logger(__name__)
+    structured_logger.info(f"Kubernetes {type}")
+
+    # Load new credentials directly
+    secret_data = (
+        event["object"].get("data", {})
+        if isinstance(event["object"], dict)
+        else event["object"].data
+    )
+    try:
+        new_credentials = Credentials.from_secret(secret_data)
+    except Exception as e:
+        structured_logger.error(f"❌ Failed to load credentials: {e}")
+        return
+
+    # Simple credential comparison using tuples
+    if memo.credentials != new_credentials:
+        structured_logger.info("🔐 Credentials changed: reloading")
+        memo.credentials = new_credentials
 
 
 def extract_nested_field(obj: Dict[str, Any], path: str) -> Any:
@@ -510,21 +560,11 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
         if not hasattr(memo, "deployment_history"):
             memo.deployment_history = DeploymentHistory()
 
-        # Create synchronizer and perform sync with new simplified parameters
-        dataplane_auth = (
-            memo.config.dataplane_auth.username,
-            memo.config.dataplane_auth.password,
-        )
-        validation_auth = (
-            memo.config.validation_auth.username,
-            memo.config.validation_auth.password,
-        )
-
+        # Create synchronizer and perform sync with credentials from Secret
         synchronizer = ConfigSynchronizer(
             production_urls=production_urls,
             validation_url=memo.config.validation_dataplane_url,
-            dataplane_auth=dataplane_auth,
-            validation_auth=validation_auth,
+            credentials=memo.credentials,
             deployment_history=memo.deployment_history,
         )
 
@@ -683,21 +723,30 @@ async def initialize_configuration(memo: Any) -> None:
     metrics = get_metrics_collector()
 
     configmap_name = memo.cli_options.configmap_name
-    logger.info(f"⚙️ Initializing config from configmap {configmap_name}.")
+    secret_name = memo.cli_options.secret_name
+    logger.info(
+        f"⚙️ Initializing config from configmap {configmap_name} and credentials from secret {secret_name}."
+    )
 
     try:
         with metrics.time_config_reload():
             namespace = get_current_namespace() or "default"
+            # Load configuration from ConfigMap
             configmap = await fetch_configmap(configmap_name, namespace)
             memo.config = await load_config_from_configmap(configmap)
             memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
+            # Load credentials from Secret
+            secret = await fetch_secret(secret_name, namespace)
+            secret_data = secret.data if hasattr(secret, "data") else secret["data"]
+            memo.credentials = Credentials.from_secret(secret_data)
+
         metrics.record_config_reload(success=True)
-        logger.info("✅ Configuration loaded successfully.")
+        logger.info("✅ Configuration and credentials loaded successfully.")
     except Exception as e:
         metrics.record_config_reload(success=False)
         metrics.record_error("config_load_failed", "operator")
-        logger.error(f"❌ Failed to load configuration: {e}")
+        logger.error(f"❌ Failed to load configuration or credentials: {e}")
         raise
 
 
@@ -711,6 +760,16 @@ async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
             name == configmap_name and namespace == get_current_namespace()
         ),
     )(handle_configmap_change)  # type: ignore[arg-type]
+
+    # Watch Secret changes
+    secret_name = memo.cli_options.secret_name
+    current_namespace = get_current_namespace()
+    kopf.on.event(
+        "secret",
+        when=lambda name, namespace, type, **_: (
+            name == secret_name and namespace == current_namespace
+        ),
+    )(handle_secret_change)  # type: ignore[arg-type]
 
 
 async def init_management_socket(memo: Any, **kwargs: Any) -> None:

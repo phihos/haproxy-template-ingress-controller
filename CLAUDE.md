@@ -389,6 +389,34 @@ Follow the style guide in `STYLEGUIDE.md`:
 - Strict config validation
 - Write deterministic tests
 
+### Type Safety and Data Modeling
+
+- **Prefer explicit types over primitives**: Use dataclasses, Pydantic models, or custom classes instead of raw tuples, dicts, or lists
+- **Pydantic for external data**: Use Pydantic models for data that comes from external sources (APIs, configs, user input)
+- **Dataclasses for internal state**: Use dataclasses for internal data structures that don't need validation
+- **Type aliases for clarity**: Create type aliases for complex types to improve readability
+- **No magic tuples**: Avoid returning multiple values as tuples; use named tuples or dataclasses instead
+
+Examples:
+```python
+# ❌ Avoid primitive types
+credentials = (("admin", "pass"), ("validator", "pass"))
+auth = credentials[0]  # Unclear what this represents
+
+# ✅ Use explicit types
+@dataclass
+class AuthCredentials:
+    username: str
+    password: SecretStr
+
+class Credentials(BaseModel):
+    dataplane: AuthCredentials
+    validation: AuthCredentials
+
+credentials = Credentials(...)
+auth = credentials.dataplane  # Clear and type-safe
+```
+
 ## Development Workflow
 
 **Standard Process**: Feature branch → Plan/implement → Test (`uv run pytest -n auto`) → Quality checks → Self-review → Commit → PR → Review → Merge

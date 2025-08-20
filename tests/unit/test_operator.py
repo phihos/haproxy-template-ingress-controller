@@ -730,11 +730,14 @@ async def test_synchronize_with_haproxy_instances_success(
     """Test successful HAProxy instance synchronization."""
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    memo.config.dataplane_auth.username = "admin"
-    memo.config.dataplane_auth.password = "adminpass"
+    # Set up credentials in memo (no longer in config)
+    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+    memo.credentials = Credentials(
+        dataplane=DataplaneAuth(username="admin", password="adminpass"),
+        validation=DataplaneAuth(username="admin", password="validationpass"),
+    )
     memo.config.validation_dataplane_url = "http://localhost:5555"
-    memo.config.validation_auth.username = "admin"
-    memo.config.validation_auth.password = "validationpass"
     memo.haproxy_config_context.rendered_config = RenderedConfig(
         content="global\n    daemon"
     )
@@ -775,8 +778,7 @@ async def test_synchronize_with_haproxy_instances_success(
     mock_synchronizer_class.assert_called_once_with(
         production_urls=["http://10.0.0.1:5555"],
         validation_url="http://localhost:5555",
-        dataplane_auth=("admin", "adminpass"),
-        validation_auth=("admin", "validationpass"),
+        credentials=memo.credentials,
         deployment_history=memo.deployment_history,
     )
     mock_synchronizer.sync_configuration.assert_called_once_with(
@@ -820,11 +822,14 @@ async def test_synchronize_with_haproxy_instances_validation_error(
 
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    memo.config.dataplane_auth.username = "admin"
-    memo.config.dataplane_auth.password = "adminpass"
+    # Set up credentials in memo (no longer in config)
+    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+    memo.credentials = Credentials(
+        dataplane=DataplaneAuth(username="admin", password="adminpass"),
+        validation=DataplaneAuth(username="admin", password="validationpass"),
+    )
     memo.config.validation_dataplane_url = "http://localhost:5555"
-    memo.config.validation_auth.username = "admin"
-    memo.config.validation_auth.password = "validationpass"
     memo.haproxy_config_context.rendered_config = RenderedConfig(
         content="global\n    daemon"
     )
@@ -851,11 +856,14 @@ async def test_synchronize_with_haproxy_instances_with_failures(
     """Test synchronization with some instance failures."""
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    memo.config.dataplane_auth.username = "admin"
-    memo.config.dataplane_auth.password = "adminpass"
+    # Set up credentials in memo (no longer in config)
+    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+    memo.credentials = Credentials(
+        dataplane=DataplaneAuth(username="admin", password="adminpass"),
+        validation=DataplaneAuth(username="admin", password="validationpass"),
+    )
     memo.config.validation_dataplane_url = "http://localhost:5555"
-    memo.config.validation_auth.username = "admin"
-    memo.config.validation_auth.password = "validationpass"
     memo.haproxy_config_context.rendered_config = RenderedConfig(
         content="global\n    daemon"
     )
@@ -890,6 +898,7 @@ def test_create_operator_memo():
 
     cli_options = CliOptions(
         configmap_name="test-config",
+        secret_name="test-credentials",
         healthz_port=8080,
         verbose=1,
         socket_path="/run/haproxy-template-ic/management.sock",
@@ -980,7 +989,11 @@ async def test_setup_resource_watchers(mock_event, mock_index, mock_create):
 @patch("haproxy_template_ic.operator.get_current_namespace")
 @patch("haproxy_template_ic.operator.fetch_configmap")
 @patch("haproxy_template_ic.operator.load_config_from_configmap")
+@patch("haproxy_template_ic.operator.fetch_secret")
+@patch("haproxy_template_ic.credentials.Credentials.from_secret")
 async def test_initialize_configuration(
+    mock_from_secret,
+    mock_fetch_secret,
     mock_load_config,
     mock_fetch_configmap,
     mock_get_namespace,
@@ -995,10 +1008,29 @@ async def test_initialize_configuration(
     mock_config = MagicMock()
     mock_load_config.return_value = mock_config
 
+    # Set up secret mock
+    mock_secret = MagicMock()
+    mock_secret.data = {
+        "dataplane_username": "admin",
+        "dataplane_password": "pass",
+        "validation_username": "admin",
+        "validation_password": "pass",
+    }
+    mock_fetch_secret.return_value = mock_secret
+    # Set up credentials mock
+    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+    mock_credentials = Credentials(
+        dataplane=DataplaneAuth(username="admin", password="pass"),
+        validation=DataplaneAuth(username="admin", password="pass"),
+    )
+    mock_from_secret.return_value = mock_credentials
+
     # Create test memo
     memo = MagicMock()
     cli_options = CliOptions(
         configmap_name="test-config",
+        secret_name="test-credentials",
         healthz_port=8080,
         verbose=1,
         socket_path="/test/socket",
@@ -1094,11 +1126,14 @@ class TestSynchronizeErrorPaths:
         """Test synchronization with validation sidecar instances."""
         memo = MagicMock()
         memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
-        memo.config.dataplane_auth.username = "admin"
-        memo.config.dataplane_auth.password = "adminpass"
+        # Set up credentials in memo (no longer in config)
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+        memo.credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
         memo.config.validation_dataplane_url = "http://localhost:5555"
-        memo.config.validation_auth.username = "admin"
-        memo.config.validation_auth.password = "validationpass"
         memo.haproxy_config_context.rendered_config = RenderedConfig(
             content="global\n    daemon"
         )
@@ -1429,11 +1464,14 @@ async def test_synchronize_success_and_failure_logging(
     """Test synchronization success and failure logging paths."""
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    memo.config.dataplane_auth.username = "admin"
-    memo.config.dataplane_auth.password = "adminpass"
+    # Set up credentials in memo (no longer in config)
+    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+    memo.credentials = Credentials(
+        dataplane=DataplaneAuth(username="admin", password="adminpass"),
+        validation=DataplaneAuth(username="admin", password="validationpass"),
+    )
     memo.config.validation_dataplane_url = "http://localhost:5555"
-    memo.config.validation_auth.username = "admin"
-    memo.config.validation_auth.password = "validationpass"
     memo.haproxy_config_context.rendered_config = RenderedConfig(
         content="global\n    daemon"
     )
@@ -1471,11 +1509,14 @@ async def test_synchronize_dataplane_api_error(
 
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
-    memo.config.dataplane_auth.username = "admin"
-    memo.config.dataplane_auth.password = "adminpass"
+    # Set up credentials in memo (no longer in config)
+    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+    memo.credentials = Credentials(
+        dataplane=DataplaneAuth(username="admin", password="adminpass"),
+        validation=DataplaneAuth(username="admin", password="validationpass"),
+    )
     memo.config.validation_dataplane_url = "http://localhost:5555"
-    memo.config.validation_auth.username = "admin"
-    memo.config.validation_auth.password = "validationpass"
     memo.haproxy_config_context.rendered_config = RenderedConfig(
         content="global\n    daemon"
     )
@@ -1517,6 +1558,7 @@ async def test_initialize_configuration_failure(
     memo = MagicMock()
     cli_options = CliOptions(
         configmap_name="test-config",
+        secret_name="test-credentials",
         healthz_port=8080,
         verbose=1,
         socket_path="/test/socket",
@@ -1546,6 +1588,7 @@ async def test_init_watch_configmap(mock_get_namespace, mock_event):
     memo = MagicMock()
     cli_options = CliOptions(
         configmap_name="test-config",
+        secret_name="test-credentials",
         healthz_port=8080,
         verbose=1,
         socket_path="/test/socket",
@@ -1560,11 +1603,18 @@ async def test_init_watch_configmap(mock_get_namespace, mock_event):
 
     await init_watch_configmap(memo)
 
-    # Verify kopf.on.event was called with correct parameters
-    mock_event.assert_called_once()
-    call_args = mock_event.call_args
-    assert "configmap" in call_args[0]
-    assert "when" in call_args[1]
+    # Verify kopf.on.event was called twice - once for configmap, once for secret
+    assert mock_event.call_count == 2
+
+    # Check first call (configmap)
+    configmap_call = mock_event.call_args_list[0]
+    assert "configmap" in configmap_call[0]
+    assert "when" in configmap_call[1]
+
+    # Check second call (secret)
+    secret_call = mock_event.call_args_list[1]
+    assert "secret" in secret_call[0]
+    assert "when" in secret_call[1]
 
 
 @pytest.mark.asyncio
@@ -1578,6 +1628,7 @@ async def test_init_management_socket(mock_run_socket, mock_create_task):
     memo = MagicMock()
     cli_options = CliOptions(
         configmap_name="test-config",
+        secret_name="test-credentials",
         healthz_port=8080,
         verbose=1,
         socket_path="/test/socket",
@@ -1608,6 +1659,7 @@ async def test_init_metrics_server(mock_get_metrics, mock_create_task):
     memo = MagicMock()
     cli_options = CliOptions(
         configmap_name="test-config",
+        secret_name="test-credentials",
         healthz_port=8080,
         verbose=1,
         socket_path="/test/socket",
@@ -1782,6 +1834,7 @@ def test_run_operator_loop_normal_shutdown(
                     # Create CLI options
                     cli_options = CliOptions(
                         configmap_name="test-config",
+                        secret_name="test-credentials",
                         healthz_port=8080,
                         verbose=1,
                         socket_path="/test/socket",
@@ -1861,6 +1914,7 @@ def test_run_operator_loop_with_config_reload(
                     # Create CLI options
                     cli_options = CliOptions(
                         configmap_name="test-config",
+                        secret_name="test-credentials",
                         healthz_port=8080,
                         verbose=1,
                         socket_path="/test/socket",
@@ -2148,11 +2202,14 @@ async def test_synchronize_mixed_results_logging(mock_sync_class, mock_get_urls)
             # Setup memo
             memo = MagicMock()
             memo.config.pod_selector = MagicMock()
-            memo.config.dataplane_auth.username = "admin"
-            memo.config.dataplane_auth.password = "pass"
+            # Set up credentials in memo (no longer in config)
+            from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+            memo.credentials = Credentials(
+                dataplane=DataplaneAuth(username="admin", password="adminpass"),
+                validation=DataplaneAuth(username="admin", password="validationpass"),
+            )
             memo.config.validation_dataplane_url = "http://localhost:5555"
-            memo.config.validation_auth.username = "admin"
-            memo.config.validation_auth.password = "validationpass"
             memo.haproxy_config_context = MagicMock()
             memo.haproxy_config_context.rendered_config = MagicMock()
             memo.indices = {

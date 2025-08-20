@@ -174,16 +174,6 @@ class PodSelector(BaseModel):
         frozen = True
 
 
-class DataplaneAuth(BaseModel):
-    """Authentication configuration for HAProxy Dataplane API."""
-
-    username: NonEmptyStr = Field(..., description="Username for Dataplane API")
-    password: NonEmptyStr = Field(..., description="Password for Dataplane API")
-
-    class Config:
-        frozen = True
-
-
 class Config(BaseModel):
     """Root configuration for HAProxy Template IC."""
 
@@ -204,17 +194,9 @@ class Config(BaseModel):
     certificates: Dict[AbsolutePath, CertificateConfig] = Field(
         default_factory=dict, description="TLS certificates"
     )
-    dataplane_auth: DataplaneAuth = Field(
-        ...,
-        description="Authentication for HAProxy Dataplane API",
-    )
     validation_dataplane_url: str = Field(
         default="http://localhost:5555",
         description="URL for validation sidecar Dataplane API",
-    )
-    validation_auth: DataplaneAuth = Field(
-        ...,
-        description="Authentication for validation sidecar Dataplane API",
     )
 
     @field_validator("template_snippets")
@@ -552,6 +534,8 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
             error_msg += "\n\n🔧 POD SELECTOR ERROR:\nYour pod_selector configuration is invalid. Ensure match_labels is a non-empty dictionary.\n\n"
         elif "haproxy_config" in error_str:
             error_msg += "\n\n🔧 HAPROXY CONFIG ERROR:\nYour haproxy_config template is invalid. Ensure it contains a valid Jinja2 template string.\n\n"
+        elif "dataplane_auth" in error_str or "validation_auth" in error_str:
+            error_msg += "\n\n🔧 CREDENTIALS MOVED TO SECRET:\nAuthentication fields are no longer supported in ConfigMaps. You must provide credentials via a Kubernetes Secret using --secret-name parameter.\n\n"
 
         error_msg += f"\nDETAILED ERROR:\n{e}"
 

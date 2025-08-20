@@ -5,13 +5,13 @@ This module provides the CLI interface with proper subcommand structure
 for clear separation between operator mode and utility commands.
 """
 
-import re
 from dataclasses import dataclass
 from importlib import metadata
 from importlib.metadata import PackageNotFoundError
 
 import click
 
+from haproxy_template_ic.credentials import validate_k8s_name
 from haproxy_template_ic.operator import run_operator_loop
 from haproxy_template_ic.structured_logging import setup_structured_logging
 from haproxy_template_ic.tracing import (
@@ -32,6 +32,7 @@ class CliOptions:
     """Container for all CLI options."""
 
     configmap_name: str
+    secret_name: str
     healthz_port: int
     verbose: int
     socket_path: str
@@ -79,38 +80,22 @@ def cli(
     setup_structured_logging(verbose, use_json=structured_logging)
 
 
-def validate_configmap_name(
-    _ctx: click.Context, _param: click.Parameter, value: str
-) -> str:
-    """Validate ConfigMap name follows Kubernetes naming conventions.
-
-    Kubernetes names must follow DNS-1123 subdomain specification:
-    - Be lowercase
-    - Contain only alphanumeric characters and hyphens
-    - Start and end with alphanumeric characters
-    - Be at most 253 characters long (DNS-1123 limit)
-    """
-    if len(value) > 253:
-        raise click.BadParameter("ConfigMap name must be at most 253 characters long")
-
-    # Fixed regex: allows single chars and properly handles 2+ character names
-    if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", value):
-        raise click.BadParameter(
-            "ConfigMap name must follow Kubernetes naming conventions: "
-            "lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric"
-        )
-
-    return value
-
-
 @cli.command()
 @click.option(
     "-c",
     "--configmap-name",
     envvar="CONFIGMAP_NAME",
     required=True,
-    callback=validate_configmap_name,
+    callback=validate_k8s_name,
     help="Name of the Kubernetes ConfigMap used for configuration.",
+)
+@click.option(
+    "-s",
+    "--secret-name",
+    envvar="SECRET_NAME",
+    required=True,
+    callback=validate_k8s_name,
+    help="Name of the Kubernetes Secret containing HAProxy credentials.",
 )
 @click.option(
     "--healthz-port",
@@ -119,7 +104,6 @@ def validate_configmap_name(
     help="Port for health check endpoint.",
 )
 @click.option(
-    "-s",
     "--socket-path",
     envvar="SOCKET_PATH",
     default="/run/haproxy-template-ic/management.sock",
@@ -142,6 +126,7 @@ def validate_configmap_name(
 def run(
     ctx: click.Context,
     configmap_name: str,
+    secret_name: str,
     healthz_port: int,
     socket_path: str,
     metrics_port: int,
@@ -165,6 +150,7 @@ def run(
         # Create CLI options object
         cli_options = CliOptions(
             configmap_name=configmap_name,
+            secret_name=secret_name,
             healthz_port=healthz_port,
             verbose=verbose,
             socket_path=socket_path,

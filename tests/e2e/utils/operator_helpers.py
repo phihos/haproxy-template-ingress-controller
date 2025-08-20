@@ -139,7 +139,7 @@ def _log_search_failure(
 
 def wait_for_operator_ready(pod):
     """Wait for the operator to be fully initialized and ready."""
-    assert_log_line(pod, "✅ Configuration loaded successfully.")
+    assert_log_line(pod, "✅ Configuration and credentials loaded successfully.")
     assert_log_line(
         pod,
         "🔌 Management socket server listening on /run/haproxy-template-ic/management.sock",
@@ -157,7 +157,9 @@ def wait_for_watch_streams_ready(pod):
 def assert_config_change(pod, timeout=30):
     """Assert that a configuration change is detected and processed."""
     assert_log_line(pod, "🔄 Config has changed:", timeout=timeout)
-    assert_log_line(pod, "✅ Configuration loaded successfully.", timeout=timeout)
+    assert_log_line(
+        pod, "✅ Configuration and credentials loaded successfully.", timeout=timeout
+    )
 
 
 def count_log_occurrences(pod, pattern, timeout=30):
