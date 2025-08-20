@@ -1,10 +1,9 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 echo "Starting HAProxy entrypoint script..."
 
 # Copy default configuration to runtime location
-cp /usr/local/etc/haproxy-default/dataplaneapi.yaml /etc/haproxy/dataplaneapi.yaml
 cp /usr/local/etc/haproxy-default/dataplaneapi.yaml /etc/haproxy/dataplaneapi.yaml
 echo "Configuration copied to /etc/haproxy/dataplaneapi.yaml"
 

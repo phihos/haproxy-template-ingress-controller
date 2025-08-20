@@ -1,7 +1,7 @@
 FROM haproxytech/haproxy-alpine:3.1
 
 # Install socat for socket-based communication and curl for healthchecks
-RUN apt-get update && apt-get install -y socat curl && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache socat curl
 
 # Copy default HAProxy configuration
 COPY haproxy-default.cfg /usr/local/etc/haproxy-default/haproxy.cfg

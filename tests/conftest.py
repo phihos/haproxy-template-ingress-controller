@@ -577,7 +577,125 @@ backend servers
 
 
 @pytest.fixture
-def haproxy_deployment(k8s_client, k8s_namespace, haproxy_config_with_health, request):
+def unified_haproxy_configmap(k8s_client, k8s_namespace):
+    """
+    Create unified ConfigMap with HAProxy startup scripts and templates for E2E tests.
+
+    This provides the same unified approach used in production deployments.
+    """
+    from kr8s.objects import ConfigMap
+
+    configmap = ConfigMap(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "haproxy-universal-test",
+                "namespace": k8s_namespace,
+                "labels": {
+                    "app": "haproxy-template-ic",
+                    "component": "universal-config-test",
+                },
+            },
+            "data": {
+                "startup.sh": """#!/bin/sh
+set -e
+
+echo "Starting HAProxy Universal Script (type: ${CONTAINER_TYPE:-unknown})"
+
+# Create required directories
+mkdir -p /etc/haproxy /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors /etc/haproxy/ssl /etc/haproxy/general /etc/haproxy/spoe
+mkdir -p /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
+chown -R haproxy:haproxy /etc/haproxy /var/lib/dataplaneapi 2>/dev/null || true
+
+# Generate appropriate config based on container type
+if [ "$CONTAINER_TYPE" = "dataplane" ]; then
+  echo "Configuring Dataplane API..."
+  sed "s/PASSWORD_TOKEN/${HAPROXY_PASSWORD}/g" \\
+      /opt/haproxy/dataplane.template > /etc/haproxy/dataplaneapi.yaml
+  echo "Starting HAProxy Dataplane API..."
+  exec dataplaneapi
+else
+  echo "Configuring HAProxy..."
+  sed "s/PASSWORD_TOKEN/${HAPROXY_PASSWORD}/g" \\
+      /opt/haproxy/haproxy.template > /etc/haproxy/haproxy.cfg
+  echo "Configuration written to /etc/haproxy/haproxy.cfg"
+  echo "Starting HAProxy in master-worker mode..."
+  exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock" -- /etc/haproxy/haproxy.cfg
+fi
+""",
+                "haproxy.template": """global
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+
+userlist dataplaneapi
+    user admin insecure-password PASSWORD_TOKEN
+
+defaults
+    mode http
+    timeout connect 1s
+    timeout client 1s
+    timeout server 1s
+
+frontend health
+    bind *:8404
+    http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+        
+frontend main
+    bind *:80
+    default_backend servers
+    
+backend servers
+    balance roundrobin
+    # Servers configured by controller
+""",
+                "dataplane.template": """config_version: 2
+name: haproxy-dataplaneapi
+dataplaneapi:
+  host: 0.0.0.0
+  port: 5555
+  user:
+    - name: admin
+      password: PASSWORD_TOKEN
+      insecure: true
+  transaction:
+    transaction_dir: /var/lib/dataplaneapi/transactions
+    backups_number: 10
+    backups_dir: /var/lib/dataplaneapi/backups
+  resources:
+    maps_dir: /etc/haproxy/maps
+    ssl_certs_dir: /etc/haproxy/ssl
+    general_storage_dir: /etc/haproxy/general
+    spoe_dir: /etc/haproxy/spoe
+haproxy:
+  config_file: /etc/haproxy/haproxy.cfg
+  haproxy_bin: /usr/local/sbin/haproxy
+  reload:
+    reload_delay: 1
+    reload_cmd: /opt/haproxy/reload.sh
+    restart_cmd: /opt/haproxy/reload.sh
+    reload_strategy: custom
+log_targets:
+  - log_to: stdout
+    log_level: info
+    log_types:
+    - access
+    - app
+""",
+                "reload.sh": """#!/bin/sh
+echo reload | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock
+""",
+            },
+        },
+        namespace=k8s_namespace,
+        api=k8s_client,
+    )
+
+    configmap.create()
+    return configmap
+
+
+@pytest.fixture
+def haproxy_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap, request):
     """
     Create scalable HAProxy deployment for testing.
 
@@ -625,22 +743,26 @@ def haproxy_deployment(k8s_client, k8s_namespace, haproxy_config_with_health, re
                         "containers": [
                             {
                                 "name": "haproxy",
-                                "image": "haproxytech/haproxy-debian:3.0",
+                                "image": "haproxytech/haproxy-alpine:3.1",
+                                "imagePullPolicy": "IfNotPresent",
+                                "command": ["/opt/haproxy/startup.sh"],
                                 "ports": [
                                     {"containerPort": 80, "name": "http"},
                                     {"containerPort": 8404, "name": "healthz"},
                                 ],
+                                "env": [
+                                    {"name": "HAPROXY_PASSWORD", "value": "adminpass"},
+                                    {"name": "CONTAINER_TYPE", "value": "haproxy"},
+                                ],
                                 "volumeMounts": [
                                     {
-                                        "name": "haproxy-config",
-                                        "mountPath": "/usr/local/etc/haproxy",
+                                        "name": "universal-config",
+                                        "mountPath": "/opt/haproxy",
                                     },
-                                ],
-                                "command": ["haproxy"],
-                                "args": [
-                                    "-f",
-                                    "/usr/local/etc/haproxy/haproxy.cfg",
-                                    "-W",
+                                    {
+                                        "name": "haproxy-config",
+                                        "mountPath": "/etc/haproxy",
+                                    },
                                 ],
                                 "readinessProbe": {
                                     "httpGet": {
@@ -654,58 +776,64 @@ def haproxy_deployment(k8s_client, k8s_namespace, haproxy_config_with_health, re
                             },
                             {
                                 "name": "dataplane-api",
-                                "image": "haproxytech/haproxy-debian:3.0",
+                                "image": "haproxytech/haproxy-alpine:3.1",
+                                "imagePullPolicy": "IfNotPresent",
+                                "command": ["/opt/haproxy/startup.sh"],
                                 "ports": [{"containerPort": 5555, "name": "dataplane"}],
+                                "env": [
+                                    {"name": "HAPROXY_PASSWORD", "value": "adminpass"},
+                                    {"name": "CONTAINER_TYPE", "value": "dataplane"},
+                                ],
                                 "volumeMounts": [
                                     {
-                                        "name": "haproxy-config",
-                                        "mountPath": "/usr/local/etc/haproxy",
+                                        "name": "universal-config",
+                                        "mountPath": "/opt/haproxy",
                                     },
-                                ],
-                                "command": ["dataplaneapi"],
-                                "args": [
-                                    "--host",
-                                    "0.0.0.0",
-                                    "--port",
-                                    "5555",
-                                    "--haproxy-bin",
-                                    "/usr/local/sbin/haproxy",
-                                    "--config-file",
-                                    "/usr/local/etc/haproxy/haproxy.cfg",
-                                    "--reload-cmd",
-                                    "kill -USR2 1",
-                                    "--reload-delay",
-                                    "2",
-                                    "--userlist",
-                                    "dataplaneapi",
-                                ],
-                                "env": [
-                                    {"name": "DATAPLANE_API_USER", "value": "admin"},
                                     {
-                                        "name": "DATAPLANE_API_PASSWORD",
-                                        "value": "adminpass",
+                                        "name": "haproxy-config",
+                                        "mountPath": "/etc/haproxy",
                                     },
                                 ],
+                                "livenessProbe": {
+                                    "httpGet": {
+                                        "path": "/v3/info",
+                                        "port": 5555,
+                                        "httpHeaders": [
+                                            {
+                                                "name": "Authorization",
+                                                "value": "Basic YWRtaW46YWRtaW5wYXNz",
+                                            }
+                                        ],
+                                    },
+                                    "initialDelaySeconds": 15,
+                                    "periodSeconds": 10,
+                                    "failureThreshold": 3,
+                                },
+                                "readinessProbe": {
+                                    "httpGet": {
+                                        "path": "/v3/info",
+                                        "port": 5555,
+                                        "httpHeaders": [
+                                            {
+                                                "name": "Authorization",
+                                                "value": "Basic YWRtaW46YWRtaW5wYXNz",
+                                            }
+                                        ],
+                                    },
+                                    "initialDelaySeconds": 10,
+                                    "periodSeconds": 5,
+                                },
                             },
                         ],
                         "volumes": [
                             {"name": "haproxy-config", "emptyDir": {}},
-                        ],
-                        "initContainers": [
                             {
-                                "name": "init-config",
-                                "image": "busybox:1.36",
-                                "command": ["sh", "-c"],
-                                "args": [
-                                    f'echo "{haproxy_config_with_health}" > /usr/local/etc/haproxy/haproxy.cfg'
-                                ],
-                                "volumeMounts": [
-                                    {
-                                        "name": "haproxy-config",
-                                        "mountPath": "/usr/local/etc/haproxy",
-                                    }
-                                ],
-                            }
+                                "name": "universal-config",
+                                "configMap": {
+                                    "name": "haproxy-universal-test",
+                                    "defaultMode": 0o755,
+                                },
+                            },
                         ],
                     },
                 },
@@ -724,7 +852,7 @@ def haproxy_deployment(k8s_client, k8s_namespace, haproxy_config_with_health, re
     start_time = time.time()
     while time.time() - start_time < max_wait:
         deployment.refresh()
-        if deployment.status.readyReplicas == replicas:
+        if getattr(deployment.status, "readyReplicas", 0) == replicas:
             break
         time.sleep(2)
     else:
@@ -797,7 +925,7 @@ backend servers
                     "containers": [
                         {
                             "name": "haproxy",
-                            "image": "haproxytech/haproxy-debian:3.0",
+                            "image": "haproxytech/haproxy-alpine:3.1",
                             "ports": [
                                 {"containerPort": 80, "name": "http"},
                                 {
@@ -833,7 +961,7 @@ backend servers
                         },
                         {
                             "name": "dataplane-api",
-                            "image": "haproxytech/haproxy-debian:3.0",
+                            "image": "haproxytech/haproxy-alpine:3.1",
                             "ports": [{"containerPort": 5555, "name": "dataplane"}],
                             "volumeMounts": [
                                 {
@@ -1094,7 +1222,7 @@ backend validation_backend
                 # Validation HAProxy sidecar
                 {
                     "name": "validation-haproxy",
-                    "image": "haproxytech/haproxy-debian:3.0",
+                    "image": "haproxytech/haproxy-alpine:3.1",
                     "ports": [
                         {"containerPort": 8081, "name": "validation-http"},
                     ],
@@ -1119,7 +1247,7 @@ backend validation_backend
                 # Validation Dataplane API sidecar
                 {
                     "name": "validation-dataplane-api",
-                    "image": "haproxytech/haproxy-debian:3.0",
+                    "image": "haproxytech/haproxy-alpine:3.1",
                     "ports": [
                         {"containerPort": 5556, "name": "validation-api"},
                     ],

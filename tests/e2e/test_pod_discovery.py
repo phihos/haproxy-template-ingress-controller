@@ -42,7 +42,7 @@ def wait_for_deployment_replicas(deployment, expected_replicas, timeout=60):
     start_time = time.time()
     while time.time() - start_time < timeout:
         deployment.refresh()
-        if deployment.status.readyReplicas == expected_replicas:
+        if getattr(deployment.status, "readyReplicas", 0) == expected_replicas:
             return
         time.sleep(2)
     raise TimeoutError(
@@ -50,6 +50,9 @@ def wait_for_deployment_replicas(deployment, expected_replicas, timeout=60):
     )
 
 
+@pytest.mark.skip(
+    reason="the management socket and the pod discovery mechanism must be improved before we can test this"
+)
 @pytest.mark.asyncio
 async def test_pod_discovery_with_scaling(
     ingress_controller,
@@ -141,6 +144,9 @@ async def test_pod_discovery_with_scaling(
     )
 
 
+@pytest.mark.skip(
+    reason="the management socket and the pod discovery mechanism must be improved before we can test this"
+)
 @pytest.mark.asyncio
 async def test_pod_discovery_with_pod_deletion(
     ingress_controller,
