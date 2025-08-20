@@ -24,11 +24,40 @@ class MockKopfBody:
     def __iter__(self):
         return iter(self._data)
 
+    def __contains__(self, key):
+        return key in self._data
+
     def keys(self):
         return self._data.keys()
 
     def items(self):
         return self._data.items()
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+
+class TestMockKopfBody:
+    """Test MockKopfBody functionality."""
+
+    def test_mock_contains_method(self):
+        """Test __contains__ method works correctly."""
+        test_data = {"metadata": {"name": "test-pod"}, "status": {"phase": "Running"}}
+        mock_body = MockKopfBody(test_data)
+
+        assert "metadata" in mock_body
+        assert "status" in mock_body
+        assert "nonexistent" not in mock_body
+
+    def test_mock_get_method(self):
+        """Test get method works correctly."""
+        test_data = {"metadata": {"name": "test-pod"}, "status": {"phase": "Running"}}
+        mock_body = MockKopfBody(test_data)
+
+        assert mock_body.get("metadata") == {"name": "test-pod"}
+        assert mock_body.get("status") == {"phase": "Running"}
+        assert mock_body.get("nonexistent") is None
+        assert mock_body.get("nonexistent", "default") == "default"
 
 
 class TestConvertKopfBodyToDict:
@@ -128,6 +157,8 @@ class TestIsValidKubernetesResource:
     def test_valid_resource(self):
         """Test a valid Kubernetes resource."""
         resource = {
+            "apiVersion": "v1",
+            "kind": "Pod",
             "metadata": {"name": "test-pod", "namespace": "default"},
             "status": {"phase": "Running"},
         }
@@ -135,7 +166,7 @@ class TestIsValidKubernetesResource:
 
     def test_valid_minimal_resource(self):
         """Test a minimal valid resource."""
-        resource = {"metadata": {"name": "test-pod"}}
+        resource = {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "test-pod"}}
         assert is_valid_kubernetes_resource(resource) is True
 
     def test_invalid_not_dict(self):
@@ -144,32 +175,80 @@ class TestIsValidKubernetesResource:
         assert is_valid_kubernetes_resource(None) is False
         assert is_valid_kubernetes_resource([]) is False
 
+    def test_invalid_no_api_version(self):
+        """Test resource without apiVersion."""
+        resource = {"kind": "Pod", "metadata": {"name": "test-pod"}}
+        assert is_valid_kubernetes_resource(resource) is False
+
+    def test_invalid_empty_api_version(self):
+        """Test resource with empty apiVersion."""
+        resource = {"apiVersion": "", "kind": "Pod", "metadata": {"name": "test-pod"}}
+        assert is_valid_kubernetes_resource(resource) is False
+
+    def test_invalid_whitespace_api_version(self):
+        """Test resource with whitespace-only apiVersion."""
+        resource = {
+            "apiVersion": "   ",
+            "kind": "Pod",
+            "metadata": {"name": "test-pod"},
+        }
+        assert is_valid_kubernetes_resource(resource) is False
+
+    def test_invalid_non_string_api_version(self):
+        """Test resource with non-string apiVersion."""
+        resource = {"apiVersion": 123, "kind": "Pod", "metadata": {"name": "test-pod"}}
+        assert is_valid_kubernetes_resource(resource) is False
+
+    def test_invalid_no_kind(self):
+        """Test resource without kind."""
+        resource = {"apiVersion": "v1", "metadata": {"name": "test-pod"}}
+        assert is_valid_kubernetes_resource(resource) is False
+
+    def test_invalid_empty_kind(self):
+        """Test resource with empty kind."""
+        resource = {"apiVersion": "v1", "kind": "", "metadata": {"name": "test-pod"}}
+        assert is_valid_kubernetes_resource(resource) is False
+
+    def test_invalid_whitespace_kind(self):
+        """Test resource with whitespace-only kind."""
+        resource = {"apiVersion": "v1", "kind": "   ", "metadata": {"name": "test-pod"}}
+        assert is_valid_kubernetes_resource(resource) is False
+
+    def test_invalid_non_string_kind(self):
+        """Test resource with non-string kind."""
+        resource = {"apiVersion": "v1", "kind": 123, "metadata": {"name": "test-pod"}}
+        assert is_valid_kubernetes_resource(resource) is False
+
     def test_invalid_no_metadata(self):
         """Test resource without metadata."""
-        resource = {"status": {"phase": "Running"}}
+        resource = {"apiVersion": "v1", "kind": "Pod", "status": {"phase": "Running"}}
         assert is_valid_kubernetes_resource(resource) is False
 
     def test_invalid_metadata_not_dict(self):
         """Test resource with non-dict metadata."""
-        resource = {"metadata": "not a dict"}
+        resource = {"apiVersion": "v1", "kind": "Pod", "metadata": "not a dict"}
         assert is_valid_kubernetes_resource(resource) is False
 
     def test_invalid_no_name(self):
         """Test resource without name."""
-        resource = {"metadata": {"namespace": "default"}}
+        resource = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"namespace": "default"},
+        }
         assert is_valid_kubernetes_resource(resource) is False
 
     def test_invalid_empty_name(self):
         """Test resource with empty name."""
-        resource = {"metadata": {"name": ""}}
+        resource = {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": ""}}
         assert is_valid_kubernetes_resource(resource) is False
 
     def test_invalid_whitespace_name(self):
         """Test resource with whitespace-only name."""
-        resource = {"metadata": {"name": "   "}}
+        resource = {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "   "}}
         assert is_valid_kubernetes_resource(resource) is False
 
     def test_invalid_non_string_name(self):
         """Test resource with non-string name."""
-        resource = {"metadata": {"name": 123}}
+        resource = {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": 123}}
         assert is_valid_kubernetes_resource(resource) is False

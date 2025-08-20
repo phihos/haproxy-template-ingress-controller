@@ -81,6 +81,16 @@ def is_valid_kubernetes_resource(resource_dict: Any) -> bool:
     if not isinstance(resource_dict, dict):
         return False
 
+    # Must have apiVersion
+    api_version = resource_dict.get("apiVersion")
+    if not isinstance(api_version, str) or not api_version.strip():
+        return False
+
+    # Must have kind
+    kind = resource_dict.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        return False
+
     # Must have metadata
     metadata = resource_dict.get("metadata")
     if not isinstance(metadata, dict):

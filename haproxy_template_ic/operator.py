@@ -727,7 +727,9 @@ def configure_webhook_server(
     settings: kopf.OperatorSettings, memo: Any, **kwargs: Any
 ) -> None:
     """Configure webhook server for admission control."""
+    import atexit
     import os
+    import shutil
     import tempfile
 
     # Check if any resources have webhook validation enabled
@@ -749,15 +751,27 @@ def configure_webhook_server(
     key_file = f"{cert_dir}/webhook-key.pem"
     ca_file = f"{cert_dir}/webhook-ca.pem"
 
+    def cleanup_temp_dir(temp_dir: str) -> None:
+        """Clean up temporary directory at exit."""
+        try:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                logger.debug(
+                    f"🧹 Cleaned up temporary webhook certificate directory: {temp_dir}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to clean up temporary directory {temp_dir}: {e}")
+
     if os.path.exists(cert_file) and os.path.exists(key_file):
         # Create a writable temporary directory for kopf's CA dump
         temp_dir = tempfile.mkdtemp(prefix="webhook-ca-")
         temp_ca_file = f"{temp_dir}/webhook-ca.pem"
 
+        # Register cleanup for this directory
+        atexit.register(cleanup_temp_dir, temp_dir)
+
         # Copy the CA file to writable location if it exists
         if os.path.exists(ca_file):
-            import shutil
-
             shutil.copy2(ca_file, temp_ca_file)
             ca_dump_file = temp_ca_file
         else:
@@ -778,6 +792,9 @@ def configure_webhook_server(
         # Create a writable temporary directory for self-signed certificates
         temp_dir = tempfile.mkdtemp(prefix="webhook-ca-")
         temp_ca_file = f"{temp_dir}/webhook-ca.pem"
+
+        # Register cleanup for this directory
+        atexit.register(cleanup_temp_dir, temp_dir)
 
         settings.admission.server = kopf.WebhookServer(
             addr="0.0.0.0",  # nosec B104 - Kubernetes webhook must bind all interfaces

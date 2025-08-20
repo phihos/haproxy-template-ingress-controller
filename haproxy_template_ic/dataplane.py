@@ -357,9 +357,7 @@ class DataplaneClient:
 
                 except BadRequestException as e:
                     # Handle BadRequestException (configuration validation failed)
-                    validation_details = (
-                        getattr(e, "body", None) if hasattr(e, "body") else None
-                    )
+                    validation_details = getattr(e, "body", None)
                     logger.warning(f"Configuration validation failed: {e}")
                     if validation_details:
                         logger.warning(f"Validation details: {validation_details}")
