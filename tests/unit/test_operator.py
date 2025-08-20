@@ -30,6 +30,7 @@ from haproxy_template_ic.operator import (
     fetch_configmap,
     get_current_namespace,
     handle_configmap_change,
+    haproxy_pods_index,
     initialize_configuration,
     load_config_from_configmap,
     render_haproxy_templates,
@@ -2322,3 +2323,80 @@ def test_configure_webhook_server_no_ca_file():
             assert (
                 settings.admission.server.cadump == "/tmp/webhook-ca-456/webhook-ca.pem"
             )
+
+
+@pytest.mark.asyncio
+async def test_haproxy_pods_index_normal_pod():
+    """Test that haproxy_pods_index correctly indexes normal pods."""
+
+    namespace = "test-namespace"
+    name = "test-pod"
+    body = {
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+        },
+        "status": {
+            "phase": "Running",
+            "podIP": "10.0.0.1",
+        },
+    }
+    logger = MagicMock()
+
+    result = await haproxy_pods_index(namespace, name, body, logger)
+
+    # Should return indexed pod data
+    assert result == {(namespace, name): body}
+    logger.info.assert_any_call(f"📝 Indexing HAProxy pod {namespace}/{name}")
+    logger.info.assert_any_call("🔍 Pod test-pod - Phase: Running, IP: 10.0.0.1")
+
+
+@pytest.mark.asyncio
+async def test_haproxy_pods_index_deleted_pod():
+    """Test that haproxy_pods_index correctly removes deleted pods from index."""
+
+    namespace = "test-namespace"
+    name = "test-pod"
+    body = {
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "deletionTimestamp": "2024-01-01T12:00:00Z",
+        },
+        "status": {
+            "phase": "Terminating",
+            "podIP": "10.0.0.1",
+        },
+    }
+    logger = MagicMock()
+
+    result = await haproxy_pods_index(namespace, name, body, logger)
+
+    # Should return empty dict to remove from index
+    assert result == {}
+    logger.info.assert_any_call(f"📝 Indexing HAProxy pod {namespace}/{name}")
+    logger.info.assert_any_call(
+        f"🗑️ Pod {namespace}/{name} is being deleted, removing from index"
+    )
+
+
+@pytest.mark.asyncio
+async def test_haproxy_pods_index_no_metadata():
+    """Test that haproxy_pods_index handles pods without metadata gracefully."""
+
+    namespace = "test-namespace"
+    name = "test-pod"
+    body = {
+        "status": {
+            "phase": "Running",
+            "podIP": "10.0.0.1",
+        }
+    }
+    logger = MagicMock()
+
+    result = await haproxy_pods_index(namespace, name, body, logger)
+
+    # Should return indexed pod data (no metadata means not deleted)
+    assert result == {(namespace, name): body}
+    logger.info.assert_any_call(f"📝 Indexing HAProxy pod {namespace}/{name}")
+    logger.info.assert_any_call("🔍 Pod test-pod - Phase: Running, IP: 10.0.0.1")

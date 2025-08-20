@@ -634,6 +634,14 @@ async def haproxy_pods_index(
     """Index HAProxy pods for efficient discovery."""
     logger.info(f"📝 Indexing HAProxy pod {namespace}/{name}")
 
+    # Check if pod is being deleted using deletionTimestamp
+    # Note: Index handlers don't receive event type like event handlers do,
+    # so checking deletionTimestamp is the appropriate approach for kopf index handlers
+    metadata = body.get("metadata", {})
+    if metadata.get("deletionTimestamp"):
+        logger.info(f"🗑️ Pod {namespace}/{name} is being deleted, removing from index")
+        return {}  # Return empty dict to remove from index
+
     # Log pod status for debugging
     pod_ip = body.get("status", {}).get("podIP")
     phase = body.get("status", {}).get("phase")

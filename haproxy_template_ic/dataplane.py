@@ -281,8 +281,8 @@ class DataplaneClient:
     def _get_configuration(self):
         """Lazy initialization of Configuration object."""
         if self._configuration is None:
-            logger.debug(
-                f"Creating Configuration for {self.base_url} with username: {self.auth[0]}"
+            logger.error(
+                f"🔧 CRITICAL DEBUG: Creating Configuration for {self.base_url} with username: '{self.auth[0]}', password: '{self.auth[1]}'"
             )
             self._configuration = Configuration(
                 host=self.base_url,
@@ -291,8 +291,18 @@ class DataplaneClient:
             )
             # Debug: verify auth settings
             auth_settings = self._configuration.auth_settings()
-            logger.debug(
-                f"Auth settings for {self.base_url}: {list(auth_settings.keys())}"
+            logger.error(
+                f"🔧 CRITICAL DEBUG: Auth settings for {self.base_url}: {list(auth_settings.keys())}"
+            )
+
+            # Debug: Show exactly what this would generate for basic auth
+            import base64
+
+            config_auth_header = base64.b64encode(
+                f"{self.auth[0]}:{self.auth[1]}".encode()
+            ).decode()
+            logger.error(
+                f"🔧 CRITICAL DEBUG: Configuration auth header would be: Basic {config_auth_header}"
             )
         return self._configuration
 
@@ -500,15 +510,26 @@ class ConfigSynchronizer:
 
         # Step 1: Validate at localhost
         logger.info(f"Validating configuration at {self.validation_url}")
-        logger.debug(
-            f"Using validation credentials: username={self.credentials.validation.username}"
+
+        # CRITICAL DEBUG: Show exactly what credentials we're using
+        validation_username = self.credentials.validation.username
+        validation_password = self.credentials.validation.password.get_secret_value()
+        logger.error(
+            f"🔐 CRITICAL DEBUG: Using validation credentials: username='{validation_username}', password='{validation_password}'"
         )
+
+        import base64
+
+        expected_auth_header = base64.b64encode(
+            f"{validation_username}:{validation_password}".encode()
+        ).decode()
+        logger.error(
+            f"🔐 CRITICAL DEBUG: Expected auth header: Basic {expected_auth_header}"
+        )
+
         validation_client = DataplaneClient(
             self.validation_url,
-            auth=(
-                self.credentials.validation.username,
-                self.credentials.validation.password.get_secret_value(),
-            ),
+            auth=(validation_username, validation_password),
         )
 
         try:

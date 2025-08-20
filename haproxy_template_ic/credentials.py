@@ -80,7 +80,17 @@ def _decode_field(val: Any) -> str | None:
         except Exception:
             return None
 
-    return str(val).strip() if isinstance(val, str) else None
+    if isinstance(val, str):
+        # Kubernetes Secret values are always base64-encoded strings
+        # We need to decode them to get the actual credential values
+        try:
+            return base64.b64decode(val.strip()).decode().strip()
+        except Exception:
+            # If base64 decoding fails, return the original string
+            # This handles cases where the value might not be base64-encoded
+            return val.strip()
+
+    return None
 
 
 def validate_k8s_name(ctx, param, name: str) -> str:
