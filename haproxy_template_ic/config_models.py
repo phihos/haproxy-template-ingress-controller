@@ -174,20 +174,6 @@ class PodSelector(BaseModel):
         frozen = True
 
 
-class DataplaneAuth(BaseModel):
-    """Authentication configuration for HAProxy Dataplane API."""
-
-    username: NonEmptyStr = Field(
-        default="admin", description="Username for Dataplane API"
-    )
-    password: NonEmptyStr = Field(
-        default="adminpass", description="Password for Dataplane API"
-    )
-
-    class Config:
-        frozen = True
-
-
 class Config(BaseModel):
     """Root configuration for HAProxy Template IC."""
 
@@ -208,9 +194,9 @@ class Config(BaseModel):
     certificates: Dict[AbsolutePath, CertificateConfig] = Field(
         default_factory=dict, description="TLS certificates"
     )
-    dataplane_auth: DataplaneAuth = Field(
-        default_factory=DataplaneAuth,
-        description="Authentication for HAProxy Dataplane API",
+    validation_dataplane_url: str = Field(
+        default="http://localhost:5555",
+        description="URL for validation sidecar Dataplane API",
     )
 
     @field_validator("template_snippets")
@@ -318,8 +304,10 @@ class IndexedResourceCollection(BaseModel):
 
     @classmethod
     def from_kopf_index(cls, index: Any) -> "IndexedResourceCollection":
-        """Create from kopf Index."""
+        """Create from kopf Index with automatic Body/Store object conversion."""
         import logging
+
+        from haproxy_template_ic.kopf_utils import normalize_kopf_resource
 
         logger = logging.getLogger(__name__)
 
@@ -337,8 +325,20 @@ class IndexedResourceCollection(BaseModel):
                 for resource in index[key]:
                     if count >= collection._max_size:
                         break
-                    if collection._validate_resource(resource):
-                        collection._internal_dict[normalized_key].append(resource)
+
+                    # Convert Kopf Body objects to regular dictionaries
+                    try:
+                        normalized_resource = normalize_kopf_resource(resource)
+                    except ValueError as e:
+                        logger.warning(
+                            f"Failed to normalize resource with key {normalized_key}: {e}"
+                        )
+                        continue
+
+                    if collection._validate_resource(normalized_resource):
+                        collection._internal_dict[normalized_key].append(
+                            normalized_resource
+                        )
                         count += 1
                     else:
                         logger.warning(
@@ -534,6 +534,8 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
             error_msg += "\n\n🔧 POD SELECTOR ERROR:\nYour pod_selector configuration is invalid. Ensure match_labels is a non-empty dictionary.\n\n"
         elif "haproxy_config" in error_str:
             error_msg += "\n\n🔧 HAPROXY CONFIG ERROR:\nYour haproxy_config template is invalid. Ensure it contains a valid Jinja2 template string.\n\n"
+        elif "dataplane_auth" in error_str or "validation_auth" in error_str:
+            error_msg += "\n\n🔧 CREDENTIALS MOVED TO SECRET:\nAuthentication fields are no longer supported in ConfigMaps. You must provide credentials via a Kubernetes Secret using --secret-name parameter.\n\n"
 
         error_msg += f"\nDETAILED ERROR:\n{e}"
 

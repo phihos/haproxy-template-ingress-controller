@@ -57,6 +57,8 @@ spec:
           env:
             - name: CONFIGMAP_NAME
               value: {{ .Values.controller.configmapName | quote }}
+            - name: SECRET_NAME
+              value: {{ include "haproxy-template-ic.fullname" . }}-credentials
             - name: HEALTHZ_PORT
               value: {{ .Values.controller.healthzPort | quote }}
             - name: VERBOSE

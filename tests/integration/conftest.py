@@ -7,14 +7,13 @@ to test interactions with HAProxy and Dataplane API.
 
 import asyncio
 from typing import Dict, Tuple
-from unittest.mock import Mock
 
 import httpx
 import pytest
 import pytest_asyncio
 from pytest import CollectReport, StashKey
 
-from haproxy_template_ic.dataplane import HAProxyInstance
+# HAProxyInstance removed in simplification - using direct URLs now
 
 from .utils import (
     DockerComposeManager,
@@ -176,40 +175,19 @@ async def production_dataplane_client(docker_compose_dataplane):
 
 
 @pytest_asyncio.fixture
-async def mock_haproxy_instances(
-    docker_compose_dataplane,
-) -> Tuple[HAProxyInstance, HAProxyInstance]:
+async def mock_haproxy_urls(docker_compose_dataplane) -> Tuple[str, str]:
     """
-    Mock HAProxy instances pointing to Docker containers.
+    HAProxy dataplane URLs pointing to Docker containers.
 
-    Returns validation and production instances that can be used
+    Returns (validation_url, production_url) that can be used
     with ConfigSynchronizer tests.
     """
     ports, _ = docker_compose_dataplane
 
-    # Mock validation instance
-    validation_pod = Mock()
-    validation_pod.namespace = "test"
-    validation_pod.name = "validation-haproxy"
+    validation_url = f"http://localhost:{ports['validation_port']}"
+    production_url = f"http://localhost:{ports['production_port']}"
 
-    validation_instance = HAProxyInstance(
-        pod=validation_pod,
-        dataplane_url=f"http://localhost:{ports['validation_port']}/v3",
-        is_validation_sidecar=True,
-    )
-
-    # Mock production instance
-    production_pod = Mock()
-    production_pod.namespace = "test"
-    production_pod.name = "production-haproxy"
-
-    production_instance = HAProxyInstance(
-        pod=production_pod,
-        dataplane_url=f"http://localhost:{ports['production_port']}/v3",
-        is_validation_sidecar=False,
-    )
-
-    return validation_instance, production_instance
+    return validation_url, production_url
 
 
 @pytest.fixture

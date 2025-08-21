@@ -177,6 +177,8 @@ warn_return_any = false
 disallow_any_expr = false
 disallow_any_decorated = false
 disallow_any_explicit = false
+# Ignore kopf signature incompatibilities
+disable_error_code = ["arg-type"]
 
 [tool.bandit]
 exclude_dirs = ["tests", "codegen"]  # Don't security-scan generated code

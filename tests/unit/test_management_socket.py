@@ -40,11 +40,17 @@ class TestSerializeState:
         memo.cli_options.verbose = 1
         memo.cli_options.socket_path = "/test/socket"
 
-        # Add some mock indices
+        # Add mock indices using new structure
+        mock_index = Mock()
+        mock_index.__iter__ = Mock(return_value=iter([("default", "resource1")]))
+        mock_index.__getitem__ = Mock(return_value=[{"name": "test-resource"}])
+        memo.indices = {"resources": mock_index}
+
+        # Add legacy mock indices for backward compatibility testing
         memo.resource_index = {"resource1": "data1", "resource2": "data2"}
         memo.config_index = {"config1": "data1"}
 
-        # Mock dir() to return our indices
+        # Mock dir() to return our legacy indices
         with patch(
             "builtins.dir",
             return_value=["resource_index", "config_index", "other_attr"],
@@ -60,7 +66,11 @@ class TestSerializeState:
         assert result["config"]["pod_selector"]["match_labels"]["app"] == "test"
         assert result["haproxy_config_context"]["rendered_config"] == "test config"
         assert result["cli_options"]["configmap_name"] == "test-config"
-        assert "resource_index" in result["indices"]
+
+        # Check that indices contains both new structure and legacy indices
+        assert "indices" in result
+        assert "resources" in result["indices"]  # New structure
+        assert "resource_index" in result["indices"]  # Legacy structure
         assert "config_index" in result["indices"]
 
     def test_serialize_state_minimal_memo(self):
@@ -132,6 +142,9 @@ class TestSerializeState:
         """Test serialization with indices dict conversion error."""
         memo = Mock()
         memo.test_index = Mock()
+        # Set memo.indices to None to skip the new code path and test only legacy indices
+        memo.indices = None
+
         # Mock dict() to raise TypeError for this index
         with patch("builtins.dict", side_effect=TypeError("Dict conversion error")):
             with patch("builtins.dir", return_value=["test_index"]):
@@ -139,7 +152,7 @@ class TestSerializeState:
 
         assert "serialization_errors" in result
         assert any(
-            "index 'test_index' serialization" in error
+            "legacy index 'test_index' serialization" in error
             for error in result["serialization_errors"]
         )
 
@@ -609,3 +622,264 @@ class TestRunManagementSocketServer:
             mock_server_class.assert_called_once_with(
                 mock_memo, "/run/haproxy-template-ic/management.sock"
             )
+
+
+class TestManagementSocketCriticalPaths:
+    """Test critical paths and edge cases for management socket."""
+
+    @pytest.fixture
+    def server(self):
+        """Create a test server instance."""
+        memo = Mock()
+        return ManagementSocketServer(memo, "/tmp/test.sock")
+
+    @pytest.mark.asyncio
+    async def test_server_cleanup_on_cancellation(self, server):
+        """Test server cleanup when serve_forever is cancelled."""
+        mock_server_instance = AsyncMock()
+        mock_server_instance.serve_forever.side_effect = asyncio.CancelledError()
+        mock_server_instance.close = Mock()
+        mock_server_instance.__aenter__ = AsyncMock(return_value=mock_server_instance)
+        mock_server_instance.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("asyncio.start_unix_server", return_value=mock_server_instance):
+            with patch.object(server, "_cleanup") as mock_cleanup:
+                with pytest.raises(asyncio.CancelledError):
+                    await server.run()
+
+                # Verify cleanup was called in finally block
+                mock_cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_server_cleanup_with_active_connections(self, server):
+        """Test cleanup with active client connections."""
+        # Create mock server that tracks active connections
+        mock_server_instance = AsyncMock()
+        mock_server_instance.serve_forever.side_effect = Exception("Server error")
+        mock_server_instance.close = Mock()
+        mock_server_instance.__aenter__ = AsyncMock(return_value=mock_server_instance)
+        mock_server_instance.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("asyncio.start_unix_server", return_value=mock_server_instance):
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("pathlib.Path.unlink") as mock_unlink:
+                    await server.run()
+
+                    # Verify server was closed and socket removed
+                    mock_server_instance.close.assert_called_once()
+                    # The cleanup is called in finally block, so it should be called at least once
+                    assert mock_unlink.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_handle_client_connection_drop_during_read(self, server):
+        """Test _handle_client when connection drops during read."""
+        reader = AsyncMock()
+        writer = AsyncMock()
+
+        # Simulate connection drop during read
+        reader.read.side_effect = ConnectionError("Connection dropped")
+
+        # Should handle gracefully without raising
+        await server._handle_client(reader, writer)
+
+        writer.close.assert_called_once()
+        writer.wait_closed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_client_write_failure_with_partial_data(self, server):
+        """Test _handle_client when write fails with partial data."""
+        reader = AsyncMock()
+        writer = AsyncMock()
+
+        reader.read.return_value = b"dump all\n"
+
+        # Mock _process_command to return data
+        with patch.object(server, "_process_command", return_value={"status": "ok"}):
+            # Make writer.write fail
+            writer.write.side_effect = BrokenPipeError("Broken pipe")
+
+            # Should handle gracefully
+            await server._handle_client(reader, writer)
+
+            writer.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_client_error_response_write_failure(self, server):
+        """Test error response write failure (lines 414-416)."""
+        reader = AsyncMock()
+        writer = AsyncMock()
+
+        reader.read.return_value = b"dump all\n"
+
+        # Make _process_command raise an exception
+        with patch.object(
+            server, "_process_command", side_effect=RuntimeError("Process error")
+        ):
+            # Make first write succeed, second write (error response) fail
+            writer.write.side_effect = [
+                None,
+                BrokenPipeError("Cannot write error response"),
+            ]
+            writer.drain = AsyncMock(
+                side_effect=[None, BrokenPipeError("Cannot drain")]
+            )
+
+            # Should handle gracefully - error is just logged
+            await server._handle_client(reader, writer)
+
+            # Verify writes were attempted
+            assert writer.write.call_count >= 1
+            writer.close.assert_called_once()
+
+    def test_cleanup_permission_error_on_socket_removal(self, server):
+        """Test cleanup when socket removal raises PermissionError."""
+        mock_server_instance = Mock()
+        server.server = mock_server_instance
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch(
+                "pathlib.Path.unlink", side_effect=PermissionError("Permission denied")
+            ):
+                # Should raise PermissionError as it's not caught in _cleanup
+                with pytest.raises(PermissionError):
+                    server._cleanup()
+
+                # Server should still be closed before the exception
+                mock_server_instance.close.assert_called_once()
+
+    def test_cleanup_with_socket_locked_by_process(self, server):
+        """Test cleanup with socket file locked by another process."""
+        mock_server_instance = Mock()
+        server.server = mock_server_instance
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.unlink", side_effect=OSError("Resource busy")):
+                # Should raise OSError as it's not caught in _cleanup
+                with pytest.raises(OSError):
+                    server._cleanup()
+
+    @pytest.mark.asyncio
+    async def test_process_command_deployment_history_missing_attribute(self, server):
+        """Test deployment history when memo has no deployment_history attribute (lines 324-326)."""
+        # Remove deployment_history attribute to trigger the condition
+        server.memo.deployment_history = None
+
+        result = await server._process_command("dump deployments")
+
+        expected = {"deployment_history": {}}
+        assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_process_command_deployment_history_endpoint_found(self, server):
+        """Test deployment history when endpoint is found in deployment data (line 335)."""
+        # Mock deployment history with data
+        mock_history = Mock()
+        mock_history.to_dict.return_value = {
+            "deployment_history": {
+                "http://pod1:5555": {"version": "123", "success": True},
+                "http://pod2:5555": {"version": "124", "success": True},
+            }
+        }
+        server.memo.deployment_history = mock_history
+
+        result = await server._process_command("get deployment http://pod1:5555")
+
+        expected_result = {"version": "123", "success": True}
+        assert result == {"result": expected_result}
+
+    @pytest.mark.asyncio
+    async def test_process_command_get_template_snippet(self, server):
+        """Test template snippet retrieval (line 269)."""
+        # Mock config with template snippets
+        server.memo.config.template_snippets = {
+            "backend-name": Mock(
+                model_dump=Mock(return_value={"template": "backend_{{ name }}"})
+            )
+        }
+
+        result = await server._process_command("get template_snippets backend-name")
+
+        expected = {"result": {"template": "backend_{{ name }}"}}
+        assert result == expected
+
+    def test_serialize_resource_collection_dict_fallback(self):
+        """Test _serialize_resource_collection fallback for dicts (line 58)."""
+        from haproxy_template_ic.management_socket import _serialize_resource_collection
+
+        # Test with a single dict resource - dicts are iterable so they iterate over keys
+        resource_dict = {"name": "test-resource", "status": "active"}
+        result = _serialize_resource_collection(resource_dict)
+
+        # Dict iterates over keys, so result should be list of keys
+        assert result == ["name", "status"]
+
+        # Test the actual fallback path with non-iterable type
+        result = _serialize_resource_collection(42)
+        assert result == [{"data": 42}]
+
+    def test_serialize_state_metadata_serialization_error(self):
+        """Test serialize_state metadata serialization error (lines 162-164)."""
+        from haproxy_template_ic.management_socket import serialize_state
+
+        memo = Mock()
+        memo.config = Mock()
+        memo.config.model_dump.return_value = {}
+
+        # Create a mock CLI options that raises an exception when accessed
+        class FailingCliOptions:
+            def __getattr__(self, name):
+                if name == "configmap_name":
+                    raise TypeError("Metadata error")
+                return Mock()
+
+        memo.cli_options = FailingCliOptions()
+        memo.haproxy_config_context = Mock()
+        memo.haproxy_config_context.model_dump.return_value = {}
+        memo.indices = {}
+
+        result = serialize_state(memo)
+
+        # Should have serialization errors
+        assert "serialization_errors" in result
+        assert any(
+            "metadata serialization" in error
+            for error in result["serialization_errors"]
+        )
+
+    def test_serialize_state_cli_options_serialization_error(self):
+        """Test serialize_state CLI options serialization error (lines 177-179)."""
+        from haproxy_template_ic.management_socket import serialize_state
+
+        memo = Mock()
+        memo.config = Mock()
+        memo.config.model_dump.return_value = {}
+        memo.cli_options = None  # This will trigger the AttributeError path
+        memo.haproxy_config_context = Mock()
+        memo.haproxy_config_context.model_dump.return_value = {}
+        memo.indices = {}
+
+        result = serialize_state(memo)
+
+        # Should have empty cli_options
+        assert result["cli_options"] == {}
+
+    @pytest.mark.asyncio
+    async def test_dump_deployments_command(self, server):
+        """Test dump deployments command (lines 241-242)."""
+        # Mock deployment history
+        mock_history = Mock()
+        mock_history.to_dict.return_value = {
+            "deployment_history": {
+                "http://pod1:5555": {"version": "123", "success": True}
+            }
+        }
+        server.memo.deployment_history = mock_history
+
+        result = await server._process_command("dump deployments")
+
+        expected = {
+            "deployment_history": {
+                "http://pod1:5555": {"version": "123", "success": True}
+            }
+        }
+        assert result == expected

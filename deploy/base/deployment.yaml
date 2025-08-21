@@ -22,6 +22,8 @@ spec:
           env:
             - name: CONFIGMAP_NAME
               value: haproxy-template-ic-config
+            - name: SECRET_NAME
+              value: haproxy-template-ic-credentials
             - name: VERBOSE
               value: "2"
             - name: HEALTHZ_PORT

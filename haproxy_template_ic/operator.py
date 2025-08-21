@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from haproxy_template_ic.__main__ import CliOptions
 
 import os
+import re
 
 import kopf
 import structlog
@@ -22,7 +23,7 @@ from deepdiff import DeepDiff
 from kopf import set_default_registry
 from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
-from kr8s.objects import ConfigMap
+from kr8s.objects import ConfigMap, Secret
 from kubernetes import config
 
 from haproxy_template_ic.config_models import (
@@ -39,13 +40,15 @@ from haproxy_template_ic.config_models import (
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
     DataplaneAPIError,
-    HAProxyPodDiscovery,
+    DeploymentHistory,
     ValidationError,
+    get_production_urls_from_index,
 )
 from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.structured_logging import autolog, observe
 from haproxy_template_ic.templating import TemplateRenderer
+from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -54,6 +57,9 @@ from haproxy_template_ic.tracing import (
 )
 
 logger = structlog.get_logger(__name__)
+
+# Pre-compiled regex pattern for field extraction performance optimization
+_DOT_SPLIT_PATTERN = re.compile(r"\.(?![^\[]*\])")
 
 
 def get_current_namespace() -> str:
@@ -79,8 +85,17 @@ def _is_valid_resource(resource: Any) -> bool:
     Returns:
         True if the resource is valid for templates, False otherwise
     """
-    # Dictionary resources are always valid
+    # Dictionary resources need basic metadata validation
     if isinstance(resource, dict):
+        # Check for basic Kubernetes resource metadata
+        metadata = resource.get("metadata", {})
+        if not isinstance(metadata, dict):
+            return False
+
+        # Validate essential metadata fields
+        if not metadata.get("name") or not metadata.get("namespace"):
+            return False
+
         return True
 
     # List/tuple resources should be non-empty
@@ -89,7 +104,15 @@ def _is_valid_resource(resource: Any) -> bool:
 
     # Objects with dict-like interface or attributes are valid
     if hasattr(resource, "__dict__") or hasattr(resource, "get"):
-        return True
+        try:
+            # Test that we can actually access the data for templating
+            if hasattr(resource, "items"):
+                dict(resource)
+            elif hasattr(resource, "__dict__"):
+                resource.__dict__
+            return True
+        except (TypeError, AttributeError):
+            return False
 
     # Primitives and other types are not valid resources
     return False
@@ -144,9 +167,36 @@ async def fetch_configmap(name: str, namespace: str) -> Any:
         result = await ConfigMap.get(name, namespace=namespace)
         record_span_event("configmap_fetched")
         return result
+    except (ConnectionError, TimeoutError) as e:
+        record_span_event("configmap_fetch_failed", {"error": str(e)})
+        raise kopf.TemporaryError(
+            f'Network error retrieving ConfigMap "{name}": {e}'
+        ) from e
     except Exception as e:
         record_span_event("configmap_fetch_failed", {"error": str(e)})
         raise kopf.TemporaryError(f'Failed to retrieve ConfigMap "{name}": {e}') from e
+
+
+@trace_async_function(
+    span_name="fetch_secret", attributes={"operation.category": "kubernetes"}
+)
+async def fetch_secret(name: str, namespace: str) -> Any:
+    """Fetch Secret from Kubernetes cluster."""
+    add_span_attributes(secret_name=name, secret_namespace=namespace)
+    try:
+        result = await Secret.get(name, namespace=namespace)
+        record_span_event("secret_fetched")
+        return result
+    except (ConnectionError, TimeoutError) as e:
+        record_span_event("secret_fetch_failed", {"error": str(e)})
+        raise kopf.TemporaryError(
+            f'Network error retrieving Secret "{name}": {e}'
+        ) from e
+    except Exception as e:
+        record_span_event("secret_fetch_failed", {"error": str(e)})
+        raise kopf.PermanentError(
+            f'Failed to retrieve Secret "{name}": {e}. Credentials are mandatory for operation.'
+        ) from e
 
 
 # =============================================================================
@@ -188,6 +238,38 @@ async def handle_configmap_change(
         trigger_reload(memo)
 
 
+@autolog(component="operator")
+async def handle_secret_change(
+    memo: Any,
+    event: Dict[str, Any],
+    name: str,
+    type: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
+    """Handle Secret change events."""
+    # Logging context is automatically injected by @autolog decorator
+    structured_logger = structlog.get_logger(__name__)
+    structured_logger.info(f"Kubernetes {type}")
+
+    # Load new credentials directly
+    secret_data = (
+        event["object"].get("data", {})
+        if isinstance(event["object"], dict)
+        else event["object"].data
+    )
+    try:
+        new_credentials = Credentials.from_secret(secret_data)
+    except Exception as e:
+        structured_logger.error(f"❌ Failed to load credentials: {e}")
+        return
+
+    # Simple credential comparison using tuples
+    if memo.credentials != new_credentials:
+        structured_logger.info("🔐 Credentials changed: reloading")
+        memo.credentials = new_credentials
+
+
 def extract_nested_field(obj: Dict[str, Any], path: str) -> Any:
     """Extract field value from nested dict using dot notation.
 
@@ -198,11 +280,9 @@ def extract_nested_field(obj: Dict[str, Any], path: str) -> Any:
     Returns:
         The field value or empty string if not found
     """
-    import re
-
     # Handle bracket notation for dict keys
     # Convert metadata.labels['kubernetes.io/service-name'] to proper access
-    parts = re.split(r"\.(?![^\[]*\])", path)
+    parts = _DOT_SPLIT_PATTERN.split(path)
 
     current = obj
     for part in parts:
@@ -289,10 +369,9 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     indices: Dict[str, IndexedResourceCollection] = {}
     for resource_id in memo.config.watched_resources:
         try:
-            # Get the index for this resource type
-            index_data = memo.indices.get(resource_id)
-
-            if index_data:
+            # Get the index for this resource type - access Kopf Store directly
+            if resource_id in memo.indices:
+                index_data = memo.indices[resource_id]
                 # Create IndexedResourceCollection from kopf Index
                 indices[resource_id] = IndexedResourceCollection.from_kopf_index(
                     index_data
@@ -447,6 +526,7 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
 
 async def synchronize_with_haproxy_instances(memo: Any) -> None:
     """Synchronize rendered configuration with HAProxy instances via Dataplane API."""
+    logger.info("🚀 SYNC FUNCTION CALLED - Starting synchronization...")
     metrics = get_metrics_collector()
 
     if not memo.config.pod_selector:
@@ -462,53 +542,81 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
         return
 
     try:
-        # Create pod discovery service
-        current_namespace = get_current_namespace()
-        pod_discovery = HAProxyPodDiscovery(
-            pod_selector=memo.config.pod_selector, namespace=current_namespace
+        # Debug: Log available indices
+        available_indices = (
+            list(memo.indices.keys()) if hasattr(memo, "indices") else []
+        )
+        logger.info(f"🔍 Available indices: {available_indices}")
+
+        # Get indexed HAProxy pods and extract production URLs
+        if "haproxy_pods" not in memo.indices:
+            logger.warning("🔍 HAProxy pods index not found - skipping synchronization")
+            return
+
+        haproxy_pods_store = memo.indices["haproxy_pods"]
+
+        logger.info(f"🔍 HAProxy pods index contains {len(haproxy_pods_store)} entries")
+
+        # Convert Kopf Store to IndexedResourceCollection for clean handling
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(
+            haproxy_pods_store
+        )
+        logger.info(
+            f"🔍 Created IndexedResourceCollection with {len(haproxy_pods_collection)} pods"
         )
 
-        # Create synchronizer and perform sync
-        auth = (
-            memo.config.dataplane_auth.username,
-            memo.config.dataplane_auth.password,
+        production_urls = get_production_urls_from_index(haproxy_pods_collection)
+
+        if not production_urls:
+            logger.warning(
+                "⚠️ No production HAProxy pods found - skipping synchronization"
+            )
+            return
+
+        # Initialize deployment history if not exists
+        if not hasattr(memo, "deployment_history"):
+            memo.deployment_history = DeploymentHistory()
+
+        # Create synchronizer and perform sync with credentials from Secret
+        synchronizer = ConfigSynchronizer(
+            production_urls=production_urls,
+            validation_url=memo.config.validation_dataplane_url,
+            credentials=memo.credentials,
+            deployment_history=memo.deployment_history,
         )
-        synchronizer = ConfigSynchronizer(pod_discovery, dataplane_auth=auth)
-        results = await synchronizer.synchronize_configuration(
-            memo.haproxy_config_context
-        )
+
+        results = await synchronizer.sync_configuration(memo.haproxy_config_context)
 
         # Log results and record metrics
-        successful = [r for r in results if r.success]
-        failed = [r for r in results if not r.success]
+        successful_count = results.get("successful", 0)
+        failed_count = results.get("failed", 0)
+        errors = results.get("errors", [])
 
         # Record HAProxy instance counts and sync results
-        production_instances = [
-            r.instance for r in results if not r.instance.is_validation_sidecar
-        ]
-        validation_instances = [
-            r.instance for r in results if r.instance.is_validation_sidecar
-        ]
+        # We have 1 validation instance (fixed localhost URL) and production_urls count for production
         metrics.record_haproxy_instances(
-            len(production_instances), len(validation_instances)
+            len(production_urls),
+            1,  # validation instances = 1 (localhost sidecar)
         )
 
-        if successful:
-            for result in successful:
+        if successful_count > 0:
+            for _ in range(successful_count):
                 metrics.record_dataplane_api_request("deploy", "success")
             logger.info(
-                f"🚀 Successfully synchronized configuration to {len(successful)} HAProxy instances"
+                f"🚀 Successfully synchronized configuration to {successful_count} HAProxy instances"
             )
 
-        if failed:
-            for result in failed:
+        if failed_count > 0:
+            for _ in range(failed_count):
                 metrics.record_dataplane_api_request("deploy", "error")
                 metrics.record_error("dataplane_deploy_failed", "dataplane")
             logger.error(
-                f"❌ Failed to synchronize configuration to {len(failed)} HAProxy instances"
+                f"❌ Failed to synchronize configuration to {failed_count} HAProxy instances"
             )
-            for result in failed:
-                logger.error(f"   - {result.instance.name}: {result.error}")
+            for error in errors:
+                logger.error(f"   - {error}")
 
     except ValidationError as e:
         metrics.record_error("validation_failed", "dataplane")
@@ -524,6 +632,74 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
 # =============================================================================
 # Resource Watchers
 # =============================================================================
+
+
+async def haproxy_pods_index(
+    namespace: str,
+    name: str,
+    body: Dict[str, Any],
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """Index HAProxy pods for efficient discovery."""
+    logger.info(f"📝 Indexing HAProxy pod {namespace}/{name}")
+
+    # Check if pod is being deleted using deletionTimestamp
+    # Note: Index handlers don't receive event type like event handlers do,
+    # so checking deletionTimestamp is the appropriate approach for kopf index handlers
+    metadata = body.get("metadata", {})
+    if metadata.get("deletionTimestamp"):
+        logger.info(f"🗑️ Pod {namespace}/{name} is being deleted, removing from index")
+        return {}  # Return empty dict to remove from index
+
+    # Log pod status for debugging
+    pod_ip = body.get("status", {}).get("podIP")
+    phase = body.get("status", {}).get("phase")
+    logger.info(f"🔍 Pod {name} - Phase: {phase}, IP: {pod_ip}")
+
+    # No manual filtering needed - Kopf already filtered by labels
+    # Index by namespace/name for easy lookup
+    return {(namespace, name): body}
+
+
+async def handle_haproxy_pod_create(**kwargs: Any) -> None:
+    """Handle HAProxy pod creation events."""
+    body = kwargs.get("body", {})
+    namespace = kwargs.get("namespace") or body.get("metadata", {}).get(
+        "namespace", "default"
+    )
+    name = kwargs.get("name") or body.get("metadata", {}).get("name", "unknown")
+
+    # No manual filtering needed - Kopf already filtered by labels
+    logger.info(f"🆕 New HAProxy pod created: {namespace}/{name}")
+    # Trigger template re-rendering for the new pod
+    # Note: This will be handled by the template rendering system
+    # The new pod will be available in the index for the next sync
+
+
+def setup_haproxy_pod_indexing(memo: Any) -> None:
+    """Set up HAProxy pod indexing and event handling."""
+    current_namespace = get_current_namespace()
+
+    logger.info("🔍 Setting up HAProxy pod indexing...")
+
+    # Get label selector from config for filtering at API level
+    pod_labels = memo.config.pod_selector.match_labels if memo.config else {}
+    logger.info(f"📋 Using label selector: {pod_labels}")
+
+    # Register HAProxy pod indexing with label filtering
+    kopf.index("pods", id="haproxy_pods", param="haproxy_pods", labels=pod_labels)(
+        haproxy_pods_index
+    )  # type: ignore
+
+    # Register pod creation handler with label filtering (only trigger on create events)
+    kopf.on.create("pods", id="haproxy_pod_create", labels=pod_labels)(
+        handle_haproxy_pod_create
+    )
+
+    logger.info(
+        f"✅ HAProxy pod indexing configured for namespace '{current_namespace}' with labels {pod_labels}"
+    )
 
 
 def setup_resource_watchers(memo: Any) -> None:
@@ -558,6 +734,9 @@ def setup_resource_watchers(memo: Any) -> None:
         kopf.index(resource_type, **kwargs)(update_resource_index)  # type: ignore[arg-type]
         kopf.on.event(resource_type, **event_kwargs)(render_haproxy_templates)  # type: ignore[arg-type]
 
+    # Set up HAProxy pod indexing
+    setup_haproxy_pod_indexing(memo)
+
     logger.info("✅ All resource watchers configured successfully")
 
 
@@ -571,21 +750,30 @@ async def initialize_configuration(memo: Any) -> None:
     metrics = get_metrics_collector()
 
     configmap_name = memo.cli_options.configmap_name
-    logger.info(f"⚙️ Initializing config from configmap {configmap_name}.")
+    secret_name = memo.cli_options.secret_name
+    logger.info(
+        f"⚙️ Initializing config from configmap {configmap_name} and credentials from secret {secret_name}."
+    )
 
     try:
         with metrics.time_config_reload():
             namespace = get_current_namespace() or "default"
+            # Load configuration from ConfigMap
             configmap = await fetch_configmap(configmap_name, namespace)
             memo.config = await load_config_from_configmap(configmap)
             memo.template_renderer = TemplateRenderer.from_config(memo.config)
 
+            # Load credentials from Secret
+            secret = await fetch_secret(secret_name, namespace)
+            secret_data = secret.data if hasattr(secret, "data") else secret["data"]
+            memo.credentials = Credentials.from_secret(secret_data)
+
         metrics.record_config_reload(success=True)
-        logger.info("✅ Configuration loaded successfully.")
+        logger.info("✅ Configuration and credentials loaded successfully.")
     except Exception as e:
         metrics.record_config_reload(success=False)
         metrics.record_error("config_load_failed", "operator")
-        logger.error(f"❌ Failed to load configuration: {e}")
+        logger.error(f"❌ Failed to load configuration or credentials: {e}")
         raise
 
 
@@ -599,6 +787,16 @@ async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
             name == configmap_name and namespace == get_current_namespace()
         ),
     )(handle_configmap_change)  # type: ignore[arg-type]
+
+    # Watch Secret changes
+    secret_name = memo.cli_options.secret_name
+    current_namespace = get_current_namespace()
+    kopf.on.event(
+        "secret",
+        when=lambda name, namespace, type, **_: (
+            name == secret_name and namespace == current_namespace
+        ),
+    )(handle_secret_change)  # type: ignore[arg-type]
 
 
 async def init_management_socket(memo: Any, **kwargs: Any) -> None:
@@ -623,7 +821,9 @@ def configure_webhook_server(
     settings: kopf.OperatorSettings, memo: Any, **kwargs: Any
 ) -> None:
     """Configure webhook server for admission control."""
+    import atexit
     import os
+    import shutil
     import tempfile
 
     # Check if any resources have webhook validation enabled
@@ -645,15 +845,27 @@ def configure_webhook_server(
     key_file = f"{cert_dir}/webhook-key.pem"
     ca_file = f"{cert_dir}/webhook-ca.pem"
 
+    def cleanup_temp_dir(temp_dir: str) -> None:
+        """Clean up temporary directory at exit."""
+        try:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                logger.debug(
+                    f"🧹 Cleaned up temporary webhook certificate directory: {temp_dir}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to clean up temporary directory {temp_dir}: {e}")
+
     if os.path.exists(cert_file) and os.path.exists(key_file):
         # Create a writable temporary directory for kopf's CA dump
         temp_dir = tempfile.mkdtemp(prefix="webhook-ca-")
         temp_ca_file = f"{temp_dir}/webhook-ca.pem"
 
+        # Register cleanup for this directory
+        atexit.register(cleanup_temp_dir, temp_dir)
+
         # Copy the CA file to writable location if it exists
         if os.path.exists(ca_file):
-            import shutil
-
             shutil.copy2(ca_file, temp_ca_file)
             ca_dump_file = temp_ca_file
         else:
@@ -674,6 +886,9 @@ def configure_webhook_server(
         # Create a writable temporary directory for self-signed certificates
         temp_dir = tempfile.mkdtemp(prefix="webhook-ca-")
         temp_ca_file = f"{temp_dir}/webhook-ca.pem"
+
+        # Register cleanup for this directory
+        atexit.register(cleanup_temp_dir, temp_dir)
 
         settings.admission.server = kopf.WebhookServer(
             addr="0.0.0.0",  # nosec B104 - Kubernetes webhook must bind all interfaces

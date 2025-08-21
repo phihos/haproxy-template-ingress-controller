@@ -4,8 +4,16 @@ metadata:
   name: haproxy-template-ic
 rules:
   - apiGroups: [ "" ]
-    resources: [ "pods", "services", "configmaps", "secrets", "events", "namespaces" ]
+    resources: [ "services", "configmaps", "namespaces", "secrets", "endpoints" ]
     verbs: [ "get", "list", "watch" ]
+  # Pods need patch permission for kopf operator annotations
+  - apiGroups: [ "" ]
+    resources: [ "pods" ]
+    verbs: [ "get", "list", "watch", "patch" ]
+  # Events need create permission for kopf operator framework
+  - apiGroups: [ "" ]
+    resources: [ "events" ]
+    verbs: [ "get", "list", "watch", "create", "patch" ]
   - apiGroups: [ "networking.k8s.io" ]
     resources: [ "ingresses" ]
     verbs: [ "get", "list", "watch" ]

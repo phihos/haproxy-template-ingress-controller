@@ -10,15 +10,16 @@ This module provides functionality to:
 Uses the complete generated HAProxy Dataplane API v3 client for all operations.
 """
 
-import asyncio
 import logging
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from datetime import datetime, UTC
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from urllib.parse import urlparse, urlunparse
 
-import kr8s
-from kr8s.objects import Pod
+if TYPE_CHECKING:
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+    from haproxy_template_ic.credentials import Credentials
 
-from haproxy_template_ic.config_models import HAProxyConfigContext, PodSelector
+from haproxy_template_ic.config_models import HAProxyConfigContext
 from haproxy_template_ic.metrics import get_metrics_collector
 from tenacity import (
     AsyncRetrying,
@@ -27,7 +28,6 @@ from tenacity import (
     retry_if_exception,
 )
 from haproxy_template_ic.tracing import (
-    trace_async_function,
     trace_dataplane_operation,
     add_span_attributes,
     record_span_event,
@@ -42,140 +42,231 @@ from haproxy_dataplane_v3.exceptions import ApiException, BadRequestException
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class HAProxyInstance:
-    """Represents a single HAProxy instance with Dataplane API access."""
-
-    pod: Pod
-    dataplane_url: str
-    is_validation_sidecar: bool = False
-
-    @property
-    def name(self) -> str:
-        """Get a human-readable name for this instance."""
-        return f"{self.pod.namespace}/{self.pod.name}"
+# Classes removed for simplification - using simple URLs and dicts instead
 
 
-@dataclass(frozen=True)
-class SyncResult:
-    """Result of a synchronization operation."""
+def normalize_dataplane_url(base_url: str) -> str:
+    """Normalize a Dataplane API URL to ensure it ends with /v3.
 
-    success: bool
-    instance: HAProxyInstance
-    error: Optional[str] = None
-    config_version: Optional[str] = None
+    This utility function handles various URL formats and ensures consistent
+    API endpoint formatting for the HAProxy Dataplane API v3. It properly
+    preserves query parameters and fragments while adding /v3 to the path.
+
+    Args:
+        base_url: The base URL in any of these formats:
+            - "http://localhost:5555" -> "http://localhost:5555/v3"
+            - "http://localhost:5555/" -> "http://localhost:5555/v3"
+            - "http://localhost:5555/v3" -> "http://localhost:5555/v3" (unchanged)
+            - "http://localhost:5555?timeout=30" -> "http://localhost:5555/v3?timeout=30"
+            - "https://haproxy.example.com:5555/api" -> "https://haproxy.example.com:5555/api/v3"
+
+    Returns:
+        Normalized URL ending with /v3, preserving query parameters and fragments
+
+    Example:
+        >>> normalize_dataplane_url("http://localhost:5555")
+        'http://localhost:5555/v3'
+        >>> normalize_dataplane_url("http://localhost:5555?timeout=30")
+        'http://localhost:5555/v3?timeout=30'
+        >>> normalize_dataplane_url("https://api.example.com/haproxy/")
+        'https://api.example.com/haproxy/v3'
+    """
+    try:
+        parsed = urlparse(base_url)
+    except ValueError:
+        # If URL parsing fails, append /v3 to the raw URL as fallback
+        if not base_url.endswith("/v3"):
+            return f"{base_url.rstrip('/')}/v3"
+        return base_url
+
+    # Handle path normalization
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/v3"):
+        path = f"{path}/v3"
+
+    # Reconstruct the URL with normalized path
+    try:
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+    except ValueError:
+        # If reconstruction fails, use simple string concatenation
+        if not base_url.endswith("/v3"):
+            return f"{base_url.rstrip('/')}/v3"
+        return base_url
 
 
 class DataplaneAPIError(Exception):
-    """Base exception for Dataplane API errors."""
+    """Base exception for Dataplane API errors.
 
-    pass
+    Attributes:
+        endpoint: The dataplane endpoint URL where the error occurred
+        operation: The operation that failed (e.g., 'validate', 'deploy', 'get_version')
+        original_error: The original exception that caused this error, if any
+    """
+
+    def __init__(
+        self,
+        message: str,
+        endpoint: Optional[str] = None,
+        operation: Optional[str] = None,
+        original_error: Optional[Exception] = None,
+    ):
+        super().__init__(message)
+        self.endpoint = endpoint
+        self.operation = operation
+        self.original_error = original_error
+
+    def __str__(self) -> str:
+        """Return detailed error message with context."""
+        base_message = super().__str__()
+        context_parts = []
+
+        if self.operation:
+            context_parts.append(f"operation={self.operation}")
+        if self.endpoint:
+            context_parts.append(f"endpoint={self.endpoint}")
+
+        if context_parts:
+            return f"{base_message} [{', '.join(context_parts)}]"
+        return base_message
 
 
 class ValidationError(DataplaneAPIError):
-    """Raised when configuration validation fails."""
+    """Raised when HAProxy configuration validation fails.
 
-    pass
+    Attributes:
+        config_size: Size of the configuration that failed validation
+        validation_details: Detailed error message from HAProxy validation
+    """
 
-
-class HAProxyPodDiscovery:
-    """Discovers HAProxy pods matching the configured selector."""
-
-    def __init__(self, pod_selector: PodSelector, namespace: Optional[str] = None):
-        self.pod_selector = pod_selector
-        self.namespace = namespace
-
-    @trace_async_function(
-        span_name="discover_haproxy_instances",
-        attributes={"operation.category": "pod_discovery"},
-    )
-    async def discover_instances(self) -> List[HAProxyInstance]:
-        """Discover all HAProxy instances matching the pod selector."""
-        add_span_attributes(
-            selector_labels=str(self.pod_selector.match_labels),
-            namespace=self.namespace or "all",
+    def __init__(
+        self,
+        message: str,
+        endpoint: Optional[str] = None,
+        config_size: Optional[int] = None,
+        validation_details: Optional[str] = None,
+        original_error: Optional[Exception] = None,
+    ):
+        super().__init__(
+            message,
+            endpoint=endpoint,
+            operation="validate",
+            original_error=original_error,
         )
-        try:
-            # Build label selector from pod_selector.match_labels
-            label_selector = ",".join(
-                [
-                    f"{key}={value}"
-                    for key, value in self.pod_selector.match_labels.items()
-                ]
-            )
+        self.config_size = config_size
+        self.validation_details = validation_details
 
-            # Get pods matching the selector
-            pods = kr8s.get(
-                "pods", label_selector=label_selector, namespace=self.namespace
-            )
+    def __str__(self) -> str:
+        """Return detailed validation error message."""
+        base_message = super().__str__()
+        detail_parts = []
 
-            instances = []
-            for pod in pods:
-                if pod.status.phase != "Running":
-                    logger.debug(f"Skipping non-running pod {pod.namespace}/{pod.name}")
-                    continue
+        if self.config_size:
+            detail_parts.append(f"config_size={self.config_size}")
+        if self.validation_details:
+            detail_parts.append(f"details={self.validation_details}")
 
-                # Determine if this is a validation sidecar
-                is_validation = self._is_validation_sidecar(pod)
+        if detail_parts:
+            return f"{base_message} [{', '.join(detail_parts)}]"
+        return base_message
 
-                # Build Dataplane API URL
-                dataplane_url = self._build_dataplane_url(pod)
 
-                instance = HAProxyInstance(
-                    pod=pod,
-                    dataplane_url=dataplane_url,
-                    is_validation_sidecar=is_validation,
-                )
-                instances.append(instance)
+class DeploymentHistory:
+    """Simple deployment tracking per endpoint."""
 
-            add_span_attributes(
-                total_instances=len(instances),
-                production_instances=len(
-                    [i for i in instances if not i.is_validation_sidecar]
-                ),
-                validation_instances=len(
-                    [i for i in instances if i.is_validation_sidecar]
-                ),
-            )
-            record_span_event(
-                "pod_discovery_completed",
-                {"total_pods": len(instances), "label_selector": label_selector},
-            )
-            logger.info(f"Discovered {len(instances)} HAProxy instances")
-            return instances
+    def __init__(self):
+        self._history: Dict[str, Dict[str, Any]] = {}
 
-        except Exception as e:
-            record_span_event("pod_discovery_failed", {"error": str(e)})
-            set_span_error(e, "Failed to discover HAProxy instances")
-            logger.error(f"Failed to discover HAProxy instances: {e}")
-            raise DataplaneAPIError(f"Pod discovery failed: {e}") from e
-
-    def _is_validation_sidecar(self, pod: Pod) -> bool:
-        """Determine if a pod is a validation sidecar."""
-        # Check for validation sidecar annotation/label
-        return (
-            pod.metadata.get("labels", {}).get("haproxy-template-ic/role")
-            == "validation"
+    def record(
+        self, endpoint: str, version: str, success: bool, error: Optional[str] = None
+    ) -> None:
+        """Record a deployment attempt."""
+        # Keep current version only if this deployment succeeded
+        current_version = (
+            self._history.get(endpoint, {}).get("version") if not success else version
         )
 
-    def _build_dataplane_url(self, pod: Pod) -> str:
-        """Build the Dataplane API URL for a pod."""
-        # Default Dataplane API port is 5555
-        dataplane_port = pod.metadata.get("annotations", {}).get(
-            "haproxy-template-ic/dataplane-port", "5555"
-        )
+        self._history[endpoint] = {
+            "version": current_version,  # What's actually running
+            "timestamp": datetime.now(UTC).isoformat(),
+            "success": success,
+            "last_attempt": version,  # What was attempted
+            "error": error,
+        }
 
-        # Use pod IP for direct access
-        pod_ip = pod.status.podIP
-        if not pod_ip:
-            raise DataplaneAPIError(f"Pod {pod.namespace}/{pod.name} has no IP address")
+    def to_dict(self) -> Dict[str, Any]:
+        """Get deployment history as dict."""
+        return {"deployment_history": self._history}
 
-        # Return the complete URL with v3 base path (this will be the host for Configuration)
-        return f"http://{pod_ip}:{dataplane_port}"
+
+def get_production_urls_from_index(
+    indexed_pods: "IndexedResourceCollection",
+) -> List[str]:
+    """Extract dataplane URLs from indexed HAProxy pods."""
+
+    urls = []
+
+    # IndexedResourceCollection has already converted all Kopf objects to regular dicts
+    # We can iterate through all resources directly
+    for pod_dict in indexed_pods.values():
+        # Extract pod status information
+        status = pod_dict.get("status", {})
+        phase = status.get("phase") if isinstance(status, dict) else None
+        pod_ip = status.get("podIP") if isinstance(status, dict) else None
+
+        logger.debug(f"🔍 Pod phase: {phase}, IP: {pod_ip}")
+
+        if phase == "Running" and pod_ip:
+            metadata = pod_dict.get("metadata", {})
+            annotations = (
+                metadata.get("annotations", {}) if isinstance(metadata, dict) else {}
+            )
+            port = (
+                annotations.get("haproxy-template-ic/dataplane-port", "5555")
+                if isinstance(annotations, dict)
+                else "5555"
+            )
+            url = f"http://{pod_ip}:{port}"
+            urls.append(url)
+            logger.debug(f"🔍 Added production URL: {url}")
+
+    logger.info(f"🔍 Found {len(urls)} production URLs: {urls}")
+    return urls
 
 
 class DataplaneClient:
-    """Wrapper around the generated HAProxy Dataplane API v3 client."""
+    """Wrapper around the generated HAProxy Dataplane API v3 client.
+
+    This client provides a simplified interface for common Dataplane API operations
+    including configuration validation and deployment. All operations raise
+    structured exceptions with detailed context information.
+
+    Example:
+        Basic usage with error handling:
+
+        >>> client = DataplaneClient("http://localhost:5555", auth=("admin", "password"))
+        >>> try:
+        ...     await client.validate_configuration(config_text)
+        ...     version = await client.deploy_configuration(config_text)
+        ... except ValidationError as e:
+        ...     print(f"Config validation failed: {e}")
+        ...     print(f"Config size: {e.config_size}, Details: {e.validation_details}")
+        ... except DataplaneAPIError as e:
+        ...     print(f"API error: {e}")
+        ...     print(f"Endpoint: {e.endpoint}, Operation: {e.operation}")
+
+    Raises:
+        DataplaneAPIError: For general API communication errors
+        ValidationError: For HAProxy configuration validation failures
+    """
 
     def __init__(
         self,
@@ -192,11 +283,7 @@ class DataplaneClient:
             auth: Tuple of (username, password) for basic auth
         """
         # Normalize the base URL to ensure it ends with /v3
-        normalized_url = base_url.rstrip("/")
-        if not normalized_url.endswith("/v3"):
-            normalized_url += "/v3"
-
-        self.base_url = normalized_url
+        self.base_url = normalize_dataplane_url(base_url)
         self.timeout = timeout
         self.auth = auth
 
@@ -206,6 +293,7 @@ class DataplaneClient:
     def _get_configuration(self):
         """Lazy initialization of Configuration object."""
         if self._configuration is None:
+            logger.debug(f"Creating dataplane configuration for {self.base_url}")
             self._configuration = Configuration(
                 host=self.base_url,
                 username=self.auth[0],
@@ -233,13 +321,39 @@ class DataplaneClient:
 
         except ApiException as e:
             logger.error(f"API error getting version from {self.base_url}: {e}")
-            raise DataplaneAPIError(f"Failed to get version: {e}") from e
+            raise DataplaneAPIError(
+                f"Failed to get version: {e}",
+                endpoint=self.base_url,
+                operation="get_version",
+                original_error=e,
+            ) from e
+        except (ConnectionError, TimeoutError, OSError) as e:
+            logger.error(f"Network error getting version from {self.base_url}: {e}")
+            raise DataplaneAPIError(
+                f"Network error: {e}",
+                endpoint=self.base_url,
+                operation="get_version",
+                original_error=e,
+            ) from e
         except Exception as e:
             logger.error(f"Unexpected error getting version from {self.base_url}: {e}")
-            raise DataplaneAPIError(f"Unexpected error: {e}") from e
+            raise DataplaneAPIError(
+                f"Unexpected error: {e}",
+                endpoint=self.base_url,
+                operation="get_version",
+                original_error=e,
+            ) from e
 
-    async def validate_configuration(self, config_content: str) -> bool:
-        """Validate HAProxy configuration without applying it."""
+    async def validate_configuration(self, config_content: str) -> None:
+        """Validate HAProxy configuration without applying it.
+
+        Note: This method does not retry on failures. Validation failures are typically
+        due to invalid configuration, so retrying would not help.
+
+        Raises:
+            ValidationError: If configuration validation fails
+            DataplaneAPIError: If API communication fails
+        """
         with trace_dataplane_operation("validate", self.base_url):
             add_span_attributes(
                 config_size=len(config_content), dataplane_url=self.base_url
@@ -262,24 +376,56 @@ class DataplaneClient:
                             _request_timeout=self.timeout,
                         )
                         record_span_event("validation_successful")
-                        return True
 
                 except BadRequestException as e:
                     # Handle BadRequestException (configuration validation failed)
+                    validation_details = getattr(e, "body", None)
                     logger.warning(f"Configuration validation failed: {e}")
-                    if hasattr(e, "body") and e.body:
-                        logger.warning(f"Validation error details: {e.body}")
+                    if validation_details:
+                        logger.warning(f"Validation details: {validation_details}")
                     record_span_event(
                         "validation_failed", {"error": "validation_failed"}
                     )
-                    return False
-                except (ApiException, Exception) as e:
+                    set_span_error(e, "Configuration validation failed")
+                    raise ValidationError(
+                        f"Configuration validation failed: {e}",
+                        endpoint=self.base_url,
+                        config_size=len(config_content),
+                        validation_details=str(validation_details)
+                        if validation_details
+                        else None,
+                        original_error=e,
+                    ) from e
+                except (ConnectionError, TimeoutError, OSError) as e:
+                    # Handle network-related exceptions
                     record_span_event("validation_failed", {"error": str(e)})
                     set_span_error(e, "Configuration validation failed")
-                    return False
+                    logger.error(f"Network error during validation: {e}")
+                    raise DataplaneAPIError(
+                        f"Network error during validation: {e}",
+                        endpoint=self.base_url,
+                        operation="validate",
+                        original_error=e,
+                    ) from e
+                except Exception as e:
+                    # Handle all other unexpected exceptions
+                    record_span_event("validation_failed", {"error": str(e)})
+                    set_span_error(e, "Configuration validation failed")
+                    logger.error(f"Unexpected error during validation: {e}")
+                    raise DataplaneAPIError(
+                        f"Configuration validation failed: {e}",
+                        endpoint=self.base_url,
+                        operation="validate",
+                        original_error=e,
+                    ) from e
 
     async def deploy_configuration(self, config_content: str) -> str:
-        """Deploy HAProxy configuration and reload."""
+        """Deploy HAProxy configuration and reload.
+
+        This method includes retry logic for transient failures (network issues,
+        temporary dataplane unavailability), but excludes BadRequestException
+        (invalid configuration) from retries since retrying won't fix config errors.
+        """
         with trace_dataplane_operation("deploy", self.base_url):
             add_span_attributes(
                 config_size=len(config_content), dataplane_url=self.base_url
@@ -319,8 +465,15 @@ class DataplaneClient:
                     stop=stop_after_attempt(5),
                     wait=wait_exponential_jitter(initial=2, max=30),
                     retry=retry_if_exception(
-                        lambda e: isinstance(e, (ApiException, DataplaneAPIError))
-                        and not isinstance(e, BadRequestException)
+                        lambda e: (
+                            (
+                                isinstance(e, ApiException) and e.status >= 500
+                            )  # Server errors only
+                            or (
+                                isinstance(e, DataplaneAPIError)
+                                and not isinstance(e, ValidationError)
+                            )
+                        )
                     ),
                 ):
                     with attempt:
@@ -332,217 +485,83 @@ class DataplaneClient:
                 record_span_event("deployment_failed", {"error": str(e)})
                 set_span_error(e, "Configuration deployment failed")
                 logger.error(f"Configuration deployment failed: {e}")
-                raise DataplaneAPIError(f"Configuration deployment failed: {e}") from e
+                raise DataplaneAPIError(
+                    f"Configuration deployment failed: {e}",
+                    endpoint=self.base_url,
+                    operation="deploy",
+                    original_error=e,
+                ) from e
 
         # This should never be reached but satisfies mypy
-        raise DataplaneAPIError("Unexpected error in deployment")
+        raise DataplaneAPIError(
+            "Unexpected error in deployment", endpoint=self.base_url, operation="deploy"
+        )
 
 
 class ConfigSynchronizer:
-    """Orchestrates configuration synchronization across HAProxy instances."""
+    """Simple configuration synchronizer for HAProxy instances."""
 
     def __init__(
         self,
-        pod_discovery: HAProxyPodDiscovery,
-        dataplane_auth: tuple[str, str] = ("admin", "adminpass"),
+        production_urls: List[str],
+        validation_url: str,
+        credentials: "Credentials",
+        deployment_history: Optional[DeploymentHistory] = None,
     ):
-        self.pod_discovery = pod_discovery
-        self.dataplane_auth = dataplane_auth
+        self.production_urls = production_urls
+        self.validation_url = validation_url
+        self.credentials = credentials
+        self.deployment_history = deployment_history or DeploymentHistory()
 
-    @trace_async_function(
-        span_name="synchronize_configuration",
-        attributes={"operation.category": "config_sync"},
-    )
-    async def synchronize_configuration(
+    async def sync_configuration(
         self, config_context: HAProxyConfigContext
-    ) -> List[SyncResult]:
-        """Synchronize rendered configuration to all HAProxy instances."""
-        logger.info("Starting configuration synchronization")
-        record_span_event("sync_started")
-
-        # Discover all HAProxy instances
-        instances = await self.pod_discovery.discover_instances()
-        if not instances:
-            logger.warning("No HAProxy instances found for synchronization")
-            return []
-
-        # Separate validation sidecars from production instances
-        validation_instances = [i for i in instances if i.is_validation_sidecar]
-        production_instances = [i for i in instances if not i.is_validation_sidecar]
-
-        logger.info(
-            f"Found {len(validation_instances)} validation sidecars, {len(production_instances)} production instances"
-        )
-
-        # Generate the complete HAProxy configuration
-        haproxy_config = self._build_complete_config(config_context)
-
-        # Step 1: Validate configuration using sidecars
-        if validation_instances:
-            validation_success = await self._validate_with_sidecars(
-                validation_instances, haproxy_config
-            )
-            if not validation_success:
-                raise ValidationError("Configuration validation failed on sidecars")
-        else:
-            logger.warning("No validation sidecars found - skipping validation step")
-
-        # Step 2: Deploy to production instances
-        results = await self._deploy_to_production(production_instances, haproxy_config)
-
-        # Log summary
-        successful = [r for r in results if r.success]
-        failed = [r for r in results if not r.success]
-
-        add_span_attributes(
-            total_results=len(results),
-            successful_syncs=len(successful),
-            failed_syncs=len(failed),
-            validation_instances_count=len(validation_instances),
-            production_instances_count=len(production_instances),
-        )
-
-        if successful:
-            record_span_event(
-                "sync_completed_with_successes",
-                {"successful_count": len(successful), "failed_count": len(failed)},
-            )
-
-        if failed:
-            record_span_event(
-                "sync_completed_with_failures",
-                {"failed_instances": [r.instance.name for r in failed]},
-            )
-
-        logger.info(
-            f"Synchronization complete: {len(successful)} successful, {len(failed)} failed"
-        )
-
-        if failed:
-            for result in failed:
-                logger.error(f"Failed to sync {result.instance.name}: {result.error}")
-
-        return results
-
-    def _build_complete_config(self, config_context: HAProxyConfigContext) -> str:
-        """Build the complete HAProxy configuration from rendered templates."""
+    ) -> Dict[str, Any]:
+        """Synchronize configuration to all endpoints."""
         if not config_context.rendered_config:
             raise DataplaneAPIError("No rendered HAProxy configuration available")
 
-        # Start with the main HAProxy config
-        config_parts = [config_context.rendered_config.content]
+        config = config_context.rendered_config.content
 
-        # Add any additional configuration sections
-        # (In the future, this could include dynamically generated backends, etc.)
+        # Step 1: Validate at localhost
+        logger.info(f"Validating configuration at {self.validation_url}")
 
-        return "\n\n".join(config_parts)
-
-    async def _validate_with_sidecars(
-        self, validation_instances: List[HAProxyInstance], config: str
-    ) -> bool:
-        """Validate configuration using validation sidecars."""
-        logger.info(
-            f"Validating configuration with {len(validation_instances)} sidecars"
+        validation_client = DataplaneClient(
+            self.validation_url,
+            auth=(
+                self.credentials.validation.username,
+                self.credentials.validation.password.get_secret_value(),
+            ),
         )
 
-        validation_tasks = []
-        for instance in validation_instances:
-            # Use configured auth for validation instances
-            client = DataplaneClient(instance.dataplane_url, auth=self.dataplane_auth)
-            task = asyncio.create_task(
-                self._validate_instance(client, instance, config)
-            )
-            validation_tasks.append(task)
-
-        # Wait for all validations to complete
-        results = await asyncio.gather(*validation_tasks, return_exceptions=True)
-
-        # Check if all validations succeeded
-        for i, result in enumerate(results):
-            instance = validation_instances[i]
-            if isinstance(result, Exception):
-                logger.error(f"Validation failed on {instance.name}: {result}")
-                return False
-            elif not result:
-                logger.error(f"Configuration validation failed on {instance.name}")
-                return False
-
-        logger.info("Configuration validation successful on all sidecars")
-        return True
-
-    async def _validate_instance(
-        self, client: DataplaneClient, instance: HAProxyInstance, config: str
-    ) -> bool:
-        """Validate configuration on a single instance."""
         try:
-            # Simple retry with tenacity for validation
-            async for attempt in AsyncRetrying(
-                stop=stop_after_attempt(2),
-                wait=wait_exponential_jitter(initial=1, max=5),
-                retry=retry_if_exception(
-                    lambda e: isinstance(e, (ApiException, DataplaneAPIError))
-                    and not isinstance(e, ValidationError)
+            await validation_client.validate_configuration(config)
+        except Exception as e:
+            logger.error(f"Validation failed: {e}")
+            raise ValidationError(f"Configuration validation failed: {e}") from e
+
+        # Step 2: Deploy to production instances
+        results: Dict[str, Any] = {"successful": 0, "failed": 0, "errors": []}
+
+        for url in self.production_urls:
+            client = DataplaneClient(
+                url,
+                auth=(
+                    self.credentials.dataplane.username,
+                    self.credentials.dataplane.password.get_secret_value(),
                 ),
-            ):
-                with attempt:
-                    is_valid = await client.validate_configuration(config)
-                    if not is_valid:
-                        raise ValidationError(
-                            f"Configuration validation failed on {instance.name}"
-                        )
-                    return True
-            return False  # Should never reach here but satisfies mypy
-        except ValidationError:
-            # Re-raise ValidationError as it indicates a configuration problem
-            raise
-        except Exception as e:
-            logger.error(f"Validation error on {instance.name}: {e}")
-            return False
+            )
+            try:
+                version = await client.deploy_configuration(config)
+                self.deployment_history.record(url, version, True)
+                results["successful"] += 1
+                logger.info(f"✅ Deployed to {url}, version: {version}")
+            except Exception as e:
+                self.deployment_history.record(url, "unknown", False, str(e))
+                results["failed"] += 1
+                results["errors"].append(f"{url}: {e}")
+                logger.error(f"❌ Failed to deploy to {url}: {e}")
 
-    async def _deploy_to_production(
-        self, production_instances: List[HAProxyInstance], config: str
-    ) -> List[SyncResult]:
-        """Deploy configuration to production instances."""
         logger.info(
-            f"Deploying configuration to {len(production_instances)} production instances"
+            f"Sync complete: {results['successful']} successful, {results['failed']} failed"
         )
-
-        deployment_tasks = []
-        for instance in production_instances:
-            # Use configured auth for production instances
-            client = DataplaneClient(instance.dataplane_url, auth=self.dataplane_auth)
-            task = asyncio.create_task(
-                self._deploy_to_instance(client, instance, config)
-            )
-            deployment_tasks.append(task)
-
-        # Wait for all deployments to complete
-        results = await asyncio.gather(*deployment_tasks, return_exceptions=True)
-
-        # Convert results to SyncResult objects
-        sync_results: List[SyncResult] = []
-        for i, result in enumerate(results):
-            instance = production_instances[i]
-            if isinstance(result, Exception):
-                sync_results.append(
-                    SyncResult(success=False, instance=instance, error=str(result))
-                )
-            else:
-                # result is SyncResult since no exception occurred
-                sync_results.append(result)  # type: ignore[arg-type]
-
-        return sync_results
-
-    async def _deploy_to_instance(
-        self, client: DataplaneClient, instance: HAProxyInstance, config: str
-    ) -> SyncResult:
-        """Deploy configuration to a single instance."""
-        try:
-            version = await client.deploy_configuration(config)
-            logger.info(
-                f"Successfully deployed configuration to {instance.name}, version: {version}"
-            )
-            return SyncResult(success=True, instance=instance, config_version=version)
-        except Exception as e:
-            logger.error(f"Deployment failed on {instance.name}: {e}")
-            return SyncResult(success=False, instance=instance, error=str(e))
+        return results

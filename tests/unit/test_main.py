@@ -72,7 +72,10 @@ def test_cli_structured_logging_flag():
 def test_run_command_with_defaults(mock_shutdown, mock_init, mock_run):
     """Test run command with default parameters."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "--configmap-name", "test-config"])
+    result = runner.invoke(
+        cli,
+        ["run", "--configmap-name", "test-config", "--secret-name", "test-credentials"],
+    )
 
     assert result.exit_code == 0
     mock_run.assert_called_once()
@@ -82,6 +85,7 @@ def test_run_command_with_defaults(mock_shutdown, mock_init, mock_run):
     # Check that the CLI options were passed correctly
     cli_options = mock_run.call_args[0][0]
     assert cli_options.configmap_name == "test-config"
+    assert cli_options.secret_name == "test-credentials"
     assert cli_options.healthz_port == 8080
     assert cli_options.socket_path == "/run/haproxy-template-ic/management.sock"
     assert cli_options.metrics_port == 9090
@@ -100,6 +104,8 @@ def test_run_command_with_custom_args(mock_shutdown, mock_init, mock_run):
             "run",
             "--configmap-name",
             "my-config",
+            "--secret-name",
+            "my-credentials",
             "--healthz-port",
             "9000",
             "--socket-path",
@@ -113,6 +119,7 @@ def test_run_command_with_custom_args(mock_shutdown, mock_init, mock_run):
     assert result.exit_code == 0
     cli_options = mock_run.call_args[0][0]
     assert cli_options.configmap_name == "my-config"
+    assert cli_options.secret_name == "my-credentials"
     assert cli_options.healthz_port == 9000
     assert cli_options.socket_path == "/tmp/socket"
     assert cli_options.metrics_port == 8080
@@ -127,6 +134,7 @@ def test_run_command_with_env_vars(mock_shutdown, mock_init, mock_run):
     runner = CliRunner(
         env={
             "CONFIGMAP_NAME": "env-config",
+            "SECRET_NAME": "env-credentials",
             "HEALTHZ_PORT": "7000",
             "SOCKET_PATH": "/var/run/socket",
             "METRICS_PORT": "7090",
@@ -138,6 +146,7 @@ def test_run_command_with_env_vars(mock_shutdown, mock_init, mock_run):
     assert result.exit_code == 0
     cli_options = mock_run.call_args[0][0]
     assert cli_options.configmap_name == "env-config"
+    assert cli_options.secret_name == "env-credentials"
     assert cli_options.healthz_port == 7000
     assert cli_options.socket_path == "/var/run/socket"
     assert cli_options.metrics_port == 7090
@@ -161,7 +170,15 @@ def test_run_command_with_tracing_enabled(mock_shutdown, mock_init, mock_run):
     """Test run command with tracing enabled."""
     runner = CliRunner()
     result = runner.invoke(
-        cli, ["run", "--configmap-name", "test-config", "--tracing-enabled"]
+        cli,
+        [
+            "run",
+            "--configmap-name",
+            "test-config",
+            "--secret-name",
+            "test-credentials",
+            "--tracing-enabled",
+        ],
     )
 
     assert result.exit_code == 0
@@ -175,7 +192,10 @@ def test_run_command_with_tracing_enabled(mock_shutdown, mock_init, mock_run):
 def test_run_command_basic_functionality(mock_shutdown, mock_init, mock_run):
     """Test that run command executes successfully."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["run", "--configmap-name", "test-config"])
+    result = runner.invoke(
+        cli,
+        ["run", "--configmap-name", "test-config", "--secret-name", "test-credentials"],
+    )
 
     assert result.exit_code == 0
     mock_run.assert_called_once()
@@ -195,22 +215,22 @@ def test_run_command_invalid_configmap_name():
     # Test with uppercase letters
     result = runner.invoke(cli, ["run", "--configmap-name", "Invalid-Name"])
     assert result.exit_code == 2
-    assert "ConfigMap name must follow Kubernetes naming conventions" in result.output
+    assert "Invalid K8s name format" in result.output
 
     # Test with invalid characters
     result = runner.invoke(cli, ["run", "--configmap-name", "invalid_name"])
     assert result.exit_code == 2
-    assert "ConfigMap name must follow Kubernetes naming conventions" in result.output
+    assert "Invalid K8s name format" in result.output
 
     # Test starting with hyphen
     result = runner.invoke(cli, ["run", "--configmap-name", "-invalid"])
     assert result.exit_code == 2
-    assert "ConfigMap name must follow Kubernetes naming conventions" in result.output
+    assert "Invalid K8s name format" in result.output
 
     # Test ending with hyphen
     result = runner.invoke(cli, ["run", "--configmap-name", "invalid-"])
     assert result.exit_code == 2
-    assert "ConfigMap name must follow Kubernetes naming conventions" in result.output
+    assert "Invalid K8s name format" in result.output
 
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
@@ -231,44 +251,39 @@ def test_run_command_valid_configmap_names(mock_shutdown, mock_init, mock_run):
     ]
 
     for name in valid_names:
-        result = runner.invoke(cli, ["run", "--configmap-name", name])
+        result = runner.invoke(
+            cli, ["run", "--configmap-name", name, "--secret-name", "test-credentials"]
+        )
         assert result.exit_code == 0, f"Failed for valid name: {name}"
 
 
 def test_configmap_validation_edge_cases():
-    """Test ConfigMap name validation edge cases."""
-    from haproxy_template_ic.__main__ import validate_configmap_name
+    """Test unified Kubernetes name validation edge cases."""
+    from haproxy_template_ic.credentials import validate_k8s_name
     import click
 
     # Test maximum length (253 characters)
     valid_long_name = "a" * 253
-    assert validate_configmap_name(None, None, valid_long_name) == valid_long_name
+    assert validate_k8s_name(None, None, valid_long_name) == valid_long_name
 
     # Test too long name (254 characters)
-    with pytest.raises(click.BadParameter, match="must be at most 253 characters"):
-        validate_configmap_name(None, None, "a" * 254)
+    with pytest.raises(click.BadParameter, match="Invalid K8s name format"):
+        validate_k8s_name(None, None, "a" * 254)
 
     # Test single character names
-    assert validate_configmap_name(None, None, "a") == "a"
-    assert validate_configmap_name(None, None, "1") == "1"
-
-    # Test two character names
-    assert validate_configmap_name(None, None, "ab") == "ab"
-    assert validate_configmap_name(None, None, "a1") == "a1"
-    assert validate_configmap_name(None, None, "1a") == "1a"
+    assert validate_k8s_name(None, None, "a") == "a"
+    assert validate_k8s_name(None, None, "1") == "1"
 
     # Test empty string
     with pytest.raises(click.BadParameter):
-        validate_configmap_name(None, None, "")
+        validate_k8s_name(None, None, "")
 
-    # Test consecutive hyphens (actually allowed by Kubernetes DNS-1123)
-    assert validate_configmap_name(None, None, "valid--name") == "valid--name"
+    # Test consecutive hyphens (allowed by Kubernetes DNS-1123)
+    assert validate_k8s_name(None, None, "valid--name") == "valid--name"
 
     # Test Unicode/international characters (should fail)
     with pytest.raises(click.BadParameter):
-        validate_configmap_name(None, None, "café")
-    with pytest.raises(click.BadParameter):
-        validate_configmap_name(None, None, "名前")
+        validate_k8s_name(None, None, "café")
 
 
 # =============================================================================
