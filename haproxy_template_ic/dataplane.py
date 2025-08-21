@@ -10,6 +10,7 @@ This module provides functionality to:
 Uses the complete generated HAProxy Dataplane API v3 client for all operations.
 """
 
+import hashlib
 import logging
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -36,7 +37,7 @@ from haproxy_template_ic.tracing import (
 
 # Import HAProxy Dataplane API v3 client with built-in lazy loading support
 from haproxy_dataplane_v3 import ApiClient, Configuration
-from haproxy_dataplane_v3.api import ConfigurationApi, InformationApi
+from haproxy_dataplane_v3.api import ConfigurationApi, InformationApi, StorageApi
 from haproxy_dataplane_v3.exceptions import ApiException, BadRequestException
 
 logger = logging.getLogger(__name__)
@@ -497,6 +498,109 @@ class DataplaneClient:
             "Unexpected error in deployment", endpoint=self.base_url, operation="deploy"
         )
 
+    def _calculate_content_hash(self, content: str) -> str:
+        """Calculate SHA256 hash of content for change detection."""
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    async def get_general_files(self) -> List[Dict[str, Any]]:
+        """Get list of all general-purpose files from HAProxy storage."""
+        try:
+            async with ApiClient(self._get_configuration()) as api_client:
+                storage_api = StorageApi(api_client)
+                files = await storage_api.get_all_storage_general_files(
+                    _request_timeout=self.timeout
+                )
+
+                # Convert to dict format for easier processing
+                return [
+                    {
+                        "storage_name": file.storage_name,
+                        "description": file.description,
+                        "size": file.size,
+                        "id": file.id,
+                    }
+                    for file in files
+                ]
+        except Exception as e:
+            logger.error(f"Failed to get general files from {self.base_url}: {e}")
+            raise DataplaneAPIError(
+                f"Failed to get general files: {e}",
+                endpoint=self.base_url,
+                operation="get_general_files",
+                original_error=e,
+            ) from e
+
+    async def create_general_file(
+        self, name: str, content: str, description: Optional[str] = None
+    ) -> None:
+        """Create a new general-purpose file in HAProxy storage."""
+        if description is None:
+            description = self._calculate_content_hash(content)
+
+        try:
+            async with ApiClient(self._get_configuration()) as api_client:
+                storage_api = StorageApi(api_client)
+                # Create file with content and hash in description
+                await storage_api.create_storage_general_file(
+                    file_upload=(name, content.encode("utf-8")),
+                    _request_timeout=self.timeout,
+                )
+                logger.debug(f"✅ Created general file {name}")
+        except Exception as e:
+            logger.error(f"Failed to create general file {name}: {e}")
+            raise DataplaneAPIError(
+                f"Failed to create general file {name}: {e}",
+                endpoint=self.base_url,
+                operation="create_general_file",
+                original_error=e,
+            ) from e
+
+    async def replace_general_file(
+        self, name: str, content: str, description: Optional[str] = None
+    ) -> None:
+        """Replace an existing general-purpose file in HAProxy storage."""
+        if description is None:
+            description = self._calculate_content_hash(content)
+
+        try:
+            async with ApiClient(self._get_configuration()) as api_client:
+                storage_api = StorageApi(api_client)
+                # Replace file with new content and hash in description
+                await storage_api.replace_storage_general_file(
+                    name=name,
+                    file_upload=(name, content.encode("utf-8")),
+                    skip_reload=True,  # We'll reload with configuration later
+                    _request_timeout=self.timeout,
+                )
+                logger.debug(f"✅ Updated general file {name}")
+        except Exception as e:
+            logger.error(f"Failed to replace general file {name}: {e}")
+            raise DataplaneAPIError(
+                f"Failed to replace general file {name}: {e}",
+                endpoint=self.base_url,
+                operation="replace_general_file",
+                original_error=e,
+            ) from e
+
+    async def delete_general_file(self, name: str) -> None:
+        """Delete a general-purpose file from HAProxy storage."""
+        try:
+            async with ApiClient(self._get_configuration()) as api_client:
+                storage_api = StorageApi(api_client)
+                await storage_api.delete_storage_general_file(
+                    name=name,
+                    _request_timeout=self.timeout,
+                )
+                logger.debug(f"✅ Deleted general file {name}")
+        except Exception as e:
+            logger.error(f"Failed to delete general file {name}: {e}")
+            raise DataplaneAPIError(
+                f"Failed to delete general file {name}: {e}",
+                endpoint=self.base_url,
+                operation="delete_general_file",
+                original_error=e,
+            ) from e
+
 
 class ConfigSynchronizer:
     """Simple configuration synchronizer for HAProxy instances."""
@@ -513,6 +617,57 @@ class ConfigSynchronizer:
         self.credentials = credentials
         self.deployment_history = deployment_history or DeploymentHistory()
 
+    async def _sync_general_files(
+        self, client: DataplaneClient, rendered_files: List[Dict[str, str]]
+    ) -> None:
+        """Synchronize general-purpose files to a specific endpoint."""
+        # Get existing files
+        try:
+            existing_files = await client.get_general_files()
+            existing_files_dict = {
+                f["storage_name"]: f["description"] for f in existing_files
+            }
+        except Exception as e:
+            logger.warning(f"Could not get existing files, assuming empty: {e}")
+            existing_files_dict = {}
+
+        # Track files we want to keep
+        target_files = set()
+
+        # Create or update files that need changes
+        for file_info in rendered_files:
+            file_path = file_info["path"]
+            content = file_info["content"]
+            content_hash = client._calculate_content_hash(content)
+
+            # Extract just the filename from the path for storage_name
+            # e.g., "/etc/haproxy/errors/500.http" -> "500.http"
+            storage_name = file_path.split("/")[-1]
+            target_files.add(storage_name)
+
+            existing_hash = existing_files_dict.get(storage_name)
+
+            if existing_hash != content_hash:
+                # File doesn't exist or content has changed
+                if storage_name in existing_files_dict:
+                    logger.info(f"📝 Updating general file {storage_name}")
+                    await client.replace_general_file(
+                        storage_name, content, content_hash
+                    )
+                else:
+                    logger.info(f"📄 Creating general file {storage_name}")
+                    await client.create_general_file(
+                        storage_name, content, content_hash
+                    )
+            else:
+                logger.debug(f"✅ General file {storage_name} unchanged")
+
+        # Delete files that are no longer needed
+        for storage_name in existing_files_dict:
+            if storage_name not in target_files:
+                logger.info(f"🗑️ Deleting general file {storage_name}")
+                await client.delete_general_file(storage_name)
+
     async def sync_configuration(
         self, config_context: HAProxyConfigContext
     ) -> Dict[str, Any]:
@@ -522,9 +677,13 @@ class ConfigSynchronizer:
 
         config = config_context.rendered_config.content
 
-        # Step 1: Validate at localhost
-        logger.info(f"Validating configuration at {self.validation_url}")
+        # Prepare rendered files for synchronization
+        rendered_files = [
+            {"path": rf.path, "content": rf.content}
+            for rf in config_context.rendered_files
+        ]
 
+        # Step 1: Sync general files to validation instance first
         validation_client = DataplaneClient(
             self.validation_url,
             auth=(
@@ -533,13 +692,22 @@ class ConfigSynchronizer:
             ),
         )
 
+        if rendered_files:
+            logger.info(
+                f"Syncing {len(rendered_files)} general files to validation instance"
+            )
+            await self._sync_general_files(validation_client, rendered_files)
+
+        # Step 2: Validate configuration at localhost
+        logger.info(f"Validating configuration at {self.validation_url}")
+
         try:
             await validation_client.validate_configuration(config)
         except Exception as e:
             logger.error(f"Validation failed: {e}")
             raise ValidationError(f"Configuration validation failed: {e}") from e
 
-        # Step 2: Deploy to production instances
+        # Step 3: Deploy to production instances
         results: Dict[str, Any] = {"successful": 0, "failed": 0, "errors": []}
 
         for url in self.production_urls:
@@ -551,6 +719,11 @@ class ConfigSynchronizer:
                 ),
             )
             try:
+                # Sync general files first, then deploy configuration
+                if rendered_files:
+                    logger.info(f"Syncing {len(rendered_files)} general files to {url}")
+                    await self._sync_general_files(client, rendered_files)
+
                 version = await client.deploy_configuration(config)
                 self.deployment_history.record(url, version, True)
                 results["successful"] += 1

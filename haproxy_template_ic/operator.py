@@ -33,6 +33,7 @@ from haproxy_template_ic.config_models import (
     PodSelector,
     RenderedCertificate,
     RenderedConfig,
+    RenderedFile,
     RenderedMap,
     TemplateContext,
     config_from_dict,
@@ -403,6 +404,7 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     memo.haproxy_config_context.rendered_maps.clear()
     memo.haproxy_config_context.rendered_config = None
     memo.haproxy_config_context.rendered_certificates.clear()
+    memo.haproxy_config_context.rendered_files.clear()
 
     # Create a new template context instance each time
     template_context = TemplateContext(
@@ -512,6 +514,36 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             logger.error(
                 f"❌ Failed to render certificate template for {cert_path}: {e}"
             )
+
+    # Render each general-purpose file template
+    for file_path, file_config in memo.config.files.items():
+        try:
+            with trace_template_render("file", file_path):
+                with metrics.time_template_render("file"):
+                    rendered_content = memo.template_renderer.render(
+                        file_config.template, **template_vars
+                    )
+            rendered_file = RenderedFile(
+                path=file_path,
+                content=rendered_content,
+                file_config=file_config,
+            )
+            memo.haproxy_config_context.rendered_files.append(rendered_file)
+            metrics.record_template_render("file", "success")
+            add_span_attributes(
+                file_path=file_path,
+                file_size=len(rendered_content),
+            )
+            record_span_event("file_rendered", {"path": file_path})
+            logger.debug(f"✅ Rendered file template for {file_path}")
+        except Exception as e:
+            metrics.record_template_render("file", "error")
+            metrics.record_error("template_render_failed", "operator")
+            record_span_event(
+                "file_render_failed",
+                {"path": file_path, "error": str(e)},
+            )
+            logger.error(f"❌ Failed to render file template for {file_path}: {e}")
 
     # Log validation errors collected during template rendering
     if validation_errors:

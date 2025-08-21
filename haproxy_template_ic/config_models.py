@@ -163,6 +163,18 @@ class CertificateConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
+class FileConfig(BaseModel):
+    """Configuration for general-purpose files."""
+
+    template: NonEmptyStrictStr = Field(
+        ..., description="Jinja2 template for the file content"
+    )
+
+    class Config:
+        # Allow Template objects (not JSON serializable but used internally)
+        arbitrary_types_allowed = True
+
+
 class PodSelector(BaseModel):
     """Selector for HAProxy pods."""
 
@@ -193,6 +205,9 @@ class Config(BaseModel):
     )
     certificates: Dict[AbsolutePath, CertificateConfig] = Field(
         default_factory=dict, description="TLS certificates"
+    )
+    files: Dict[AbsolutePath, FileConfig] = Field(
+        default_factory=dict, description="General-purpose files (e.g., error pages)"
     )
     validation_dataplane_url: str = Field(
         default="http://localhost:5555",
@@ -291,6 +306,21 @@ class RenderedCertificate(BaseModel):
     content: str = Field(..., description="Rendered certificate content")
 
     class Config:
+        frozen = True
+
+
+class RenderedFile(BaseModel):
+    """Rendered general-purpose file."""
+
+    path: AbsolutePath = Field(..., description="Absolute path to the file")
+    content: str = Field(..., description="Rendered file content")
+    file_config: Optional["FileConfig"] = Field(
+        None, description="Source file configuration"
+    )
+
+    class Config:
+        # Allow arbitrary types for FileConfig
+        arbitrary_types_allowed = True
         frozen = True
 
 
@@ -479,6 +509,9 @@ class HAProxyConfigContext(BaseModel):
     rendered_certificates: List[RenderedCertificate] = Field(
         default_factory=list, description="Rendered certificates"
     )
+    rendered_files: List[RenderedFile] = Field(
+        default_factory=list, description="Rendered general-purpose files"
+    )
 
     def get_rendered_map_by_path(self, path: str) -> Optional[RenderedMap]:
         """Get a rendered map by its path."""
@@ -494,6 +527,13 @@ class HAProxyConfigContext(BaseModel):
         for cert in self.rendered_certificates:
             if cert.path == path:
                 return cert
+        return None
+
+    def get_rendered_file_by_path(self, path: str) -> Optional[RenderedFile]:
+        """Get a rendered file by its path."""
+        for file in self.rendered_files:
+            if file.path == path:
+                return file
         return None
 
     class Config:
