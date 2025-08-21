@@ -281,28 +281,11 @@ class DataplaneClient:
     def _get_configuration(self):
         """Lazy initialization of Configuration object."""
         if self._configuration is None:
-            logger.error(
-                f"🔧 CRITICAL DEBUG: Creating Configuration for {self.base_url} with username: '{self.auth[0]}', password: '{self.auth[1]}'"
-            )
+            logger.debug(f"Creating dataplane configuration for {self.base_url}")
             self._configuration = Configuration(
                 host=self.base_url,
                 username=self.auth[0],
                 password=self.auth[1],
-            )
-            # Debug: verify auth settings
-            auth_settings = self._configuration.auth_settings()
-            logger.error(
-                f"🔧 CRITICAL DEBUG: Auth settings for {self.base_url}: {list(auth_settings.keys())}"
-            )
-
-            # Debug: Show exactly what this would generate for basic auth
-            import base64
-
-            config_auth_header = base64.b64encode(
-                f"{self.auth[0]}:{self.auth[1]}".encode()
-            ).decode()
-            logger.error(
-                f"🔧 CRITICAL DEBUG: Configuration auth header would be: Basic {config_auth_header}"
             )
         return self._configuration
 
@@ -328,6 +311,14 @@ class DataplaneClient:
             logger.error(f"API error getting version from {self.base_url}: {e}")
             raise DataplaneAPIError(
                 f"Failed to get version: {e}",
+                endpoint=self.base_url,
+                operation="get_version",
+                original_error=e,
+            ) from e
+        except (ConnectionError, TimeoutError, OSError) as e:
+            logger.error(f"Network error getting version from {self.base_url}: {e}")
+            raise DataplaneAPIError(
+                f"Network error: {e}",
                 endpoint=self.base_url,
                 operation="get_version",
                 original_error=e,
@@ -393,11 +384,22 @@ class DataplaneClient:
                         else None,
                         original_error=e,
                     ) from e
-                except Exception as e:
-                    # Handle all other exceptions (network errors, timeouts, etc.)
+                except (ConnectionError, TimeoutError, OSError) as e:
+                    # Handle network-related exceptions
                     record_span_event("validation_failed", {"error": str(e)})
                     set_span_error(e, "Configuration validation failed")
-                    logger.error(f"Dataplane API error during validation: {e}")
+                    logger.error(f"Network error during validation: {e}")
+                    raise DataplaneAPIError(
+                        f"Network error during validation: {e}",
+                        endpoint=self.base_url,
+                        operation="validate",
+                        original_error=e,
+                    ) from e
+                except Exception as e:
+                    # Handle all other unexpected exceptions
+                    record_span_event("validation_failed", {"error": str(e)})
+                    set_span_error(e, "Configuration validation failed")
+                    logger.error(f"Unexpected error during validation: {e}")
                     raise DataplaneAPIError(
                         f"Configuration validation failed: {e}",
                         endpoint=self.base_url,
@@ -511,25 +513,12 @@ class ConfigSynchronizer:
         # Step 1: Validate at localhost
         logger.info(f"Validating configuration at {self.validation_url}")
 
-        # CRITICAL DEBUG: Show exactly what credentials we're using
-        validation_username = self.credentials.validation.username
-        validation_password = self.credentials.validation.password.get_secret_value()
-        logger.error(
-            f"🔐 CRITICAL DEBUG: Using validation credentials: username='{validation_username}', password='{validation_password}'"
-        )
-
-        import base64
-
-        expected_auth_header = base64.b64encode(
-            f"{validation_username}:{validation_password}".encode()
-        ).decode()
-        logger.error(
-            f"🔐 CRITICAL DEBUG: Expected auth header: Basic {expected_auth_header}"
-        )
-
         validation_client = DataplaneClient(
             self.validation_url,
-            auth=(validation_username, validation_password),
+            auth=(
+                self.credentials.validation.username,
+                self.credentials.validation.password.get_secret_value(),
+            ),
         )
 
         try:

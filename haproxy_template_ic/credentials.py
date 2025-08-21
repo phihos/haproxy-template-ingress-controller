@@ -1,8 +1,9 @@
 """Credential management for HAProxy Template IC."""
 
 import base64
+import binascii
 import re
-from typing import Any
+from typing import Any, cast
 
 import click
 from pydantic import BaseModel, Field, SecretStr
@@ -56,8 +57,13 @@ class Credentials(BaseModel):
             raise ValueError(f"Missing/invalid credential fields: {missing}")
 
         # Create auth objects - vals are guaranteed to be str after None check
-        dataplane_auth = DataplaneAuth(username=vals[0], password=vals[1])  # type: ignore[arg-type]
-        validation_auth = DataplaneAuth(username=vals[2], password=vals[3])  # type: ignore[arg-type]
+        # Type assertions are safe because we've already validated that no values are None
+        dataplane_auth = DataplaneAuth(
+            username=cast(str, vals[0]), password=SecretStr(cast(str, vals[1]))
+        )
+        validation_auth = DataplaneAuth(
+            username=cast(str, vals[2]), password=SecretStr(cast(str, vals[3]))
+        )
 
         return cls(dataplane=dataplane_auth, validation=validation_auth)
 
@@ -77,7 +83,7 @@ def _decode_field(val: Any) -> str | None:
     if isinstance(val, bytes):
         try:
             return base64.b64decode(val).decode().strip()
-        except Exception:
+        except (binascii.Error, UnicodeDecodeError, ValueError):
             return None
 
     if isinstance(val, str):
@@ -85,7 +91,7 @@ def _decode_field(val: Any) -> str | None:
         # We need to decode them to get the actual credential values
         try:
             return base64.b64decode(val.strip()).decode().strip()
-        except Exception:
+        except (binascii.Error, UnicodeDecodeError, ValueError):
             # If base64 decoding fails, return the original string
             # This handles cases where the value might not be base64-encoded
             return val.strip()

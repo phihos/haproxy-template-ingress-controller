@@ -2402,42 +2402,45 @@ async def test_haproxy_pods_index_no_metadata():
     logger.info.assert_any_call("🔍 Pod test-pod - Phase: Running, IP: 10.0.0.1")
 
 
-@pytest.mark.asyncio  
+@pytest.mark.asyncio
 async def test_handle_haproxy_pod_create():
     """Test haproxy pod create handler."""
     from haproxy_template_ic.operator import handle_haproxy_pod_create
-    
-    body = {
-        "metadata": {
-            "name": "test-pod",
-            "namespace": "test-namespace"
-        }
-    }
-    
+
+    body = {"metadata": {"name": "test-pod", "namespace": "test-namespace"}}
+
     # Should execute without error
-    await handle_haproxy_pod_create(body=body, namespace="test-namespace", name="test-pod")
+    await handle_haproxy_pod_create(
+        body=body, namespace="test-namespace", name="test-pod"
+    )
 
 
 def test_setup_haproxy_pod_indexing():
     """Test HAProxy pod indexing setup."""
     from haproxy_template_ic.operator import setup_haproxy_pod_indexing
-    
+
     memo = MagicMock()
-    memo.config.pod_selector.match_labels = {"app": "haproxy", "component": "loadbalancer"}
-    
+    memo.config.pod_selector.match_labels = {
+        "app": "haproxy",
+        "component": "loadbalancer",
+    }
+
     with patch("haproxy_template_ic.operator.kopf") as mock_kopf:
-        with patch("haproxy_template_ic.operator.get_current_namespace", return_value="test-namespace"):
+        with patch(
+            "haproxy_template_ic.operator.get_current_namespace",
+            return_value="test-namespace",
+        ):
             setup_haproxy_pod_indexing(memo)
-            
+
             # Should call kopf.index for pod indexing
             mock_kopf.index.assert_called()
             mock_kopf.on.create.assert_called()
 
 
-def test_setup_resource_watchers():
-    """Test resource watchers setup."""
+def test_setup_resource_watchers_additional():
+    """Test resource watchers setup with additional scenarios."""
     from haproxy_template_ic.operator import setup_resource_watchers
-    
+
     memo = MagicMock()
     watch_config = MagicMock()
     watch_config.kind = "Ingress"
@@ -2445,11 +2448,11 @@ def test_setup_resource_watchers():
     watch_config.version = "v1"
     memo.config.watched_resources = {"ingresses": watch_config}
     memo.config.pod_selector.match_labels = {"app": "haproxy"}
-    
+
     with patch("haproxy_template_ic.operator.kopf") as mock_kopf:
         with patch("haproxy_template_ic.operator.setup_haproxy_pod_indexing"):
             setup_resource_watchers(memo)
-            
+
             # Should call kopf.index and kopf.on.event
             mock_kopf.index.assert_called()
             mock_kopf.on.event.assert_called()
@@ -2458,7 +2461,7 @@ def test_setup_resource_watchers():
 def test_setup_resource_watchers_no_group():
     """Test resource watchers setup without group/version."""
     from haproxy_template_ic.operator import setup_resource_watchers
-    
+
     memo = MagicMock()
     watch_config = MagicMock()
     watch_config.kind = "ConfigMap"
@@ -2466,11 +2469,11 @@ def test_setup_resource_watchers_no_group():
     watch_config.version = None
     memo.config.watched_resources = {"configmaps": watch_config}
     memo.config.pod_selector.match_labels = {"app": "haproxy"}
-    
+
     with patch("haproxy_template_ic.operator.kopf") as mock_kopf:
         with patch("haproxy_template_ic.operator.setup_haproxy_pod_indexing"):
             setup_resource_watchers(memo)
-            
+
             # Should call kopf.index and kopf.on.event for core resources
             mock_kopf.index.assert_called()
             mock_kopf.on.event.assert_called()
@@ -2480,25 +2483,27 @@ def test_setup_resource_watchers_no_group():
 async def test_fetch_secret():
     """Test secret fetching."""
     from haproxy_template_ic.operator import fetch_secret
-    
+
     mock_secret = MagicMock()
-    
+
     with patch("haproxy_template_ic.operator.Secret") as mock_secret_class:
         mock_secret_class.get = AsyncMock(return_value=mock_secret)
-        
+
         result = await fetch_secret("test-secret", "test-namespace")
         assert result == mock_secret
-        mock_secret_class.get.assert_called_once_with("test-secret", namespace="test-namespace")
+        mock_secret_class.get.assert_called_once_with(
+            "test-secret", namespace="test-namespace"
+        )
 
 
 @pytest.mark.asyncio
 async def test_fetch_secret_failure():
     """Test secret fetching failure."""
     from haproxy_template_ic.operator import fetch_secret
-    
+
     with patch("haproxy_template_ic.operator.Secret") as mock_secret_class:
         mock_secret_class.get = AsyncMock(side_effect=Exception("Secret not found"))
-        
+
         with pytest.raises(kopf.PermanentError, match="Failed to retrieve Secret"):
             await fetch_secret("test-secret", "test-namespace")
 
@@ -2507,10 +2512,10 @@ async def test_fetch_secret_failure():
 async def test_handle_secret_change():
     """Test secret change handling."""
     from haproxy_template_ic.operator import handle_secret_change
-    
+
     memo = MagicMock()
     memo.credentials = MagicMock()
-    
+
     event = {
         "object": {
             "data": {
@@ -2521,31 +2526,27 @@ async def test_handle_secret_change():
             }
         }
     }
-    
+
     logger = MagicMock()
-    
+
     await handle_secret_change(
-        memo=memo,
-        event=event,
-        name="test-secret",
-        type="MODIFIED",
-        logger=logger
+        memo=memo, event=event, name="test-secret", type="MODIFIED", logger=logger
     )
-    
+
     # Should log the change - the actual call uses structured logging
     # Check that info was called (the exact message uses structured logging)
 
 
-def test_trigger_reload():
-    """Test trigger reload function."""
+def test_trigger_reload_additional():
+    """Test trigger reload function with additional coverage."""
     from haproxy_template_ic.operator import trigger_reload
-    
+
     memo = MagicMock()
     memo.config_reload_flag = MagicMock()
     memo.stop_flag = MagicMock()
-    
+
     trigger_reload(memo)
-    
+
     memo.config_reload_flag.set_result.assert_called_once_with(None)
     memo.stop_flag.set_result.assert_called_once_with(None)
 
@@ -2553,46 +2554,35 @@ def test_trigger_reload():
 def test_is_valid_resource():
     """Test resource validation."""
     from haproxy_template_ic.operator import _is_valid_resource
-    
+
     # Valid dict resource
-    valid_dict = {
-        "metadata": {
-            "name": "test",
-            "namespace": "default"
-        }
-    }
+    valid_dict = {"metadata": {"name": "test", "namespace": "default"}}
     assert _is_valid_resource(valid_dict) is True
-    
+
     # Invalid dict - missing name
-    invalid_dict = {
-        "metadata": {
-            "namespace": "default"
-        }
-    }
+    invalid_dict = {"metadata": {"namespace": "default"}}
     assert _is_valid_resource(invalid_dict) is False
-    
+
     # Invalid dict - metadata not dict
-    invalid_dict2 = {
-        "metadata": "not a dict"
-    }
+    invalid_dict2 = {"metadata": "not a dict"}
     assert _is_valid_resource(invalid_dict2) is False
-    
+
     # Valid list
     valid_list = ["item1", "item2"]
     assert _is_valid_resource(valid_list) is True
-    
+
     # Empty list
     empty_list = []
     assert _is_valid_resource(empty_list) is False
-    
+
     # Object with __dict__
     class TestObj:
         def __init__(self):
             self.name = "test"
-    
+
     test_obj = TestObj()
     assert _is_valid_resource(test_obj) is True
-    
+
     # Invalid primitive
     assert _is_valid_resource("string") is False
     assert _is_valid_resource(123) is False

@@ -306,35 +306,35 @@ class TestNormalizeDataplaneUrl:
     def test_normalize_url_without_v3(self):
         """Test URL normalization adds /v3."""
         from haproxy_template_ic.dataplane import normalize_dataplane_url
-        
+
         result = normalize_dataplane_url("http://localhost:5555")
         assert result == "http://localhost:5555/v3"
 
     def test_normalize_url_with_trailing_slash(self):
         """Test URL normalization with trailing slash."""
         from haproxy_template_ic.dataplane import normalize_dataplane_url
-        
+
         result = normalize_dataplane_url("http://localhost:5555/")
         assert result == "http://localhost:5555/v3"
 
     def test_normalize_url_already_has_v3(self):
         """Test URL normalization when /v3 already exists."""
         from haproxy_template_ic.dataplane import normalize_dataplane_url
-        
+
         result = normalize_dataplane_url("http://localhost:5555/v3")
         assert result == "http://localhost:5555/v3"
 
     def test_normalize_url_with_query_params(self):
         """Test URL normalization preserves query parameters."""
         from haproxy_template_ic.dataplane import normalize_dataplane_url
-        
+
         result = normalize_dataplane_url("http://localhost:5555?timeout=30")
         assert result == "http://localhost:5555/v3?timeout=30"
 
     def test_normalize_url_with_path_and_query(self):
         """Test URL normalization with existing path and query parameters."""
         from haproxy_template_ic.dataplane import normalize_dataplane_url
-        
+
         result = normalize_dataplane_url("https://api.example.com/haproxy?auth=token")
         assert result == "https://api.example.com/haproxy/v3?auth=token"
 
@@ -349,9 +349,9 @@ class TestValidationErrorClass:
             endpoint="http://test:5555",
             config_size=1024,
             validation_details="Missing global section",
-            original_error=Exception("Parse error")
+            original_error=Exception("Parse error"),
         )
-        
+
         assert str(error).startswith("Config invalid")
         assert "endpoint=http://test:5555" in str(error)
         assert "config_size=1024" in str(error)
@@ -362,7 +362,7 @@ class TestValidationErrorClass:
     def test_validation_error_minimal(self):
         """Test ValidationError with minimal parameters."""
         error = ValidationError("Config invalid")
-        
+
         assert str(error) == "Config invalid [operation=validate]"
         assert error.operation == "validate"
 
@@ -377,9 +377,9 @@ class TestDataplaneAPIErrorClass:
             "Request failed",
             endpoint="http://test:5555",
             operation="get_version",
-            original_error=original
+            original_error=original,
         )
-        
+
         assert "Request failed" in str(error)
         assert "operation=get_version" in str(error)
         assert "endpoint=http://test:5555" in str(error)
@@ -390,7 +390,7 @@ class TestDataplaneAPIErrorClass:
     def test_dataplane_api_error_minimal(self):
         """Test DataplaneAPIError with minimal parameters."""
         error = DataplaneAPIError("Request failed")
-        
+
         assert str(error) == "Request failed"
         assert error.endpoint is None
         assert error.operation is None
@@ -403,7 +403,7 @@ class TestDataplaneClientInitialization:
     def test_client_init_default_auth(self):
         """Test client initialization with default auth."""
         client = DataplaneClient("http://test:5555")
-        
+
         assert client.base_url == "http://test:5555/v3"
         assert client.timeout == 30.0
         assert client.auth == ("admin", "adminpass")
@@ -411,11 +411,9 @@ class TestDataplaneClientInitialization:
     def test_client_init_custom_auth(self):
         """Test client initialization with custom auth."""
         client = DataplaneClient(
-            "http://test:5555",
-            timeout=60.0,
-            auth=("user", "pass")
+            "http://test:5555", timeout=60.0, auth=("user", "pass")
         )
-        
+
         assert client.base_url == "http://test:5555/v3"
         assert client.timeout == 60.0
         assert client.auth == ("user", "pass")
@@ -423,14 +421,14 @@ class TestDataplaneClientInitialization:
     def test_client_lazy_configuration(self):
         """Test lazy configuration initialization."""
         client = DataplaneClient("http://test:5555")
-        
+
         # Configuration should be None initially
         assert client._configuration is None
-        
+
         # First call should create configuration
         config1 = client._get_configuration()
         assert client._configuration is not None
-        
+
         # Second call should return same instance
         config2 = client._get_configuration()
         assert config1 is config2
@@ -503,17 +501,19 @@ class TestProductionUrlExtraction:
             },
             ("default", "haproxy-4"): {
                 "status": {"phase": "Running", "podIP": "192.168.1.14"},
-                "metadata": {"annotations": {"haproxy-template-ic/dataplane-port": "9999"}},
+                "metadata": {
+                    "annotations": {"haproxy-template-ic/dataplane-port": "9999"}
+                },
             },
         }
-        
+
         urls = get_production_urls_from_index(indexed_pods)
-        
+
         # Should only include running pods with IPs
         assert len(urls) == 2
         assert "http://192.168.1.10:5555" in urls
         assert "http://192.168.1.14:9999" in urls
-        
+
         # Should not include pending or pods without IPs
         assert "http://192.168.1.11:5555" not in urls
 
@@ -533,9 +533,9 @@ class TestProductionUrlExtraction:
                 "metadata": {"annotations": {}},
             },
         }
-        
+
         urls = get_production_urls_from_index(indexed_pods)
-        
+
         # Should return consistent results
         assert len(urls) == 3
         assert "http://192.168.1.11:5555" in urls
@@ -549,21 +549,21 @@ class TestDeploymentHistoryDetailed:
     def test_record_failure_then_success(self):
         """Test recording failure followed by success."""
         history = DeploymentHistory()
-        
+
         # Record failure
         history.record("http://test:5555", "v1.0", False, "Deploy failed")
         data = history.to_dict()
-        
+
         entry = data["deployment_history"]["http://test:5555"]
         assert entry["version"] is None  # No successful version yet
         assert entry["success"] is False
         assert entry["last_attempt"] == "v1.0"
         assert entry["error"] == "Deploy failed"
-        
+
         # Record success
         history.record("http://test:5555", "v1.1", True)
         data = history.to_dict()
-        
+
         entry = data["deployment_history"]["http://test:5555"]
         assert entry["version"] == "v1.1"  # Now has successful version
         assert entry["success"] is True
@@ -573,12 +573,12 @@ class TestDeploymentHistoryDetailed:
     def test_multiple_endpoints(self):
         """Test recording for multiple endpoints."""
         history = DeploymentHistory()
-        
+
         history.record("http://test1:5555", "v1.0", True)
         history.record("http://test2:5555", "v1.0", False, "Network error")
-        
+
         data = history.to_dict()
         assert len(data["deployment_history"]) == 2
-        
+
         assert data["deployment_history"]["http://test1:5555"]["success"] is True
         assert data["deployment_history"]["http://test2:5555"]["success"] is False

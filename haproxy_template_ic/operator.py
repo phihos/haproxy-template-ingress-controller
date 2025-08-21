@@ -167,6 +167,11 @@ async def fetch_configmap(name: str, namespace: str) -> Any:
         result = await ConfigMap.get(name, namespace=namespace)
         record_span_event("configmap_fetched")
         return result
+    except (ConnectionError, TimeoutError) as e:
+        record_span_event("configmap_fetch_failed", {"error": str(e)})
+        raise kopf.TemporaryError(
+            f'Network error retrieving ConfigMap "{name}": {e}'
+        ) from e
     except Exception as e:
         record_span_event("configmap_fetch_failed", {"error": str(e)})
         raise kopf.TemporaryError(f'Failed to retrieve ConfigMap "{name}": {e}') from e
@@ -182,6 +187,11 @@ async def fetch_secret(name: str, namespace: str) -> Any:
         result = await Secret.get(name, namespace=namespace)
         record_span_event("secret_fetched")
         return result
+    except (ConnectionError, TimeoutError) as e:
+        record_span_event("secret_fetch_failed", {"error": str(e)})
+        raise kopf.TemporaryError(
+            f'Network error retrieving Secret "{name}": {e}'
+        ) from e
     except Exception as e:
         record_span_event("secret_fetch_failed", {"error": str(e)})
         raise kopf.PermanentError(

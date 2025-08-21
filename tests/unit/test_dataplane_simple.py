@@ -16,7 +16,6 @@ from haproxy_template_ic.dataplane import (
     get_production_urls_from_index,
     normalize_dataplane_url,
 )
-from haproxy_template_ic.config_models import HAProxyConfigContext
 
 
 class TestNormalizeDataplaneUrlComplete:
@@ -135,9 +134,9 @@ class TestProductionUrlExtractionComplete:
                 "metadata": {"annotations": {}},
             },
         }
-        
+
         urls = get_production_urls_from_index(indexed_pods)
-        
+
         # URLs should be deterministic (not necessarily sorted, but consistent)
         assert len(urls) == 3
         assert "http://192.168.1.11:5555" in urls
@@ -158,9 +157,7 @@ class TestDataplaneClientSimple:
     def test_client_initialization_custom(self):
         """Test client with custom parameters."""
         client = DataplaneClient(
-            "http://test:8888/v3",
-            timeout=60.0,
-            auth=("user", "pass")
+            "http://test:8888/v3", timeout=60.0, auth=("user", "pass")
         )
         assert client.base_url == "http://test:8888/v3"
         assert client.timeout == 60.0
@@ -169,14 +166,14 @@ class TestDataplaneClientSimple:
     def test_client_configuration_lazy_loading(self):
         """Test configuration lazy loading."""
         client = DataplaneClient("http://test:5555")
-        
+
         # Initially configuration should be None
         assert client._configuration is None
-        
+
         # First call creates configuration
         config1 = client._get_configuration()
         assert client._configuration is not None
-        
+
         # Second call returns same instance
         config2 = client._get_configuration()
         assert config1 is config2
@@ -193,15 +190,15 @@ class TestConfigSynchronizerSimple:
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
             validation=DataplaneAuth(username="admin", password="validationpass"),
         )
-        
+
         production_urls = ["http://192.168.1.1:5555", "http://192.168.1.2:5555"]
-        
+
         synchronizer = ConfigSynchronizer(
             production_urls=production_urls,
             validation_url="http://localhost:5555",
             credentials=credentials,
         )
-        
+
         assert synchronizer.production_urls == production_urls
         assert synchronizer.validation_url == "http://localhost:5555"
         assert synchronizer.credentials == credentials
@@ -215,7 +212,7 @@ class TestConfigSynchronizerSimple:
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
             validation=DataplaneAuth(username="admin", password="validationpass"),
         )
-        
+
         synchronizer = ConfigSynchronizer(
             production_urls=["http://192.168.1.1:5555"],
             validation_url="http://localhost:5555",
@@ -225,7 +222,9 @@ class TestConfigSynchronizerSimple:
         context = Mock()
         context.rendered_config = None
 
-        with pytest.raises(DataplaneAPIError, match="No rendered HAProxy configuration"):
+        with pytest.raises(
+            DataplaneAPIError, match="No rendered HAProxy configuration"
+        ):
             await synchronizer.sync_configuration(context)
 
 
@@ -236,7 +235,7 @@ class TestDeploymentHistoryComplete:
         """Test empty history initialization."""
         history = DeploymentHistory()
         assert history._history == {}
-        
+
         data = history.to_dict()
         assert "deployment_history" in data
         assert data["deployment_history"] == {}
@@ -268,14 +267,14 @@ class TestDeploymentHistoryComplete:
     def test_record_failure_then_success(self):
         """Test recording failure followed by success."""
         history = DeploymentHistory()
-        
+
         # Record failure first
         history.record("http://test:5555", "v1.0", False, "Deploy failed")
         data = history.to_dict()
         entry = data["deployment_history"]["http://test:5555"]
         assert entry["version"] is None
         assert entry["success"] is False
-        
+
         # Then record success
         history.record("http://test:5555", "v1.1", True)
         data = history.to_dict()
@@ -287,13 +286,13 @@ class TestDeploymentHistoryComplete:
     def test_multiple_endpoints(self):
         """Test tracking multiple endpoints."""
         history = DeploymentHistory()
-        
+
         history.record("http://test1:5555", "v1.0", True)
         history.record("http://test2:5555", "v1.0", False, "Network error")
-        
+
         data = history.to_dict()
         assert len(data["deployment_history"]) == 2
-        
+
         assert data["deployment_history"]["http://test1:5555"]["success"] is True
         assert data["deployment_history"]["http://test2:5555"]["success"] is False
 
@@ -316,9 +315,9 @@ class TestExceptionClasses:
             "Request failed",
             endpoint="http://test:5555",
             operation="deploy_config",
-            original_error=original
+            original_error=original,
         )
-        
+
         error_str = str(error)
         assert "Request failed" in error_str
         assert "operation=deploy_config" in error_str
@@ -338,9 +337,9 @@ class TestExceptionClasses:
             endpoint="http://validation:5555",
             config_size=1024,
             validation_details="Missing global section",
-            original_error=Exception("Parse error")
+            original_error=Exception("Parse error"),
         )
-        
+
         error_str = str(error)
         assert "Config invalid" in error_str
         assert "endpoint=http://validation:5555" in error_str
