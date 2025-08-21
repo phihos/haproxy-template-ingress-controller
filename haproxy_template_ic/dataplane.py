@@ -71,7 +71,13 @@ def normalize_dataplane_url(base_url: str) -> str:
         >>> normalize_dataplane_url("https://api.example.com/haproxy/")
         'https://api.example.com/haproxy/v3'
     """
-    parsed = urlparse(base_url)
+    try:
+        parsed = urlparse(base_url)
+    except ValueError:
+        # If URL parsing fails, append /v3 to the raw URL as fallback
+        if not base_url.endswith("/v3"):
+            return f"{base_url.rstrip('/')}/v3"
+        return base_url
 
     # Handle path normalization
     path = parsed.path.rstrip("/")
@@ -79,16 +85,22 @@ def normalize_dataplane_url(base_url: str) -> str:
         path = f"{path}/v3"
 
     # Reconstruct the URL with normalized path
-    return urlunparse(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
+    try:
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            )
         )
-    )
+    except ValueError:
+        # If reconstruction fails, use simple string concatenation
+        if not base_url.endswith("/v3"):
+            return f"{base_url.rstrip('/')}/v3"
+        return base_url
 
 
 class DataplaneAPIError(Exception):

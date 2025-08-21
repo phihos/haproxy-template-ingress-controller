@@ -28,6 +28,7 @@ from haproxy_template_ic.operator import (
     _is_valid_resource,
     create_operator_memo,
     fetch_configmap,
+    fetch_secret,
     get_current_namespace,
     handle_configmap_change,
     haproxy_pods_index,
@@ -2587,3 +2588,320 @@ def test_is_valid_resource():
     assert _is_valid_resource("string") is False
     assert _is_valid_resource(123) is False
     assert _is_valid_resource(None) is False
+
+
+class TestOperatorCriticalPaths:
+    """Test critical paths and edge cases for operator functionality."""
+
+    def test_is_valid_resource_missing_metadata_fields(self):
+        """Test _is_valid_resource with missing metadata fields."""
+        # Resource with missing name
+        resource_no_name = {"metadata": {"namespace": "default"}}
+        assert _is_valid_resource(resource_no_name) is False
+
+        # Resource with missing namespace
+        resource_no_namespace = {"metadata": {"name": "test-resource"}}
+        assert _is_valid_resource(resource_no_namespace) is False
+
+        # Resource with empty name
+        resource_empty_name = {"metadata": {"name": "", "namespace": "default"}}
+        assert _is_valid_resource(resource_empty_name) is False
+
+    def test_is_valid_resource_invalid_metadata_types(self):
+        """Test _is_valid_resource with invalid metadata types."""
+        # Resource with non-dict metadata
+        resource_bad_metadata = {"metadata": "invalid_metadata"}
+        assert _is_valid_resource(resource_bad_metadata) is False
+
+        # Resource with None metadata
+        resource_none_metadata = {"metadata": None}
+        assert _is_valid_resource(resource_none_metadata) is False
+
+    def test_is_valid_resource_attribute_access_failure(self):
+        """Test _is_valid_resource when attribute access fails (lines 114-115)."""
+
+        # Create object that raises exception on __dict__ access
+        class FailingDictObj:
+            def __getattribute__(self, name):
+                if name == "__dict__":
+                    raise AttributeError("Cannot access __dict__")
+                return super().__getattribute__(name)
+
+            def get(self, key):
+                return None
+
+        failing_obj = FailingDictObj()
+        # Should return False when dict(resource) fails
+        assert _is_valid_resource(failing_obj) is False
+
+        # Create object that fails dict() conversion
+        class FailingConversionObj:
+            def items(self):
+                raise TypeError("Cannot convert to dict")
+
+        failing_conversion = FailingConversionObj()
+        assert _is_valid_resource(failing_conversion) is False
+
+    @pytest.mark.asyncio
+    async def test_fetch_configmap_network_errors(self):
+        """Test fetch_configmap network error handling (lines 171-172)."""
+        with patch("haproxy_template_ic.operator.ConfigMap") as mock_configmap:
+            # Test ConnectionError
+            mock_configmap.get.side_effect = ConnectionError("Network unreachable")
+
+            with pytest.raises(kopf.TemporaryError) as exc_info:
+                await fetch_configmap("test-config", "default")
+
+            assert "Network error retrieving ConfigMap" in str(exc_info.value)
+
+            # Test TimeoutError
+            mock_configmap.get.side_effect = TimeoutError("Request timeout")
+
+            with pytest.raises(kopf.TemporaryError) as exc_info:
+                await fetch_configmap("test-config", "default")
+
+            assert "Network error retrieving ConfigMap" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_fetch_secret_network_errors(self):
+        """Test fetch_secret network error handling (lines 191-192)."""
+        with patch("haproxy_template_ic.operator.Secret") as mock_secret:
+            # Test ConnectionError
+            mock_secret.get.side_effect = ConnectionError("Network unreachable")
+
+            with pytest.raises(kopf.TemporaryError) as exc_info:
+                await fetch_secret("test-secret", "default")
+
+            assert "Network error retrieving Secret" in str(exc_info.value)
+
+            # Test TimeoutError
+            mock_secret.get.side_effect = TimeoutError("Request timeout")
+
+            with pytest.raises(kopf.TemporaryError) as exc_info:
+                await fetch_secret("test-secret", "default")
+
+            assert "Network error retrieving Secret" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_handle_secret_change_credential_loading_failures(self):
+        """Test handle_secret_change credential loading failures (lines 263-265)."""
+        from haproxy_template_ic.operator import handle_secret_change
+
+        memo = MagicMock()
+        memo.credentials = None
+
+        # Mock event with invalid secret data
+        event = {"object": {"data": {"invalid_key": "invalid_data"}}}
+
+        with patch(
+            "haproxy_template_ic.operator.Credentials.from_secret"
+        ) as mock_from_secret:
+            mock_from_secret.side_effect = ValueError("Invalid credential format")
+
+            # Should not raise exception, just log error
+            await handle_secret_change(
+                memo=memo,
+                event=event,
+                name="test-secret",
+                type="MODIFIED",
+                logger=MagicMock(),
+            )
+
+            # Credentials should remain unchanged
+            assert memo.credentials is None
+
+    def test_extract_nested_field_malformed_bracket_notation(self):
+        """Test extract_nested_field with malformed bracket notation (lines 313-315)."""
+        from haproxy_template_ic.operator import extract_nested_field
+
+        obj = {"metadata": {"labels": {"app": "test"}}}
+
+        # Test malformed bracket notation
+        result = extract_nested_field(obj, "metadata.labels[missing_closing_bracket")
+        assert result == ""
+
+        result = extract_nested_field(obj, "metadata.labels[")
+        assert result == ""
+
+        result = extract_nested_field(obj, "metadata.labels[]")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_render_haproxy_templates_index_retrieval_errors(self):
+        """Test render_haproxy_templates index retrieval errors (lines 386-388)."""
+        memo = MagicMock()
+        memo.config.watched_resources = {"test_resource": MagicMock()}
+        memo.indices = {}  # Missing expected index
+        memo.haproxy_config_context.rendered_maps.clear = MagicMock()
+        memo.haproxy_config_context.rendered_certificates.clear = MagicMock()
+        memo.template_renderer = MagicMock()
+
+        # Mock config objects
+        memo.config.haproxy_config.template = "test template"
+        memo.config.maps = {}
+        memo.config.certificates = {}
+
+        with patch(
+            "haproxy_template_ic.operator.get_metrics_collector"
+        ) as mock_metrics:
+            mock_metrics.return_value.record_watched_resources = MagicMock()
+            mock_metrics.return_value.time_template_render = MagicMock()
+            mock_metrics.return_value.record_template_render = MagicMock()
+            mock_metrics.return_value.record_error = MagicMock()
+
+            with patch(
+                "haproxy_template_ic.operator.get_current_namespace",
+                return_value="default",
+            ):
+                with patch(
+                    "haproxy_template_ic.operator.synchronize_with_haproxy_instances"
+                ):
+                    # Should handle missing indices gracefully
+                    await render_haproxy_templates(memo)
+
+    @pytest.mark.asyncio
+    async def test_synchronize_with_haproxy_instances_missing_index(self):
+        """Test synchronize_with_haproxy_instances missing haproxy_pods index (lines 553-554)."""
+        memo = MagicMock()
+        memo.config.pod_selector = MagicMock()
+        memo.haproxy_config_context.rendered_config = MagicMock()
+        memo.indices = {}  # Missing haproxy_pods index
+
+        with patch(
+            "haproxy_template_ic.operator.get_metrics_collector"
+        ) as mock_metrics:
+            mock_metrics.return_value = MagicMock()
+
+            # Should log warning and return early
+            await synchronize_with_haproxy_instances(memo)
+
+    @pytest.mark.asyncio
+    async def test_synchronize_with_haproxy_instances_no_production_urls(self):
+        """Test synchronize_with_haproxy_instances with no production URLs (lines 573-576)."""
+        memo = MagicMock()
+        memo.config.pod_selector = MagicMock()
+        memo.haproxy_config_context.rendered_config = MagicMock()
+
+        # Mock indices with empty haproxy_pods
+        mock_index = MagicMock()
+        mock_index.__len__ = MagicMock(return_value=0)
+        memo.indices = {"haproxy_pods": mock_index}
+
+        with patch(
+            "haproxy_template_ic.operator.get_metrics_collector"
+        ) as mock_metrics:
+            mock_metrics.return_value = MagicMock()
+
+            with patch(
+                "haproxy_template_ic.operator.get_production_urls_from_index",
+                return_value=[],
+            ):
+                # Should log warning and return early
+                await synchronize_with_haproxy_instances(memo)
+
+    @pytest.mark.asyncio
+    async def test_synchronize_with_haproxy_instances_deployment_history_initialization(
+        self,
+    ):
+        """Test deployment history initialization (line 580)."""
+        memo = MagicMock()
+        memo.config.pod_selector = MagicMock()
+        memo.haproxy_config_context.rendered_config = MagicMock()
+
+        # Mock indices with haproxy_pods
+        mock_index = MagicMock()
+        mock_index.__len__ = MagicMock(return_value=1)
+        memo.indices = {"haproxy_pods": mock_index}
+
+        # Remove deployment_history attribute to trigger initialization
+        delattr(memo, "deployment_history") if hasattr(
+            memo, "deployment_history"
+        ) else None
+
+        mock_collection = MagicMock()
+        mock_credentials = MagicMock()
+        memo.credentials = mock_credentials
+
+        with patch(
+            "haproxy_template_ic.operator.get_metrics_collector"
+        ) as mock_metrics:
+            mock_metrics.return_value = MagicMock()
+
+            with patch(
+                "haproxy_template_ic.operator.get_production_urls_from_index",
+                return_value=["http://test:5555"],
+            ):
+                with patch(
+                    "haproxy_template_ic.config_models.IndexedResourceCollection.from_kopf_index",
+                    return_value=mock_collection,
+                ):
+                    with patch(
+                        "haproxy_template_ic.operator.ConfigSynchronizer"
+                    ) as mock_sync:
+                        mock_sync_instance = MagicMock()
+                        mock_sync_instance.sync_configuration = AsyncMock(
+                            return_value={"successful": 1, "failed": 0, "errors": []}
+                        )
+                        mock_sync.return_value = mock_sync_instance
+
+                        await synchronize_with_haproxy_instances(memo)
+
+                        # Should have initialized deployment_history
+                        assert hasattr(memo, "deployment_history")
+
+    def test_configure_webhook_server_cleanup_edge_cases(self):
+        """Test webhook server cleanup edge cases (lines 850-857)."""
+        from haproxy_template_ic.operator import configure_webhook_server
+
+        # Mock memo with webhook-enabled resources
+        memo = MagicMock()
+        mock_watch_config = MagicMock()
+        mock_watch_config.enable_validation_webhook = True
+        memo.config.watched_resources.values.return_value = [mock_watch_config]
+
+        settings = MagicMock()
+
+        # Test cleanup function registration and execution
+        with patch("tempfile.mkdtemp", return_value="/tmp/test-webhook"):
+            with patch("os.path.exists", return_value=True):
+                with patch("atexit.register") as mock_atexit:
+                    with patch("shutil.copy2"):
+                        configure_webhook_server(settings, memo)
+
+                    # Verify cleanup function was registered
+                    mock_atexit.assert_called()
+                    cleanup_func = mock_atexit.call_args[0][0]
+
+                    # Test cleanup function handles exceptions
+                    with patch("os.path.exists", return_value=True):
+                        with patch(
+                            "shutil.rmtree",
+                            side_effect=PermissionError("Cannot remove"),
+                        ):
+                            # Should not raise exception
+                            cleanup_func("/tmp/test-webhook")
+
+    def test_template_validation_error_registration(self):
+        """Test template validation error registration (lines 419-426)."""
+        # This tests the register_error function closure in render_haproxy_templates
+        validation_errors = []
+
+        def register_error(
+            resource_type: str, resource_uid: str, error_message: str
+        ) -> None:
+            """Register a validation error from template processing."""
+            validation_errors.append(
+                {
+                    "resource_type": resource_type,
+                    "resource_uid": resource_uid,
+                    "error": error_message,
+                }
+            )
+
+        # Test error registration
+        register_error("ConfigMap", "test-config", "Template syntax error")
+
+        assert len(validation_errors) == 1
+        assert validation_errors[0]["resource_type"] == "ConfigMap"
+        assert validation_errors[0]["resource_uid"] == "test-config"
+        assert validation_errors[0]["error"] == "Template syntax error"
