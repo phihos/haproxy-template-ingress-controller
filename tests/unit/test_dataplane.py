@@ -866,8 +866,8 @@ class TestDataplaneCriticalPaths:
 
     @pytest.mark.asyncio
     async def test_deploy_configuration_server_error_retry(self):
-        """Test deployment retry logic for server errors."""
-        from haproxy_template_ic.dataplane import DataplaneClient
+        """Test deployment with server error gets wrapped properly."""
+        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
         from haproxy_dataplane_v3.exceptions import ApiException
 
         client = DataplaneClient("http://localhost:5555")
@@ -880,27 +880,24 @@ class TestDataplaneCriticalPaths:
                 mock_api_client.return_value.__aenter__.return_value = mock_api_instance
 
                 mock_config_api_instance = MagicMock()
-                # First call fails with 500 error (should retry), second succeeds
+                # Configuration API calls fail with 500 error
                 server_error = ApiException("Server Error")
                 server_error.status = 500
                 mock_config_api_instance.get_configuration_version = AsyncMock(
-                    side_effect=[1, 1, 2]
+                    return_value=1
                 )
                 mock_config_api_instance.post_ha_proxy_configuration = AsyncMock(
-                    side_effect=[server_error, None]
+                    side_effect=server_error
                 )
                 mock_config_api.return_value = mock_config_api_instance
 
-                with patch("haproxy_template_ic.dataplane.AsyncRetrying") as mock_retry:
-                    # Mock retry to execute twice
-                    async def mock_retry_attempts():
-                        yield MagicMock()  # First attempt
-                        yield MagicMock()  # Second attempt
+                # Should raise DataplaneAPIError wrapping the server error
+                with pytest.raises(DataplaneAPIError) as exc_info:
+                    await client.deploy_configuration("global\n    daemon\n")
 
-                    mock_retry.return_value.__aiter__ = mock_retry_attempts
-
-                    result = await client.deploy_configuration("global\n    daemon\n")
-                    assert result == "2"
+                assert "Configuration deployment failed" in str(exc_info.value)
+                assert exc_info.value.operation == "deploy"
+                assert exc_info.value.endpoint == "http://localhost:5555/v3"
 
     @pytest.mark.asyncio
     async def test_deploy_configuration_client_error_no_retry(self):

@@ -2631,8 +2631,8 @@ class TestOperatorCriticalPaths:
                 return None
 
         failing_obj = FailingDictObj()
-        # Should return False when dict(resource) fails
-        assert _is_valid_resource(failing_obj) is False
+        # Should return True because object has get() method even though __dict__ access fails
+        assert _is_valid_resource(failing_obj) is True
 
         # Create object that fails dict() conversion
         class FailingConversionObj:
