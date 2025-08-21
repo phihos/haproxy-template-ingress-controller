@@ -121,7 +121,7 @@ data:
           {% endif %}
           {% endfor %}
     maps:
-      /etc/haproxy/maps/path-exact.map:
+      path-exact.map:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           # It should be used with the equality string matcher. Example:
@@ -130,14 +130,14 @@ data:
           {% set suffix = "" %}
           {% include "path-map-entry" %}
 
-      /etc/haproxy/maps/path-prefix-exact.map:
+      path-prefix-exact.map:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           {% set path_types = ["Prefix", "ImplementationSpecific"] %}
           {% set suffix = "" %}
           {% include "path-map-entry" %}
 
-      /etc/haproxy/maps/path-prefix.map:
+      path-prefix.map:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           # It should be used with the prefix string matcher. Example:
@@ -149,7 +149,7 @@ data:
       
     
     certificates:
-      /etc/haproxy/certs/tls.pem:
+      tls.pem:
         template: |
           {# Generate combined cert+key file for HAProxy from TLS secrets using indexed lookup #}
           {% for secret in resources.get('secrets', {}).get_indexed('default', 'kubernetes.io/tls') %}
@@ -162,7 +162,7 @@ data:
           {% endfor %}
 
     files:
-      /etc/haproxy/errors/400.http:
+      400.http:
         template: |
           HTTP/1.0 400 Bad Request
           Cache-Control: no-cache
@@ -173,7 +173,7 @@ data:
           <p>Your browser sent a request that this server could not understand.</p>
           </body></html>
 
-      /etc/haproxy/errors/403.http:
+      403.http:
         template: |
           HTTP/1.0 403 Forbidden
           Cache-Control: no-cache
@@ -184,7 +184,7 @@ data:
           <p>You don't have permission to access this resource.</p>
           </body></html>
 
-      /etc/haproxy/errors/408.http:
+      408.http:
         template: |
           HTTP/1.0 408 Request Time-out
           Cache-Control: no-cache
@@ -195,7 +195,7 @@ data:
           <p>Your browser didn't send a complete request in time.</p>
           </body></html>
 
-      /etc/haproxy/errors/500.http:
+      500.http:
         template: |
           HTTP/1.0 500 Internal Server Error
           Cache-Control: no-cache
@@ -206,7 +206,7 @@ data:
           <p>An internal server error occurred.</p>
           </body></html>
 
-      /etc/haproxy/errors/502.http:
+      502.http:
         template: |
           HTTP/1.0 502 Bad Gateway
           Cache-Control: no-cache
@@ -217,7 +217,7 @@ data:
           <p>The server received an invalid response from an upstream server.</p>
           </body></html>
 
-      /etc/haproxy/errors/503.http:
+      503.http:
         template: |
           HTTP/1.0 503 Service Unavailable
           Cache-Control: no-cache
@@ -228,7 +228,7 @@ data:
           <p>No server is available to handle this request.</p>
           </body></html>
 
-      /etc/haproxy/errors/504.http:
+      504.http:
         template: |
           HTTP/1.0 504 Gateway Time-out
           Cache-Control: no-cache
@@ -264,13 +264,13 @@ data:
             timeout connect 5000
             timeout client 50000
             timeout server 50000
-            errorfile 400 /etc/haproxy/errors/400.http
-            errorfile 403 /etc/haproxy/errors/403.http
-            errorfile 408 /etc/haproxy/errors/408.http
-            errorfile 500 /etc/haproxy/errors/500.http
-            errorfile 502 /etc/haproxy/errors/502.http
-            errorfile 503 /etc/haproxy/errors/503.http
-            errorfile 504 /etc/haproxy/errors/504.http
+            errorfile 400 {{ "400.http" | get_path("file") }}
+            errorfile 403 {{ "403.http" | get_path("file") }}
+            errorfile 408 {{ "408.http" | get_path("file") }}
+            errorfile 500 {{ "500.http" | get_path("file") }}
+            errorfile 502 {{ "502.http" | get_path("file") }}
+            errorfile 503 {{ "503.http" | get_path("file") }}
+            errorfile 504 {{ "504.http" | get_path("file") }}
 
         frontend health
             bind *:8404
@@ -281,7 +281,7 @@ data:
             redirect scheme https code 301 if !{ ssl_fc }
 
         frontend https_frontend
-            bind *:443 ssl crt /etc/haproxy/certs/tls.pem
+            bind *:443 ssl crt {{ "tls.pem" | get_path("certificate") }}
 
             # Set a few variables
             http-request set-var(txn.base) base

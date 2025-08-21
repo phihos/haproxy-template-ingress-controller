@@ -5,13 +5,11 @@ from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.config_models import (
     Config,
     WatchResourceConfig,
-    MapConfig,
-    CertificateConfig,
+    TemplateConfig,
     PodSelector,
     config_from_dict,
-    RenderedMap,
+    RenderedContent,
     RenderedConfig,
-    RenderedCertificate,
     TemplateContext,
     HAProxyConfigContext,
 )
@@ -79,10 +77,10 @@ def ensure_auth_fields_REMOVED(config_dict):
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
-                    "/etc/haproxy/maps/path-prefix.map": {
+                    "path-prefix.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     },
-                    "/etc/haproxy/maps/backend-servers.map": {
+                    "backend-servers.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     },
                 },
@@ -103,7 +101,7 @@ def ensure_auth_fields_REMOVED(config_dict):
                     }
                 },
                 "maps": {
-                    "/etc/haproxy/maps/path-prefix.map": {
+                    "path-prefix.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     }
                 },
@@ -194,14 +192,14 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
-                    "/etc/haproxy/maps/path-prefix.map": {
+                    "path-prefix.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     }
                 },
             },
             {
-                "name": "/etc/haproxy/maps/path-prefix.map",
-                "path": "/etc/haproxy/maps/path-prefix.map",
+                "name": "path-prefix.map",
+                "filename": "path-prefix.map",
                 "template": "server {{ name }} {{ ip }}:{{ port }}",
                 "expected_rendered": "server test-server 192.168.1.1:8080",
             },
@@ -211,14 +209,14 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
-                    "/etc/haproxy/maps/backend-servers.map": {
+                    "backend-servers.map": {
                         "template": "server {{ name }} {{ ip }}:{{ port }}",
                     }
                 },
             },
             {
-                "name": "/etc/haproxy/maps/backend-servers.map",
-                "path": "/etc/haproxy/maps/backend-servers.map",
+                "name": "backend-servers.map",
+                "filename": "backend-servers.map",
                 "template": "server {{ name }} {{ ip }}:{{ port }}",
                 "expected_rendered": "server test-server 192.168.1.1:8080",
             },
@@ -228,14 +226,14 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
                 "pod_selector": {"match_labels": {"app": "myapp"}},
                 "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
-                    "/var/log/app.log": {
+                    "app.log": {
                         "template": "log_format {{ format }};",
                     }
                 },
             },
             {
-                "name": "/var/log/app.log",
-                "path": "/var/log/app.log",
+                "name": "app.log",
+                "filename": "app.log",
                 "template": "log_format {{ format }};",
                 "expected_rendered": "log_format combined;",
             },
@@ -243,15 +241,17 @@ def test_watch_resources_structure(config_dict, expected_watch_resource):
     ],
 )
 def test_maps_structure(config_dict, expected_map):
-    """Test that maps are properly structured as MapConfig objects."""
+    """Test that maps are properly structured as TemplateConfig objects."""
     config = config_from_dict(config_dict.copy())
 
-    # Find the map config by path in the dictionary
-    target_path = expected_map["name"]
-    assert target_path in config.maps, f"Map with path {target_path} not found"
+    # Find the map config by filename in the dictionary
+    target_filename = expected_map["name"]
+    assert target_filename in config.maps, (
+        f"Map with filename {target_filename} not found"
+    )
 
-    map_config = config.maps[target_path]
-    assert isinstance(map_config, MapConfig)
+    map_config = config.maps[target_filename]
+    assert isinstance(map_config, TemplateConfig)
     # Template should be compilable with the new API
     compiled_template = TemplateRenderer.from_config(config).get_compiled(
         map_config.template
@@ -310,7 +310,7 @@ def test_maps_structure(config_dict, expected_map):
         {
             "pod_selector": {"match_labels": {"app": "myapp"}},
             "maps": {
-                "/etc/haproxy/maps/test.map": {
+                "test.map": {
                     "template": "server {{ name",
                 }
             },
@@ -318,7 +318,7 @@ def test_maps_structure(config_dict, expected_map):
         {
             "pod_selector": {"match_labels": {"app": "myapp"}},
             "maps": {
-                "/etc/haproxy/maps/test.map": {
+                "test.map": {
                     "template": "server {{ unknown_var }",
                 }
             },
@@ -326,7 +326,7 @@ def test_maps_structure(config_dict, expected_map):
         {
             "pod_selector": {"match_labels": {"app": "myapp"}},
             "maps": {
-                "/etc/haproxy/maps/test.map": {
+                "test.map": {
                     "template": "server {% if name %}",
                 }
             },
@@ -344,26 +344,25 @@ def test_invalid_configs(config_dict):
         config_from_dict(config_dict.copy())
 
 
-# RenderedMap Tests
+# RenderedContent Tests
 def test_rendered_map_creation():
-    """Test RenderedMap dataclass creation."""
-    map_config = MapConfig(template="test {{ name }}")
-    rendered_map = RenderedMap(
-        path="/etc/haproxy/maps/test.map", content="test content", map_config=map_config
+    """Test RenderedContent creation."""
+    rendered_map = RenderedContent(
+        filename="test.map", content="test content", content_type="map"
     )
 
-    assert rendered_map.path == "/etc/haproxy/maps/test.map"
+    assert rendered_map.filename == "test.map"
     assert rendered_map.content == "test content"
-    assert rendered_map.map_config == map_config
 
 
 def test_rendered_map_is_frozen():
-    """Test that RenderedMap is immutable."""
-    map_config = MapConfig(template="test")
-    rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
+    """Test that RenderedContent is immutable."""
+    rendered_map = RenderedContent(
+        filename="test", content="content", content_type="map"
+    )
 
     with pytest.raises((AttributeError, ValidationError)):
-        rendered_map.path = "/new/path"
+        rendered_map.filename = "new_file"
 
 
 # TemplateContext Tests
@@ -421,7 +420,7 @@ def test_haproxy_config_context_creation():
 
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
@@ -433,8 +432,9 @@ def test_haproxy_config_context_creation():
 
 def test_haproxy_config_context_with_custom_data():
     """Test HAProxyConfigContext with custom rendered maps."""
-    map_config = MapConfig(template="test")
-    rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
+    rendered_map = RenderedContent(
+        filename="test.map", content="content", content_type="map"
+    )
     rendered_maps = [rendered_map]
 
     # Create required config and template_context
@@ -442,13 +442,13 @@ def test_haproxy_config_context_with_custom_data():
 
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
 
     context = HAProxyConfigContext(
-        config=config, template_context=template_context, rendered_maps=rendered_maps
+        config=config, template_context=template_context, rendered_content=rendered_maps
     )
 
     assert context.rendered_maps == rendered_maps
@@ -460,19 +460,21 @@ def test_haproxy_config_context_mutable():
 
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
 
     context = HAProxyConfigContext(config=config, template_context=template_context)
-    map_config = MapConfig(template="test")
-    rendered_map = RenderedMap(path="/test", content="content", map_config=map_config)
+    rendered_content = RenderedContent(
+        filename="test", content="content", content_type="map"
+    )
 
-    # Should be able to modify rendered_maps
-    context.rendered_maps.append(rendered_map)
-    assert len(context.rendered_maps) == 1
-    assert context.rendered_maps[0] == rendered_map
+    # Should be able to modify rendered_content
+    context.rendered_content.append(rendered_content)
+    context._clear_cache()  # Clear cache when adding new content
+    assert len(context.rendered_content) == 1
+    assert context.rendered_content[0] == rendered_content
 
 
 # RenderedConfig Tests
@@ -496,7 +498,7 @@ def test_haproxy_config_context_with_rendered_config():
     """Test HAProxyConfigContext with rendered config."""
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
@@ -516,7 +518,7 @@ def test_haproxy_config_context_default_rendered_config():
     """Test HAProxyConfigContext default rendered_config is None."""
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
@@ -526,57 +528,57 @@ def test_haproxy_config_context_default_rendered_config():
     assert context.rendered_maps == []
 
 
-# RenderedCertificate Tests
+# RenderedContent Tests
 def test_rendered_certificate_creation():
-    """Test RenderedCertificate dataclass creation."""
-    rendered_certificate = RenderedCertificate(
-        path="/etc/haproxy/certs/test.pem", content="cert content"
+    """Test RenderedContent dataclass creation."""
+    rendered_certificate = RenderedContent(
+        filename="test.pem", content="cert content", content_type="certificate"
     )
 
-    assert rendered_certificate.path == "/etc/haproxy/certs/test.pem"
+    assert rendered_certificate.filename == "test.pem"
     assert rendered_certificate.content == "cert content"
 
 
 def test_rendered_certificate_frozen():
-    """Test that RenderedCertificate is frozen (immutable)."""
-    rendered_certificate = RenderedCertificate(
-        path="/etc/haproxy/certs/test.pem", content="cert content"
+    """Test that RenderedContent is frozen (immutable)."""
+    rendered_certificate = RenderedContent(
+        filename="test.pem", content="cert content", content_type="certificate"
     )
 
     # Should not be able to modify fields (Pydantic immutability)
     with pytest.raises(ValidationError):
-        rendered_certificate.path = "/new/path.pem"
+        rendered_certificate.filename = "new_file.pem"
 
 
 def test_haproxy_config_context_with_rendered_certificates():
     """Test HAProxyConfigContext with rendered certificates."""
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
 
-    rendered_certificate = RenderedCertificate(
-        path="/etc/haproxy/certs/test.pem", content="cert content"
+    rendered_certificate = RenderedContent(
+        filename="test.pem", content="cert content", content_type="certificate"
     )
 
     context = HAProxyConfigContext(
         config=config,
         template_context=template_context,
-        rendered_certificates=[rendered_certificate],
+        rendered_content=[rendered_certificate],
     )
 
     assert len(context.rendered_certificates) == 1
     assert context.rendered_certificates[0] == rendered_certificate
-    assert context.rendered_certificates[0].path == "/etc/haproxy/certs/test.pem"
+    assert context.rendered_certificates[0].filename == "test.pem"
 
 
 def test_haproxy_config_context_default_rendered_certificates():
     """Test HAProxyConfigContext default rendered_certificates is empty list."""
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
@@ -618,21 +620,21 @@ def test_watch_resource_collection_by_id():
 
 def test_map_collection_by_path():
     """Test map collection access by path key."""
-    from haproxy_template_ic.config_models import MapConfig
+    from haproxy_template_ic.config_models import TemplateConfig
 
     maps = {
-        "/etc/haproxy/maps/backend.map": MapConfig(template="backend map"),
-        "/etc/haproxy/maps/path.map": MapConfig(template="path map"),
-        "/etc/haproxy/maps/host.map": MapConfig(template="host map"),
+        "backend.map": TemplateConfig(template="backend map"),
+        "path.map": TemplateConfig(template="path map"),
+        "host.map": TemplateConfig(template="host map"),
     }
 
     # Test successful lookup
-    found = maps.get("/etc/haproxy/maps/path.map")
+    found = maps.get("path.map")
     assert found is not None
     assert found.template == "path map"
 
     # Test not found
-    not_found = maps.get("/nonexistent.map")
+    not_found = maps.get("nonexistent.map")
     assert not_found is None
 
     # Test empty collection
@@ -670,18 +672,18 @@ def test_certificate_collection_by_name():
     """Test certificate collection access by path (dict-based)."""
 
     certificates = {
-        "/etc/haproxy/certs/tls.pem": CertificateConfig(template="tls cert"),
-        "/etc/haproxy/certs/ca.pem": CertificateConfig(template="ca cert"),
-        "/etc/haproxy/certs/server.pem": CertificateConfig(template="server cert"),
+        "tls.pem": TemplateConfig(template="tls cert"),
+        "ca.pem": TemplateConfig(template="ca cert"),
+        "server.pem": TemplateConfig(template="server cert"),
     }
 
     # Test successful lookup
-    found = certificates.get("/etc/haproxy/certs/ca.pem")
+    found = certificates.get("ca.pem")
     assert found is not None
     assert found.template == "ca cert"
 
     # Test not found
-    not_found = certificates.get("/etc/haproxy/certs/nonexistent.pem")
+    not_found = certificates.get("nonexistent.pem")
     assert not_found is None
 
     # Test empty collection
@@ -694,7 +696,7 @@ def test_template_context_get_methods():
     from haproxy_template_ic.config_models import (
         TemplateContext,
         Config,
-        MapConfig,
+        TemplateConfig,
         TemplateSnippet,
         PodSelector,
         WatchResourceConfig,
@@ -703,12 +705,12 @@ def test_template_context_get_methods():
     # Create config with collections for testing
     test_config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
-        maps={"/test.map": MapConfig(template="test")},
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
+        maps={"test.map": TemplateConfig(template="test")},
         template_snippets={
             "test-snippet": TemplateSnippet(name="test-snippet", template="snippet")
         },
-        certificates={"/test.pem": CertificateConfig(template="cert")},
+        certificates={"test.pem": TemplateConfig(template="cert")},
         watched_resources={"test": WatchResourceConfig(api_version="v1", kind="Pod")},
     )
 
@@ -716,16 +718,16 @@ def test_template_context_get_methods():
     assert test_config.template_snippets.get("test-snippet") is not None
     assert test_config.template_snippets.get("test-snippet").name == "test-snippet"
 
-    assert test_config.maps.get("/test.map") is not None
-    assert test_config.maps.get("/test.map").template == "test"
+    assert test_config.maps.get("test.map") is not None
+    assert test_config.maps.get("test.map").template == "test"
 
-    assert test_config.certificates.get("/test.pem") is not None
-    assert test_config.certificates.get("/test.pem").template == "cert"
+    assert test_config.certificates.get("test.pem") is not None
+    assert test_config.certificates.get("test.pem").template == "cert"
 
     # Test not found
     assert test_config.template_snippets.get("nonexistent") is None
-    assert test_config.maps.get("/nonexistent.map") is None
-    assert test_config.certificates.get("/nonexistent.pem") is None
+    assert test_config.maps.get("nonexistent.map") is None
+    assert test_config.certificates.get("nonexistent.pem") is None
 
     # Test basic template context functionality
     from haproxy_template_ic.config_models import IndexedResourceCollection
@@ -787,10 +789,10 @@ def test_parse_maps_errors():
         {
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
-            "maps": {"/test": {"template": "simple_template"}},
+            "maps": {"test": {"template": "simple_template"}},
         }
     )
-    assert config.maps["/test"].template == "simple_template"
+    assert config.maps["test"].template == "simple_template"
 
     # Test that missing template field raises validation error
     with pytest.raises(ValueError, match="Field required"):
@@ -798,7 +800,7 @@ def test_parse_maps_errors():
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "maps": {"/test": {}},
+                "maps": {"test": {}},
             }
         )
 
@@ -952,15 +954,15 @@ def test_list_format_parsing():
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
             "maps": {
-                "/test1.map": {"template": "test1"},
-                "/test2.map": {"template": "test2"},
+                "test1.map": {"template": "test1"},
+                "test2.map": {"template": "test2"},
             },
         }
     )
 
     assert len(config.maps) == 2
-    assert config.maps.get("/test1.map") is not None
-    assert config.maps.get("/test2.map") is not None
+    assert config.maps.get("test1.map") is not None
+    assert config.maps.get("test2.map") is not None
 
     # Test template_snippets dict format
     config = config_from_dict(
@@ -984,15 +986,15 @@ def test_list_format_parsing():
             "pod_selector": {"match_labels": {"app": "test"}},
             "haproxy_config": {"template": "global\n    daemon"},
             "certificates": {
-                "/etc/haproxy/certs/cert1.pem": {"template": "test1"},
-                "/etc/haproxy/certs/cert2.pem": {"template": "test2"},
+                "cert1.pem": {"template": "test1"},
+                "cert2.pem": {"template": "test2"},
             },
         }
     )
 
     assert len(config.certificates) == 2
-    assert config.certificates.get("/etc/haproxy/certs/cert1.pem") is not None
-    assert config.certificates.get("/etc/haproxy/certs/cert2.pem") is not None
+    assert config.certificates.get("cert1.pem") is not None
+    assert config.certificates.get("cert2.pem") is not None
 
     # Test watched_resources dict format
     config = config_from_dict(
@@ -1023,13 +1025,13 @@ def test_list_format_errors():
             }
         )
 
-    # Test map path validation (relative paths not allowed)
+    # Test map filename validation (filenames with forward slashes not allowed)
     with pytest.raises(ValueError):
         config_from_dict(
             {
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
-                "maps": {"relative": {"template": "test"}},
+                "maps": {"relative/path.conf": {"template": "test"}},
             }
         )
 
@@ -1070,11 +1072,7 @@ def test_template_snippet_basic_include():
                 "template": "server {{ name }} {{ ip }}:{{ port }} check",
             }
         },
-        "maps": {
-            "/etc/haproxy/maps/backends.map": {
-                "template": "{% include 'ingress-backends' %}"
-            }
-        },
+        "maps": {"backends.map": {"template": "{% include 'ingress-backends' %}"}},
     }
 
     config = config_from_dict(config_dict.copy())
@@ -1086,7 +1084,7 @@ def test_template_snippet_basic_include():
     assert snippet.name == "ingress-backends"
 
     # Test that map template can include the snippet
-    map_config = config.maps.get("/etc/haproxy/maps/backends.map")
+    map_config = config.maps.get("backends.map")
     assert map_config is not None
 
     # Render the template with snippet inclusion using the new API
@@ -1116,7 +1114,7 @@ def test_template_snippet_multiple_includes():
             },
         },
         "maps": {
-            "/etc/haproxy/maps/backend.map": {
+            "backend.map": {
                 "template": "{% include 'backend-header' %}\n{% include 'server-entry' %}\n{% include 'backend-footer' %}"
             }
         },
@@ -1128,7 +1126,7 @@ def test_template_snippet_multiple_includes():
     assert len(config.template_snippets) == 3
 
     # Render the template with multiple snippet inclusions
-    map_config = config.maps.get("/etc/haproxy/maps/backend.map")
+    map_config = config.maps.get("backend.map")
     rendered = (
         TemplateRenderer.from_config(config)
         .get_compiled(map_config.template)
@@ -1151,7 +1149,7 @@ def test_template_snippet_with_variables():
             }
         },
         "maps": {
-            "/etc/haproxy/maps/weighted.map": {
+            "weighted.map": {
                 "template": "{% for server in servers %}{% with name=server.name, ip=server.ip, port=server.port, weight=server.weight %}{% include 'server-with-weight' %}{% endwith %}\n{% endfor %}"
             }
         },
@@ -1159,7 +1157,7 @@ def test_template_snippet_with_variables():
 
     config = config_from_dict(config_dict.copy())
 
-    map_config = config.maps.get("/etc/haproxy/maps/weighted.map")
+    map_config = config.maps.get("weighted.map")
     servers = [
         {"name": "web-1", "ip": "192.168.1.10", "port": "80", "weight": 150},
         {"name": "web-2", "ip": "192.168.1.11", "port": "80"},
@@ -1190,14 +1188,12 @@ def test_template_snippet_nested_includes():
                 "template": "{% include 'server-base' %} {% include 'health-check' %}",
             },
         },
-        "maps": {
-            "/etc/haproxy/maps/servers.map": {"template": "{% include 'server-full' %}"}
-        },
+        "maps": {"servers.map": {"template": "{% include 'server-full' %}"}},
     }
 
     config = config_from_dict(config_dict.copy())
 
-    map_config = config.maps.get("/etc/haproxy/maps/servers.map")
+    map_config = config.maps.get("servers.map")
     rendered = (
         TemplateRenderer.from_config(config)
         .get_compiled(map_config.template)
@@ -1216,16 +1212,12 @@ def test_template_snippet_not_found_error():
         "template_snippets": {
             "existing-snippet": {"name": "existing-snippet", "template": "some content"}
         },
-        "maps": {
-            "/etc/haproxy/maps/error.map": {
-                "template": "{% include 'non-existent-snippet' %}"
-            }
-        },
+        "maps": {"error.map": {"template": "{% include 'non-existent-snippet' %}"}},
     }
 
     config = config_from_dict(config_dict.copy())
 
-    map_config = config.maps.get("/etc/haproxy/maps/error.map")
+    map_config = config.maps.get("error.map")
 
     # Should raise TemplateNotFound when trying to render
     from jinja2 import TemplateNotFound
@@ -1239,11 +1231,7 @@ def test_template_snippet_empty_collection():
     config_dict = {
         "pod_selector": {"match_labels": {"app": "test"}},
         "haproxy_config": {"template": "global\n    daemon"},
-        "maps": {
-            "/etc/haproxy/maps/no-snippets.map": {
-                "template": "plain template without includes"
-            }
-        },
+        "maps": {"no-snippets.map": {"template": "plain template without includes"}},
     }
 
     config = config_from_dict(config_dict.copy())
@@ -1252,7 +1240,7 @@ def test_template_snippet_empty_collection():
     assert len(config.template_snippets) == 0
 
     # Template without includes should still work
-    map_config = config.maps.get("/etc/haproxy/maps/no-snippets.map")
+    map_config = config.maps.get("no-snippets.map")
     rendered = (
         TemplateRenderer.from_config(config).get_compiled(map_config.template).render()
     )
@@ -1279,7 +1267,7 @@ def test_template_snippet_complex_example():
             },
         },
         "maps": {
-            "/etc/haproxy/maps/path-exact.map": {
+            "path-exact.map": {
                 "template": "{% for resource_key, resource in resources.ingresses.items() %}{% include 'path-map-entry' %}{% endfor %}"
             }
         },
@@ -1294,7 +1282,7 @@ def test_template_snippet_complex_example():
     assert config.template_snippets.get("server-entry") is not None
 
     # Test the complex template rendering
-    map_config = config.maps.get("/etc/haproxy/maps/path-exact.map")
+    map_config = config.maps.get("path-exact.map")
     assert map_config is not None
 
     # Mock ingress data
@@ -1345,11 +1333,11 @@ def test_template_snippet_update_during_config_reload():
         "template_snippets": {
             "greeting": {"name": "greeting", "template": "Hello {{ name }}"}
         },
-        "maps": {"/test.map": {"template": "{% include 'greeting' %}"}},
+        "maps": {"test.map": {"template": "{% include 'greeting' %}"}},
     }
 
     config_1 = config_from_dict(config_dict_1)
-    map_config_1 = config_1.maps.get("/test.map")
+    map_config_1 = config_1.maps.get("test.map")
     rendered_1 = TemplateRenderer.from_config(config_1).render(
         map_config_1.template, name="World"
     )
@@ -1362,11 +1350,11 @@ def test_template_snippet_update_during_config_reload():
         "template_snippets": {
             "greeting": {"name": "greeting", "template": "Hi {{ name }}!"}
         },
-        "maps": {"/test.map": {"template": "{% include 'greeting' %}"}},
+        "maps": {"test.map": {"template": "{% include 'greeting' %}"}},
     }
 
     config_2 = config_from_dict(config_dict_2)
-    map_config_2 = config_2.maps.get("/test.map")
+    map_config_2 = config_2.maps.get("test.map")
     rendered_2 = TemplateRenderer.from_config(config_2).render(
         map_config_2.template, name="World"
     )
@@ -1443,7 +1431,7 @@ def test_template_compilation():
         "template_snippets": {
             "greeting": {"name": "greeting", "template": "Hello {{ name }}"}
         },
-        "maps": {"/test.map": {"template": "{% include 'greeting' %}"}},
+        "maps": {"test.map": {"template": "{% include 'greeting' %}"}},
     }
 
     config = config_from_dict(config_dict.copy())
@@ -1454,12 +1442,12 @@ def test_template_compilation():
     assert (
         renderer.get_compiled(config.template_snippets["greeting"].template) is not None
     )
-    assert renderer.get_compiled(config.maps["/test.map"].template) is not None
+    assert renderer.get_compiled(config.maps["test.map"].template) is not None
 
     # Test that templates can be rendered
     rendered = (
         TemplateRenderer.from_config(config)
-        .get_compiled(config.maps["/test.map"].template)
+        .get_compiled(config.maps["test.map"].template)
         .render(name="World")
     )
     assert rendered == "Hello World"
@@ -1476,13 +1464,13 @@ def test_b64decode_filter():
     config_dict = {
         "pod_selector": {"match_labels": {"app": "test"}},
         "haproxy_config": {"template": "global\n    daemon"},
-        "maps": {"/test.map": {"template": f"{{{{ '{encoded}' | b64decode }}}}"}},
+        "maps": {"test.map": {"template": f"{{{{ '{encoded}' | b64decode }}}}"}},
     }
 
     config = config_from_dict(config_dict.copy())
     result = (
         TemplateRenderer.from_config(config)
-        .get_compiled(config.maps["/test.map"].template)
+        .get_compiled(config.maps["test.map"].template)
         .render()
     )
     assert result == test_string
@@ -1494,12 +1482,12 @@ def test_b64decode_filter():
     config_dict2 = {
         "pod_selector": {"match_labels": {"app": "test"}},
         "haproxy_config": {"template": "global\n    daemon"},
-        "maps": {"/test2.map": {"template": f"{{{{ '{encoded2}' | b64decode }}}}"}},
+        "maps": {"test2.map": {"template": f"{{{{ '{encoded2}' | b64decode }}}}"}},
     }
 
     config2 = config_from_dict(config_dict2)
     result2 = TemplateRenderer.from_config(config2).render(
-        config2.maps["/test2.map"].template
+        config2.maps["test2.map"].template
     )
     assert result2 == test_string2
 
@@ -1507,13 +1495,13 @@ def test_b64decode_filter():
     config_dict_invalid = {
         "pod_selector": {"match_labels": {"app": "test"}},
         "haproxy_config": {"template": "global\n    daemon"},
-        "maps": {"/invalid.map": {"template": "{{ 'invalid_base64!' | b64decode }}"}},
+        "maps": {"invalid.map": {"template": "{{ 'invalid_base64!' | b64decode }}"}},
     }
 
     config_invalid = config_from_dict(config_dict_invalid)
     with pytest.raises(ValueError, match="Failed to decode base64 value"):
         TemplateRenderer.from_config(config_invalid).render(
-            config_invalid.maps["/invalid.map"].template
+            config_invalid.maps["invalid.map"].template
         )
 
 
@@ -1551,7 +1539,7 @@ def test_type_safety_enhancements():
                 "pod_selector": {"match_labels": {"app": "test"}},
                 "haproxy_config": {"template": "global\n    daemon"},
                 "maps": {
-                    "/test.map": {"template": 123}  # Non-string template
+                    "test.map": {"template": 123}  # Non-string template
                 },
             }
         )
@@ -1576,7 +1564,7 @@ def test_type_safety_enhancements():
                 "haproxy_config": {"template": "global\n    daemon"},
                 "maps": [
                     {
-                        "path": "/test.map",
+                        "filename": "test.map",
                         "template": ["test"],
                     }  # List format not supported
                 ],
@@ -1627,7 +1615,7 @@ def test_host_map_template_rendering():
         "pod_selector": {"match_labels": {"app": "haproxy"}},
         "haproxy_config": {"template": "global\n    daemon"},
         "maps": {
-            "/etc/haproxy/maps/host.map": {
+            "host.map": {
                 "template": """{% for _, ingress in resources.get('ingresses', {}).items() %}
 {% if ingress.spec and ingress.spec.rules %}
 {% for rule in ingress.spec.rules %}
@@ -1672,7 +1660,7 @@ def test_host_map_template_rendering():
     context = TemplateContext(resources=mock_resources)
 
     # Render the host map
-    host_map_config = config.maps.get("/etc/haproxy/maps/host.map")
+    host_map_config = config.maps.get("host.map")
     template_vars = {
         "resources": context.resources,
         "namespace": context.namespace,
@@ -1713,7 +1701,7 @@ def test_complete_ingress_configuration_with_certificates():
         "pod_selector": {"match_labels": {"app": "haproxy"}},
         "haproxy_config": {"template": "global\n    daemon"},
         "certificates": {
-            "/etc/haproxy/certs/tls.pem": {
+            "tls.pem": {
                 "template": """{% for _, secret in resources.get('secrets', {}).items() %}
 {% if secret.type == "kubernetes.io/tls" and secret.metadata.labels.get('haproxy-template-ic/tls') == 'true' %}
 # Certificate for {{ secret.metadata.name }} in {{ secret.metadata.namespace }}
@@ -1750,7 +1738,7 @@ def test_complete_ingress_configuration_with_certificates():
     context = TemplateContext(resources=mock_resources)
 
     # Render the certificate template
-    cert_config = config.certificates.get("/etc/haproxy/certs/tls.pem")
+    cert_config = config.certificates.get("tls.pem")
     template_vars = {
         "resources": context.resources,
         "namespace": context.namespace,
@@ -1777,32 +1765,31 @@ def test_haproxy_config_context_get_rendered_map_by_path():
     """Test getting rendered map by path."""
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
 
-    map_config = MapConfig(template="test")
-    rendered_map1 = RenderedMap(
-        path="/test1.map", content="content1", map_config=map_config
+    rendered_map1 = RenderedContent(
+        filename="test1.map", content="content1", content_type="map"
     )
-    rendered_map2 = RenderedMap(
-        path="/test2.map", content="content2", map_config=map_config
+    rendered_map2 = RenderedContent(
+        filename="test2.map", content="content2", content_type="map"
     )
 
     context = HAProxyConfigContext(
         config=config,
         template_context=template_context,
-        rendered_maps=[rendered_map1, rendered_map2],
+        rendered_content=[rendered_map1, rendered_map2],
     )
 
     # Test finding existing map
-    found_map = context.get_rendered_map_by_path("/test1.map")
+    found_map = context.get_content_by_filename("test1.map")
     assert found_map == rendered_map1
     assert found_map.content == "content1"
 
     # Test not found
-    not_found = context.get_rendered_map_by_path("/nonexistent.map")
+    not_found = context.get_content_by_filename("nonexistent.map")
     assert not_found is None
 
 
@@ -1810,27 +1797,31 @@ def test_haproxy_config_context_get_rendered_certificate_by_path():
     """Test getting rendered certificate by path."""
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
         # Authentication removed - now managed via Kubernetes Secrets
     )
     template_context = TemplateContext()
 
-    cert1 = RenderedCertificate(path="/cert1.pem", content="cert1 content")
-    cert2 = RenderedCertificate(path="/cert2.pem", content="cert2 content")
+    cert1 = RenderedContent(
+        filename="cert1.pem", content="cert1 content", content_type="certificate"
+    )
+    cert2 = RenderedContent(
+        filename="cert2.pem", content="cert2 content", content_type="certificate"
+    )
 
     context = HAProxyConfigContext(
         config=config,
         template_context=template_context,
-        rendered_certificates=[cert1, cert2],
+        rendered_content=[cert1, cert2],
     )
 
     # Test finding existing certificate
-    found_cert = context.get_rendered_certificate_by_path("/cert1.pem")
+    found_cert = context.get_content_by_filename("cert1.pem")
     assert found_cert == cert1
     assert found_cert.content == "cert1 content"
 
     # Test not found
-    not_found = context.get_rendered_certificate_by_path("/nonexistent.pem")
+    not_found = context.get_content_by_filename("nonexistent.pem")
     assert not_found is None
 
 
@@ -1917,3 +1908,261 @@ def test_pod_selector_frozen():
     # Should not be able to modify (frozen dataclass)
     with pytest.raises(ValidationError):
         selector.match_labels = {"app": "modified"}
+
+
+class TestFilenameSecurity:
+    """Security tests for Filename validation to prevent path traversal attacks."""
+
+    def test_filename_validation_valid_cases(self):
+        """Test that valid filenames are accepted."""
+        from haproxy_template_ic.config_models import RenderedContent, ContentType
+
+        valid_filenames = [
+            "host.map",
+            "tls.pem",
+            "error404.http",
+            "host_backend.map",
+            "tls-cert-2024.pem",
+            "error-404.http",
+            "file123.txt",
+            "a",  # Single character
+            "host file.map",  # Spaces allowed
+            "file.with.multiple.dots.map",
+            "файл.map",  # Unicode characters
+            "αρχείο.map",  # Greek characters
+        ]
+
+        for filename in valid_filenames:
+            # Should not raise ValidationError
+            content = RenderedContent(
+                filename=filename, content="test content", content_type=ContentType.MAP
+            )
+            assert content.filename == filename
+
+    def test_filename_validation_path_traversal_blocked(self):
+        """Test that path traversal attempts in filenames are blocked."""
+        from haproxy_template_ic.config_models import RenderedContent, ContentType
+
+        path_traversal_attempts = [
+            "../../../etc/passwd",
+            "..\\..\\..\\windows\\system32\\config\\sam",
+            "host/../../../etc/passwd",
+            "tls/../../etc/passwd",
+            "../../../../../../root/.ssh/id_rsa",
+            "..\\..\\..\\..\\.ssh\\id_rsa",
+            "normal/../../../etc/shadow",
+            "file.map/../../../etc/hosts",
+            "subdir/host.map",
+            "dir\\host.map",
+            "a/b/c/host.map",
+            "dir\\subdir\\host.map",
+            "//host.map",
+            "\\\\host.map",
+        ]
+
+        for malicious_filename in path_traversal_attempts:
+            with pytest.raises(ValidationError, match="String should match pattern"):
+                RenderedContent(
+                    filename=malicious_filename,
+                    content="test content",
+                    content_type=ContentType.MAP,
+                )
+
+    def test_filename_validation_directory_names_blocked(self):
+        """Test that directory names like '.' and '..' are blocked."""
+        from haproxy_template_ic.config_models import RenderedContent, ContentType
+
+        directory_names = [".", ".."]
+
+        for dir_name in directory_names:
+            with pytest.raises(
+                ValidationError, match="Filename cannot be a directory name"
+            ):
+                RenderedContent(
+                    filename=dir_name,
+                    content="test content",
+                    content_type=ContentType.MAP,
+                )
+
+    def test_filename_validation_null_byte_blocked(self):
+        """Test that null byte injection in filenames is blocked."""
+        from haproxy_template_ic.config_models import RenderedContent, ContentType
+
+        null_byte_attempts = [
+            "host.map\x00",
+            "\x00host.map",
+            "host\x00.map",
+            "host.map\x00../../../etc/passwd",
+        ]
+
+        for malicious_filename in null_byte_attempts:
+            with pytest.raises(ValidationError, match="String should match pattern"):
+                RenderedContent(
+                    filename=malicious_filename,
+                    content="test content",
+                    content_type=ContentType.MAP,
+                )
+
+    def test_filename_validation_length_limits(self):
+        """Test filename length validation."""
+        from haproxy_template_ic.config_models import RenderedContent, ContentType
+
+        # Test maximum length (255 characters)
+        max_valid_filename = "a" * 255
+        content = RenderedContent(
+            filename=max_valid_filename,
+            content="test content",
+            content_type=ContentType.MAP,
+        )
+        assert content.filename == max_valid_filename
+
+        # Test exceeding maximum length
+        too_long_filename = "a" * 256
+        with pytest.raises(
+            ValidationError, match="String should have at most 255 characters"
+        ):
+            RenderedContent(
+                filename=too_long_filename,
+                content="test content",
+                content_type=ContentType.MAP,
+            )
+
+        # Test empty filename
+        with pytest.raises(
+            ValidationError, match="String should have at least 1 character"
+        ):
+            RenderedContent(
+                filename="", content="test content", content_type=ContentType.MAP
+            )
+
+    def test_filename_validation_in_config_maps(self):
+        """Test that filename validation applies to maps in Config."""
+        # Test valid map filename
+        valid_config = {
+            "pod_selector": {"match_labels": {"app": "haproxy"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+            "maps": {"host.map": {"template": "{{ host }} {{ backend }}"}},
+        }
+
+        config = config_from_dict(valid_config)
+        assert "host.map" in config.maps
+
+        # Test invalid map filename with path traversal
+        invalid_config = {
+            "pod_selector": {"match_labels": {"app": "haproxy"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+            "maps": {"../../../etc/passwd": {"template": "malicious content"}},
+        }
+
+        with pytest.raises(ValueError):
+            config_from_dict(invalid_config)
+
+    def test_filename_validation_in_config_certificates(self):
+        """Test that filename validation applies to certificates in Config."""
+        # Test valid certificate filename
+        valid_config = {
+            "pod_selector": {"match_labels": {"app": "haproxy"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+            "certificates": {"tls.pem": {"template": "{{ cert_data }}"}},
+        }
+
+        config = config_from_dict(valid_config)
+        assert "tls.pem" in config.certificates
+
+        # Test invalid certificate filename with path traversal
+        invalid_config = {
+            "pod_selector": {"match_labels": {"app": "haproxy"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+            "certificates": {
+                "../../etc/ssl/private/key.pem": {"template": "malicious content"}
+            },
+        }
+
+        with pytest.raises(ValueError):
+            config_from_dict(invalid_config)
+
+    def test_filename_validation_in_config_files(self):
+        """Test that filename validation applies to files in Config."""
+        # Test valid file filename
+        valid_config = {
+            "pod_selector": {"match_labels": {"app": "haproxy"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+            "files": {"500.http": {"template": "HTTP/1.0 500 Server Error\\r\\n"}},
+        }
+
+        config = config_from_dict(valid_config)
+        assert "500.http" in config.files
+
+        # Test invalid file filename with path traversal
+        invalid_config = {
+            "pod_selector": {"match_labels": {"app": "haproxy"}},
+            "haproxy_config": {"template": "global\n    daemon"},
+            "files": {"../../../etc/shadow": {"template": "malicious content"}},
+        }
+
+        with pytest.raises(ValueError):
+            config_from_dict(invalid_config)
+
+    def test_filename_validation_comprehensive_attacks(self):
+        """Test comprehensive filename attack scenarios."""
+        from haproxy_template_ic.config_models import RenderedContent, ContentType
+
+        # These attacks should be blocked by the regex pattern
+        path_attacks = [
+            "../../../etc/passwd",
+            "..\\..\\..\\windows\\system32\\config\\sam",
+            "./../../etc/shadow",
+            ".\\..\\..\\etc\\hosts",
+            "normal/../../etc/passwd",
+            "normal\\..\\..\\etc\\passwd",
+            "../..\\../etc/passwd",
+        ]
+
+        for attack in path_attacks:
+            with pytest.raises(ValidationError, match="String should match pattern"):
+                RenderedContent(
+                    filename=attack,
+                    content="malicious content",
+                    content_type=ContentType.MAP,
+                )
+
+        # These might not be caught by regex but would be handled by get_path_filter
+        encoded_attacks = [
+            "host.map%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+            "host.map%252e%252e%252f",
+        ]
+
+        for attack in encoded_attacks:
+            # These should pass Pydantic validation but be caught at application level
+            try:
+                content = RenderedContent(
+                    filename=attack,
+                    content="test content",
+                    content_type=ContentType.MAP,
+                )
+                # If it passes Pydantic, that's expected for encoded attacks
+                assert content.filename == attack
+            except ValidationError:
+                # Also acceptable if Pydantic catches it
+                pass
+
+    def test_content_type_enum_security(self):
+        """Test that ContentType enum prevents invalid content types."""
+        from haproxy_template_ic.config_models import RenderedContent, ContentType
+
+        # Valid content types
+        valid_types = [ContentType.MAP, ContentType.CERTIFICATE, ContentType.FILE]
+
+        for content_type in valid_types:
+            content = RenderedContent(
+                filename="test.txt", content="test content", content_type=content_type
+            )
+            assert content.content_type == content_type
+
+        # Invalid content type strings should be rejected
+        with pytest.raises(ValidationError):
+            RenderedContent(
+                filename="test.txt",
+                content="test content",
+                content_type="invalid_type",  # Not a valid ContentType enum value
+            )

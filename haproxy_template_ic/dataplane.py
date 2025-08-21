@@ -10,7 +10,6 @@ This module provides functionality to:
 Uses the complete generated HAProxy Dataplane API v3 client for all operations.
 """
 
-import hashlib
 import logging
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -498,108 +497,173 @@ class DataplaneClient:
             "Unexpected error in deployment", endpoint=self.base_url, operation="deploy"
         )
 
-    def _calculate_content_hash(self, content: str) -> str:
-        """Calculate SHA256 hash of content for change detection."""
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    async def sync_maps(self, maps: Dict[str, str]) -> None:
+        """Synchronize HAProxy map files to storage."""
 
-    async def get_general_files(self) -> List[Dict[str, Any]]:
-        """Get list of all general-purpose files from HAProxy storage."""
-        try:
+        metrics = get_metrics_collector()
+
+        with metrics.time_dataplane_api_operation("sync_maps"):
             async with ApiClient(self._get_configuration()) as api_client:
                 storage_api = StorageApi(api_client)
-                files = await storage_api.get_all_storage_general_files(
-                    _request_timeout=self.timeout
-                )
 
-                # Convert to dict format for easier processing
-                return [
-                    {
-                        "storage_name": file.storage_name,
-                        "description": file.description,
-                        "size": file.size,
-                        "id": file.id,
-                    }
-                    for file in files
-                ]
-        except Exception as e:
-            logger.error(f"Failed to get general files from {self.base_url}: {e}")
-            raise DataplaneAPIError(
-                f"Failed to get general files: {e}",
-                endpoint=self.base_url,
-                operation="get_general_files",
-                original_error=e,
-            ) from e
+                try:
+                    # Get existing maps and create lookup dict
+                    existing_maps = await storage_api.get_all_storage_maps(
+                        _request_timeout=self.timeout
+                    )
+                    existing_dict = {f.storage_name: f for f in existing_maps}
 
-    async def create_general_file(
-        self, name: str, content: str, description: Optional[str] = None
-    ) -> None:
-        """Create a new general-purpose file in HAProxy storage."""
-        if description is None:
-            description = self._calculate_content_hash(content)
+                    target_names = set(maps.keys())
+                    existing_names = set(existing_dict.keys())
 
-        try:
+                    # Create new maps
+                    for name in target_names - existing_names:
+                        content = maps[name]
+                        await storage_api.create_storage_map_file(
+                            file_upload=(name, content.encode("utf-8")),
+                            _request_timeout=self.timeout,
+                        )
+                        logger.debug(f"🗺️ Created map {name}")
+
+                    # Update changed maps (always update - no hash comparison available)
+                    for name in target_names & existing_names:
+                        content = maps[name]
+                        await storage_api.replace_storage_map_file(
+                            name=name,
+                            file_upload=(name, content.encode("utf-8")),
+                            skip_reload=True,
+                            _request_timeout=self.timeout,
+                        )
+                        logger.debug(f"🔄 Updated map {name}")
+
+                    # Delete obsolete maps
+                    for name in existing_names - target_names:
+                        await storage_api.delete_storage_map_file(
+                            name=name, _request_timeout=self.timeout
+                        )
+                        logger.debug(f"🗑️ Deleted map {name}")
+
+                    # Record successful sync
+                    metrics.record_dataplane_api_request("sync_maps", "success")
+
+                except Exception as e:
+                    metrics.record_dataplane_api_request("sync_maps", "error")
+                    logger.error(f"Map sync failed: {e}")
+                    raise DataplaneAPIError(
+                        f"Map sync failed: {e}", operation="sync_maps"
+                    ) from e
+
+    async def sync_certificates(self, certificates: Dict[str, str]) -> None:
+        """Synchronize SSL certificates to storage."""
+
+        metrics = get_metrics_collector()
+
+        with metrics.time_dataplane_api_operation("sync_certificates"):
             async with ApiClient(self._get_configuration()) as api_client:
                 storage_api = StorageApi(api_client)
-                # Create file with content and hash in description
-                await storage_api.create_storage_general_file(
-                    file_upload=(name, content.encode("utf-8")),
-                    _request_timeout=self.timeout,
-                )
-                logger.debug(f"✅ Created general file {name}")
-        except Exception as e:
-            logger.error(f"Failed to create general file {name}: {e}")
-            raise DataplaneAPIError(
-                f"Failed to create general file {name}: {e}",
-                endpoint=self.base_url,
-                operation="create_general_file",
-                original_error=e,
-            ) from e
 
-    async def replace_general_file(
-        self, name: str, content: str, description: Optional[str] = None
-    ) -> None:
-        """Replace an existing general-purpose file in HAProxy storage."""
-        if description is None:
-            description = self._calculate_content_hash(content)
+                try:
+                    # Get existing SSL certs and create lookup dict
+                    existing_certs = await storage_api.get_all_ssl_certificates(
+                        _request_timeout=self.timeout
+                    )
+                    existing_dict = {f.storage_name: f for f in existing_certs}
 
-        try:
+                    target_names = set(certificates.keys())
+                    existing_names = set(existing_dict.keys())
+
+                    # Create new certificates
+                    for name in target_names - existing_names:
+                        content = certificates[name]
+                        await storage_api.create_ssl_certificate(
+                            file_upload=(name, content.encode("utf-8")),
+                            _request_timeout=self.timeout,
+                        )
+                        logger.debug(f"🔐 Created certificate {name}")
+
+                    # Update changed certificates (always update - no hash comparison available)
+                    for name in target_names & existing_names:
+                        content = certificates[name]
+                        await storage_api.replace_ssl_certificate(
+                            name=name,
+                            file_upload=(name, content.encode("utf-8")),
+                            skip_reload=True,
+                            _request_timeout=self.timeout,
+                        )
+                        logger.debug(f"🔄 Updated certificate {name}")
+
+                    # Delete obsolete certificates
+                    for name in existing_names - target_names:
+                        await storage_api.delete_ssl_certificate(
+                            name=name, _request_timeout=self.timeout
+                        )
+                        logger.debug(f"🗑️ Deleted certificate {name}")
+
+                    # Record successful sync
+                    metrics.record_dataplane_api_request("sync_certificates", "success")
+
+                except Exception as e:
+                    metrics.record_dataplane_api_request("sync_certificates", "error")
+                    logger.error(f"Certificate sync failed: {e}")
+                    raise DataplaneAPIError(
+                        f"Certificate sync failed: {e}", operation="sync_certificates"
+                    ) from e
+
+    async def sync_files(self, files: Dict[str, str]) -> None:
+        """Synchronize general-purpose files to HAProxy storage."""
+
+        metrics = get_metrics_collector()
+
+        with metrics.time_dataplane_api_operation("sync_files"):
             async with ApiClient(self._get_configuration()) as api_client:
                 storage_api = StorageApi(api_client)
-                # Replace file with new content and hash in description
-                await storage_api.replace_storage_general_file(
-                    name=name,
-                    file_upload=(name, content.encode("utf-8")),
-                    skip_reload=True,  # We'll reload with configuration later
-                    _request_timeout=self.timeout,
-                )
-                logger.debug(f"✅ Updated general file {name}")
-        except Exception as e:
-            logger.error(f"Failed to replace general file {name}: {e}")
-            raise DataplaneAPIError(
-                f"Failed to replace general file {name}: {e}",
-                endpoint=self.base_url,
-                operation="replace_general_file",
-                original_error=e,
-            ) from e
 
-    async def delete_general_file(self, name: str) -> None:
-        """Delete a general-purpose file from HAProxy storage."""
-        try:
-            async with ApiClient(self._get_configuration()) as api_client:
-                storage_api = StorageApi(api_client)
-                await storage_api.delete_storage_general_file(
-                    name=name,
-                    _request_timeout=self.timeout,
-                )
-                logger.debug(f"✅ Deleted general file {name}")
-        except Exception as e:
-            logger.error(f"Failed to delete general file {name}: {e}")
-            raise DataplaneAPIError(
-                f"Failed to delete general file {name}: {e}",
-                endpoint=self.base_url,
-                operation="delete_general_file",
-                original_error=e,
-            ) from e
+                try:
+                    # Get existing files and create lookup dict
+                    existing_files = await storage_api.get_all_storage_general_files(
+                        _request_timeout=self.timeout
+                    )
+                    existing_dict = {f.storage_name: f for f in existing_files}
+
+                    target_names = set(files.keys())
+                    existing_names = set(existing_dict.keys())
+
+                    # Create new files
+                    for name in target_names - existing_names:
+                        content = files[name]
+                        await storage_api.create_storage_general_file(
+                            file_upload=(name, content.encode("utf-8")),
+                            _request_timeout=self.timeout,
+                        )
+                        logger.debug(f"📄 Created file {name}")
+
+                    # Update changed files (always update - no hash comparison reliable)
+                    for name in target_names & existing_names:
+                        content = files[name]
+                        await storage_api.replace_storage_general_file(
+                            name=name,
+                            file_upload=(name, content.encode("utf-8")),
+                            skip_reload=True,
+                            _request_timeout=self.timeout,
+                        )
+                        logger.debug(f"📝 Updated file {name}")
+
+                    # Delete obsolete files
+                    for name in existing_names - target_names:
+                        await storage_api.delete_storage_general_file(
+                            name=name, _request_timeout=self.timeout
+                        )
+                        logger.debug(f"🗑️ Deleted file {name}")
+
+                    # Record successful sync
+                    metrics.record_dataplane_api_request("sync_files", "success")
+
+                except Exception as e:
+                    metrics.record_dataplane_api_request("sync_files", "error")
+                    logger.error(f"File sync failed: {e}")
+                    raise DataplaneAPIError(
+                        f"File sync failed: {e}", operation="sync_files"
+                    ) from e
 
 
 class ConfigSynchronizer:
@@ -617,57 +681,6 @@ class ConfigSynchronizer:
         self.credentials = credentials
         self.deployment_history = deployment_history or DeploymentHistory()
 
-    async def _sync_general_files(
-        self, client: DataplaneClient, rendered_files: List[Dict[str, str]]
-    ) -> None:
-        """Synchronize general-purpose files to a specific endpoint."""
-        # Get existing files
-        try:
-            existing_files = await client.get_general_files()
-            existing_files_dict = {
-                f["storage_name"]: f["description"] for f in existing_files
-            }
-        except Exception as e:
-            logger.warning(f"Could not get existing files, assuming empty: {e}")
-            existing_files_dict = {}
-
-        # Track files we want to keep
-        target_files = set()
-
-        # Create or update files that need changes
-        for file_info in rendered_files:
-            file_path = file_info["path"]
-            content = file_info["content"]
-            content_hash = client._calculate_content_hash(content)
-
-            # Extract just the filename from the path for storage_name
-            # e.g., "/etc/haproxy/errors/500.http" -> "500.http"
-            storage_name = file_path.split("/")[-1]
-            target_files.add(storage_name)
-
-            existing_hash = existing_files_dict.get(storage_name)
-
-            if existing_hash != content_hash:
-                # File doesn't exist or content has changed
-                if storage_name in existing_files_dict:
-                    logger.info(f"📝 Updating general file {storage_name}")
-                    await client.replace_general_file(
-                        storage_name, content, content_hash
-                    )
-                else:
-                    logger.info(f"📄 Creating general file {storage_name}")
-                    await client.create_general_file(
-                        storage_name, content, content_hash
-                    )
-            else:
-                logger.debug(f"✅ General file {storage_name} unchanged")
-
-        # Delete files that are no longer needed
-        for storage_name in existing_files_dict:
-            if storage_name not in target_files:
-                logger.info(f"🗑️ Deleting general file {storage_name}")
-                await client.delete_general_file(storage_name)
-
     async def sync_configuration(
         self, config_context: HAProxyConfigContext
     ) -> Dict[str, Any]:
@@ -677,13 +690,16 @@ class ConfigSynchronizer:
 
         config = config_context.rendered_config.content
 
-        # Prepare rendered files for synchronization
-        rendered_files = [
-            {"path": rf.path, "content": rf.content}
-            for rf in config_context.rendered_files
-        ]
+        # Prepare all content for synchronization using filenames directly
+        maps_to_sync = {rc.filename: rc.content for rc in config_context.rendered_maps}
+        certificates_to_sync = {
+            rc.filename: rc.content for rc in config_context.rendered_certificates
+        }
+        files_to_sync = {
+            rc.filename: rc.content for rc in config_context.rendered_files
+        }
 
-        # Step 1: Sync general files to validation instance first
+        # Step 1: Sync all content to validation instance first
         validation_client = DataplaneClient(
             self.validation_url,
             auth=(
@@ -692,11 +708,20 @@ class ConfigSynchronizer:
             ),
         )
 
-        if rendered_files:
+        # Sync maps, certificates, and files to validation instance
+        if maps_to_sync:
+            logger.info(f"Syncing {len(maps_to_sync)} maps to validation instance")
+            await validation_client.sync_maps(maps_to_sync)
+
+        if certificates_to_sync:
             logger.info(
-                f"Syncing {len(rendered_files)} general files to validation instance"
+                f"Syncing {len(certificates_to_sync)} certificates to validation instance"
             )
-            await self._sync_general_files(validation_client, rendered_files)
+            await validation_client.sync_certificates(certificates_to_sync)
+
+        if files_to_sync:
+            logger.info(f"Syncing {len(files_to_sync)} files to validation instance")
+            await validation_client.sync_files(files_to_sync)
 
         # Step 2: Validate configuration at localhost
         logger.info(f"Validating configuration at {self.validation_url}")
@@ -719,10 +744,20 @@ class ConfigSynchronizer:
                 ),
             )
             try:
-                # Sync general files first, then deploy configuration
-                if rendered_files:
-                    logger.info(f"Syncing {len(rendered_files)} general files to {url}")
-                    await self._sync_general_files(client, rendered_files)
+                # Sync all content first, then deploy configuration
+                if maps_to_sync:
+                    logger.info(f"Syncing {len(maps_to_sync)} maps to {url}")
+                    await client.sync_maps(maps_to_sync)
+
+                if certificates_to_sync:
+                    logger.info(
+                        f"Syncing {len(certificates_to_sync)} certificates to {url}"
+                    )
+                    await client.sync_certificates(certificates_to_sync)
+
+                if files_to_sync:
+                    logger.info(f"Syncing {len(files_to_sync)} files to {url}")
+                    await client.sync_files(files_to_sync)
 
                 version = await client.deploy_configuration(config)
                 self.deployment_history.record(url, version, True)

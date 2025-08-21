@@ -13,8 +13,8 @@ data:
     
     echo "Starting HAProxy Universal Script (type: ${CONTAINER_TYPE:-unknown})"
     
-    # Create required directories
-    mkdir -p /etc/haproxy /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors /etc/haproxy/ssl /etc/haproxy/general /etc/haproxy/spoe
+    # Create required directories - align with dataplane API defaults
+    mkdir -p /etc/haproxy /etc/haproxy/maps /etc/haproxy/ssl /etc/haproxy/general /etc/haproxy/spoe
     mkdir -p /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
     chown -R haproxy:haproxy /etc/haproxy /var/lib/dataplaneapi 2>/dev/null || true
     
