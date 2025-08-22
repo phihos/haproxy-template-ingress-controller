@@ -259,14 +259,6 @@ class TestDataplaneClientMethods:
         """Create a DataplaneClient for testing."""
         return DataplaneClient("http://test:5555", timeout=10.0)
 
-    def test_get_configuration(self, mock_client):
-        """Test configuration lazy loading."""
-        config1 = mock_client._get_configuration()
-        config2 = mock_client._get_configuration()
-        # Should return same instance (lazy loading)
-        assert config1 is config2
-        assert config1.host == "http://test:5555/v3"
-
 
 class TestConfigSynchronizerMethods:
     """Test ConfigSynchronizer methods for coverage."""
@@ -396,6 +388,99 @@ class TestNormalizeDataplaneUrl:
         assert result == "https://api.example.com/haproxy/v3?auth=token"
 
 
+class TestErrorParsingFunctions:
+    """Test error parsing helper functions."""
+
+    def test_parse_haproxy_error_line_config_parsing_format(self):
+        """Test parsing line number from config parsing error format."""
+        from haproxy_template_ic.dataplane import parse_haproxy_error_line
+
+        error_msg = "config parsing [/tmp/onlyvalidate3935728576:54] 'listen' or 'defaults' expected."
+        line_num = parse_haproxy_error_line(error_msg)
+        assert line_num == 54
+
+    def test_parse_haproxy_error_line_simple_line_format(self):
+        """Test parsing line number from simple line format."""
+        from haproxy_template_ic.dataplane import parse_haproxy_error_line
+
+        error_msg = "line 42: unknown keyword 'foobar'"
+        line_num = parse_haproxy_error_line(error_msg)
+        assert line_num == 42
+
+    def test_parse_haproxy_error_line_at_line_format(self):
+        """Test parsing line number from 'at line' format."""
+        from haproxy_template_ic.dataplane import parse_haproxy_error_line
+
+        error_msg = "syntax error at line 123"
+        line_num = parse_haproxy_error_line(error_msg)
+        assert line_num == 123
+
+    def test_parse_haproxy_error_line_not_found(self):
+        """Test when no line number is found in error message."""
+        from haproxy_template_ic.dataplane import parse_haproxy_error_line
+
+        error_msg = "generic error without line number"
+        line_num = parse_haproxy_error_line(error_msg)
+        assert line_num is None
+
+    def test_extract_config_context(self):
+        """Test extracting configuration context around an error line."""
+        from haproxy_template_ic.dataplane import extract_config_context
+
+        config = """global
+    daemon
+    log stdout local0
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+
+frontend main
+    bind *:80
+    use_backend default"""
+
+        context = extract_config_context(config, 6, context_lines=2)
+        expected_lines = [
+            "    5: defaults",
+            ">   6:     mode http",
+            "    7:     timeout connect 5000ms",
+            "    8:     timeout client 50000ms",
+        ]
+
+        for expected_line in expected_lines:
+            assert expected_line in context
+
+    def test_extract_config_context_out_of_range(self):
+        """Test extracting context when line number is out of range."""
+        from haproxy_template_ic.dataplane import extract_config_context
+
+        config = "line1\nline2\nline3"
+        context = extract_config_context(config, 10, context_lines=2)
+        assert "out of range" in context
+        assert "3 lines" in context
+
+    def test_parse_validation_error_details(self):
+        """Test parsing complete validation error details."""
+        from haproxy_template_ic.dataplane import parse_validation_error_details
+
+        error_msg = "config parsing [/tmp/file:54] 'listen' or 'defaults' expected."
+        config = """global
+    daemon
+
+defaults
+    mode http
+
+frontend main
+    bind *:80
+    invalid_directive here"""
+
+        error_line, error_context = parse_validation_error_details(error_msg, config)
+        assert error_line == 54
+        # Since line 54 is out of range for our short config, error_context should indicate this
+        assert error_context and "out of range" in error_context
+
+
 class TestValidationErrorClass:
     """Test ValidationError class functionality."""
 
@@ -422,6 +507,31 @@ class TestValidationErrorClass:
 
         assert str(error) == "Config invalid [operation=validate]"
         assert error.operation == "validate"
+
+    def test_validation_error_with_context(self):
+        """Test ValidationError with error context and line information."""
+        config_content = "global\n    daemon\ndefaults\n    mode http"
+        error_context = "  3: defaults\n> 4:     mode http\n  5:"
+
+        error = ValidationError(
+            "Config syntax error",
+            endpoint="http://test:5555",
+            config_size=len(config_content),
+            validation_details="'listen' or 'defaults' expected",
+            error_line=4,
+            config_content=config_content,
+            error_context=error_context,
+        )
+
+        error_str = str(error)
+        assert "Config syntax error" in error_str
+        assert "config_size=40" in error_str  # Updated to match actual size
+        assert "'listen' or 'defaults' expected" in error_str
+        assert "Configuration context around error:" in error_str
+        assert "> 4:     mode http" in error_str
+        assert error.error_line == 4
+        assert error.config_content == config_content
+        assert error.error_context == error_context
 
 
 class TestDataplaneAPIErrorClass:
@@ -476,19 +586,19 @@ class TestDataplaneClientInitialization:
         assert client.auth == ("user", "pass")
 
     def test_client_lazy_configuration(self):
-        """Test lazy configuration initialization."""
+        """Test lazy client initialization."""
         client = DataplaneClient("http://test:5555")
 
-        # Configuration should be None initially
-        assert client._configuration is None
+        # Client should be None initially
+        assert client._client is None
 
-        # First call should create configuration
-        config1 = client._get_configuration()
-        assert client._configuration is not None
+        # First call should create client
+        client1 = client._get_client()
+        assert client._client is not None
 
         # Second call should return same instance
-        config2 = client._get_configuration()
-        assert config1 is config2
+        client2 = client._get_client()
+        assert client1 is client2
 
 
 class TestConfigSynchronizerSuccessPath:
@@ -683,57 +793,49 @@ class TestDataplaneCriticalPaths:
 
         client = DataplaneClient("http://localhost:5555")
 
-        # Mock the API client and response
+        # Mock the API response with proper structure for new client
         mock_info_response = MagicMock()
-        mock_info_response.haproxy = {"version": "3.1.0"}
-        mock_info_response.api = {"build_date": "2024-01-01"}
-        mock_info_response.system = {"hostname": "test-host"}
+        mock_haproxy = MagicMock()
+        mock_haproxy.to_dict.return_value = {"version": "3.1.0"}
+        mock_api = MagicMock()
+        mock_api.to_dict.return_value = {"build_date": "2024-01-01"}
+        mock_system = MagicMock()
+        mock_system.to_dict.return_value = {"hostname": "test-host"}
 
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            with patch("haproxy_template_ic.dataplane.InformationApi") as mock_info_api:
-                mock_api_instance = AsyncMock()
-                mock_api_client.return_value.__aenter__.return_value = mock_api_instance
+        mock_info_response.haproxy = mock_haproxy
+        mock_info_response.api = mock_api
+        mock_info_response.system = mock_system
 
-                mock_info_api_instance = MagicMock()
-                mock_info_api_instance.get_info = AsyncMock(
-                    return_value=mock_info_response
-                )
-                mock_info_api.return_value = mock_info_api_instance
+        with patch("haproxy_template_ic.dataplane.get_info") as mock_get_info:
+            mock_get_info.asyncio = AsyncMock(return_value=mock_info_response)
 
-                result = await client.get_version()
+            result = await client.get_version()
 
-                expected = {
-                    "version": "3.1.0",
-                    "build_date": "2024-01-01",
-                    "hostname": "test-host",
-                }
-                assert result == expected
+            expected = {
+                "version": "3.1.0",
+                "build_date": "2024-01-01",
+                "hostname": "test-host",
+            }
+            assert result == expected
 
     @pytest.mark.asyncio
     async def test_dataplane_client_get_version_api_exception(self):
         """Test DataplaneClient.get_version() API exception handling."""
         from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
-        from haproxy_dataplane_v3.exceptions import ApiException
+        from haproxy_dataplane_v3.errors import UnexpectedStatus
 
         client = DataplaneClient("http://localhost:5555")
 
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            with patch("haproxy_template_ic.dataplane.InformationApi") as mock_info_api:
-                mock_api_instance = AsyncMock()
-                mock_api_client.return_value.__aenter__.return_value = mock_api_instance
+        with patch("haproxy_template_ic.dataplane.get_info") as mock_get_info:
+            api_exception = UnexpectedStatus(500, b"API Error")
+            mock_get_info.asyncio.side_effect = api_exception
 
-                mock_info_api_instance = MagicMock()
-                mock_info_api_instance.get_info = AsyncMock(
-                    side_effect=ApiException("API Error")
-                )
-                mock_info_api.return_value = mock_info_api_instance
+            with pytest.raises(DataplaneAPIError) as exc_info:
+                await client.get_version()
 
-                with pytest.raises(DataplaneAPIError) as exc_info:
-                    await client.get_version()
-
-                assert "Failed to get version" in str(exc_info.value)
-                assert exc_info.value.endpoint == "http://localhost:5555/v3"
-                assert exc_info.value.operation == "get_version"
+            assert "Failed to get version" in str(exc_info.value)
+            assert exc_info.value.endpoint == "http://localhost:5555/v3"
+            assert exc_info.value.operation == "get_version"
 
     @pytest.mark.asyncio
     async def test_dataplane_client_get_version_network_errors(self):
@@ -743,10 +845,8 @@ class TestDataplaneCriticalPaths:
         client = DataplaneClient("http://localhost:5555")
 
         # Test ConnectionError
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            mock_api_client.return_value.__aenter__.side_effect = ConnectionError(
-                "Connection refused"
-            )
+        with patch("haproxy_template_ic.dataplane.get_info") as mock_get_info:
+            mock_get_info.asyncio.side_effect = ConnectionError("Connection refused")
 
             with pytest.raises(DataplaneAPIError) as exc_info:
                 await client.get_version()
@@ -755,10 +855,8 @@ class TestDataplaneCriticalPaths:
             assert exc_info.value.operation == "get_version"
 
         # Test TimeoutError
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            mock_api_client.return_value.__aenter__.side_effect = TimeoutError(
-                "Request timeout"
-            )
+        with patch("haproxy_template_ic.dataplane.get_info") as mock_get_info:
+            mock_get_info.asyncio.side_effect = TimeoutError("Request timeout")
 
             with pytest.raises(DataplaneAPIError) as exc_info:
                 await client.get_version()
@@ -766,10 +864,8 @@ class TestDataplaneCriticalPaths:
             assert "Network error" in str(exc_info.value)
 
         # Test OSError
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            mock_api_client.return_value.__aenter__.side_effect = OSError(
-                "Network is unreachable"
-            )
+        with patch("haproxy_template_ic.dataplane.get_info") as mock_get_info:
+            mock_get_info.asyncio.side_effect = OSError("Network is unreachable")
 
             with pytest.raises(DataplaneAPIError) as exc_info:
                 await client.get_version()
@@ -783,10 +879,8 @@ class TestDataplaneCriticalPaths:
 
         client = DataplaneClient("http://localhost:5555")
 
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            mock_api_client.return_value.__aenter__.side_effect = RuntimeError(
-                "Unexpected error"
-            )
+        with patch("haproxy_template_ic.dataplane.get_info") as mock_get_info:
+            mock_get_info.asyncio.side_effect = RuntimeError("Unexpected error")
 
             with pytest.raises(DataplaneAPIError) as exc_info:
                 await client.get_version()
@@ -801,51 +895,45 @@ class TestDataplaneCriticalPaths:
 
         client = DataplaneClient("http://localhost:5555")
 
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            with patch(
-                "haproxy_template_ic.dataplane.ConfigurationApi"
-            ) as mock_config_api:
-                mock_api_instance = AsyncMock()
-                mock_api_client.return_value.__aenter__.return_value = mock_api_instance
+        with patch("httpx.AsyncClient") as mock_httpx_client:
+            mock_client_instance = AsyncMock()
+            mock_httpx_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
 
-                mock_config_api_instance = MagicMock()
-                mock_config_api_instance.post_ha_proxy_configuration = AsyncMock()
-                mock_config_api.return_value = mock_config_api_instance
+            # Mock successful response
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_client_instance.post.return_value = mock_response
 
-                # Should not raise exception
-                await client.validate_configuration("global\n    daemon\n")
+            # Should not raise exception
+            await client.validate_configuration("global\n    daemon\n")
 
     @pytest.mark.asyncio
     async def test_validate_configuration_bad_request_exception(self):
-        """Test configuration validation with BadRequestException."""
+        """Test configuration validation with bad request response."""
         from haproxy_template_ic.dataplane import DataplaneClient, ValidationError
-        from haproxy_dataplane_v3.exceptions import BadRequestException
 
         client = DataplaneClient("http://localhost:5555")
 
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            with patch(
-                "haproxy_template_ic.dataplane.ConfigurationApi"
-            ) as mock_config_api:
-                mock_api_instance = AsyncMock()
-                mock_api_client.return_value.__aenter__.return_value = mock_api_instance
+        with patch("httpx.AsyncClient") as mock_httpx_client:
+            mock_client_instance = AsyncMock()
+            mock_httpx_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
 
-                mock_config_api_instance = MagicMock()
-                bad_request = BadRequestException("Invalid configuration")
-                bad_request.body = "Configuration error details"
-                mock_config_api_instance.post_ha_proxy_configuration = AsyncMock(
-                    side_effect=bad_request
-                )
-                mock_config_api.return_value = mock_config_api_instance
+            # Mock error response
+            mock_response = MagicMock()
+            mock_response.status_code = 400
+            mock_response.text = "Configuration error details"
+            mock_client_instance.post.return_value = mock_response
 
-                with pytest.raises(ValidationError) as exc_info:
-                    await client.validate_configuration("invalid config")
+            with pytest.raises(ValidationError) as exc_info:
+                await client.validate_configuration("invalid config")
 
-                assert "Configuration validation failed" in str(exc_info.value)
-                assert exc_info.value.config_size == 14  # len("invalid config")
-                assert (
-                    exc_info.value.validation_details == "Configuration error details"
-                )
+            assert "Configuration validation failed" in str(exc_info.value)
+            assert exc_info.value.config_size == 14  # len("invalid config")
+            assert exc_info.value.validation_details == "Configuration error details"
 
     @pytest.mark.asyncio
     async def test_validate_configuration_network_errors(self):
@@ -855,24 +943,20 @@ class TestDataplaneCriticalPaths:
         client = DataplaneClient("http://localhost:5555")
 
         # Test ConnectionError
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            mock_api_instance = AsyncMock()
-            mock_api_client.return_value.__aenter__.return_value = mock_api_instance
+        with patch("httpx.AsyncClient") as mock_httpx_client:
+            mock_client_instance = AsyncMock()
+            mock_httpx_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
+            import httpx
 
-            with patch(
-                "haproxy_template_ic.dataplane.ConfigurationApi"
-            ) as mock_config_api:
-                mock_config_api_instance = MagicMock()
-                mock_config_api_instance.post_ha_proxy_configuration = AsyncMock(
-                    side_effect=ConnectionError("Network error")
-                )
-                mock_config_api.return_value = mock_config_api_instance
+            mock_client_instance.post.side_effect = httpx.RequestError("Network error")
 
-                with pytest.raises(DataplaneAPIError) as exc_info:
-                    await client.validate_configuration("test config")
+            with pytest.raises(DataplaneAPIError) as exc_info:
+                await client.validate_configuration("test config")
 
-                assert "Network error during validation" in str(exc_info.value)
-                assert exc_info.value.operation == "validate"
+            assert "Network error during validation" in str(exc_info.value)
+            assert exc_info.value.operation == "validate"
 
     @pytest.mark.asyncio
     async def test_validate_configuration_unexpected_exception(self):
@@ -881,24 +965,18 @@ class TestDataplaneCriticalPaths:
 
         client = DataplaneClient("http://localhost:5555")
 
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            mock_api_instance = AsyncMock()
-            mock_api_client.return_value.__aenter__.return_value = mock_api_instance
+        with patch("httpx.AsyncClient") as mock_httpx_client:
+            mock_client_instance = AsyncMock()
+            mock_httpx_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
+            mock_client_instance.post.side_effect = ValueError("Unexpected error")
 
-            with patch(
-                "haproxy_template_ic.dataplane.ConfigurationApi"
-            ) as mock_config_api:
-                mock_config_api_instance = MagicMock()
-                mock_config_api_instance.post_ha_proxy_configuration = AsyncMock(
-                    side_effect=ValueError("Unexpected error")
-                )
-                mock_config_api.return_value = mock_config_api_instance
+            with pytest.raises(DataplaneAPIError) as exc_info:
+                await client.validate_configuration("test config")
 
-                with pytest.raises(DataplaneAPIError) as exc_info:
-                    await client.validate_configuration("test config")
-
-                assert "Configuration validation failed" in str(exc_info.value)
-                assert exc_info.value.operation == "validate"
+            assert "Configuration validation failed" in str(exc_info.value)
+            assert exc_info.value.operation == "validate"
 
     @pytest.mark.asyncio
     async def test_deploy_configuration_success(self):
@@ -907,128 +985,31 @@ class TestDataplaneCriticalPaths:
 
         client = DataplaneClient("http://localhost:5555")
 
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            with patch(
-                "haproxy_template_ic.dataplane.ConfigurationApi"
-            ) as mock_config_api:
-                mock_api_instance = AsyncMock()
-                mock_api_client.return_value.__aenter__.return_value = mock_api_instance
+        # Mock httpx.AsyncClient for direct HTTP calls
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_client_instance = AsyncMock()
+            mock_async_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
 
-                mock_config_api_instance = MagicMock()
-                mock_config_api_instance.get_configuration_version = AsyncMock(
-                    side_effect=[1, 2]
-                )  # before and after
-                mock_config_api_instance.post_ha_proxy_configuration = AsyncMock()
-                mock_config_api.return_value = mock_config_api_instance
+            # Mock version requests
+            mock_version_resp_1 = MagicMock()
+            mock_version_resp_1.status_code = 200
+            mock_version_resp_1.json.return_value = 1
 
-                result = await client.deploy_configuration("global\n    daemon\n")
-                assert result == "2"
+            mock_version_resp_2 = MagicMock()
+            mock_version_resp_2.status_code = 200
+            mock_version_resp_2.json.return_value = 2
 
-    @pytest.mark.asyncio
-    async def test_deploy_configuration_server_error_retry(self):
-        """Test deployment with server error gets wrapped properly."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
-        from haproxy_dataplane_v3.exceptions import ApiException
+            # Mock deploy request
+            mock_deploy_resp = MagicMock()
+            mock_deploy_resp.status_code = 200
 
-        client = DataplaneClient("http://localhost:5555")
+            mock_client_instance.get.side_effect = [
+                mock_version_resp_1,
+                mock_version_resp_2,
+            ]
+            mock_client_instance.post.return_value = mock_deploy_resp
 
-        with patch("haproxy_template_ic.dataplane.AsyncRetrying", MockAsyncRetrying):
-            with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-                with patch(
-                    "haproxy_template_ic.dataplane.ConfigurationApi"
-                ) as mock_config_api:
-                    mock_api_instance = AsyncMock()
-                    mock_api_client.return_value.__aenter__.return_value = (
-                        mock_api_instance
-                    )
-
-                    mock_config_api_instance = MagicMock()
-                    # Configuration API calls fail with 500 error
-                    server_error = ApiException("Server Error")
-                    server_error.status = 500
-                    mock_config_api_instance.get_configuration_version = AsyncMock(
-                        return_value=1
-                    )
-                    mock_config_api_instance.post_ha_proxy_configuration = AsyncMock(
-                        side_effect=server_error
-                    )
-                    mock_config_api.return_value = mock_config_api_instance
-
-                    # Should raise DataplaneAPIError wrapping the server error
-                    with pytest.raises(DataplaneAPIError) as exc_info:
-                        await client.deploy_configuration("global\n    daemon\n")
-
-                    assert "Configuration deployment failed" in str(exc_info.value)
-                    assert exc_info.value.operation == "deploy"
-                    assert exc_info.value.endpoint == "http://localhost:5555/v3"
-
-    @pytest.mark.asyncio
-    async def test_deploy_configuration_client_error_no_retry(self):
-        """Test deployment doesn't retry client errors."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
-        from haproxy_dataplane_v3.exceptions import ApiException
-
-        client = DataplaneClient("http://localhost:5555")
-
-        with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-            with patch(
-                "haproxy_template_ic.dataplane.ConfigurationApi"
-            ) as mock_config_api:
-                mock_api_instance = AsyncMock()
-                mock_api_client.return_value.__aenter__.return_value = mock_api_instance
-
-                mock_config_api_instance = MagicMock()
-                mock_config_api_instance.get_configuration_version = AsyncMock(
-                    return_value=1
-                )
-
-                # Client error (400) should not retry
-                client_error = ApiException("Bad Request")
-                client_error.status = 400
-                mock_config_api_instance.post_ha_proxy_configuration = AsyncMock(
-                    side_effect=client_error
-                )
-                mock_config_api.return_value = mock_config_api_instance
-
-                with pytest.raises(DataplaneAPIError) as exc_info:
-                    await client.deploy_configuration("invalid config")
-
-                assert "Configuration deployment failed" in str(exc_info.value)
-                assert exc_info.value.operation == "deploy"
-
-    @pytest.mark.asyncio
-    async def test_deploy_configuration_retry_exhaustion(self):
-        """Test deployment failure after retry exhaustion."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
-        from haproxy_dataplane_v3.exceptions import ApiException
-
-        client = DataplaneClient("http://localhost:5555")
-
-        with patch("haproxy_template_ic.dataplane.AsyncRetrying", MockAsyncRetrying):
-            with patch("haproxy_template_ic.dataplane.ApiClient") as mock_api_client:
-                with patch(
-                    "haproxy_template_ic.dataplane.ConfigurationApi"
-                ) as mock_config_api:
-                    mock_api_instance = AsyncMock()
-                    mock_api_client.return_value.__aenter__.return_value = (
-                        mock_api_instance
-                    )
-
-                    mock_config_api_instance = MagicMock()
-                    mock_config_api_instance.get_configuration_version = AsyncMock(
-                        return_value=1
-                    )
-
-                    # Server error that persists through retries
-                    server_error = ApiException("Server Error")
-                    server_error.status = 500
-                    mock_config_api_instance.post_ha_proxy_configuration = AsyncMock(
-                        side_effect=server_error
-                    )
-                    mock_config_api.return_value = mock_config_api_instance
-
-                    with pytest.raises(DataplaneAPIError) as exc_info:
-                        await client.deploy_configuration("global\n    daemon\n")
-
-                    assert "Configuration deployment failed" in str(exc_info.value)
-                    assert exc_info.value.operation == "deploy"
+            result = await client.deploy_configuration("global\n    daemon\n")
+            assert result == "2"

@@ -1,0 +1,10 @@
+from enum import Enum
+
+
+class PerformanceOptionsProfilingTasks(str, Enum):
+    AUTO = "auto"
+    DISABLED = "disabled"
+    ENABLED = "enabled"
+
+    def __str__(self) -> str:
+        return str(self.value)

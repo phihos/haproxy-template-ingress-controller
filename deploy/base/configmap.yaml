@@ -121,6 +121,15 @@ data:
           {% endif %}
           {% endfor %}
     maps:
+      host.map:
+        template: |
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
+          {% set host_without_asterisk = rule.host | replace('*', '', 1) %}
+          {{ host_without_asterisk }} {{ host_without_asterisk }}
+          {% endfor %}
+          {% endfor %}
+    
       path-exact.map:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
@@ -145,21 +154,6 @@ data:
           {% set path_types = ["Prefix", "ImplementationSpecific"] %}
           {% set suffix = "/" %}
           {% include "path-map-entry" %}
-      
-      
-    
-    certificates:
-      tls.pem:
-        template: |
-          {# Generate combined cert+key file for HAProxy from TLS secrets using indexed lookup #}
-          {% for secret in resources.get('secrets', {}).get_indexed('default', 'kubernetes.io/tls') %}
-          {% if secret.metadata.labels.get('haproxy-template-ic/tls') == 'true' %}
-          # Certificate for {{ secret.metadata.name }} in {{ secret.metadata.namespace }}
-          {{ secret.data.get('tls.crt') | b64decode }}
-          {{ secret.data.get('tls.key') | b64decode }}
-          
-          {% endif %}
-          {% endfor %}
 
     files:
       400.http:
@@ -242,7 +236,7 @@ data:
     haproxy_config:
       template: |
         global
-            log stdout len 65536 local0 info
+            log stdout len 4096 local0 info
             chroot /var/lib/haproxy
             stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
             stats timeout 30s
@@ -277,12 +271,6 @@ data:
             http-request return status 200 content-type text/plain string "OK" if { path /healthz }
 
         frontend http_frontend
-            bind *:80
-            redirect scheme https code 301 if !{ ssl_fc }
-
-        frontend https_frontend
-            bind *:443 ssl crt {{ "tls.pem" | get_path("certificate") }}
-
             # Set a few variables
             http-request set-var(txn.base) base
             http-request set-var(txn.path) path

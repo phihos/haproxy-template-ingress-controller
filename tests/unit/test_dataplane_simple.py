@@ -164,19 +164,19 @@ class TestDataplaneClientSimple:
         assert client.auth == ("user", "pass")
 
     def test_client_configuration_lazy_loading(self):
-        """Test configuration lazy loading."""
+        """Test client lazy loading."""
         client = DataplaneClient("http://test:5555")
 
-        # Initially configuration should be None
-        assert client._configuration is None
+        # Initially client should be None
+        assert client._client is None
 
-        # First call creates configuration
-        config1 = client._get_configuration()
-        assert client._configuration is not None
+        # First call creates client
+        client1 = client._get_client()
+        assert client._client is not None
 
         # Second call returns same instance
-        config2 = client._get_configuration()
-        assert config1 is config2
+        client2 = client._get_client()
+        assert client1 is client2
 
 
 class TestConfigSynchronizerSimple:

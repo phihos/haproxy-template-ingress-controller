@@ -219,7 +219,9 @@ class TestSetupLogging:
         for verbose_level, expected_level in test_cases:
             with patch("logging.basicConfig") as mock_basic_config:
                 setup_structured_logging(verbose_level=verbose_level)
-                mock_basic_config.assert_called()
+
+                # In test environment, basicConfig should be called
+                mock_basic_config.assert_called_once()
                 args, kwargs = mock_basic_config.call_args
                 assert kwargs["level"] == expected_level
 

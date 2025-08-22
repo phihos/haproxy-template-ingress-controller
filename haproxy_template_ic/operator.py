@@ -634,6 +634,46 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
     except ValidationError as e:
         metrics.record_error("validation_failed", "dataplane")
         logger.error(f"❌ Configuration validation failed: {e}")
+
+        # Log additional context if available
+        if e.error_line:
+            logger.error(
+                f"💥 Error occurred at line {e.error_line} in HAProxy configuration"
+            )
+        if e.error_context:
+            logger.error("📝 Configuration context around the error:")
+            # Split context by lines and log each line separately to preserve formatting
+            for line in e.error_context.split("\n"):
+                logger.error(f"   {line}")
+
+        # Additional hints for common HAProxy configuration errors
+        if e.validation_details:
+            details_lower = e.validation_details.lower()
+            if "'listen' or 'defaults' expected" in details_lower:
+                logger.error(
+                    "💡 Hint: This error often occurs when a section is missing or has syntax errors. Check that all frontend/backend/listen blocks are properly defined."
+                )
+            elif "unknown keyword" in details_lower:
+                logger.error(
+                    "💡 Hint: Check for typos in HAProxy directives or unsupported configuration options."
+                )
+            elif "missing argument" in details_lower:
+                logger.error(
+                    "💡 Hint: A configuration directive is missing required parameters."
+                )
+            elif "too many args" in details_lower:
+                logger.error(
+                    "💡 Hint: A configuration directive has too many parameters."
+                )
+
+        # Provide template debugging suggestions
+        if memo.config and memo.config.template_snippets:
+            logger.error(
+                "🔧 Debug tip: Check your Jinja2 templates and snippets for syntax errors or missing includes"
+            )
+        logger.error(
+            "🔧 Debug tip: Use the management socket 'dump config' command to inspect the rendered configuration"
+        )
     except DataplaneAPIError as e:
         metrics.record_error("dataplane_api_failed", "dataplane")
         logger.error(f"❌ Dataplane API error: {e}")
