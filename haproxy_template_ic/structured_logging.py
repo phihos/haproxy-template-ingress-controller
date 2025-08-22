@@ -194,7 +194,7 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
         processors.extend(
             [
                 structlog.processors.TimeStamper(fmt="iso"),
-                structlog.processors.JSONRenderer(),
+                structlog.processors.JSONRenderer(ensure_ascii=False),
             ]
         )
     else:
@@ -228,7 +228,7 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
         # Configure standard library logging to use structlog formatting
         # This ensures ALL logs (including from kopf, kr8s, uvloop, etc.) use consistent formatting
         formatter = structlog.stdlib.ProcessorFormatter(
-            processor=structlog.processors.JSONRenderer()
+            processor=structlog.processors.JSONRenderer(ensure_ascii=False)
             if use_json
             else structlog.processors.KeyValueRenderer(
                 key_order=["timestamp", "level", "logger"]
