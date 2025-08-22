@@ -10,7 +10,7 @@ import logging
 import functools
 import inspect
 from functools import lru_cache
-from typing import Any, Callable, TypeVar, Awaitable, Dict
+from typing import Any, Callable, TypeVar, Awaitable, Dict, Union
 from uuid import uuid4
 
 import structlog
@@ -185,6 +185,7 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
     ]
 
     # Choose renderer based on output format
+    renderer: Union[structlog.processors.JSONRenderer, structlog.dev.ConsoleRenderer]
     if use_json:
         renderer = structlog.processors.JSONRenderer(ensure_ascii=False)
     else:
@@ -199,8 +200,9 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
         )
 
     # Configure structlog
+    processors = shared_processors + [renderer]
     structlog.configure(
-        processors=shared_processors + [renderer],
+        processors=processors,  # type: ignore[arg-type]
         wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
@@ -211,7 +213,7 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
     # This ensures ALL logs (including from kopf, kr8s, uvloop) use our formatting
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=renderer,
-        foreign_pre_chain=shared_processors,
+        foreign_pre_chain=shared_processors,  # type: ignore[arg-type]
     )
 
     handler = logging.StreamHandler()

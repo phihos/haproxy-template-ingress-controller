@@ -7,6 +7,7 @@ client operations, and configuration synchronization.
 
 import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
+from unittest import mock
 
 from haproxy_template_ic.dataplane import (
     DataplaneAPIError,
@@ -52,6 +53,16 @@ class MockAttemptManager:
     def __init__(self, attempt_number):
         self.attempt_number = attempt_number
         self._exception = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            self._exception = exc_val
+            # Don't suppress the exception - let it propagate for retry logic
+            return False
+        return True
 
     async def __aenter__(self):
         return self
@@ -480,6 +491,55 @@ frontend main
         # Since line 54 is out of range for our short config, error_context should indicate this
         assert error_context and "out of range" in error_context
 
+    def test_extract_config_context_empty_config(self):
+        """Test extracting context from empty configuration."""
+        from haproxy_template_ic.dataplane import extract_config_context
+
+        context = extract_config_context("", 1)
+        assert context == "No configuration content available"
+
+        context = extract_config_context(None, 1)
+        assert context == "No configuration content available"
+
+    def test_parse_validation_error_details_context_extraction_exception(self):
+        """Test parsing validation error when context extraction fails."""
+        from haproxy_template_ic.dataplane import parse_validation_error_details
+
+        error_msg = "config parsing [/tmp/file:2] syntax error"
+        config = "global\n    daemon"
+
+        with patch(
+            "haproxy_template_ic.dataplane.extract_config_context"
+        ) as mock_extract:
+            mock_extract.side_effect = Exception("Context extraction failed")
+
+            error_line, error_context = parse_validation_error_details(
+                error_msg, config
+            )
+            assert error_line == 2
+            assert (
+                error_context
+                == "Error extracting context for line 2: Context extraction failed"
+            )
+
+    def test_parse_haproxy_error_line_invalid_number(self):
+        """Test parsing when regex matches but number is invalid."""
+        from haproxy_template_ic.dataplane import parse_haproxy_error_line
+
+        # Test with non-numeric match
+        error_msg = "config parsing [/tmp/file:invalid]: error"
+        line_num = parse_haproxy_error_line(error_msg)
+        assert line_num is None
+
+        # Test empty match group
+        with patch("re.search") as mock_search:
+            mock_match = Mock()
+            mock_match.group.side_effect = IndexError("No group")
+            mock_search.return_value = mock_match
+
+            line_num = parse_haproxy_error_line("some error")
+            assert line_num is None
+
 
 class TestValidationErrorClass:
     """Test ValidationError class functionality."""
@@ -754,6 +814,337 @@ class TestDeploymentHistoryDetailed:
         assert data["deployment_history"]["http://test2:5555"]["success"] is False
 
 
+class TestDataplaneClientSyncMethods:
+    """Test DataplaneClient sync methods for maps, certificates, and files."""
+
+    @pytest.mark.asyncio
+    async def test_sync_maps_success(self):
+        """Test successful map synchronization."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+
+        # Mock the generated client
+        mock_api_client = Mock()
+
+        # Mock existing maps
+        mock_existing_map = Mock()
+        mock_existing_map.storage_name = "existing.map"
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_map_files"
+            ) as mock_get_maps:
+                with patch(
+                    "haproxy_template_ic.dataplane.create_storage_map_file"
+                ) as mock_create:
+                    with patch(
+                        "haproxy_template_ic.dataplane.delete_storage_map"
+                    ) as mock_delete:
+                        # Set up existing maps
+                        mock_get_maps.asyncio = AsyncMock(
+                            return_value=[mock_existing_map]
+                        )
+                        mock_create.asyncio = AsyncMock(return_value=None)
+                        mock_delete.asyncio = AsyncMock(return_value=None)
+
+                        maps_to_sync = {
+                            "new.map": "new map content",
+                            "existing.map": "updated content",
+                        }
+
+                        await client.sync_maps(maps_to_sync)
+
+                        # Verify create was called for new map
+                        mock_create.asyncio.assert_called()
+                        # Verify delete+create was called for existing map update
+                        mock_delete.asyncio.assert_called_with(
+                            client=mock_api_client, name="existing.map"
+                        )
+
+    @pytest.mark.asyncio
+    async def test_sync_maps_with_obsolete_maps(self):
+        """Test map sync deletes obsolete maps."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        # Mock existing maps - one will become obsolete
+        mock_existing_map = Mock()
+        mock_existing_map.storage_name = "obsolete.map"
+        mock_keep_map = Mock()
+        mock_keep_map.storage_name = "keep.map"
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_map_files"
+            ) as mock_get_maps:
+                with patch(
+                    "haproxy_template_ic.dataplane.create_storage_map_file"
+                ) as mock_create:
+                    with patch(
+                        "haproxy_template_ic.dataplane.delete_storage_map"
+                    ) as mock_delete:
+                        mock_get_maps.asyncio = AsyncMock(
+                            return_value=[mock_existing_map, mock_keep_map]
+                        )
+                        mock_create.asyncio = AsyncMock(return_value=None)
+                        mock_delete.asyncio = AsyncMock(return_value=None)
+
+                        maps_to_sync = {
+                            "keep.map": "updated content",
+                        }
+
+                        await client.sync_maps(maps_to_sync)
+
+                        # Verify obsolete map was deleted
+                        mock_delete.asyncio.assert_any_call(
+                            client=mock_api_client, name="obsolete.map"
+                        )
+
+    @pytest.mark.asyncio
+    async def test_sync_maps_error_handling(self):
+        """Test map sync error handling."""
+        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_map_files"
+            ) as mock_get_maps:
+                mock_get_maps.asyncio = AsyncMock(side_effect=Exception("API Error"))
+
+                maps_to_sync = {"test.map": "content"}
+
+                with pytest.raises(DataplaneAPIError) as exc_info:
+                    await client.sync_maps(maps_to_sync)
+
+                assert "Map sync failed" in str(exc_info.value)
+                assert exc_info.value.operation == "sync_maps"
+
+    @pytest.mark.asyncio
+    async def test_sync_certificates_success(self):
+        """Test successful certificate synchronization."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        # Mock existing certificates
+        mock_existing_cert = Mock()
+        mock_existing_cert.storage_name = "existing.pem"
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_ssl_certificates"
+            ) as mock_get_certs:
+                with patch(
+                    "haproxy_template_ic.dataplane.create_storage_ssl_certificate"
+                ) as mock_create:
+                    with patch(
+                        "haproxy_template_ic.dataplane.delete_storage_ssl_certificate"
+                    ) as mock_delete:
+                        mock_get_certs.asyncio = AsyncMock(
+                            return_value=[mock_existing_cert]
+                        )
+                        mock_create.asyncio = AsyncMock(return_value=None)
+                        mock_delete.asyncio = AsyncMock(return_value=None)
+
+                        certs_to_sync = {
+                            "new.pem": "-----BEGIN CERTIFICATE-----\nnew cert\n-----END CERTIFICATE-----",
+                            "existing.pem": "-----BEGIN CERTIFICATE-----\nupdated cert\n-----END CERTIFICATE-----",
+                        }
+
+                        await client.sync_certificates(certs_to_sync)
+
+                        # Verify create was called for new cert
+                        mock_create.asyncio.assert_called()
+                        # Verify delete+create was called for existing cert update
+                        mock_delete.asyncio.assert_called_with(
+                            client=mock_api_client, name="existing.pem"
+                        )
+
+    @pytest.mark.asyncio
+    async def test_sync_certificates_error_handling(self):
+        """Test certificate sync error handling."""
+        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_ssl_certificates"
+            ) as mock_get_certs:
+                mock_get_certs.asyncio = AsyncMock(
+                    side_effect=Exception("Certificate API Error")
+                )
+
+                certs_to_sync = {"test.pem": "cert content"}
+
+                with pytest.raises(DataplaneAPIError) as exc_info:
+                    await client.sync_certificates(certs_to_sync)
+
+                assert "Certificate sync failed" in str(exc_info.value)
+                assert exc_info.value.operation == "sync_certificates"
+
+    @pytest.mark.asyncio
+    async def test_sync_files_success(self):
+        """Test successful general file synchronization."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        # Mock existing files
+        mock_existing_file = Mock()
+        mock_existing_file.storage_name = "existing.txt"
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_general_files"
+            ) as mock_get_files:
+                with patch(
+                    "haproxy_template_ic.dataplane.create_storage_general_file"
+                ) as mock_create:
+                    with patch(
+                        "haproxy_template_ic.dataplane.replace_storage_general_file"
+                    ) as mock_replace:
+                        with patch(
+                            "haproxy_template_ic.dataplane.delete_storage_general_file"
+                        ) as mock_delete:
+                            mock_get_files.asyncio = AsyncMock(
+                                return_value=[mock_existing_file]
+                            )
+                            mock_create.asyncio = AsyncMock(return_value=None)
+                            mock_replace.asyncio = AsyncMock(return_value=None)
+                            mock_delete.asyncio = AsyncMock(return_value=None)
+
+                            files_to_sync = {
+                                "new.txt": "new file content",
+                                "existing.txt": "updated content",
+                            }
+
+                            await client.sync_files(files_to_sync)
+
+                            # Verify create was called for new file
+                            mock_create.asyncio.assert_called()
+                            # Verify replace was called for existing file update
+                            mock_replace.asyncio.assert_called_with(
+                                client=mock_api_client,
+                                name="existing.txt",
+                                body=mock.ANY,
+                            )
+
+    @pytest.mark.asyncio
+    async def test_sync_files_error_handling(self):
+        """Test file sync error handling."""
+        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_general_files"
+            ) as mock_get_files:
+                mock_get_files.asyncio = AsyncMock(
+                    side_effect=Exception("File API Error")
+                )
+
+                files_to_sync = {"test.txt": "file content"}
+
+                with pytest.raises(DataplaneAPIError) as exc_info:
+                    await client.sync_files(files_to_sync)
+
+                assert "File sync failed" in str(exc_info.value)
+                assert exc_info.value.operation == "sync_files"
+
+    @pytest.mark.asyncio
+    async def test_sync_maps_with_none_response(self):
+        """Test sync_maps handles None response from API."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_map_files"
+            ) as mock_get_maps:
+                with patch(
+                    "haproxy_template_ic.dataplane.create_storage_map_file"
+                ) as mock_create:
+                    # API returns None instead of empty list
+                    mock_get_maps.asyncio = AsyncMock(return_value=None)
+                    mock_create.asyncio = AsyncMock(return_value=None)
+
+                    maps_to_sync = {"test.map": "content"}
+
+                    # Should not raise exception and should handle None gracefully
+                    await client.sync_maps(maps_to_sync)
+
+                    # Verify create was called since no existing maps
+                    mock_create.asyncio.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_sync_certificates_with_none_response(self):
+        """Test sync_certificates handles None response from API."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_ssl_certificates"
+            ) as mock_get_certs:
+                with patch(
+                    "haproxy_template_ic.dataplane.create_storage_ssl_certificate"
+                ) as mock_create:
+                    # API returns None instead of empty list
+                    mock_get_certs.asyncio = AsyncMock(return_value=None)
+                    mock_create.asyncio = AsyncMock(return_value=None)
+
+                    certs_to_sync = {"test.pem": "cert content"}
+
+                    # Should not raise exception and should handle None gracefully
+                    await client.sync_certificates(certs_to_sync)
+
+                    # Verify create was called since no existing certs
+                    mock_create.asyncio.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_sync_files_with_none_response(self):
+        """Test sync_files handles None response from API."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        mock_api_client = Mock()
+
+        with patch.object(client, "_get_client", return_value=mock_api_client):
+            with patch(
+                "haproxy_template_ic.dataplane.get_all_storage_general_files"
+            ) as mock_get_files:
+                with patch(
+                    "haproxy_template_ic.dataplane.create_storage_general_file"
+                ) as mock_create:
+                    # API returns None instead of empty list
+                    mock_get_files.asyncio = AsyncMock(return_value=None)
+                    mock_create.asyncio = AsyncMock(return_value=None)
+
+                    files_to_sync = {"test.txt": "file content"}
+
+                    # Should not raise exception and should handle None gracefully
+                    await client.sync_files(files_to_sync)
+
+                    # Verify create was called since no existing files
+                    mock_create.asyncio.assert_called()
+
+
 class TestDataplaneCriticalPaths:
     """Test critical paths and edge cases for dataplane functionality."""
 
@@ -785,6 +1176,33 @@ class TestDataplaneCriticalPaths:
         complex_url = "http://user:pass@host:5555/path?query=value#fragment"
         result = normalize_dataplane_url(complex_url)
         assert result == "http://user:pass@host:5555/path/v3?query=value#fragment"
+
+    def test_normalize_dataplane_url_parse_errors(self):
+        """Test URL normalization with parsing errors triggering fallbacks."""
+        from haproxy_template_ic.dataplane import normalize_dataplane_url
+
+        # Test with string that causes urlparse to raise ValueError
+        with patch("haproxy_template_ic.dataplane.urlparse") as mock_urlparse:
+            mock_urlparse.side_effect = ValueError("URL parsing failed")
+
+            # Should fallback to simple string concatenation
+            result = normalize_dataplane_url("http://localhost:5555")
+            assert result == "http://localhost:5555/v3"
+
+            # Test URL that already has /v3 - should remain unchanged in fallback
+            result = normalize_dataplane_url("http://localhost:5555/v3")
+            assert result == "http://localhost:5555/v3"
+
+    def test_normalize_dataplane_url_reconstruction_errors(self):
+        """Test URL normalization when urlunparse fails."""
+        from haproxy_template_ic.dataplane import normalize_dataplane_url
+
+        with patch("haproxy_template_ic.dataplane.urlunparse") as mock_urlunparse:
+            mock_urlunparse.side_effect = ValueError("URL reconstruction failed")
+
+            # Should fallback to simple string concatenation
+            result = normalize_dataplane_url("http://localhost:5555")
+            assert result == "http://localhost:5555/v3"
 
     @pytest.mark.asyncio
     async def test_dataplane_client_get_version_success(self):
@@ -1065,3 +1483,368 @@ defaults
             )  # Error line marked with >
             assert "    3: defaults" in error_str  # Context before
             assert "    5:     mode http" in error_str  # Context after
+
+
+class TestConfigSynchronizerSyncMethods:
+    """Test ConfigSynchronizer sync methods with maps, certificates, and files."""
+
+    @pytest.mark.asyncio
+    async def test_sync_configuration_with_maps_and_certificates(self):
+        """Test sync with maps and certificates."""
+        deployment_history = DeploymentHistory()
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
+        synchronizer = ConfigSynchronizer(
+            production_urls=["http://test1:5555"],
+            validation_url="http://localhost:5555",
+            credentials=credentials,
+            deployment_history=deployment_history,
+        )
+
+        # Create context with maps and certificates
+        context = Mock()
+        context.rendered_config.content = "global\n    daemon"
+
+        # Mock rendered content
+        mock_map = Mock()
+        mock_map.filename = "test.map"
+        mock_map.content = "map content"
+        context.rendered_maps = [mock_map]
+
+        mock_cert = Mock()
+        mock_cert.filename = "test.pem"
+        mock_cert.content = "cert content"
+        context.rendered_certificates = [mock_cert]
+
+        mock_file = Mock()
+        mock_file.filename = "test.txt"
+        mock_file.content = "file content"
+        context.rendered_files = [mock_file]
+
+        with patch(
+            "haproxy_template_ic.dataplane.DataplaneClient"
+        ) as mock_client_class:
+            mock_client = Mock()
+            mock_client.validate_configuration = AsyncMock(return_value=None)
+            mock_client.deploy_configuration = AsyncMock(return_value="v1.0")
+            mock_client.sync_maps = AsyncMock(return_value=None)
+            mock_client.sync_certificates = AsyncMock(return_value=None)
+            mock_client.sync_files = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            results = await synchronizer.sync_configuration(context)
+
+            assert results["successful"] == 1
+            assert results["failed"] == 0
+
+            # Verify sync methods were called
+            mock_client.sync_maps.assert_called_with({"test.map": "map content"})
+            mock_client.sync_certificates.assert_called_with(
+                {"test.pem": "cert content"}
+            )
+            mock_client.sync_files.assert_called_with({"test.txt": "file content"})
+
+    @pytest.mark.asyncio
+    async def test_sync_configuration_deployment_with_config_context_error(self):
+        """Test deployment error with config context parsing."""
+        deployment_history = DeploymentHistory()
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
+        synchronizer = ConfigSynchronizer(
+            production_urls=["http://test1:5555"],
+            validation_url="http://localhost:5555",
+            credentials=credentials,
+            deployment_history=deployment_history,
+        )
+
+        context = Mock()
+        config_with_error = """global
+    daemon
+defaults
+    invalid-directive
+    mode http"""
+        context.rendered_config.content = config_with_error
+        context.rendered_maps = []
+        context.rendered_certificates = []
+        context.rendered_files = []
+
+        with patch(
+            "haproxy_template_ic.dataplane.DataplaneClient"
+        ) as mock_client_class:
+
+            def create_mock_client(url, **kwargs):
+                mock_client = Mock()
+                if "localhost" in url:  # Validation client
+                    mock_client.validate_configuration = AsyncMock(return_value=None)
+                else:  # Production client
+                    # Simulate deployment error with line reference
+                    error_with_line = Exception(
+                        "config parsing [/tmp/haproxy.cfg:4]: unknown keyword 'invalid-directive'"
+                    )
+                    mock_client.deploy_configuration = AsyncMock(
+                        side_effect=error_with_line
+                    )
+                return mock_client
+
+            mock_client_class.side_effect = create_mock_client
+
+            results = await synchronizer.sync_configuration(context)
+
+            assert results["successful"] == 0
+            assert results["failed"] == 1
+            assert len(results["errors"]) == 1
+            # Error should contain context information
+            error_msg = results["errors"][0]
+            assert "unknown keyword 'invalid-directive'" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_sync_configuration_deployment_with_dataplane_api_error_containing_context(
+        self,
+    ):
+        """Test deployment error with DataplaneAPIError that already contains context."""
+        deployment_history = DeploymentHistory()
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+        from haproxy_template_ic.dataplane import DataplaneAPIError
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
+        synchronizer = ConfigSynchronizer(
+            production_urls=["http://test1:5555"],
+            validation_url="http://localhost:5555",
+            credentials=credentials,
+            deployment_history=deployment_history,
+        )
+
+        context = Mock()
+        context.rendered_config.content = "global\n    daemon"
+        context.rendered_maps = []
+        context.rendered_certificates = []
+        context.rendered_files = []
+
+        with patch(
+            "haproxy_template_ic.dataplane.DataplaneClient"
+        ) as mock_client_class:
+
+            def create_mock_client(url, **kwargs):
+                mock_client = Mock()
+                if "localhost" in url:  # Validation client
+                    mock_client.validate_configuration = AsyncMock(return_value=None)
+                else:  # Production client
+                    # Create error that already contains context
+                    error_with_context = DataplaneAPIError(
+                        "Deploy failed\n\nConfiguration context around error:\n> 4: invalid line"
+                    )
+                    mock_client.deploy_configuration = AsyncMock(
+                        side_effect=error_with_context
+                    )
+                return mock_client
+
+            mock_client_class.side_effect = create_mock_client
+
+            results = await synchronizer.sync_configuration(context)
+
+            assert results["successful"] == 0
+            assert results["failed"] == 1
+            # Should not try to add additional context since it already exists
+            error_msg = results["errors"][0]
+            assert "Configuration context around error:" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_sync_configuration_deployment_context_extraction_failure(self):
+        """Test deployment error when context extraction fails."""
+        deployment_history = DeploymentHistory()
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password="adminpass"),
+            validation=DataplaneAuth(username="admin", password="validationpass"),
+        )
+        synchronizer = ConfigSynchronizer(
+            production_urls=["http://test1:5555"],
+            validation_url="http://localhost:5555",
+            credentials=credentials,
+            deployment_history=deployment_history,
+        )
+
+        context = Mock()
+        context.rendered_config.content = "global\n    daemon"
+        context.rendered_maps = []
+        context.rendered_certificates = []
+        context.rendered_files = []
+
+        with patch(
+            "haproxy_template_ic.dataplane.DataplaneClient"
+        ) as mock_client_class:
+            with patch(
+                "haproxy_template_ic.dataplane.parse_validation_error_details"
+            ) as mock_parse:
+
+                def create_mock_client(url, **kwargs):
+                    mock_client = Mock()
+                    if "localhost" in url:  # Validation client
+                        mock_client.validate_configuration = AsyncMock(
+                            return_value=None
+                        )
+                    else:  # Production client
+                        mock_client.deploy_configuration = AsyncMock(
+                            side_effect=Exception("Generic deployment error")
+                        )
+                    return mock_client
+
+                # Make context extraction raise an exception
+                mock_parse.side_effect = Exception("Context extraction failed")
+                mock_client_class.side_effect = create_mock_client
+
+                results = await synchronizer.sync_configuration(context)
+
+                assert results["successful"] == 0
+                assert results["failed"] == 1
+                # Should still log the original error even if context extraction fails
+                error_msg = results["errors"][0]
+                assert "Generic deployment error" in error_msg
+
+
+class TestDataplaneClientDeploymentRetryLogic:
+    """Test DataplaneClient deployment retry mechanisms and error handling."""
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_version_get_failure(self):
+        """Test deployment when getting current version fails."""
+        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
+
+        client = DataplaneClient("http://localhost:5555")
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_client_instance = AsyncMock()
+            mock_async_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
+
+            # Mock version request failure
+            mock_version_resp = MagicMock()
+            mock_version_resp.status_code = 500
+            mock_version_resp.text = "Version API error"
+
+            mock_client_instance.get.return_value = mock_version_resp
+
+            with pytest.raises(DataplaneAPIError) as exc_info:
+                await client.deploy_configuration("global\n    daemon\n")
+
+            assert "Failed to get configuration version" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_new_version_get_failure(self):
+        """Test deployment when getting new version after deployment fails."""
+        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
+
+        client = DataplaneClient("http://localhost:5555")
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_client_instance = AsyncMock()
+            mock_async_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
+
+            # Mock successful initial version request and deployment
+            mock_version_resp_1 = MagicMock()
+            mock_version_resp_1.status_code = 200
+            mock_version_resp_1.json.return_value = 1
+
+            mock_deploy_resp = MagicMock()
+            mock_deploy_resp.status_code = 200
+
+            # Mock failed new version request
+            mock_version_resp_2 = MagicMock()
+            mock_version_resp_2.status_code = 500
+            mock_version_resp_2.text = "New version API error"
+
+            mock_client_instance.get.side_effect = [
+                mock_version_resp_1,
+                mock_version_resp_2,
+            ]
+            mock_client_instance.post.return_value = mock_deploy_resp
+
+            with pytest.raises(DataplaneAPIError) as exc_info:
+                await client.deploy_configuration("global\n    daemon\n")
+
+            assert "Failed to get new configuration version" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_retry_mechanism(self):
+        """Test deployment retry mechanism with transient errors."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+        import httpx
+
+        client = DataplaneClient("http://localhost:5555")
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_client_instance = AsyncMock()
+            mock_async_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
+
+            # Mock version responses (successful)
+            mock_version_resp_1 = MagicMock()
+            mock_version_resp_1.status_code = 200
+            mock_version_resp_1.json.return_value = 1
+
+            mock_version_resp_2 = MagicMock()
+            mock_version_resp_2.status_code = 200
+            mock_version_resp_2.json.return_value = 2
+
+            # First call fails with network error, second succeeds
+            mock_client_instance.get.side_effect = [
+                httpx.RequestError("Network timeout"),  # First attempt fails
+                mock_version_resp_1,  # Retry gets version
+                mock_version_resp_2,  # Gets new version
+            ]
+
+            mock_deploy_resp = MagicMock()
+            mock_deploy_resp.status_code = 200
+            mock_client_instance.post.return_value = mock_deploy_resp
+
+            # Mock the retry mechanism to avoid actual waits
+            with patch(
+                "haproxy_template_ic.dataplane.AsyncRetrying", MockAsyncRetrying
+            ):
+                result = await client.deploy_configuration("global\n    daemon\n")
+                assert result == "2"
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_retry_exhausted(self):
+        """Test deployment when all retry attempts are exhausted."""
+        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
+        import httpx
+
+        client = DataplaneClient("http://localhost:5555")
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_client_instance = AsyncMock()
+            mock_async_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
+
+            # Always fail with network error
+            mock_client_instance.get.side_effect = httpx.RequestError(
+                "Network always fails"
+            )
+
+            # Mock the retry mechanism to avoid actual waits
+            with patch(
+                "haproxy_template_ic.dataplane.AsyncRetrying", MockAsyncRetrying
+            ):
+                with pytest.raises(DataplaneAPIError) as exc_info:
+                    await client.deploy_configuration("global\n    daemon\n")
+
+                assert "Configuration deployment failed" in str(exc_info.value)
+                assert exc_info.value.operation == "deploy"
