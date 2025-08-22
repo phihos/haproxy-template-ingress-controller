@@ -57,7 +57,7 @@ Filename = Annotated[
     StringConstraints(
         min_length=1,
         max_length=255,  # Common filesystem limit
-        pattern=r"^[^/\\\\\x00]+$",  # No forward slashes, backslashes, or null bytes
+        pattern=r"^[^/\\\x00]+$",  # No forward slashes, backslashes, or null bytes
     ),
 ]
 
