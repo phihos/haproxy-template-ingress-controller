@@ -57,7 +57,7 @@ def test_cli_verbose_flag():
 def test_cli_structured_logging_flag():
     """Test structured logging flag functionality."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["--structured-logging", "--help"])
+    result = runner.invoke(cli, ["--structured-logging", "true", "--help"])
     assert result.exit_code == 0
 
 
@@ -113,6 +113,7 @@ def test_run_command_with_custom_args(mock_shutdown, mock_init, mock_run):
             "--metrics-port",
             "8080",
             "--tracing-enabled",
+            "true",
         ],
     )
 
@@ -178,6 +179,7 @@ def test_run_command_with_tracing_enabled(mock_shutdown, mock_init, mock_run):
             "--secret-name",
             "test-credentials",
             "--tracing-enabled",
+            "true",
         ],
     )
 
