@@ -12,6 +12,9 @@ images:
     newName: haproxytech/haproxy-alpine
     newTag: "3.1"
 
+patchesStrategicMerge:
+  - service-patch.yaml
+
 patches:
   - target:
       kind: Deployment

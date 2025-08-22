@@ -79,7 +79,7 @@ tests/fixtures/    # Test data and configurations
 
 ### Application
 - **Run operator**: `uv run haproxy-template-ic run --configmap-name=<name>` (or use `version` subcommand)
-- **Management socket**: `socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock`
+- **Management socket**: `nc local:/run/haproxy-template-ic/management.sock`
 - **Monitoring endpoints** (require port-forward):
   - Metrics: `curl http://localhost:9090/metrics`
   - Health: `curl http://localhost:8080/healthz`

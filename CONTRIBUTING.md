@@ -153,7 +153,7 @@ kubectl run haproxy-template-ic --image=haproxy-template-ic:dev --env="CONFIGMAP
 
 # Access logs and management socket
 kubectl logs -f haproxy-template-ic
-kubectl exec -it haproxy-template-ic -- socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+kubectl exec -it haproxy-template-ic -- nc local:/run/haproxy-template-ic/management.sock
 ```
 
 ### IDE Configuration
@@ -257,8 +257,8 @@ kubectl logs haproxy-template-ic -n <test-namespace> --previous
 kubectl logs haproxy-template-ic -n <test-namespace> --follow
 
 # 4. Debug application state via management socket
-kubectl exec -it haproxy-template-ic -n <test-namespace> -- socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-echo "dump all" | kubectl exec -i haproxy-template-ic -n <test-namespace> -- socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+kubectl exec -it haproxy-template-ic -n <test-namespace> -- nc local:/run/haproxy-template-ic/management.sock
+echo "dump all" | kubectl exec -i haproxy-template-ic -n <test-namespace> -- nc local:/run/haproxy-template-ic/management.sock
 
 # 5. Inspect cluster configuration
 kubectl cluster-info
@@ -365,7 +365,7 @@ docker logs haproxy-template-ic --follow
 docker inspect haproxy-template-ic
 
 # Access management socket from host
-docker exec haproxy-template-ic socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+docker exec haproxy-template-ic nc local:/run/haproxy-template-ic/management.sock
 
 # Debug with coverage container
 docker run -it --rm \
@@ -544,7 +544,7 @@ kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
 
 # Interactive debugging with management socket
 kubectl exec -it haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+  nc local:/run/haproxy-template-ic/management.sock
 
 # Stream logs
 kubectl logs -f haproxy-template-ic

@@ -1133,7 +1133,7 @@ def test_template_snippet_multiple_includes():
         .render(backend_name="web-servers", name="web-1", ip="192.168.1.10", port="80")
     )
 
-    expected = "backend web-servers    server web-1 192.168.1.10:80 check    option httpchk GET /health"
+    expected = "backend web-servers\n    server web-1 192.168.1.10:80 check\n    option httpchk GET /health"
     assert rendered == expected
 
 
@@ -1168,7 +1168,7 @@ def test_template_snippet_with_variables():
         .get_compiled(map_config.template)
         .render(servers=servers)
     )
-    expected = "server web-1 192.168.1.10:80 weight 150 checkserver web-2 192.168.1.11:80 weight 100 check"
+    expected = "server web-1 192.168.1.10:80 weight 150 check\nserver web-2 192.168.1.11:80 weight 100 check\n"
     assert rendered == expected
 
 

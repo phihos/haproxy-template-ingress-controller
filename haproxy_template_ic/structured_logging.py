@@ -10,7 +10,7 @@ import logging
 import functools
 import inspect
 from functools import lru_cache
-from typing import Any, List, Callable, TypeVar, Awaitable, Dict
+from typing import Any, Callable, TypeVar, Awaitable, Dict
 from uuid import uuid4
 
 import structlog
@@ -172,86 +172,62 @@ def observe(**decorator_kwargs: Any) -> Callable[[AsyncF], AsyncF]:
 
 
 def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None:
-    """Configure structured logging with optional JSON output using structlog.
+    """Configure structured logging with optional JSON or colored console output."""
+    level = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}.get(
+        verbose_level, logging.DEBUG
+    )
 
-    Intercepts and formats ALL logs from both application code and external libraries
-    (kopf, kr8s, uvloop, httpx) to ensure consistent output formatting.
-    """
-    import sys
-
-    log_levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
-    level = log_levels.get(verbose_level, logging.DEBUG)
-
-    # Configure structlog processors for both application and standard library logs
-    processors: List[Any] = [
-        structlog.contextvars.merge_contextvars,  # Merge context variables
-        structlog.processors.add_log_level,  # Add log level
-        structlog.processors.StackInfoRenderer(),  # Add stack info if requested
+    # Build shared processors for both structlog and stdlib
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
     ]
 
+    # Choose renderer based on output format
     if use_json:
-        # Add timestamp and JSON renderer for JSON output
-        processors.extend(
-            [
-                structlog.processors.TimeStamper(fmt="iso"),
-                structlog.processors.JSONRenderer(ensure_ascii=False),
-            ]
-        )
+        renderer = structlog.processors.JSONRenderer(ensure_ascii=False)
     else:
-        # Use structlog's built-in processors for traditional format
-        processors.extend(
-            [
-                structlog.processors.TimeStamper(fmt="iso"),
-                structlog.processors.KeyValueRenderer(
-                    key_order=["timestamp", "level", "logger"]
-                ),
-            ]
+        # Get default styles and customize debug to gray
+        level_styles = structlog.dev.ConsoleRenderer.get_default_level_styles()
+        level_styles["debug"] = "\x1b[90m"  # Bright black (gray)
+
+        renderer = structlog.dev.ConsoleRenderer(
+            colors=True,
+            force_colors=True,  # Force colors even without TTY (Kubernetes)
+            level_styles=level_styles,
         )
 
-    # Configure structlog to handle both structlog and standard library logs
+    # Configure structlog
     structlog.configure(
-        processors=processors,
+        processors=shared_processors + [renderer],
         wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
 
-    # In testing environment, use basic configuration to avoid mocking issues
-    if "pytest" in sys.modules:
-        logging.basicConfig(
-            level=level,
-            format="%(message)s",  # structlog will handle all formatting
-            force=True,
-        )
-    else:
-        # Configure standard library logging to use structlog formatting
-        # This ensures ALL logs (including from kopf, kr8s, uvloop, etc.) use consistent formatting
-        formatter = structlog.stdlib.ProcessorFormatter(
-            processor=structlog.processors.JSONRenderer(ensure_ascii=False)
-            if use_json
-            else structlog.processors.KeyValueRenderer(
-                key_order=["timestamp", "level", "logger"]
-            ),
-            foreign_pre_chain=processors[
-                :-1
-            ],  # All processors except the final renderer
-        )
+    # Configure standard library logging to use structlog formatting
+    # This ensures ALL logs (including from kopf, kr8s, uvloop) use our formatting
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=renderer,
+        foreign_pre_chain=shared_processors,
+    )
 
-        # Set up root logger with structlog formatter
-        handler = logging.StreamHandler()
-        handler.setFormatter(formatter)
-        handler.setLevel(level)  # Set handler level to match root logger
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
 
-        root_logger = logging.getLogger()
-        root_logger.handlers.clear()  # Remove any existing handlers
-        root_logger.addHandler(handler)
-        root_logger.setLevel(level)
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()  # Remove existing handlers
+    root_logger.addHandler(handler)
+    root_logger.setLevel(level)
 
-    # Suppress noisy HTTP client debug logs while keeping application debug logs
-    # These loggers produce excessive debug output that clutters application logs
+    # Suppress noisy libraries in debug mode
     if level == logging.DEBUG:
-        logging.getLogger("httpx").setLevel(logging.INFO)
-        logging.getLogger("httpcore").setLevel(logging.INFO)
-        logging.getLogger("httpcore.connection").setLevel(logging.INFO)
-        logging.getLogger("httpcore.http11").setLevel(logging.INFO)
+        for logger_name in [
+            "httpx",
+            "httpcore",
+            "httpcore.connection",
+            "httpcore.http11",
+        ]:
+            logging.getLogger(logger_name).setLevel(logging.INFO)

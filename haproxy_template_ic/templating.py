@@ -143,8 +143,8 @@ def get_template_environment(
     env = Environment(
         loader=snippet_loader,
         autoescape=False,  # HAProxy config shouldn't be HTML-escaped  # nosec B701
-        trim_blocks=True,  # Remove trailing newlines from template tags
-        lstrip_blocks=True,  # Remove leading whitespace from block tags
+        trim_blocks=False,  # Rely on manual whitespace control to create fewer surprises
+        lstrip_blocks=False,  # Rely on manual whitespace control to create fewer surprises
         extensions=["jinja2.ext.do"],  # Enable do extension for {% do %} statements
     )
 

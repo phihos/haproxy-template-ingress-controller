@@ -279,19 +279,19 @@ Access from within the pod or via `kubectl exec`:
 ```bash
 # Complete state
 kubectl exec -it haproxy-template-ic -- \
-  echo "dump all" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+  echo "dump all" | nc local:/run/haproxy-template-ic/management.sock
 
 # Resource indices only  
 kubectl exec -it haproxy-template-ic -- \
-  echo "dump indices" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+  echo "dump indices" | nc local:/run/haproxy-template-ic/management.sock
 
 # Specific index
 kubectl exec -it haproxy-template-ic -- \
-  echo "dump index pods" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+  echo "dump index pods" | nc local:/run/haproxy-template-ic/management.sock
 
 # HAProxy config context
 kubectl exec -it haproxy-template-ic -- \
-  echo "dump config" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+  echo "dump config" | nc local:/run/haproxy-template-ic/management.sock
 ```
 
 ### Configuration

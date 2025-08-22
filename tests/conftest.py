@@ -272,8 +272,8 @@ def kind_cluster(request):
             # kind command failed, let create() handle cluster creation
             pass
 
-        # Use project root config for admission controllers
-        config_path = request.config.rootpath / "kind-config.yaml"
+        # Use test-specific config to avoid port conflicts
+        config_path = request.config.rootpath / "kind-config-test.yaml"
         cluster.create(config_file=config_path)
 
     token: CleanupToken = yield cluster
@@ -705,7 +705,7 @@ log_targets:
     - app
 """,
                 "reload.sh": """#!/bin/sh
-echo reload | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock
+echo reload | nc local:/etc/haproxy/haproxy-master.sock
 """,
             },
         },

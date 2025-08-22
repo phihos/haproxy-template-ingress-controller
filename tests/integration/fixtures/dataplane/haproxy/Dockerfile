@@ -1,7 +1,7 @@
 FROM haproxytech/haproxy-alpine:3.1
 
-# Install socat for socket-based communication and curl for healthchecks
-RUN apk add --no-cache socat curl
+# Install curl for healthchecks (nc is already available in busybox)
+RUN apk add --no-cache curl
 
 # Copy default HAProxy configuration
 COPY haproxy-default.cfg /usr/local/etc/haproxy-default/haproxy.cfg

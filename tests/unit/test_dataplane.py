@@ -1013,3 +1013,55 @@ class TestDataplaneCriticalPaths:
 
             result = await client.deploy_configuration("global\n    daemon\n")
             assert result == "2"
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_error_with_context(self):
+        """Test deployment error includes HAProxy config context."""
+        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
+
+        client = DataplaneClient("http://localhost:5555")
+
+        # Create config with a known error on line 4
+        config_content = """global
+    daemon
+defaults
+    invalid-directive here
+    mode http
+"""
+
+        # Mock httpx.AsyncClient for direct HTTP calls
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_client_instance = AsyncMock()
+            mock_async_client.return_value.__aenter__.return_value = (
+                mock_client_instance
+            )
+
+            # Mock version request (successful)
+            mock_version_resp = MagicMock()
+            mock_version_resp.status_code = 200
+            mock_version_resp.json.return_value = 1
+
+            # Mock deploy request (failed with HAProxy error)
+            mock_deploy_resp = MagicMock()
+            mock_deploy_resp.status_code = 400
+            mock_deploy_resp.text = "config parsing [/tmp/haproxy.cfg:4]: unknown keyword 'invalid-directive'"
+
+            mock_client_instance.get.return_value = mock_version_resp
+            mock_client_instance.post.return_value = mock_deploy_resp
+
+            # Test that deployment failure includes config context
+            with pytest.raises(DataplaneAPIError) as exc_info:
+                await client.deploy_configuration(config_content)
+
+            error_str = str(exc_info.value)
+            # Should contain the original error
+            assert "Configuration deployment failed: 400" in error_str
+            assert "unknown keyword 'invalid-directive'" in error_str
+
+            # Should contain config context around line 4
+            assert "Configuration context around error:" in error_str
+            assert (
+                ">   4:     invalid-directive here" in error_str
+            )  # Error line marked with >
+            assert "    3: defaults" in error_str  # Context before
+            assert "    5:     mode http" in error_str  # Context after

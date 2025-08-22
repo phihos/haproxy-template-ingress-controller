@@ -12,14 +12,16 @@ import pytest
 
 
 def send_socket_command(pod, command, retries=3):
-    """Send a command to the management socket using socat and return the response."""
+    """Send a command to the management socket using nc and return the response."""
     for attempt in range(retries):
         try:
-            # Check if socat is available first
-            pod.exec(["which", "socat"])
+            # Check if nc is available first
+            pod.exec(["which", "nc"])
 
-            # Use echo to pipe command to socat
-            cmd = f'echo "{command}" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock'
+            # Use echo to pipe command to nc
+            cmd = (
+                f'echo "{command}" | nc local:/run/haproxy-template-ic/management.sock'
+            )
             result = pod.exec(["sh", "-c", cmd])
 
             # Parse the response

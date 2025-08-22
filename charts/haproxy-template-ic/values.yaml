@@ -335,8 +335,6 @@ webhook:
         global
             log stdout len 4096 local0 info
             chroot /var/lib/haproxy
-            stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
-            stats timeout 30s
             user haproxy
             group haproxy
             daemon

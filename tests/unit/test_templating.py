@@ -126,8 +126,8 @@ class TestGetTemplateEnvironment:
 
         assert isinstance(env, Environment)
         assert env.autoescape is False
-        assert env.trim_blocks is True
-        assert env.lstrip_blocks is True
+        assert env.trim_blocks is False
+        assert env.lstrip_blocks is False
         assert "b64decode" in env.filters
 
     def test_get_template_environment_without_snippets(self):

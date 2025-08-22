@@ -630,9 +630,18 @@ class DataplaneClient:
                         )
 
                         if deploy_response.status_code >= 400:
-                            raise DataplaneAPIError(
-                                f"Configuration deployment failed: {deploy_response.status_code} {deploy_response.text}"
+                            error_details = deploy_response.text
+                            # Parse error details to extract line number and context
+                            error_line, error_context = parse_validation_error_details(
+                                error_details, config_data
                             )
+
+                            # Create enhanced error with config context
+                            error_msg = f"Configuration deployment failed: {deploy_response.status_code} {error_details}"
+                            if error_context:
+                                error_msg += f"\n\nConfiguration context around error:\n{error_context}"
+
+                            raise DataplaneAPIError(error_msg)
 
                         # Get the new configuration version
                         new_version_response = await client.get(
@@ -982,7 +991,26 @@ class ConfigSynchronizer:
                 self.deployment_history.record(url, "unknown", False, str(e))
                 results["failed"] += 1
                 results["errors"].append(f"{url}: {e}")
-                logger.error(f"❌ Failed to deploy to {url}: {e}")
+
+                # Enhanced error logging with config context if available
+                error_msg = f"❌ Failed to deploy to {url}: {e}"
+                if isinstance(
+                    e, DataplaneAPIError
+                ) and "Configuration context around error:" in str(e):
+                    # The error already contains context, log it as-is
+                    logger.error(error_msg)
+                else:
+                    # Try to extract context for other types of errors
+                    try:
+                        error_line, error_context = parse_validation_error_details(
+                            str(e), config
+                        )
+                        if error_context:
+                            error_msg += f"\n\nConfiguration context around error:\n{error_context}"
+                    except Exception:  # nosec B110
+                        # If context extraction fails, continue with original error
+                        pass
+                    logger.error(error_msg)
 
         logger.info(
             f"Sync complete: {results['successful']} successful, {results['failed']} failed"

@@ -238,8 +238,6 @@ data:
         global
             log stdout len 4096 local0 info
             chroot /var/lib/haproxy
-            stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
-            stats timeout 30s
             user haproxy
             group haproxy
             daemon
@@ -271,6 +269,8 @@ data:
             http-request return status 200 content-type text/plain string "OK" if { path /healthz }
 
         frontend http_frontend
+            bind *:80
+    
             # Set a few variables
             http-request set-var(txn.base) base
             http-request set-var(txn.path) path
