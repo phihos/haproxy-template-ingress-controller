@@ -33,7 +33,7 @@ spec:
             - name: METRICS_PORT
               value: "9090"
             - name: STRUCTURED_LOGGING
-              value: "true"
+              value: "false"
             - name: TRACING_ENABLED
               value: "false"
           ports:
