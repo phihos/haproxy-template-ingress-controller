@@ -362,7 +362,7 @@ def get_pod_logs(
 
             for log_line in pod.logs(
                 container=container_name,
-                tail=actual_tail_lines if actual_tail_lines > 0 else None,
+                tail_lines=actual_tail_lines if actual_tail_lines > 0 else None,
             ):
                 if log_count >= max_logs:
                     log_lines.append(f"... [truncated after {max_logs} lines] ...")
