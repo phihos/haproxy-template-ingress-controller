@@ -66,25 +66,6 @@ class Credentials(BaseModel):
         if missing_fields:
             raise ValueError(ERROR_MISSING_CREDENTIALS.format(fields=missing_fields))
 
-        # Additional type safety check - these should not be None after validation
-        # Using explicit runtime checks instead of assertions for production safety
-        if dataplane_username is None:
-            raise RuntimeError(
-                "Internal error: dataplane_username should not be None after validation"
-            )
-        if dataplane_password is None:
-            raise RuntimeError(
-                "Internal error: dataplane_password should not be None after validation"
-            )
-        if validation_username is None:
-            raise RuntimeError(
-                "Internal error: validation_username should not be None after validation"
-            )
-        if validation_password is None:
-            raise RuntimeError(
-                "Internal error: validation_password should not be None after validation"
-            )
-
         # Create auth objects with validated fields
         dataplane_auth = DataplaneAuth(
             username=dataplane_username, password=SecretStr(dataplane_password)

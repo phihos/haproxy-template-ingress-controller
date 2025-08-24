@@ -2904,3 +2904,160 @@ class TestOperatorCriticalPaths:
         assert validation_errors[0]["resource_type"] == "ConfigMap"
         assert validation_errors[0]["resource_uid"] == "test-config"
         assert validation_errors[0]["error"] == "Template syntax error"
+
+
+# Tests for _is_valid_resource function to improve coverage
+
+
+def test_is_valid_resource_valid_dict():
+    """Test _is_valid_resource with valid dictionary resource."""
+    resource = {
+        "metadata": {
+            "name": "test-resource",
+            "namespace": "default",
+            "uid": "test-uid",
+        },
+        "spec": {"some": "data"},
+    }
+    assert _is_valid_resource(resource) is True
+
+
+def test_is_valid_resource_invalid_metadata_not_dict():
+    """Test _is_valid_resource with non-dict metadata."""
+    resource = {"metadata": "invalid-metadata-string"}
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_missing_name():
+    """Test _is_valid_resource with missing name in metadata."""
+    resource = {"metadata": {"namespace": "default"}}
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_missing_namespace():
+    """Test _is_valid_resource with missing namespace in metadata."""
+    resource = {"metadata": {"name": "test-resource"}}
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_empty_name():
+    """Test _is_valid_resource with empty name."""
+    resource = {"metadata": {"name": "", "namespace": "default"}}
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_empty_namespace():
+    """Test _is_valid_resource with empty namespace."""
+    resource = {"metadata": {"name": "test-resource", "namespace": ""}}
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_valid_list():
+    """Test _is_valid_resource with non-empty list."""
+    resource = ["item1", "item2"]
+    assert _is_valid_resource(resource) is True
+
+
+def test_is_valid_resource_empty_list():
+    """Test _is_valid_resource with empty list."""
+    resource = []
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_valid_tuple():
+    """Test _is_valid_resource with non-empty tuple."""
+    resource = ("item1", "item2")
+    assert _is_valid_resource(resource) is True
+
+
+def test_is_valid_resource_empty_tuple():
+    """Test _is_valid_resource with empty tuple."""
+    resource = ()
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_object_with_dict_attribute():
+    """Test _is_valid_resource with object that has __dict__."""
+
+    class TestResource:
+        def __init__(self):
+            self.name = "test"
+            self.data = "value"
+
+    resource = TestResource()
+    assert _is_valid_resource(resource) is True
+
+
+def test_is_valid_resource_object_with_get_method():
+    """Test _is_valid_resource with object that has get method and items."""
+
+    class DictLikeResource:
+        def __init__(self):
+            self._data = {"name": "test", "value": "data"}
+
+        def get(self, key, default=None):
+            return self._data.get(key, default)
+
+        def items(self):
+            return self._data.items()
+
+        def keys(self):
+            return self._data.keys()
+
+        def values(self):
+            return self._data.values()
+
+        def __iter__(self):
+            return iter(self._data)
+
+        def __getitem__(self, key):
+            return self._data[key]
+
+    resource = DictLikeResource()
+    assert _is_valid_resource(resource) is True
+
+
+def test_is_valid_resource_object_with_get_but_no_items():
+    """Test _is_valid_resource with object that has get but no items."""
+
+    class PartialDictLike:
+        def get(self, key, default=None):
+            return None
+
+    resource = PartialDictLike()
+    assert _is_valid_resource(resource) is True
+
+
+def test_is_valid_resource_object_with_failing_items():
+    """Test _is_valid_resource with object that raises exception on items()."""
+
+    class FailingResource:
+        def items(self):
+            raise TypeError("Cannot convert to dict")
+
+        def get(self, key, default=None):
+            return None
+
+    resource = FailingResource()
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_object_with_failing_dict_access():
+    """Test _is_valid_resource with object that raises exception on __dict__."""
+
+    class FailingDictResource:
+        @property
+        def __dict__(self):
+            raise AttributeError("No __dict__ available")
+
+    resource = FailingDictResource()
+    assert _is_valid_resource(resource) is False
+
+
+def test_is_valid_resource_primitive_types():
+    """Test _is_valid_resource with primitive types."""
+    assert _is_valid_resource("string") is False
+    assert _is_valid_resource(42) is False
+    assert _is_valid_resource(3.14) is False
+    assert _is_valid_resource(True) is False
+    assert _is_valid_resource(None) is False

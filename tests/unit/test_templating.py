@@ -166,6 +166,41 @@ class TestTemplateEnvironmentFactory:
         assert isinstance(env, Environment)
         assert "b64decode" in env.filters
 
+    def test_create_environment_with_config(self):
+        """Test creating environment with config object."""
+
+        class MockConfig:
+            storage_maps_dir = "/test/maps"
+            storage_ssl_dir = "/test/ssl"
+            storage_general_dir = "/test/general"
+
+        config = MockConfig()
+        env = TemplateEnvironmentFactory.create_environment(None, config)
+
+        assert isinstance(env, Environment)
+        assert "get_path" in env.filters
+
+    def test_create_environment_error_handling(self):
+        """Test factory error handling with invalid snippets."""
+        # Test with invalid snippet data that could cause issues
+        invalid_snippets = {"test": "not a snippet object"}
+
+        # Should not raise an exception, factory should handle gracefully
+        env = TemplateEnvironmentFactory.create_environment(invalid_snippets)
+        assert isinstance(env, Environment)
+
+    def test_create_environment_filters_available(self):
+        """Test that all expected filters are available in created environment."""
+        env = TemplateEnvironmentFactory.create_environment()
+
+        # Check that custom filters are registered
+        assert "b64decode" in env.filters
+        assert "get_path" in env.filters
+
+        # Verify filters are callable
+        assert callable(env.filters["b64decode"])
+        assert callable(env.filters["get_path"])
+
 
 class TestTemplateCompiler:
     """Test the TemplateCompiler class."""

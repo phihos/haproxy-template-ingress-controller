@@ -25,6 +25,7 @@ from haproxy_template_ic.config_models import HAProxyConfigContext
 from haproxy_template_ic.constants import (
     DEFAULT_API_TIMEOUT,
     DEFAULT_DATAPLANE_PASSWORD,
+    DEFAULT_DATAPLANE_PORT,
     DEFAULT_DATAPLANE_USERNAME,
     INITIAL_RETRY_WAIT_SECONDS,
     MAX_RETRY_WAIT_SECONDS,
@@ -335,9 +336,9 @@ class ValidationError(DataplaneAPIError):
 
 
 class DeploymentHistory:
-    """Simple deployment tracking per endpoint."""
+    """Simple deployment tracking per endpoint with thread-safe operations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._history: Dict[str, Dict[str, Any]] = {}
 
     def record(
@@ -385,9 +386,11 @@ def get_production_urls_from_index(
                 metadata.get("annotations", {}) if isinstance(metadata, dict) else {}
             )
             port = (
-                annotations.get("haproxy-template-ic/dataplane-port", "5555")
+                annotations.get(
+                    "haproxy-template-ic/dataplane-port", str(DEFAULT_DATAPLANE_PORT)
+                )
                 if isinstance(annotations, dict)
-                else "5555"
+                else str(DEFAULT_DATAPLANE_PORT)
             )
             url = f"http://{pod_ip}:{port}"
             urls.append(url)

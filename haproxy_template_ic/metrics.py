@@ -20,6 +20,8 @@ from prometheus_client import (
     generate_latest,
 )
 
+from haproxy_template_ic.constants import DEFAULT_METRICS_PORT
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 logger = logging.getLogger(__name__)
@@ -138,7 +140,7 @@ class MetricsCollector:
         self.start_time = time.time()
         self._server_started = False
 
-    async def start_metrics_server(self, port: int = 9090) -> None:
+    async def start_metrics_server(self, port: int = DEFAULT_METRICS_PORT) -> None:
         """Start the Prometheus metrics HTTP server using asyncio."""
         if self._server_started:
             logger.warning("Metrics server already started")
