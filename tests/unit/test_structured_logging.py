@@ -217,11 +217,11 @@ class TestSetupLogging:
         ]
 
         for verbose_level, expected_level in test_cases:
-            with patch("logging.basicConfig") as mock_basic_config:
-                setup_structured_logging(verbose_level=verbose_level)
-                mock_basic_config.assert_called()
-                args, kwargs = mock_basic_config.call_args
-                assert kwargs["level"] == expected_level
+            setup_structured_logging(verbose_level=verbose_level)
+
+            # Check that root logger level is set correctly
+            root_logger = logging.getLogger()
+            assert root_logger.level == expected_level
 
 
 class TestErrorHandling:
@@ -303,7 +303,6 @@ class TestErrorHandling:
 
     def test_observe_decorator_without_tracing(self):
         """Test observe decorator when tracing module is not available."""
-        from unittest.mock import patch
 
         # Mock the import to fail
         with patch.dict("sys.modules", {"haproxy_template_ic.tracing": None}):

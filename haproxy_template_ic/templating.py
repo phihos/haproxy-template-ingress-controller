@@ -6,6 +6,9 @@ functionality including support for template snippets and custom filters.
 """
 
 import base64
+import os
+import unicodedata
+import urllib.parse
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
 
@@ -35,6 +38,117 @@ def b64decode_filter(value: str) -> str:
         raise ValueError(f"Failed to decode base64 value: {e}") from e
 
 
+def get_path_filter(filename: str, content_type: str, config=None) -> str:
+    """Custom Jinja2 filter to resolve full paths from filenames with security validation.
+
+    Args:
+        filename: The filename without path
+        content_type: Type of content ("map", "certificate", or "file")
+        config: Configuration object containing storage directories
+
+    Returns:
+        Full path to the file based on content type and configuration
+
+    Example:
+        {{ "500.http" | get_path("file") }} -> "/etc/haproxy/general/500.http"
+        {{ "host.map" | get_path("map") }} -> "/etc/haproxy/maps/host.map"
+
+    Raises:
+        ValueError: If filename contains invalid characters or content_type is unknown
+    """
+    # Validate filename for security with comprehensive normalization
+    if not filename or not isinstance(filename, str):
+        raise ValueError(f"Invalid filename: {filename}")
+
+    # Defense in depth: Multiple layers of validation
+
+    # Layer 1: URL decode the filename to catch encoded attacks
+    try:
+        decoded_filename = urllib.parse.unquote(filename, errors="strict")
+    except UnicodeDecodeError:
+        raise ValueError(f"Invalid filename encoding: {filename}")
+
+    # Layer 2: Normalize Unicode to catch Unicode variations
+    normalized_filename = unicodedata.normalize("NFKC", decoded_filename)
+
+    # Layer 3: Check if normalization/decoding revealed encoded sequences
+    if "%" in normalized_filename:
+        raise ValueError(
+            f"Filename contains encoded sequences after normalization: {filename}"
+        )
+
+    # Layer 4: Check for path traversal attempts and dangerous characters
+    # Apply checks to both original and normalized filenames for completeness
+    for check_filename in [filename, normalized_filename]:
+        if (
+            ".." in check_filename
+            or "/" in check_filename
+            or "\\" in check_filename
+            or "\x00" in check_filename
+            or check_filename in (".", "..")
+            # Additional checks for common path separator Unicode variants
+            or "\u002f" in check_filename  # Unicode forward slash
+            or "\u005c" in check_filename  # Unicode backslash
+            or "\u2044" in check_filename  # Unicode fraction slash
+            or "\u2215" in check_filename  # Unicode division slash
+        ):
+            raise ValueError(
+                f"Invalid filename contains prohibited characters: {filename}"
+            )
+
+    # Layer 5: Final whitelist validation - only safe characters allowed
+    import re
+
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", normalized_filename):
+        raise ValueError(
+            f"Filename contains unsafe characters (only alphanumeric, dots, hyphens, underscores allowed): {filename}"
+        )
+
+    # Use normalized filename for further processing
+    filename = normalized_filename
+
+    # Validate content_type
+    valid_types = {"map", "certificate", "file"}
+    if content_type not in valid_types:
+        raise ValueError(
+            f"Invalid content_type '{content_type}'. Must be one of: {valid_types}"
+        )
+
+    # Get base directory
+    if config is None:
+        # Fallback to defaults if no config provided
+        base_dirs = {
+            "map": "/etc/haproxy/maps",
+            "certificate": "/etc/haproxy/ssl",
+            "file": "/etc/haproxy/general",
+        }
+        base_dir = base_dirs[content_type]
+    else:
+        # Use config storage directories
+        base_dirs = {
+            "map": config.storage_maps_dir,
+            "certificate": config.storage_ssl_dir,
+            "file": config.storage_general_dir,
+        }
+        base_dir = base_dirs[content_type]
+
+    # Construct and validate path
+    full_path = os.path.join(base_dir, filename)
+    normalized_path = os.path.normpath(full_path)
+    normalized_base = os.path.normpath(base_dir)
+
+    # Ensure path doesn't escape base directory
+    if (
+        not normalized_path.startswith(normalized_base + os.sep)
+        and normalized_path != normalized_base
+    ):
+        raise ValueError(
+            f"Path traversal detected for filename '{filename}' in {content_type}"
+        )
+
+    return normalized_path
+
+
 class SnippetLoader(BaseLoader):
     """Custom Jinja2 loader that can resolve template snippets by name."""
 
@@ -58,6 +172,7 @@ class SnippetLoader(BaseLoader):
 
 def get_template_environment(
     snippets: Optional[TemplateSnippetCollection] = None,
+    config=None,
 ) -> Environment:
     """Get or create a Jinja2 environment with snippet support."""
     # Create snippet loader
@@ -67,13 +182,19 @@ def get_template_environment(
     env = Environment(
         loader=snippet_loader,
         autoescape=False,  # HAProxy config shouldn't be HTML-escaped  # nosec B701
-        trim_blocks=True,
-        lstrip_blocks=True,
+        trim_blocks=False,  # Rely on manual whitespace control to create fewer surprises
+        lstrip_blocks=False,  # Rely on manual whitespace control to create fewer surprises
         extensions=["jinja2.ext.do"],  # Enable do extension for {% do %} statements
     )
 
     # Add custom filters
     env.filters["b64decode"] = b64decode_filter
+
+    # Add get_path filter with config access
+    def get_path_with_config(filename: str, content_type: str) -> str:
+        return get_path_filter(filename, content_type, config)
+
+    env.filters["get_path"] = get_path_with_config
 
     return env
 
@@ -84,17 +205,22 @@ class TemplateEnvironmentFactory:
     @staticmethod
     def create_environment(
         snippets: Optional[TemplateSnippetCollection] = None,
+        config=None,
     ) -> Environment:
         """Create a Jinja2 environment with the given snippets."""
-        return get_template_environment(snippets)
+        return get_template_environment(snippets, config)
 
 
 class TemplateCompiler:
     """Service for compiling Jinja2 templates with dependency injection."""
 
-    def __init__(self, snippets: Optional[TemplateSnippetCollection] = None):
+    def __init__(
+        self, snippets: Optional[TemplateSnippetCollection] = None, config=None
+    ):
         """Initialize the compiler with template snippets."""
-        self.environment = TemplateEnvironmentFactory.create_environment(snippets)
+        self.environment = TemplateEnvironmentFactory.create_environment(
+            snippets, config
+        )
 
     def compile_template(self, template_string: str) -> Template:
         """Compile a template string into a Jinja2 Template object."""
@@ -149,13 +275,16 @@ class TemplateRenderer:
     for efficient reuse. Templates are compiled once and cached by their content.
     """
 
-    def __init__(self, template_snippets: Optional[TemplateSnippetCollection] = None):
+    def __init__(
+        self, template_snippets: Optional[TemplateSnippetCollection] = None, config=None
+    ):
         """Initialize the renderer with template snippets.
 
         Args:
             template_snippets: Collection of reusable template snippets
+            config: Configuration object for get_path filter
         """
-        self._compiler = TemplateCompiler(template_snippets)
+        self._compiler = TemplateCompiler(template_snippets, config)
         self._compiled_templates: Dict[str, Template] = {}
 
     @classmethod
@@ -168,7 +297,7 @@ class TemplateRenderer:
         Returns:
             TemplateRenderer instance configured with the config's snippets
         """
-        return cls(template_snippets=config.template_snippets)
+        return cls(template_snippets=config.template_snippets, config=config)
 
     def render(self, template_str: str, **context: Any) -> str:
         """Compile (with caching) and render a template.

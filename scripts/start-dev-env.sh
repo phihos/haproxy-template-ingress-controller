@@ -97,6 +97,8 @@ COMMANDS:
     restart     Restart controller deployment
     status      Show deployment status
     clean       Clean up and reset environment
+    test        Test ingress controller functionality
+    port-forward Setup port forwarding for HAProxy services
 
 OPTIONS:
     --cluster-name NAME     Custom cluster name (default: haproxy-template-ic-dev)
@@ -113,7 +115,9 @@ OPTIONS:
 EXAMPLES:
     $0                      # Start dev environment with defaults
     $0 up --skip-build      # Start without rebuilding image
+    $0 test                 # Test ingress controller functionality
     $0 logs                 # Follow controller logs
+    $0 port-forward         # Setup port forwarding for testing
     $0 down                 # Delete cluster
     $0 restart --verbose    # Restart with debug output
 
@@ -344,9 +348,6 @@ deploy_controller() {
     log INFO "Pointing deployment to local image '${LOCAL_IMAGE}'..."
     kubectl -n "${CTRL_NAMESPACE}" set image deployment/haproxy-template-ic controller="${LOCAL_IMAGE}" >/dev/null || true
     
-    log INFO "Forcing controller rollout restart..."
-    kubectl -n "${CTRL_NAMESPACE}" rollout restart deployment/haproxy-template-ic >/dev/null || true
-    
     log INFO "Waiting for controller deployment to become ready..."
     if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-template-ic --timeout="${TIMEOUT}s"; then
         err "Controller rollout did not complete in ${TIMEOUT}s."
@@ -507,6 +508,102 @@ dev_down() {
     dev_clean "$@"
 }
 
+test_ingress() {
+    print_section "🧪 Testing Ingress Controller"
+    
+    # Check if the echo service is available
+    if ! kubectl -n "$ECHO_NAMESPACE" get deployment "$ECHO_APP_NAME" >/dev/null 2>&1; then
+        warn "Echo service not found. Deploy it first with: $0 up"
+        return 1
+    fi
+    
+    # Test via NodePort (requires kind cluster)
+    if kind get clusters 2>/dev/null | grep -q "$CLUSTER_NAME"; then
+        log INFO "Testing via NodePort (localhost:30080)..."
+        echo "Trying to connect to echo service through HAProxy ingress controller..."
+        
+        # Wait a moment for the service to be ready
+        sleep 2
+        
+        if curl -s --max-time 10 -H "Host: echo.localdev.me" http://localhost:30080 >/dev/null 2>&1; then
+            ok "✅ Ingress controller is working! Echo service is accessible"
+            echo
+            echo "Test the ingress controller with:"
+            echo "  curl -H 'Host: echo.localdev.me' http://localhost:30080"
+            echo "  curl -H 'Host: echo.localdev.me' http://localhost:30080/test"
+            echo
+            echo "Or in your browser:"
+            echo "  Add '127.0.0.1 echo.localdev.me' to /etc/hosts"
+            echo "  Then visit: http://echo.localdev.me:30080"
+        else
+            warn "❌ Could not reach echo service through ingress controller"
+            echo "Troubleshooting steps:"
+            echo "  1. Check HAProxy status: kubectl -n $CTRL_NAMESPACE get pods -l app=haproxy"
+            echo "  2. Check HAProxy logs: kubectl -n $CTRL_NAMESPACE logs deploy/haproxy-production -c haproxy"
+            echo "  3. Check echo service: kubectl -n $ECHO_NAMESPACE get pods -l app=$ECHO_APP_NAME"
+            echo "  4. Verify ingress: kubectl -n $ECHO_NAMESPACE get ingress $ECHO_APP_NAME -o wide"
+            return 1
+        fi
+    else
+        warn "Kind cluster '$CLUSTER_NAME' not found. Cannot test via NodePort."
+        return 1
+    fi
+}
+
+port_forward_haproxy() {
+    print_section "🔄 Setting up Port Forwarding"
+    
+    echo "Setting up port forwarding for HAProxy services..."
+    echo "This will forward local ports to the HAProxy services in the cluster."
+    echo
+    
+    # Check if HAProxy is running
+    if ! kubectl -n "$CTRL_NAMESPACE" get deployment haproxy-production >/dev/null 2>&1; then
+        warn "HAProxy production deployment not found. Deploy it first with: $0 up"
+        return 1
+    fi
+    
+    echo "Available port forwarding options:"
+    echo "  1. HAProxy HTTP (port 8080 -> 80): kubectl -n $CTRL_NAMESPACE port-forward svc/haproxy-production 8080:80"
+    echo "  2. HAProxy Health (port 8404 -> 8404): kubectl -n $CTRL_NAMESPACE port-forward svc/haproxy-production 8404:8404"
+    echo "  3. Controller Metrics (port 9090 -> 9090): kubectl -n $CTRL_NAMESPACE port-forward svc/haproxy-template-ic-metrics 9090:9090"
+    echo "  4. Controller Health (port 8081 -> 8080): kubectl -n $CTRL_NAMESPACE port-forward deploy/haproxy-template-ic 8081:8080"
+    echo
+    
+    read -p "Choose an option (1-4) or 'q' to quit: " choice
+    
+    case "$choice" in
+        1)
+            log INFO "Starting port forwarding: localhost:8080 -> HAProxy HTTP"
+            echo "Test with: curl -H 'Host: echo.localdev.me' http://localhost:8080"
+            kubectl -n "$CTRL_NAMESPACE" port-forward svc/haproxy-production 8080:80
+            ;;
+        2)
+            log INFO "Starting port forwarding: localhost:8404 -> HAProxy Health"
+            echo "Test with: curl http://localhost:8404/healthz"
+            kubectl -n "$CTRL_NAMESPACE" port-forward svc/haproxy-production 8404:8404
+            ;;
+        3)
+            log INFO "Starting port forwarding: localhost:9090 -> Controller Metrics"
+            echo "Test with: curl http://localhost:9090/metrics"
+            kubectl -n "$CTRL_NAMESPACE" port-forward svc/haproxy-template-ic-metrics 9090:9090
+            ;;
+        4)
+            log INFO "Starting port forwarding: localhost:8081 -> Controller Health"
+            echo "Test with: curl http://localhost:8081/healthz"
+            kubectl -n "$CTRL_NAMESPACE" port-forward deploy/haproxy-template-ic 8081:8080
+            ;;
+        q|Q)
+            echo "Exiting port forwarding setup"
+            return 0
+            ;;
+        *)
+            err "Invalid choice: $choice"
+            return 1
+            ;;
+    esac
+}
+
 post_deploy_tips() {
 	echo
 	ok "Environment is up. Next steps:"
@@ -515,6 +612,13 @@ post_deploy_tips() {
 	echo "  - HAProxy production logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/haproxy-production -f"
 	echo "  - Echo service: kubectl -n ${ECHO_NAMESPACE} get svc ${ECHO_APP_NAME}"
 	echo "  - Ingress: kubectl -n ${ECHO_NAMESPACE} get ingress ${ECHO_APP_NAME} -o wide"
+	echo
+	
+	ok "🧪 Testing the Ingress Controller:"
+	echo "  - Quick test: $0 test"
+	echo "  - Manual test: curl -H 'Host: echo.localdev.me' http://localhost:30080"
+	echo "  - Browser test: Add '127.0.0.1 echo.localdev.me' to /etc/hosts, visit http://echo.localdev.me:30080"
+	echo "  - Port forwarding: $0 port-forward"
 	echo
 	ok "Monitoring & Observability:"
 	echo "  - Metrics (Prometheus): kubectl -n ${CTRL_NAMESPACE} port-forward svc/haproxy-template-ic-metrics 9090:9090"
@@ -548,7 +652,7 @@ post_deploy_tips() {
 	echo "  - Inspect events: kubectl get events --all-namespaces --sort-by=.lastTimestamp | tail -n 50"
 	echo "  - Describe resources: kubectl -n ${CTRL_NAMESPACE} describe deploy/haproxy-template-ic"
 	echo "  - Describe HAProxy: kubectl -n ${CTRL_NAMESPACE} describe deploy/haproxy-production"
-	echo "  - Socket debug: kubectl -n ${CTRL_NAMESPACE} exec -it deploy/haproxy-template-ic -- sh -c 'socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock'"
+	echo "  - Socket debug: kubectl -n ${CTRL_NAMESPACE} exec -it deploy/haproxy-template-ic -- sh -c 'nc local:/run/haproxy-template-ic/management.sock'"
 	echo "  - Check metrics: kubectl -n ${CTRL_NAMESPACE} get pods -l app=haproxy-template-ic --show-labels"
 	echo "  - Check HAProxy pods: kubectl -n ${CTRL_NAMESPACE} get pods -l app=haproxy,component=loadbalancer --show-labels"
 	echo "  - Network policies: kubectl -n ${CTRL_NAMESPACE} get networkpolicy"
@@ -604,6 +708,12 @@ main() {
             ;;
         status)
             dev_status
+            ;;
+        test)
+            test_ingress
+            ;;
+        port-forward)
+            port_forward_haproxy
             ;;
         *)
             err "Unknown command: $COMMAND"

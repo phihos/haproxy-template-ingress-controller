@@ -10,7 +10,7 @@ import logging
 import functools
 import inspect
 from functools import lru_cache
-from typing import Any, List, Callable, TypeVar, Awaitable, Dict
+from typing import Any, Callable, TypeVar, Awaitable, Dict, Union
 from uuid import uuid4
 
 import structlog
@@ -172,48 +172,64 @@ def observe(**decorator_kwargs: Any) -> Callable[[AsyncF], AsyncF]:
 
 
 def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None:
-    """Configure structured logging with optional JSON output using structlog."""
-    log_levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
-    level = log_levels.get(verbose_level, logging.DEBUG)
-
-    # Configure the standard library logging first
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",  # structlog will handle all formatting
-        force=True,
+    """Configure structured logging with optional JSON or colored console output."""
+    level = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}.get(
+        verbose_level, logging.DEBUG
     )
 
-    # Configure structlog processors
-    processors: List[Any] = [
-        structlog.contextvars.merge_contextvars,  # Merge context variables
-        structlog.processors.add_log_level,  # Add log level
-        structlog.processors.StackInfoRenderer(),  # Add stack info if requested
+    # Build shared processors for both structlog and stdlib
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
     ]
 
+    # Choose renderer based on output format
+    renderer: Union[structlog.processors.JSONRenderer, structlog.dev.ConsoleRenderer]
     if use_json:
-        # Add timestamp and JSON renderer for JSON output
-        processors.extend(
-            [
-                structlog.processors.TimeStamper(fmt="iso"),
-                structlog.processors.JSONRenderer(),
-            ]
-        )
+        renderer = structlog.processors.JSONRenderer(ensure_ascii=False)
     else:
-        # Use structlog's built-in processors for traditional format
-        processors.extend(
-            [
-                structlog.processors.TimeStamper(fmt="iso"),
-                structlog.processors.KeyValueRenderer(
-                    key_order=["timestamp", "level", "logger"]
-                ),
-            ]
+        # Get default styles and customize debug to gray
+        level_styles = structlog.dev.ConsoleRenderer.get_default_level_styles()
+        level_styles["debug"] = "\x1b[90m"  # Bright black (gray)
+
+        renderer = structlog.dev.ConsoleRenderer(
+            colors=True,
+            force_colors=True,  # Force colors even without TTY (Kubernetes)
+            level_styles=level_styles,
         )
 
     # Configure structlog
+    processors = shared_processors + [renderer]
     structlog.configure(
-        processors=processors,
+        processors=processors,  # type: ignore[arg-type]
         wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+    # Configure standard library logging to use structlog formatting
+    # This ensures ALL logs (including from kopf, kr8s, uvloop) use our formatting
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=renderer,
+        foreign_pre_chain=shared_processors,  # type: ignore[arg-type]
+    )
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()  # Remove existing handlers
+    root_logger.addHandler(handler)
+    root_logger.setLevel(level)
+
+    # Suppress noisy libraries in debug mode
+    if level == logging.DEBUG:
+        for logger_name in [
+            "httpx",
+            "httpcore",
+            "httpcore.connection",
+            "httpcore.http11",
+        ]:
+            logging.getLogger(logger_name).setLevel(logging.INFO)

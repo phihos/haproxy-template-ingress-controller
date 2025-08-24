@@ -354,12 +354,12 @@ class TestConvenienceContextManagers:
     @patch("haproxy_template_ic.tracing.trace_operation")
     def test_trace_template_render(self, mock_trace_operation):
         """Test template render tracing context manager."""
-        with trace_template_render("map", "/etc/haproxy/maps/test.map"):
+        with trace_template_render("map", "test.map"):
             pass
 
         expected_attributes = {
             "template.type": "map",
-            "template.path": "/etc/haproxy/maps/test.map",
+            "template.path": "test.map",
             "operation.category": "template_rendering",
         }
         mock_trace_operation.assert_called_once_with(

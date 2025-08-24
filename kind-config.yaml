@@ -1,6 +1,13 @@
 # Enable admission controllers for ValidatingAdmissionWebhook support
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Expose HAProxy HTTP port for testing
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP
 kubeadmConfigPatches:
 - |
   kind: ClusterConfiguration

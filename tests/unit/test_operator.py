@@ -15,11 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from haproxy_template_ic.config_models import (
     Config,
     HAProxyConfigContext,
-    MapConfig,
     PodSelector,
-    RenderedCertificate,
+    RenderedContent,
     RenderedConfig,
-    RenderedMap,
+    TemplateConfig,
     TemplateContext,
     WatchResourceConfig,
     config_from_dict,
@@ -135,7 +134,7 @@ async def test_handle_configmap_change_with_change(mock_get_namespace):
     memo = MagicMock()
     memo.config = Config(
         pod_selector=PodSelector(match_labels={"app": "old"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
     )
     event = {
         "object": {
@@ -156,7 +155,7 @@ async def test_handle_configmap_change_with_change(mock_get_namespace):
         with patch("haproxy_template_ic.operator.trigger_reload") as mock_trigger:
             mock_load.return_value = Config(
                 pod_selector=PodSelector(match_labels={"app": "new"}),
-                haproxy_config=MapConfig(template="global\n    daemon"),
+                haproxy_config=TemplateConfig(template="global\n    daemon"),
             )
 
             await handle_configmap_change(
@@ -175,7 +174,7 @@ async def test_handle_configmap_change_no_change(mock_get_namespace):
     memo = MagicMock()
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=MapConfig(template="global\n    daemon"),
+        haproxy_config=TemplateConfig(template="global\n    daemon"),
     )
     memo.config = config
 
@@ -247,7 +246,7 @@ async def test_render_haproxy_templates_success(mock_get_namespace, mock_sync):
                 }
             },
             "maps": {
-                "/etc/haproxy/maps/backend.map": {
+                "backend.map": {
                     "template": "{% for key, pod in resources.get('pods', {}).items() %}server {{ pod.metadata.name }} {{ pod.status.podIP }}:80{% endfor %}"
                 }
             },
@@ -285,8 +284,8 @@ async def test_render_haproxy_templates_success(mock_get_namespace, mock_sync):
     # Check that rendered map was added
     assert len(memo.haproxy_config_context.rendered_maps) == 1
     rendered_map = memo.haproxy_config_context.rendered_maps[0]
-    assert isinstance(rendered_map, RenderedMap)
-    assert rendered_map.path == "/etc/haproxy/maps/backend.map"
+    assert isinstance(rendered_map, RenderedContent)
+    assert rendered_map.filename == "backend.map"
     assert "server test-pod 10.0.1.5:80" in rendered_map.content
 
     # Check that no certificates were rendered (none configured)
@@ -312,7 +311,7 @@ async def test_render_haproxy_templates_with_ingress(mock_get_namespace, mock_sy
                 }
             },
             "maps": {
-                "/etc/haproxy/maps/path-exact.map": {
+                "path-exact.map": {
                     "template": (
                         "{% for _, ingress in resources.get('ingresses', {}).items() %}"
                         "{% for rule in (ingress.spec.get('rules', []) | selectattr('http', 'defined')) %}"
@@ -369,8 +368,8 @@ async def test_render_haproxy_templates_with_ingress(mock_get_namespace, mock_sy
     # Check that rendered map was added
     assert len(memo.haproxy_config_context.rendered_maps) == 1
     rendered_map = memo.haproxy_config_context.rendered_maps[0]
-    assert isinstance(rendered_map, RenderedMap)
-    assert rendered_map.path == "/etc/haproxy/maps/path-exact.map"
+    assert isinstance(rendered_map, RenderedContent)
+    assert rendered_map.filename == "path-exact.map"
     assert "example.com/api backend_name" in rendered_map.content
 
 
@@ -393,7 +392,7 @@ async def test_kopf_index_store_resource_access(mock_get_namespace, mock_sync):
                 }
             },
             "maps": {
-                "/etc/haproxy/maps/test.map": {
+                "test.map": {
                     # This template pattern was failing with the original error:
                     # "'kopf._core.engines.indexing.Store object' has no attribute 'spec'"
                     "template": (
@@ -487,7 +486,7 @@ async def test_render_haproxy_templates_jinja_error(
             "haproxy_config": {"template": "global\n    daemon"},
             "watched_resources": {},
             "maps": {
-                "/etc/haproxy/maps/backend.map": {
+                "backend.map": {
                     "template": "server {{ undefined_variable.invalid_attr }}"
                 }
             },
@@ -508,7 +507,7 @@ async def test_render_haproxy_templates_jinja_error(
 
     # Should log error but not crash
     mock_logger.error.assert_called()
-    assert "Failed to render template" in mock_logger.error.call_args_list[0][0][0]
+    assert "Failed to render" in mock_logger.error.call_args_list[0][0][0]
     # Sync should be called but will handle the error gracefully
     mock_sync.assert_called_once()
 
@@ -629,7 +628,7 @@ async def test_render_certificates_with_template_variables(
             },
             "maps": {},
             "certificates": {
-                "/etc/ssl/certs/tls.pem": {
+                "tls.pem": {
                     "template": (
                         "{% for _, secret in resources.get('secrets', {}).items() %}"
                         "# Certificate for {{ secret.metadata.name }}\n"
@@ -666,8 +665,8 @@ async def test_render_certificates_with_template_variables(
     # Check that rendered certificate was added
     assert len(memo.haproxy_config_context.rendered_certificates) == 1
     rendered_certificate = memo.haproxy_config_context.rendered_certificates[0]
-    assert isinstance(rendered_certificate, RenderedCertificate)
-    assert rendered_certificate.path == "/etc/ssl/certs/tls.pem"
+    assert isinstance(rendered_certificate, RenderedContent)
+    assert rendered_certificate.filename == "tls.pem"
     assert "# Certificate for test-secret" in rendered_certificate.content
     assert "certificate data" in rendered_certificate.content
     assert "key data" in rendered_certificate.content
@@ -680,7 +679,7 @@ async def test_render_certificates_with_template_variables(
 async def test_render_certificates_jinja_error(
     mock_logger, mock_get_namespace, mock_sync
 ):
-    """Test certificate rendering with Jinja error."""
+    """Test certificate rendering with Jinja error - should be critical and abort."""
     mock_get_namespace.return_value = "default"
     memo = MagicMock()
     memo.config = config_from_dict(
@@ -690,9 +689,7 @@ async def test_render_certificates_jinja_error(
             "watched_resources": {},
             "maps": {},
             "certificates": {
-                "/etc/ssl/certs/bad-cert.pem": {
-                    "template": "{{ undefined_variable.invalid_attr }}"
-                }
+                "bad-cert.pem": {"template": "{{ undefined_variable.invalid_attr }}"}
             },
         }
     )
@@ -707,20 +704,22 @@ async def test_render_certificates_jinja_error(
     mock_index.__iter__.return_value = iter([])
     memo.indices = {"pods": mock_index}
 
-    await render_haproxy_templates(memo)
+    # Certificate template errors should now be critical and raise RuntimeError
+    with pytest.raises(RuntimeError, match="Critical certificate template errors"):
+        await render_haproxy_templates(memo)
 
-    # Should log error but not crash, and rendered_certificates should be empty
+    # Should log error
     mock_logger.error.assert_called()
 
     # Check for certificate error in any of the error calls
     error_messages = [str(call) for call in mock_logger.error.call_args_list]
     assert any(
-        "Failed to render certificate template for /etc/ssl/certs/bad-cert.pem" in msg
+        "Failed to render certificate template for bad-cert.pem" in msg
         for msg in error_messages
     )
-    assert len(memo.haproxy_config_context.rendered_certificates) == 0
-    # Sync should be called but will handle the error gracefully
-    mock_sync.assert_called_once()
+
+    # Since it raises an error, sync should NOT be called
+    mock_sync.assert_not_called()
 
 
 @pytest.mark.asyncio

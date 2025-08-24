@@ -1,7 +1,7 @@
 FROM haproxytech/haproxy-alpine:3.1
 
-# Install socat for socket-based communication and curl for healthchecks
-RUN apk add --no-cache socat curl
+# Install curl for healthchecks (nc is already available in busybox)
+RUN apk add --no-cache curl
 
 # Copy dataplane API configuration
 COPY dataplaneapi.yaml /usr/local/etc/haproxy-default/dataplaneapi.yaml

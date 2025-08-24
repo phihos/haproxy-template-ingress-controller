@@ -306,16 +306,26 @@ class ManagementSocketServer:
             hasattr(self.memo, "haproxy_config_context")
             and self.memo.haproxy_config_context
         ):
-            return {
-                "haproxy_config_context": self.memo.haproxy_config_context.model_dump(
-                    mode="json"
-                )
-            }
+            context_dict = self.memo.haproxy_config_context.model_dump(mode="json")
+            # Add convenience properties for backward compatibility
+            rendered_content = context_dict.get("rendered_content", [])
+            context_dict["rendered_maps"] = [
+                c for c in rendered_content if c.get("content_type") == "map"
+            ]
+            context_dict["rendered_certificates"] = [
+                c for c in rendered_content if c.get("content_type") == "certificate"
+            ]
+            context_dict["rendered_files"] = [
+                c for c in rendered_content if c.get("content_type") == "file"
+            ]
+            return {"haproxy_config_context": context_dict}
         return {
             "haproxy_config_context": {
-                "rendered_maps": {},
+                "rendered_content": [],
+                "rendered_maps": [],
+                "rendered_certificates": [],
+                "rendered_files": [],
                 "rendered_config": None,
-                "rendered_certificates": {},
             }
         }
 

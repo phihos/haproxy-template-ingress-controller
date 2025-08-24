@@ -58,7 +58,8 @@ class CliOptions:
 @click.option(
     "--structured-logging",
     envvar="STRUCTURED_LOGGING",
-    is_flag=True,
+    type=click.BOOL,
+    default=False,
     help="Enable structured JSON logging output.",
 )
 @click.pass_context
@@ -119,7 +120,8 @@ def cli(
 @click.option(
     "--tracing-enabled",
     envvar="TRACING_ENABLED",
-    is_flag=True,
+    type=click.BOOL,
+    default=False,
     help="Enable distributed tracing with OpenTelemetry.",
 )
 @click.pass_context

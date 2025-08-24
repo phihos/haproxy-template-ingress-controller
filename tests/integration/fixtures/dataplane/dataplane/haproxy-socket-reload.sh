@@ -1,3 +1,3 @@
 #!/bin/sh
 
-echo reload | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock
+echo reload | nc local:/etc/haproxy/haproxy-master.sock

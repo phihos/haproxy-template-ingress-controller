@@ -83,14 +83,14 @@ docker-entrypoint.sh: |
   if [ "$1" = "haproxy" ] || [ $# -eq 0 ]; then
       echo "Starting HAProxy in master-worker mode..."
       # Start HAProxy in master-worker mode with management socket
-      exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock" -- /etc/haproxy/haproxy.cfg
+      exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
   else
       echo "Executing: $@"
       exec "$@"
   fi
 haproxy-socket-reload.sh: |
   #!/usr/bin/env bash
-  echo reload | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock
+  echo reload | nc local:/etc/haproxy/haproxy-master.sock
 dataplane-entrypoint.sh: |
   #!/bin/sh
   set -e

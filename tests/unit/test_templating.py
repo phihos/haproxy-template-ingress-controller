@@ -12,6 +12,7 @@ from jinja2 import TemplateSyntaxError, TemplateNotFound, Environment, Template
 
 from haproxy_template_ic.templating import (
     b64decode_filter,
+    get_path_filter,
     SnippetLoader,
     get_template_environment,
     TemplateEnvironmentFactory,
@@ -125,8 +126,8 @@ class TestGetTemplateEnvironment:
 
         assert isinstance(env, Environment)
         assert env.autoescape is False
-        assert env.trim_blocks is True
-        assert env.lstrip_blocks is True
+        assert env.trim_blocks is False
+        assert env.lstrip_blocks is False
         assert "b64decode" in env.filters
 
     def test_get_template_environment_without_snippets(self):
@@ -556,7 +557,7 @@ class TestValidateConfigTemplates:
         """Test validation with valid map templates."""
         config_dict = {
             "maps": {
-                "/etc/haproxy/maps/host.map": {"template": "{{ host }} {{ backend }}"},
+                "host.map": {"template": "{{ host }} {{ backend }}"},
             }
         }
 
@@ -568,14 +569,14 @@ class TestValidateConfigTemplates:
         """Test validation with invalid map template."""
         config_dict = {
             "maps": {
-                "/etc/haproxy/maps/host.map": {"template": "{{ invalid syntax"},
+                "host.map": {"template": "{{ invalid syntax"},
             }
         }
 
         warnings = validate_config_templates(config_dict)
 
         assert len(warnings) > 0
-        assert "Map '/etc/haproxy/maps/host.map'" in warnings[0]
+        assert "Map 'host.map'" in warnings[0]
 
     def test_validate_config_templates_valid_haproxy_config(self):
         """Test validation with valid HAProxy config template."""
@@ -602,7 +603,7 @@ class TestValidateConfigTemplates:
         """Test validation with valid certificate templates."""
         config_dict = {
             "certificates": {
-                "/etc/haproxy/certs/tls.pem": {"template": "{{ cert_data }}"},
+                "tls.pem": {"template": "{{ cert_data }}"},
             }
         }
 
@@ -614,14 +615,14 @@ class TestValidateConfigTemplates:
         """Test validation with invalid certificate template."""
         config_dict = {
             "certificates": {
-                "/etc/haproxy/certs/tls.pem": {"template": "{{ invalid syntax"},
+                "tls.pem": {"template": "{{ invalid syntax"},
             }
         }
 
         warnings = validate_config_templates(config_dict)
 
         assert len(warnings) > 0
-        assert "Certificate '/etc/haproxy/certs/tls.pem'" in warnings[0]
+        assert "Certificate 'tls.pem'" in warnings[0]
 
     def test_validate_config_templates_comprehensive(self):
         """Test validation with all template types."""
@@ -631,13 +632,13 @@ class TestValidateConfigTemplates:
                 "broken_snippet": {"template": "{{ invalid syntax"},
             },
             "maps": {
-                "/etc/haproxy/maps/host.map": {"template": "{{ host }} {{ backend }}"},
-                "/etc/haproxy/maps/broken.map": {"template": "{{ invalid syntax"},
+                "host.map": {"template": "{{ host }} {{ backend }}"},
+                "broken.map": {"template": "{{ invalid syntax"},
             },
             "haproxy_config": {"template": "global\n  daemon"},
             "certificates": {
-                "/etc/haproxy/certs/tls.pem": {"template": "{{ cert_data }}"},
-                "/etc/haproxy/certs/broken.pem": {"template": "{{ invalid syntax"},
+                "tls.pem": {"template": "{{ cert_data }}"},
+                "broken.pem": {"template": "{{ invalid syntax"},
             },
         }
 
@@ -662,3 +663,345 @@ class TestValidateConfigTemplates:
 
         # May have warnings but should complete successfully
         assert isinstance(warnings, list)
+
+
+class TestGetPathFilterSecurity:
+    """Security tests for the get_path filter to prevent path traversal attacks."""
+
+    def test_get_path_filter_valid_filenames(self):
+        """Test get_path_filter with valid filenames."""
+        # Test valid cases
+        assert get_path_filter("host.map", "map") == "/etc/haproxy/maps/host.map"
+        assert get_path_filter("tls.pem", "certificate") == "/etc/haproxy/ssl/tls.pem"
+        assert get_path_filter("500.http", "file") == "/etc/haproxy/general/500.http"
+
+        # Test with underscores, hyphens, numbers
+        assert (
+            get_path_filter("host_backend.map", "map")
+            == "/etc/haproxy/maps/host_backend.map"
+        )
+        assert (
+            get_path_filter("tls-cert-2024.pem", "certificate")
+            == "/etc/haproxy/ssl/tls-cert-2024.pem"
+        )
+        assert (
+            get_path_filter("error404.http", "file")
+            == "/etc/haproxy/general/error404.http"
+        )
+
+    def test_get_path_filter_path_traversal_protection(self):
+        """Test that get_path_filter blocks path traversal attempts."""
+        # Test various path traversal patterns
+        path_traversal_attempts = [
+            "../../../etc/passwd",
+            "..\\..\\..\\windows\\system32\\config\\sam",
+            "host/../../../etc/passwd",
+            "tls/../../etc/passwd",
+            "../../../../../../root/.ssh/id_rsa",
+            "..\\..\\..\\..\\.ssh\\id_rsa",
+            "normal/../../../etc/shadow",
+            "file.map/../../../etc/hosts",
+        ]
+
+        for malicious_filename in path_traversal_attempts:
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(malicious_filename, "map")
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(malicious_filename, "certificate")
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(malicious_filename, "file")
+
+    def test_get_path_filter_directory_names_blocked(self):
+        """Test that directory names like '.' and '..' are blocked."""
+        directory_names = [".", ".."]
+
+        for dir_name in directory_names:
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(dir_name, "map")
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(dir_name, "certificate")
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(dir_name, "file")
+
+    def test_get_path_filter_null_byte_injection(self):
+        """Test that null byte injection is blocked."""
+        null_byte_attempts = [
+            "host.map\x00",
+            "\x00host.map",
+            "host\x00.map",
+            "host.map\x00../../../etc/passwd",
+        ]
+
+        for malicious_filename in null_byte_attempts:
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(malicious_filename, "map")
+
+    def test_get_path_filter_path_separators_blocked(self):
+        """Test that path separators are blocked."""
+        separator_attempts = [
+            "subdir/host.map",
+            "dir\\host.map",
+            "a/b/c/host.map",
+            "dir\\subdir\\host.map",
+            "//host.map",
+            "\\\\host.map",
+        ]
+
+        for malicious_filename in separator_attempts:
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(malicious_filename, "map")
+
+    def test_get_path_filter_empty_invalid_filenames(self):
+        """Test that empty or invalid filenames are rejected."""
+        invalid_filenames = ["", None]
+
+        for invalid_filename in invalid_filenames:
+            with pytest.raises(ValueError, match="Invalid filename"):
+                get_path_filter(invalid_filename, "map")
+
+    def test_get_path_filter_invalid_content_types(self):
+        """Test that invalid content types are rejected."""
+        invalid_content_types = [
+            "invalid",
+            "MAP",  # Wrong case
+            "Certificate",  # Wrong case
+            "files",  # Plural
+            "",
+            None,
+            123,
+            "executable",
+        ]
+
+        for invalid_type in invalid_content_types:
+            with pytest.raises(ValueError, match="Invalid content_type"):
+                get_path_filter("host.map", invalid_type)
+
+    def test_get_path_filter_with_custom_config(self):
+        """Test get_path_filter with custom configuration directories."""
+        mock_config = Mock()
+        mock_config.storage_maps_dir = "/custom/maps"
+        mock_config.storage_ssl_dir = "/custom/ssl"
+        mock_config.storage_general_dir = "/custom/files"
+
+        # Test custom paths
+        assert (
+            get_path_filter("host.map", "map", mock_config) == "/custom/maps/host.map"
+        )
+        assert (
+            get_path_filter("tls.pem", "certificate", mock_config)
+            == "/custom/ssl/tls.pem"
+        )
+        assert (
+            get_path_filter("500.http", "file", mock_config) == "/custom/files/500.http"
+        )
+
+    def test_get_path_filter_path_traversal_with_normalization(self):
+        """Test that path traversal is blocked even with path normalization attempts."""
+        # These might try to bypass validation through normalization
+        normalization_attempts = [
+            "host.map/./../../etc/passwd",
+            "host.map/./../../../etc/passwd",
+            "host.map/foo/../../../etc/passwd",
+        ]
+
+        # All should be blocked at the filename validation level
+        for malicious_filename in normalization_attempts:
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(malicious_filename, "map")
+
+    def test_get_path_filter_comprehensive_attack_scenarios(self):
+        """Test comprehensive attack scenarios combining multiple techniques."""
+        attack_scenarios_with_prohibited_chars = [
+            # Path traversal with explicit separators and null bytes
+            "../../../etc/passwd\x00.map",
+            "..\\..\\..\\windows\\system32\\config\\sam\x00",
+            "./../../etc/shadow",
+            ".\\..\\..\\etc\\hosts",
+            "normal/../../etc/passwd",
+            "normal\\..\\..\\etc\\passwd",
+        ]
+
+        for attack in attack_scenarios_with_prohibited_chars:
+            with pytest.raises(
+                ValueError, match="Invalid filename contains prohibited characters"
+            ):
+                get_path_filter(attack, "map")
+
+        # These should pass get_path_filter but would be caught by Pydantic validation patterns
+        encoded_attacks = [
+            "host.map%2e%2e%2f%2e%2e%2fetc%2fpasswd",  # URL encoded - no actual path separators
+        ]
+
+        for encoded_attack in encoded_attacks:
+            # These should pass get_path_filter since they don't contain actual path separators
+            try:
+                result = get_path_filter(encoded_attack, "map")
+                assert "/etc/haproxy/maps/" in result
+            except ValueError:
+                # Also acceptable if caught at filter level for being suspicious
+                pass
+
+    def test_get_path_filter_case_sensitivity(self):
+        """Test that content type validation is case-sensitive (security feature)."""
+        # Uppercase versions should be rejected to prevent confusion
+        uppercase_types = ["MAP", "CERTIFICATE", "FILE"]
+
+        for bad_type in uppercase_types:
+            with pytest.raises(ValueError, match="Invalid content_type"):
+                get_path_filter("host.map", bad_type)
+
+    def test_get_path_filter_boundary_conditions(self):
+        """Test boundary conditions for filename security."""
+        # Very long filename (potential buffer overflow attempt)
+        long_filename = "a" * 300 + ".map"
+        # This should be caught by our Filename validation in config_models.py
+        # but we test the filter directly here
+        try:
+            result = get_path_filter(long_filename, "map")
+            # If it doesn't raise, check it's handled properly
+            assert "/etc/haproxy/maps/" in result
+        except ValueError:
+            # Also acceptable if rejected for being too long
+            pass
+
+        # Single character filenames (valid)
+        assert get_path_filter("a", "map") == "/etc/haproxy/maps/a"
+
+        # Filenames with spaces are now blocked by the restrictive pattern
+        with pytest.raises(ValueError, match="unsafe characters"):
+            get_path_filter("host file.map", "map")
+
+    def test_get_path_filter_url_encoded_attacks(self):
+        """Test that URL-encoded path traversal attacks are blocked."""
+        url_encoded_attacks = [
+            # Basic URL encoding
+            "host%2e%2e%2f%2e%2e%2fetc%2fpasswd",  # ../../../etc/passwd
+            "host%2E%2E%2F%2E%2E%2Fetc%2Fpasswd",  # Mixed case encoding
+            "host%5c%2e%2e%5c%2e%2e%5cwindows%5csystem32",  # Windows paths
+            # Double encoding
+            "host%252e%252e%252f%252e%252e%252fetc%252fpasswd",
+            # Partial encoding
+            "host..%2fetc%2fpasswd",
+            "host%2e%2e/etc/passwd",
+            # Null byte injection
+            "host%00.map",
+            "host.map%00.txt",
+        ]
+
+        for attack in url_encoded_attacks:
+            with pytest.raises(
+                ValueError,
+                match="(Invalid filename|Filename contains|prohibited characters|unsafe characters)",
+            ):
+                get_path_filter(attack, "map")
+
+    def test_get_path_filter_unicode_normalization_attacks(self):
+        """Test that Unicode normalization attacks are blocked."""
+        unicode_attacks = [
+            # Unicode dot variations (U+002E is normal dot)
+            "host\u002e\u002e/etc/passwd",  # Unicode dots
+            "host․․/etc/passwd",  # U+2024 ONE DOT LEADER
+            # Unicode slash variations
+            "host..\u002fetc\u002fpasswd",  # Unicode forward slash
+            "host..\u2044etc\u2044passwd",  # Fraction slash
+            "host..\u2215etc\u2215passwd",  # Division slash
+            "host..\u005cetc\u005cpasswd",  # Unicode backslash
+            # Mixed Unicode and ASCII
+            "host\u002e\u002e/\u002e\u002e/etc/passwd",
+        ]
+
+        for attack in unicode_attacks:
+            with pytest.raises(
+                ValueError,
+                match="(Invalid filename|prohibited characters|unsafe characters)",
+            ):
+                get_path_filter(attack, "map")
+
+    def test_get_path_filter_comprehensive_encoded_attacks(self):
+        """Test comprehensive encoded attack scenarios."""
+        comprehensive_attacks = [
+            # Triple encoding
+            "host%25252e%25252e%25252f",
+            # Mixed encoding techniques
+            "host%2e%2e%u002f%2e%2e",
+            # Unicode escape sequences
+            "host\\u002e\\u002e\\u002f",
+            # Hex encoding variations
+            "host\\x2e\\x2e\\x2f",
+            # Overlong UTF-8 encoding attempts
+            "host%c0%ae%c0%ae%c0%af",
+            # Directory traversal with various encodings
+            "host%2e%2e%c0%af%2e%2e%c0%afetc%c0%afpasswd",
+        ]
+
+        for attack in comprehensive_attacks:
+            with pytest.raises(
+                ValueError,
+                match="(Invalid filename|Filename contains|prohibited characters|unsafe characters)",
+            ):
+                get_path_filter(attack, "map")
+
+    def test_get_path_filter_whitelist_validation(self):
+        """Test that only whitelisted characters are allowed."""
+        # Valid filenames that should pass
+        valid_filenames = [
+            "host.map",
+            "backend-config.conf",
+            "ssl_cert.pem",
+            "route_123.map",
+            "test-file_v2.config",
+            "a",
+            "A123",
+            "file.with.dots",
+        ]
+
+        for valid_filename in valid_filenames:
+            # Should not raise an exception
+            result = get_path_filter(valid_filename, "map")
+            assert "/etc/haproxy/maps/" in result
+            assert valid_filename in result
+
+        # Invalid characters that should be blocked
+        invalid_filenames = [
+            "host file.map",  # space
+            "host@file.map",  # special character
+            "host#file.map",  # hash
+            "host&file.map",  # ampersand
+            "host*file.map",  # asterisk
+            "host+file.map",  # plus
+            "host=file.map",  # equals
+            "host[file].map",  # brackets
+            "host{file}.map",  # braces
+            "host|file.map",  # pipe
+            "host:file.map",  # colon
+            "host;file.map",  # semicolon
+            "host,file.map",  # comma
+            "host<file>.map",  # angle brackets
+            "host?file.map",  # question mark
+            "!host.map",  # starts with special char
+            ".host.map",  # starts with dot
+            "-host.map",  # starts with dash
+            "_host.map",  # starts with underscore
+        ]
+
+        for invalid_filename in invalid_filenames:
+            with pytest.raises(ValueError, match="unsafe characters"):
+                get_path_filter(invalid_filename, "map")

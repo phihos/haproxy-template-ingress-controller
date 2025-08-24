@@ -214,7 +214,7 @@ data:
       backend-name: "backend_{{ service_name }}_{{ port }}"
     
     maps:
-      /etc/haproxy/maps/host.map:
+      host.map:
         template: |
           {% for _, ingress in resources.get('ingresses', {}).items() %}
           {% if ingress.spec.rules %}
@@ -237,7 +237,7 @@ data:
             {% include "backend-routing" %}
     
     certificates:
-      /etc/haproxy/certs/tls.pem:
+      tls.pem:
         template: |
           {% for _, secret in resources.get('secrets', {}).items() %}
           {% if secret.type == "kubernetes.io/tls" %}

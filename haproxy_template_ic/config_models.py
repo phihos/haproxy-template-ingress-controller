@@ -26,8 +26,10 @@ custom validators, providing better maintainability and standardized error messa
 """
 
 from typing import Annotated, Any, Dict, Iterator, List, Optional, Tuple, TYPE_CHECKING
+import os
 import unicodedata
 from collections import defaultdict
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic.types import StringConstraints
@@ -46,8 +48,22 @@ NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 # Non-empty strict string for template validation (prevents Template objects)
 NonEmptyStrictStr = Annotated[str, StringConstraints(min_length=1, strict=True)]
 
-# Absolute path validation
+# Absolute path validation (deprecated - use storage_*_dir fields instead)
 AbsolutePath = Annotated[str, StringConstraints(pattern="^/")]
+
+# Filename validation (secure against path traversal and filesystem issues)
+Filename = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=255,  # Common filesystem limit
+        # Whitelist approach: Only allow safe characters
+        # - Must start with alphanumeric character
+        # - Can contain alphanumeric, dots, hyphens, underscores
+        # - No encoded sequences, path separators, or special characters
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+    ),
+]
 
 # Kubernetes kind validation (PascalCase starting with uppercase)
 KubernetesKind = Annotated[
@@ -128,12 +144,10 @@ class WatchResourceConfig(BaseModel):
         arbitrary_types_allowed = True
 
 
-class MapConfig(BaseModel):
-    """Configuration for HAProxy map files."""
+class TemplateConfig(BaseModel):
+    """Base configuration for template-based content."""
 
-    template: NonEmptyStrictStr = Field(
-        ..., description="Jinja2 template for the map content"
-    )
+    template: NonEmptyStrictStr = Field(..., description="Jinja2 template content")
 
     class Config:
         # Allow Template objects (not JSON serializable but used internally)
@@ -151,16 +165,7 @@ class TemplateSnippet(BaseModel):
         arbitrary_types_allowed = True
 
 
-class CertificateConfig(BaseModel):
-    """Configuration for TLS certificates."""
-
-    template: NonEmptyStrictStr = Field(
-        ..., description="Jinja2 template for certificate content"
-    )
-
-    class Config:
-        # Allow Template objects (not JSON serializable but used internally)
-        arbitrary_types_allowed = True
+# Removed type aliases - use TemplateConfig directly for clarity
 
 
 class PodSelector(BaseModel):
@@ -179,20 +184,39 @@ class Config(BaseModel):
 
     # Required fields
     pod_selector: PodSelector = Field(..., description="Selector for HAProxy pods")
-    haproxy_config: MapConfig = Field(..., description="Main HAProxy configuration")
+    haproxy_config: TemplateConfig = Field(
+        ..., description="Main HAProxy configuration"
+    )
 
     # Optional collections
     watched_resources: Dict[str, WatchResourceConfig] = Field(
         default_factory=dict, description="Kubernetes resources to watch"
     )
-    maps: Dict[AbsolutePath, MapConfig] = Field(
-        default_factory=dict, description="HAProxy map files"
+    maps: Dict[Filename, TemplateConfig] = Field(
+        default_factory=dict, description="HAProxy map files (by filename)"
     )
     template_snippets: Dict[str, TemplateSnippet] = Field(
         default_factory=dict, description="Reusable template snippets"
     )
-    certificates: Dict[AbsolutePath, CertificateConfig] = Field(
-        default_factory=dict, description="TLS certificates"
+    certificates: Dict[Filename, TemplateConfig] = Field(
+        default_factory=dict, description="TLS certificates (by filename)"
+    )
+    files: Dict[Filename, TemplateConfig] = Field(
+        default_factory=dict, description="General-purpose files (by filename)"
+    )
+
+    # Storage directory configuration for HAProxy Dataplane API
+    storage_maps_dir: str = Field(
+        default="/etc/haproxy/maps",
+        description="Directory for HAProxy map files in Dataplane API",
+    )
+    storage_ssl_dir: str = Field(
+        default="/etc/haproxy/ssl",
+        description="Directory for SSL certificates in Dataplane API",
+    )
+    storage_general_dir: str = Field(
+        default="/etc/haproxy/general",
+        description="Directory for general files in Dataplane API",
     )
     validation_dataplane_url: str = Field(
         default="http://localhost:5555",
@@ -209,6 +233,14 @@ class Config(BaseModel):
                     f"Snippet key '{name}' must match snippet.name '{snippet.name}'"
                 )
         return v
+
+    @field_validator("storage_maps_dir", "storage_ssl_dir", "storage_general_dir")
+    @classmethod
+    def validate_storage_dir(cls, v: str) -> str:
+        """Validate storage directories are absolute paths."""
+        if not os.path.isabs(v):
+            raise ValueError(f"Storage directory must be absolute path: {v}")
+        return v.rstrip("/")  # Remove trailing slash for consistency
 
     model_config = ConfigDict(
         # Forbid extra fields for strict validation
@@ -242,7 +274,7 @@ class Config(BaseModel):
                         },
                     },
                     "maps": {
-                        "/etc/haproxy/maps/host.map": {
+                        "host.map": {
                             "template": "{% for _, ingress in resources.get('ingresses', {}).items() %}\n{% if ingress.spec and ingress.spec.rules %}\n{% for rule in ingress.spec.rules %}\n{% if rule.host %}\n{{ rule.host }} {{ rule.host }}\n{% endif %}\n{% endfor %}\n{% endif %}\n{% endfor %}"
                         }
                     },
@@ -260,18 +292,32 @@ class Config(BaseModel):
     )
 
 
-class RenderedMap(BaseModel):
-    """Rendered HAProxy map file."""
+class ContentType(str, Enum):
+    """Enum for HAProxy content types."""
 
-    path: AbsolutePath = Field(..., description="Absolute path to the map file")
-    content: str = Field(..., description="Rendered map content")
-    map_config: Optional["MapConfig"] = Field(
-        None, description="Source map configuration"
+    MAP = "map"
+    CERTIFICATE = "certificate"
+    FILE = "file"
+
+
+class RenderedContent(BaseModel):
+    """Unified model for all rendered HAProxy content (maps, certificates, files)."""
+
+    filename: Filename = Field(..., description="Filename without path")
+    content: str = Field(..., description="Rendered content")
+    content_type: ContentType = Field(
+        default=ContentType.FILE, description="Type of rendered content"
     )
 
+    @field_validator("filename")
+    @classmethod
+    def validate_filename_not_directory(cls, v: str) -> str:
+        """Additional validation to block directory names like '.' and '..'."""
+        if v in (".", ".."):
+            raise ValueError(f"Filename cannot be a directory name: {v}")
+        return v
+
     class Config:
-        # Allow arbitrary types for MapConfig
-        arbitrary_types_allowed = True
         frozen = True
 
 
@@ -284,14 +330,7 @@ class RenderedConfig(BaseModel):
         frozen = True
 
 
-class RenderedCertificate(BaseModel):
-    """Rendered TLS certificate."""
-
-    path: AbsolutePath = Field(..., description="Absolute path to the certificate file")
-    content: str = Field(..., description="Rendered certificate content")
-
-    class Config:
-        frozen = True
+# Removed type aliases - use RenderedContent directly for clarity
 
 
 class IndexedResourceCollection(BaseModel):
@@ -469,32 +508,65 @@ class HAProxyConfigContext(BaseModel):
         ..., description="Template rendering context"
     )
 
-    # Rendered artifacts (optional, populated during rendering)
-    rendered_maps: List[RenderedMap] = Field(
-        default_factory=list, description="Rendered map files"
+    # Rendered artifacts (unified for all content types)
+    rendered_content: List[RenderedContent] = Field(
+        default_factory=list, description="All rendered content (maps, certs, files)"
     )
     rendered_config: Optional[RenderedConfig] = Field(
         None, description="Rendered HAProxy config"
     )
-    rendered_certificates: List[RenderedCertificate] = Field(
-        default_factory=list, description="Rendered certificates"
-    )
 
-    def get_rendered_map_by_path(self, path: str) -> Optional[RenderedMap]:
-        """Get a rendered map by its path."""
-        for rendered_map in self.rendered_maps:
-            if rendered_map.path == path:
-                return rendered_map
-        return None
+    # Private attributes for caching filtered lists
+    _cached_maps: Optional[List[RenderedContent]] = PrivateAttr(default=None)
+    _cached_certificates: Optional[List[RenderedContent]] = PrivateAttr(default=None)
+    _cached_files: Optional[List[RenderedContent]] = PrivateAttr(default=None)
+    _cache_version: int = PrivateAttr(default=0)
 
-    def get_rendered_certificate_by_path(
-        self, path: str
-    ) -> Optional[RenderedCertificate]:
-        """Get a rendered certificate by its path."""
-        for cert in self.rendered_certificates:
-            if cert.path == path:
-                return cert
-        return None
+    def get_content_by_filename(self, filename: str) -> Optional[RenderedContent]:
+        """Get any rendered content by its filename (maps, certificates, files)."""
+        return next(
+            (
+                content
+                for content in self.rendered_content
+                if content.filename == filename
+            ),
+            None,
+        )
+
+    def _clear_cache(self) -> None:
+        """Clear cached filtered lists when content changes."""
+        self._cached_maps = None
+        self._cached_certificates = None
+        self._cached_files = None
+        self._cache_version += 1
+
+    # Convenience properties for backward compatibility (filters by content type with caching)
+    @property
+    def rendered_maps(self) -> List[RenderedContent]:
+        """Get rendered maps (cached)."""
+        if self._cached_maps is None:
+            self._cached_maps = [
+                c for c in self.rendered_content if c.content_type == "map"
+            ]
+        return self._cached_maps
+
+    @property
+    def rendered_certificates(self) -> List[RenderedContent]:
+        """Get rendered certificates (cached)."""
+        if self._cached_certificates is None:
+            self._cached_certificates = [
+                c for c in self.rendered_content if c.content_type == "certificate"
+            ]
+        return self._cached_certificates
+
+    @property
+    def rendered_files(self) -> List[RenderedContent]:
+        """Get rendered files (cached)."""
+        if self._cached_files is None:
+            self._cached_files = [
+                c for c in self.rendered_content if c.content_type == "file"
+            ]
+        return self._cached_files
 
     class Config:
         # This is mutable during rendering process
@@ -543,6 +615,6 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
 
 
 WatchResourceCollection = Dict[str, WatchResourceConfig]
-MapCollection = Dict[str, MapConfig]
+MapCollection = Dict[str, TemplateConfig]
 TemplateSnippetCollection = Dict[str, TemplateSnippet]
-CertificateCollection = Dict[str, CertificateConfig]
+CertificateCollection = Dict[str, TemplateConfig]

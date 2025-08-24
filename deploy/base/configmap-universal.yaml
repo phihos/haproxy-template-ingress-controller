@@ -13,8 +13,8 @@ data:
     
     echo "Starting HAProxy Universal Script (type: ${CONTAINER_TYPE:-unknown})"
     
-    # Create required directories
-    mkdir -p /etc/haproxy /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors /etc/haproxy/ssl /etc/haproxy/general /etc/haproxy/spoe
+    # Create required directories - align with dataplane API defaults
+    mkdir -p /etc/haproxy /etc/haproxy/maps /etc/haproxy/ssl /etc/haproxy/general /etc/haproxy/spoe
     mkdir -p /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
     chown -R haproxy:haproxy /etc/haproxy /var/lib/dataplaneapi 2>/dev/null || true
     
@@ -31,12 +31,11 @@ data:
           /opt/haproxy/haproxy.template > /etc/haproxy/haproxy.cfg
       echo "Configuration written to /etc/haproxy/haproxy.cfg"
       echo "Starting HAProxy in master-worker mode..."
-      exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock" -- /etc/haproxy/haproxy.cfg
+      exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
     fi
     
   haproxy.template: |
     global
-        stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
 
     userlist dataplaneapi
         user admin insecure-password PASSWORD_TOKEN
@@ -80,11 +79,26 @@ data:
         reload_strategy: custom
     log_targets:
       - log_to: stdout
-        log_level: info
+        log_level: trace
         log_types:
         - access
         - app
         
   reload.sh: |
     #!/bin/sh
-    echo reload | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock
+    set -e
+
+    # Send reload command and capture output
+    output=$(echo reload | nc local:/etc/haproxy/haproxy-master.sock 2>&1)
+
+    # Check if reload was successful
+    if echo "$output" | grep -q "Success=1"; then
+        # Success - output to stdout for logging
+        echo "$output"
+        exit 0
+    else
+        # Failure - output to stderr
+        echo "HAProxy reload failed. Socket response:" >&2
+        echo "$output" >&2
+        exit 1
+    fi

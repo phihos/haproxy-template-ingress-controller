@@ -29,11 +29,10 @@ from kubernetes import config
 from haproxy_template_ic.config_models import (
     Config,
     HAProxyConfigContext,
-    MapConfig,
     PodSelector,
-    RenderedCertificate,
+    RenderedContent,
     RenderedConfig,
-    RenderedMap,
+    TemplateConfig,
     TemplateContext,
     config_from_dict,
 )
@@ -400,9 +399,9 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
     metrics.record_watched_resources(metrics_data)
 
     # Clear previous renders
-    memo.haproxy_config_context.rendered_maps.clear()
+    memo.haproxy_config_context.rendered_content.clear()
+    memo.haproxy_config_context._clear_cache()  # Clear cached filtered lists
     memo.haproxy_config_context.rendered_config = None
-    memo.haproxy_config_context.rendered_certificates.clear()
 
     # Create a new template context instance each time
     template_context = TemplateContext(
@@ -458,60 +457,74 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
         record_span_event("haproxy_config_render_failed", {"error": str(e)})
         logger.error(f"❌ Failed to render HAProxy configuration template: {e}")
 
-    # Render each map template
-    for map_path, map_config in memo.config.maps.items():
-        try:
-            with trace_template_render("map", map_path):
-                with metrics.time_template_render("map"):
-                    rendered_content = memo.template_renderer.render(
-                        map_config.template, **template_vars
-                    )
-            rendered_map = RenderedMap(
-                path=map_path, content=rendered_content, map_config=map_config
-            )
-            memo.haproxy_config_context.rendered_maps.append(rendered_map)
-            metrics.record_template_render("map", "success")
-            add_span_attributes(map_path=map_path, map_size=len(rendered_content))
-            record_span_event("map_rendered", {"path": map_path})
-            logger.debug(f"✅ Rendered template for {map_path}")
-        except Exception as e:
-            metrics.record_template_render("map", "error")
-            metrics.record_error("template_render_failed", "operator")
-            record_span_event("map_render_failed", {"path": map_path, "error": str(e)})
-            logger.error(f"❌ Failed to render template for {map_path}: {e}")
+    # Render all content templates (maps, certificates, files) in unified loop
+    content_collections = [
+        ("map", memo.config.maps),
+        ("certificate", memo.config.certificates),
+        ("file", memo.config.files),
+    ]
 
-    # Render each certificate template
-    for cert_path, certificate_config in memo.config.certificates.items():
-        try:
-            with trace_template_render("certificate", cert_path):
-                with metrics.time_template_render("certificate"):
-                    rendered_content = memo.template_renderer.render(
-                        certificate_config.template, **template_vars
-                    )
-            rendered_certificate = RenderedCertificate(
-                path=cert_path,
-                content=rendered_content,
-            )
-            memo.haproxy_config_context.rendered_certificates.append(
-                rendered_certificate
-            )
-            metrics.record_template_render("certificate", "success")
-            add_span_attributes(
-                certificate_path=cert_path,
-                certificate_size=len(rendered_content),
-            )
-            record_span_event("certificate_rendered", {"path": cert_path})
-            logger.debug(f"✅ Rendered certificate template for {cert_path}")
-        except Exception as e:
-            metrics.record_template_render("certificate", "error")
-            metrics.record_error("template_render_failed", "operator")
-            record_span_event(
-                "certificate_render_failed",
-                {"path": cert_path, "error": str(e)},
-            )
-            logger.error(
-                f"❌ Failed to render certificate template for {cert_path}: {e}"
-            )
+    template_errors = []
+
+    for content_type, items in content_collections:
+        for filename, template_config in items.items():
+            try:
+                with trace_template_render(content_type, filename):
+                    with metrics.time_template_render(content_type):
+                        rendered_content_text = memo.template_renderer.render(
+                            template_config.template, **template_vars
+                        )
+
+                rendered_content = RenderedContent(
+                    filename=filename,
+                    content=rendered_content_text,
+                    content_type=content_type,
+                )
+                memo.haproxy_config_context.rendered_content.append(rendered_content)
+
+                metrics.record_template_render(content_type, "success")
+                add_span_attributes(
+                    **{
+                        f"{content_type}_filename": filename,
+                        f"{content_type}_size": len(rendered_content_text),
+                    }
+                )
+                record_span_event(f"{content_type}_rendered", {"filename": filename})
+                logger.debug(f"✅ Rendered {content_type} template for {filename}")
+
+            except Exception as e:
+                template_error = {
+                    "type": content_type,
+                    "filename": filename,
+                    "error": str(e),
+                }
+                template_errors.append(template_error)
+
+                metrics.record_template_render(content_type, "error")
+                metrics.record_error("template_render_failed", "operator")
+                record_span_event(
+                    f"{content_type}_render_failed",
+                    {"filename": filename, "error": str(e)},
+                )
+                logger.error(
+                    f"❌ Failed to render {content_type} template for {filename}: {e}"
+                )
+
+    # Check for critical template errors that should abort deployment
+    if template_errors:
+        logger.warning(
+            f"Template rendering completed with {len(template_errors)} errors"
+        )
+
+        # Certificate errors are critical since they affect TLS functionality
+        critical_errors = [e for e in template_errors if e["type"] == "certificate"]
+        if critical_errors:
+            error_msg = f"Critical certificate template errors: {[e['filename'] + ': ' + e['error'] for e in critical_errors]}"
+            logger.error(f"❌ Aborting deployment due to critical errors: {error_msg}")
+            raise RuntimeError(error_msg)
+
+    # Clear cache once after all content has been rendered
+    memo.haproxy_config_context._clear_cache()
 
     # Log validation errors collected during template rendering
     if validation_errors:
@@ -621,6 +634,46 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
     except ValidationError as e:
         metrics.record_error("validation_failed", "dataplane")
         logger.error(f"❌ Configuration validation failed: {e}")
+
+        # Log additional context if available
+        if e.error_line:
+            logger.error(
+                f"💥 Error occurred at line {e.error_line} in HAProxy configuration"
+            )
+        if e.error_context:
+            logger.error("📝 Configuration context around the error:")
+            # Split context by lines and log each line separately to preserve formatting
+            for line in e.error_context.split("\n"):
+                logger.error(f"   {line}")
+
+        # Additional hints for common HAProxy configuration errors
+        if e.validation_details:
+            details_lower = e.validation_details.lower()
+            if "'listen' or 'defaults' expected" in details_lower:
+                logger.error(
+                    "💡 Hint: This error often occurs when a section is missing or has syntax errors. Check that all frontend/backend/listen blocks are properly defined."
+                )
+            elif "unknown keyword" in details_lower:
+                logger.error(
+                    "💡 Hint: Check for typos in HAProxy directives or unsupported configuration options."
+                )
+            elif "missing argument" in details_lower:
+                logger.error(
+                    "💡 Hint: A configuration directive is missing required parameters."
+                )
+            elif "too many args" in details_lower:
+                logger.error(
+                    "💡 Hint: A configuration directive has too many parameters."
+                )
+
+        # Provide template debugging suggestions
+        if memo.config and memo.config.template_snippets:
+            logger.error(
+                "🔧 Debug tip: Check your Jinja2 templates and snippets for syntax errors or missing includes"
+            )
+        logger.error(
+            "🔧 Debug tip: Use the management socket 'dump config' command to inspect the rendered configuration"
+        )
     except DataplaneAPIError as e:
         metrics.record_error("dataplane_api_failed", "dataplane")
         logger.error(f"❌ Dataplane API error: {e}")
@@ -921,7 +974,7 @@ def create_operator_memo(cli_options: Any) -> Any:
             haproxy_config_context=HAProxyConfigContext(
                 config=Config(
                     pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-                    haproxy_config=MapConfig(template="# Initial config"),
+                    haproxy_config=TemplateConfig(template="# Initial config"),
                 ),
                 template_context=TemplateContext(namespace="default"),
                 rendered_config=None,
@@ -971,7 +1024,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             haproxy_config_context=HAProxyConfigContext(
                 config=Config(
                     pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-                    haproxy_config=MapConfig(template="# Initial config"),
+                    haproxy_config=TemplateConfig(template="# Initial config"),
                 ),
                 template_context=TemplateContext(namespace="default"),
                 rendered_config=None,
