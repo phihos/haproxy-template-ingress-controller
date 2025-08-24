@@ -557,7 +557,7 @@ class TestValidateConfigTemplates:
         """Test validation with valid map templates."""
         config_dict = {
             "maps": {
-                "/etc/haproxy/maps/host.map": {"template": "{{ host }} {{ backend }}"},
+                "host.map": {"template": "{{ host }} {{ backend }}"},
             }
         }
 
@@ -569,14 +569,14 @@ class TestValidateConfigTemplates:
         """Test validation with invalid map template."""
         config_dict = {
             "maps": {
-                "/etc/haproxy/maps/host.map": {"template": "{{ invalid syntax"},
+                "host.map": {"template": "{{ invalid syntax"},
             }
         }
 
         warnings = validate_config_templates(config_dict)
 
         assert len(warnings) > 0
-        assert "Map '/etc/haproxy/maps/host.map'" in warnings[0]
+        assert "Map 'host.map'" in warnings[0]
 
     def test_validate_config_templates_valid_haproxy_config(self):
         """Test validation with valid HAProxy config template."""
@@ -603,7 +603,7 @@ class TestValidateConfigTemplates:
         """Test validation with valid certificate templates."""
         config_dict = {
             "certificates": {
-                "/etc/haproxy/certs/tls.pem": {"template": "{{ cert_data }}"},
+                "tls.pem": {"template": "{{ cert_data }}"},
             }
         }
 
@@ -615,14 +615,14 @@ class TestValidateConfigTemplates:
         """Test validation with invalid certificate template."""
         config_dict = {
             "certificates": {
-                "/etc/haproxy/certs/tls.pem": {"template": "{{ invalid syntax"},
+                "tls.pem": {"template": "{{ invalid syntax"},
             }
         }
 
         warnings = validate_config_templates(config_dict)
 
         assert len(warnings) > 0
-        assert "Certificate '/etc/haproxy/certs/tls.pem'" in warnings[0]
+        assert "Certificate 'tls.pem'" in warnings[0]
 
     def test_validate_config_templates_comprehensive(self):
         """Test validation with all template types."""
@@ -632,13 +632,13 @@ class TestValidateConfigTemplates:
                 "broken_snippet": {"template": "{{ invalid syntax"},
             },
             "maps": {
-                "/etc/haproxy/maps/host.map": {"template": "{{ host }} {{ backend }}"},
-                "/etc/haproxy/maps/broken.map": {"template": "{{ invalid syntax"},
+                "host.map": {"template": "{{ host }} {{ backend }}"},
+                "broken.map": {"template": "{{ invalid syntax"},
             },
             "haproxy_config": {"template": "global\n  daemon"},
             "certificates": {
-                "/etc/haproxy/certs/tls.pem": {"template": "{{ cert_data }}"},
-                "/etc/haproxy/certs/broken.pem": {"template": "{{ invalid syntax"},
+                "tls.pem": {"template": "{{ cert_data }}"},
+                "broken.pem": {"template": "{{ invalid syntax"},
             },
         }
 

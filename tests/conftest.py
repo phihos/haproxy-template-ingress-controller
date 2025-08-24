@@ -3,10 +3,12 @@
 # =============================================================================
 
 # Standard library imports
+import logging
 import subprocess
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 # Third-party imports
 import kr8s
@@ -42,7 +44,17 @@ from pytest_shared_session_scope import (
 CONTAINER_IMAGE_NAME = "haproxy-template-ic-acceptance-test:test"
 CONTAINER_IMAGE_NAME_COVERAGE = "haproxy-template-ic-acceptance-test:test-coverage"
 
+# Constants for timeouts and limits
+DEFAULT_STALE_RESOURCE_AGE_HOURS = 24
+MAX_NAMESPACE_CLEANUP_ATTEMPTS = 3
+NAMESPACE_CLEANUP_RETRY_DELAY = 1
+DEFAULT_POD_READY_TIMEOUT = 180
+DEFAULT_SERVICEACCOUNT_WAIT_ATTEMPTS = 5
+
 phase_report_key = StashKey[Dict[str, CollectReport]]()
+
+# Module-level logger for better performance
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -50,11 +62,91 @@ phase_report_key = StashKey[Dict[str, CollectReport]]()
 # =============================================================================
 
 
+def log_test_resource_summary(item: Any) -> None:
+    """
+    Log a summary of resources created/used during the test.
+
+    This helps with debugging and understanding test resource usage patterns.
+
+    Args:
+        item: The pytest test item containing resource information
+    """
+    # Use module-level logger
+
+    if not hasattr(item, "_test_resources"):
+        return
+
+    resources = item._test_resources
+    summary_parts = []
+
+    if "namespace" in resources:
+        ns_info = resources["namespace"]
+        summary_parts.append(f"namespace:{ns_info['name']}")
+
+    if "pods" in resources:
+        pod_count = len(resources["pods"])
+        created_count = sum(1 for p in resources["pods"] if p.get("created", False))
+        reused_count = sum(1 for p in resources["pods"] if p.get("reused", False))
+        summary_parts.append(
+            f"pods:{pod_count}(created:{created_count},reused:{reused_count})"
+        )
+
+    if summary_parts:
+        logger.info(f"Test {item.name} resource usage: {', '.join(summary_parts)}")
+
+
+def cleanup_stale_test_resources(
+    k8s_client: Any, max_age_hours: int = DEFAULT_STALE_RESOURCE_AGE_HOURS
+) -> None:
+    """
+    Clean up test resources that may have been left behind from failed test runs.
+
+    This function identifies and removes namespaces and other resources created by
+    tests that are older than the specified age.
+
+    Args:
+        k8s_client: Kubernetes API client instance
+        max_age_hours: Maximum age in hours for resources to be considered stale
+    """
+    # Use module-level logger
+
+    try:
+        # Get all namespaces with our test labels
+        namespaces = k8s_client.get(
+            "namespaces", label_selector="created-by=haproxy-template-ic-tests"
+        )
+        stale_count = 0
+
+        cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
+
+        for ns in namespaces:
+            try:
+                # Parse creation timestamp
+                created_at = datetime.fromisoformat(
+                    ns.metadata.creationTimestamp.replace("Z", "+00:00")
+                ).replace(tzinfo=None)
+
+                if created_at < cutoff_time:
+                    logger.info(
+                        f"Cleaning up stale test namespace: {ns.metadata.name} (age: {datetime.now() - created_at})"
+                    )
+                    ns.delete()
+                    stale_count += 1
+
+            except (ValueError, AttributeError, OSError) as e:
+                logger.warning(f"Could not process namespace {ns.metadata.name}: {e}")
+
+        if stale_count > 0:
+            logger.info(f"Cleaned up {stale_count} stale test namespace(s)")
+
+    except (OSError, AttributeError) as e:
+        logger.warning(f"Stale resource cleanup failed: {e}")
+
+
 def wait_for_default_serviceaccount(k8s_client, k8s_namespace):
     """Wait for the default serviceaccount to be created in the given namespace."""
-    max_attempts = 5
     attempt = 0
-    while attempt < max_attempts:
+    while attempt < DEFAULT_SERVICEACCOUNT_WAIT_ATTEMPTS:
         try:
             sa = ServiceAccount.get("default", namespace=k8s_namespace, api=k8s_client)
             if sa:
@@ -337,10 +429,14 @@ def k8s_namespace(request, k8s_client):
     Generates a unique namespace name using test name hash, timestamp, and worker ID
     for parallel execution. Automatically cleans up unless --keep-namespaces or
     --keep-namespace-on-failure flags are used.
+
+    Resource tracking ensures proper cleanup and provides debugging information.
     """
-    # Generate a unique but short namespace name for each test (max 64 chars)
     import hashlib
 
+    # Use module-level logger
+
+    # Generate a unique but short namespace name for each test (max 64 chars)
     test_name = request.node.name
     # Create a short hash of the test name for uniqueness
     test_hash = hashlib.sha256(test_name.encode()).hexdigest()[:8]
@@ -353,25 +449,90 @@ def k8s_namespace(request, k8s_client):
     ns_name = (
         f"test-{timestamp}-{microseconds}-{worker_id.replace('gw', '')}-{test_hash}"
     )
+
     ns = Namespace(
         {
             "apiVersion": "v1",
             "kind": "Namespace",
             "metadata": {
                 "name": ns_name,
+                "labels": {
+                    "test-name": test_name[:63],  # Kubernetes label limit
+                    "worker-id": worker_id,
+                    "created-by": "haproxy-template-ic-tests",
+                },
             },
         }
     )
-    ns.create()
+
+    try:
+        ns.create()
+        logger.debug(f"Created namespace {ns_name} for test {test_name}")
+
+        # Track namespace creation for debugging
+        if not hasattr(request.node, "_test_resources"):
+            request.node._test_resources = {}
+        request.node._test_resources["namespace"] = {
+            "name": ns_name,
+            "created_at": timestamp,
+            "worker_id": worker_id,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to create namespace {ns_name}: {e}")
+        raise
+
     yield ns.name
+
+    # Determine cleanup strategy based on test results and configuration
     report = request.node.stash[phase_report_key]
     test_failed = ("setup" in report and report["setup"].failed) or (
         "call" in report and report["call"].failed
     )
-    if not request.config.getoption("--keep-namespaces") and not (
+
+    should_keep_namespace = request.config.getoption("--keep-namespaces") or (
         test_failed and request.config.getoption("--keep-namespace-on-failure")
-    ):
-        ns.delete()
+    )
+
+    if should_keep_namespace:
+        logger.info(
+            f"Keeping namespace {ns_name} for debugging (test_failed={test_failed})"
+        )
+        # Add annotation to preserved namespace for identification
+        try:
+            ns.refresh()
+            if not ns.metadata.annotations:
+                ns.metadata.annotations = {}
+            ns.metadata.annotations.update(
+                {
+                    "haproxy-template-ic-test/preserved": "true",
+                    "haproxy-template-ic-test/test-name": test_name,
+                    "haproxy-template-ic-test/failure-reason": "test-failed"
+                    if test_failed
+                    else "keep-requested",
+                }
+            )
+            ns.patch()
+        except Exception as e:
+            logger.warning(f"Could not annotate preserved namespace {ns_name}: {e}")
+    else:
+        # Attempt graceful cleanup with retry
+        for attempt in range(MAX_NAMESPACE_CLEANUP_ATTEMPTS):
+            try:
+                ns.delete()
+                logger.debug(f"Successfully deleted namespace {ns_name}")
+                break
+            except Exception as e:
+                if attempt < MAX_NAMESPACE_CLEANUP_ATTEMPTS - 1:
+                    logger.warning(
+                        f"Cleanup attempt {attempt + 1} failed for namespace {ns_name}: {e}, retrying..."
+                    )
+                    time.sleep(NAMESPACE_CLEANUP_RETRY_DELAY)
+                else:
+                    logger.error(
+                        f"Failed to cleanup namespace {ns_name} after {MAX_NAMESPACE_CLEANUP_ATTEMPTS} attempts: {e}"
+                    )
+                    # Don't raise - test already completed, just log the issue
 
 
 # =============================================================================
@@ -414,7 +575,7 @@ backend servers
 """
         },
         "maps": {
-            "/etc/haproxy/maps/host.map": {
+            "host.map": {
                 "template": "# Host mapping\n{% for key, ingress in resources.get('ingresses', {}).items() %}\n# {{ ingress.metadata.name }}\n{% endfor %}"
             }
         },
@@ -1120,28 +1281,43 @@ def controller_with_validation_sidecar(
     # Wait for the default serviceaccount before proceeding
     wait_for_default_serviceaccount(k8s_client, k8s_namespace)
 
-    ClusterRoleBinding(
-        {
-            "apiVersion": "rbac.authorization.k8s.io/v1",
-            "kind": "ClusterRoleBinding",
-            "metadata": {
-                "name": f"ingress-controller-cluster-admin-{k8s_namespace}",
+    # Create or reuse ClusterRoleBinding (idempotent)
+    crb_name = f"ingress-controller-cluster-admin-{k8s_namespace}"
+    try:
+        ClusterRoleBinding(
+            {
+                "apiVersion": "rbac.authorization.k8s.io/v1",
+                "kind": "ClusterRoleBinding",
+                "metadata": {
+                    "name": crb_name,
+                },
+                "subjects": [
+                    {
+                        "kind": "ServiceAccount",
+                        "name": "default",
+                        "namespace": k8s_namespace,
+                    }
+                ],
+                "roleRef": {
+                    "kind": "ClusterRole",
+                    "name": "cluster-admin",
+                    "apiGroup": "rbac.authorization.k8s.io",
+                },
             },
-            "subjects": [
-                {
-                    "kind": "ServiceAccount",
-                    "name": "default",
-                    "namespace": k8s_namespace,
-                }
-            ],
-            "roleRef": {
-                "kind": "ClusterRole",
-                "name": "cluster-admin",
-                "apiGroup": "rbac.authorization.k8s.io",
-            },
-        },
-        api=k8s_client,
-    ).create()
+            api=k8s_client,
+        ).create()
+    except Exception as e:
+        # Handle specific k8s errors for idempotent resource creation
+        from kr8s._exceptions import ServerError
+
+        if isinstance(e, ServerError) and "already exists" in str(e):
+            # Resource already exists, which is expected in test environments
+            # Use module-level logger
+            logger.debug(f"Reusing existing ClusterRoleBinding: {crb_name}")
+        else:
+            # Use module-level logger
+            logger.error(f"Failed to create ClusterRoleBinding {crb_name}: {e}")
+            raise
 
     # Check if test needs webhook functionality and set up webhook volumes
     needs_webhook = "webhook" in request.node.name
@@ -1227,16 +1403,20 @@ backend validation_backend
                             "path": "/healthz",
                             "port": 8080,
                         },
-                        "initialDelaySeconds": 10,
+                        "initialDelaySeconds": 30,
                         "periodSeconds": 30,
+                        "timeoutSeconds": 5,
+                        "failureThreshold": 3,
                     },
                     "readinessProbe": {
                         "httpGet": {
                             "path": "/healthz",
                             "port": 8080,
                         },
-                        "initialDelaySeconds": 5,
+                        "initialDelaySeconds": 15,
                         "periodSeconds": 10,
+                        "timeoutSeconds": 5,
+                        "failureThreshold": 10,
                     },
                     "volumeMounts": [
                         {
@@ -1344,8 +1524,249 @@ backend validation_backend
         ]
 
     pod = Pod(pod_spec, namespace=k8s_namespace, api=k8s_client)
-    pod.create()
-    pod.wait("condition=Ready", timeout=120)
+
+    # Try to create pod, or reuse if it already exists
+    # Use module-level logger
+
+    try:
+        pod.create()
+        logger.debug(f"Created new controller pod in namespace {k8s_namespace}")
+
+        # Track pod creation for resource management
+        if hasattr(request, "node") and hasattr(request.node, "_test_resources"):
+            if "pods" not in request.node._test_resources:
+                request.node._test_resources["pods"] = []
+            request.node._test_resources["pods"].append(
+                {
+                    "name": "haproxy-template-ic",
+                    "namespace": k8s_namespace,
+                    "created": True,
+                    "reused": False,
+                }
+            )
+
+    except Exception as e:
+        # Handle specific k8s errors for idempotent pod creation
+        from kr8s._exceptions import ServerError
+
+        if isinstance(e, ServerError) and "already exists" in str(e):
+            # Pod already exists, get the existing one
+            logger.debug(
+                f"Reusing existing pod: haproxy-template-ic in namespace {k8s_namespace}"
+            )
+            pod = Pod.get(
+                "haproxy-template-ic", namespace=k8s_namespace, api=k8s_client
+            )
+
+            # Track pod reuse
+            if hasattr(request, "node") and hasattr(request.node, "_test_resources"):
+                if "pods" not in request.node._test_resources:
+                    request.node._test_resources["pods"] = []
+                request.node._test_resources["pods"].append(
+                    {
+                        "name": "haproxy-template-ic",
+                        "namespace": k8s_namespace,
+                        "created": False,
+                        "reused": True,
+                    }
+                )
+        else:
+            logger.error(
+                f"Failed to create pod haproxy-template-ic in namespace {k8s_namespace}: {e}"
+            )
+            raise
+
+    # Wait for pod readiness with enhanced logging
+    try:
+        logger.debug(
+            f"Waiting for controller pod readiness (timeout={DEFAULT_POD_READY_TIMEOUT}s)"
+        )
+        pod.wait("condition=Ready", timeout=DEFAULT_POD_READY_TIMEOUT)
+        logger.debug(f"Controller pod ready in namespace {k8s_namespace}")
+    except Exception as e:
+        logger.error(f"Controller pod failed to become ready: {e}")
+        # Log pod status for debugging
+        try:
+            pod.refresh()
+            logger.error(
+                f"Pod status: {pod.status.phase if hasattr(pod.status, 'phase') else 'unknown'}"
+            )
+            if hasattr(pod.status, "containerStatuses"):
+                for container_status in pod.status.containerStatuses or []:
+                    logger.error(
+                        f"Container {container_status.name}: ready={container_status.ready}"
+                    )
+        except (AttributeError, OSError):
+            logger.error("Could not retrieve pod status for debugging")
+        raise
+
+    if needs_webhook:
+        create_webhook_service(k8s_client, k8s_namespace)
+
+    return pod
+
+
+@pytest.fixture
+def simple_controller(
+    k8s_client, k8s_namespace, container_image, configmap, credentials_secret, request
+):
+    """
+    Create a simplified HAProxy template ingress controller WITHOUT validation sidecars.
+    This fixture is optimized for faster startup and should be used for tests that don't
+    require the validation functionality.
+    """
+    # Wait for the default serviceaccount before proceeding
+    wait_for_default_serviceaccount(k8s_client, k8s_namespace)
+
+    # Create or reuse ClusterRoleBinding (idempotent)
+    crb_name = f"ingress-controller-cluster-admin-{k8s_namespace}"
+    try:
+        ClusterRoleBinding(
+            {
+                "apiVersion": "rbac.authorization.k8s.io/v1",
+                "kind": "ClusterRoleBinding",
+                "metadata": {
+                    "name": crb_name,
+                },
+                "subjects": [
+                    {
+                        "kind": "ServiceAccount",
+                        "name": "default",
+                        "namespace": k8s_namespace,
+                    }
+                ],
+                "roleRef": {
+                    "kind": "ClusterRole",
+                    "name": "cluster-admin",
+                    "apiGroup": "rbac.authorization.k8s.io",
+                },
+            },
+            api=k8s_client,
+        ).create()
+    except Exception as e:
+        # Handle specific k8s errors for idempotent resource creation
+        from kr8s._exceptions import ServerError
+
+        if isinstance(e, ServerError) and "already exists" in str(e):
+            # Resource already exists, which is expected in test environments
+            # Use module-level logger
+            logger.debug(f"Reusing existing ClusterRoleBinding: {crb_name}")
+        else:
+            # Use module-level logger
+            logger.error(f"Failed to create ClusterRoleBinding {crb_name}: {e}")
+            raise
+
+    # Check if test needs webhook functionality
+    needs_webhook = "webhook" in request.node.name
+    volume_mounts, volumes, webhook_setup_successful = setup_webhook_volumes_and_mounts(
+        k8s_client, k8s_namespace, needs_webhook
+    )
+    needs_webhook = needs_webhook and webhook_setup_successful
+
+    # Simplified pod specification with only main controller container
+    pod_spec = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": "haproxy-template-ic",
+            "namespace": k8s_namespace,
+            "labels": {
+                "app.kubernetes.io/name": "haproxy-template-ic",
+                "app.kubernetes.io/instance": "acceptance-test",
+                "haproxy-template-ic/role": "controller",
+            },
+        },
+        "spec": {
+            "containers": [
+                # Main controller container only
+                {
+                    "name": "haproxy-template-ic",
+                    "image": container_image.repo_tags[0],
+                    "args": ["run"],
+                    "ports": [
+                        {"containerPort": 8080, "name": "healthz"},
+                        {"containerPort": 9443, "name": "webhook"}
+                        if needs_webhook
+                        else {},
+                        {"containerPort": 9090, "name": "metrics"},
+                    ],
+                    "env": [
+                        {"name": "CONFIGMAP_NAME", "value": configmap.name},
+                        {
+                            "name": "SECRET_NAME",
+                            "value": "haproxy-template-ic-credentials",
+                        },
+                        {"name": "VERBOSE", "value": "2"},
+                        {
+                            "name": "SOCKET_PATH",
+                            "value": "/run/haproxy-template-ic/management.sock",
+                        },
+                    ],
+                    "livenessProbe": {
+                        "httpGet": {
+                            "path": "/healthz",
+                            "port": 8080,
+                        },
+                        "initialDelaySeconds": 20,
+                        "periodSeconds": 30,
+                        "timeoutSeconds": 5,
+                        "failureThreshold": 3,
+                    },
+                    "readinessProbe": {
+                        "httpGet": {
+                            "path": "/healthz",
+                            "port": 8080,
+                        },
+                        "initialDelaySeconds": 10,
+                        "periodSeconds": 10,
+                        "timeoutSeconds": 5,
+                        "failureThreshold": 6,
+                    },
+                    "volumeMounts": [
+                        {
+                            "name": "management-socket",
+                            "mountPath": "/run/haproxy-template-ic",
+                        },
+                    ]
+                    + volume_mounts,
+                },
+            ],
+            "volumes": volumes + [{"name": "management-socket", "emptyDir": {}}],
+        },
+    }
+
+    # Remove empty webhook port if not needed
+    if not needs_webhook:
+        pod_spec["spec"]["containers"][0]["ports"] = [
+            port for port in pod_spec["spec"]["containers"][0]["ports"] if port
+        ]
+
+    pod = Pod(pod_spec, namespace=k8s_namespace, api=k8s_client)
+
+    # Try to create pod, or reuse if it already exists
+    try:
+        pod.create()
+    except Exception as e:
+        # Handle specific k8s errors for idempotent pod creation
+        from kr8s._exceptions import ServerError
+
+        if isinstance(e, ServerError) and "already exists" in str(e):
+            # Pod already exists, get the existing one
+            # Use module-level logger
+            logger.debug(
+                f"Reusing existing pod: haproxy-template-ic in namespace {k8s_namespace}"
+            )
+            pod = Pod.get(
+                "haproxy-template-ic", namespace=k8s_namespace, api=k8s_client
+            )
+        else:
+            # Use module-level logger
+            logger.error(
+                f"Failed to create pod haproxy-template-ic in namespace {k8s_namespace}: {e}"
+            )
+            raise
+
+    pod.wait("condition=Ready", timeout=90)  # Shorter timeout for simpler pod
 
     if needs_webhook:
         create_webhook_service(k8s_client, k8s_namespace)
@@ -1439,10 +1860,10 @@ backend servers
 """
         },
         "maps": {
-            "/etc/haproxy/maps/host.map": {
+            "host.map": {
                 "template": "# Host mapping file\n# Generated by HAProxy Template IC"
             },
-            "/etc/haproxy/maps/backends.map": {
+            "backends.map": {
                 "template": "# Backend mapping file\n# Generated by HAProxy Template IC"
             },
         },
@@ -1500,3 +1921,87 @@ def collect_coverage(request, controller_with_validation_sidecar):
 
     if coverage_file:
         request.node.stash["coverage_file"] = coverage_file
+
+
+def pytest_runtest_teardown(item, nextitem):
+    """
+    Print haproxy-template-ic pod logs when acceptance tests fail.
+
+    This hook runs after each test and checks if it was an acceptance test that failed.
+    If so, it attempts to retrieve and print the pod logs for debugging.
+
+    Environment Variables:
+        PYTEST_DISABLE_POD_LOG_PRINTING: Set to 'true' to disable automatic log printing
+        PYTEST_POD_FIXTURE_NAMES: Comma-separated list of fixture names to search for pods
+    """
+    import os
+
+    # Use module-level logger
+
+    # Check if log printing is globally disabled
+    if os.environ.get("PYTEST_DISABLE_POD_LOG_PRINTING", "").lower() == "true":
+        return
+
+    # Check if this is an acceptance test
+    is_acceptance_test = any(
+        marker.name == "acceptance" for marker in item.iter_markers()
+    )
+    if not is_acceptance_test:
+        return
+
+    # Log resource summary for all tests (not just failures)
+    log_test_resource_summary(item)
+
+    # Check if the test failed
+    reports = item.stash.get(phase_report_key, {})
+    test_failed = any(report.failed for report in reports.values())
+
+    if test_failed:
+        try:
+            # Get configurable fixture names from environment or use defaults
+            fixture_names_str = os.environ.get(
+                "PYTEST_POD_FIXTURE_NAMES",
+                "ingress_controller,controller_with_validation_sidecar,simple_controller",
+            )
+            fixture_names = [name.strip() for name in fixture_names_str.split(",")]
+
+            # Try to find a controller pod from fixture names
+            pod = None
+            found_fixture = None
+
+            for fixture_name in fixture_names:
+                try:
+                    if hasattr(item, "funcargs") and fixture_name in item.funcargs:
+                        pod_candidate = item.funcargs[fixture_name]
+                        # Basic validation that this looks like a pod object
+                        if pod_candidate and hasattr(pod_candidate, "logs"):
+                            pod = pod_candidate
+                            found_fixture = fixture_name
+                            logger.debug(f"Found pod from fixture: {fixture_name}")
+                            break
+                except (KeyError, AttributeError) as e:
+                    logger.debug(f"Could not get pod from fixture {fixture_name}: {e}")
+                    continue
+
+            if pod is not None:
+                try:
+                    from tests.e2e.utils.k8s_helpers import print_pod_logs_on_failure
+
+                    logger.info(
+                        f"Printing pod logs for failed test {item.name} using fixture {found_fixture}"
+                    )
+                    print_pod_logs_on_failure(pod, item.name)
+                except ImportError as e:
+                    logger.error(f"Could not import log printing function: {e}")
+                    print(f"⚠️ Could not import pod log printing function: {e}")
+            else:
+                logger.info(
+                    f"No haproxy-template-ic pod found for test {item.name}. Available fixtures: {list(getattr(item, 'funcargs', {}).keys())}"
+                )
+                print("ℹ️ No haproxy-template-ic pod found for log retrieval")
+
+        except Exception as e:
+            logger.error(
+                f"Unexpected error in pod log retrieval for test {item.name}: {e}"
+            )
+            print(f"⚠️ Failed to retrieve pod logs for debugging: {e}")

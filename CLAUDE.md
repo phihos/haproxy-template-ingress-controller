@@ -79,7 +79,7 @@ tests/fixtures/    # Test data and configurations
 
 ### Application
 - **Run operator**: `uv run haproxy-template-ic run --configmap-name=<name>` (or use `version` subcommand)
-- **Management socket**: `nc local:/run/haproxy-template-ic/management.sock`
+- **Management socket**: `socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock`
 - **Monitoring endpoints** (require port-forward):
   - Metrics: `curl http://localhost:9090/metrics`
   - Health: `curl http://localhost:8080/healthz`
@@ -214,7 +214,7 @@ data:
       backend-name: "backend_{{ service_name }}_{{ port }}"
     
     maps:
-      /etc/haproxy/maps/host.map:
+      host.map:
         template: |
           {% for _, ingress in resources.get('ingresses', {}).items() %}
           {% if ingress.spec.rules %}
@@ -237,7 +237,7 @@ data:
             {% include "backend-routing" %}
     
     certificates:
-      /etc/haproxy/certs/tls.pem:
+      tls.pem:
         template: |
           {% for _, secret in resources.get('secrets', {}).items() %}
           {% if secret.type == "kubernetes.io/tls" %}
