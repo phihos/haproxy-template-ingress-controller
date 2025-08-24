@@ -885,7 +885,123 @@ class TestGetPathFilterSecurity:
         # Single character filenames (valid)
         assert get_path_filter("a", "map") == "/etc/haproxy/maps/a"
 
-        # Filenames with spaces (should work since spaces are allowed)
-        assert (
-            get_path_filter("host file.map", "map") == "/etc/haproxy/maps/host file.map"
-        )
+        # Filenames with spaces are now blocked by the restrictive pattern
+        with pytest.raises(ValueError, match="unsafe characters"):
+            get_path_filter("host file.map", "map")
+
+    def test_get_path_filter_url_encoded_attacks(self):
+        """Test that URL-encoded path traversal attacks are blocked."""
+        url_encoded_attacks = [
+            # Basic URL encoding
+            "host%2e%2e%2f%2e%2e%2fetc%2fpasswd",  # ../../../etc/passwd
+            "host%2E%2E%2F%2E%2E%2Fetc%2Fpasswd",  # Mixed case encoding
+            "host%5c%2e%2e%5c%2e%2e%5cwindows%5csystem32",  # Windows paths
+            # Double encoding
+            "host%252e%252e%252f%252e%252e%252fetc%252fpasswd",
+            # Partial encoding
+            "host..%2fetc%2fpasswd",
+            "host%2e%2e/etc/passwd",
+            # Null byte injection
+            "host%00.map",
+            "host.map%00.txt",
+        ]
+
+        for attack in url_encoded_attacks:
+            with pytest.raises(
+                ValueError,
+                match="(Invalid filename|Filename contains|prohibited characters|unsafe characters)",
+            ):
+                get_path_filter(attack, "map")
+
+    def test_get_path_filter_unicode_normalization_attacks(self):
+        """Test that Unicode normalization attacks are blocked."""
+        unicode_attacks = [
+            # Unicode dot variations (U+002E is normal dot)
+            "host\u002e\u002e/etc/passwd",  # Unicode dots
+            "host․․/etc/passwd",  # U+2024 ONE DOT LEADER
+            # Unicode slash variations
+            "host..\u002fetc\u002fpasswd",  # Unicode forward slash
+            "host..\u2044etc\u2044passwd",  # Fraction slash
+            "host..\u2215etc\u2215passwd",  # Division slash
+            "host..\u005cetc\u005cpasswd",  # Unicode backslash
+            # Mixed Unicode and ASCII
+            "host\u002e\u002e/\u002e\u002e/etc/passwd",
+        ]
+
+        for attack in unicode_attacks:
+            with pytest.raises(
+                ValueError,
+                match="(Invalid filename|prohibited characters|unsafe characters)",
+            ):
+                get_path_filter(attack, "map")
+
+    def test_get_path_filter_comprehensive_encoded_attacks(self):
+        """Test comprehensive encoded attack scenarios."""
+        comprehensive_attacks = [
+            # Triple encoding
+            "host%25252e%25252e%25252f",
+            # Mixed encoding techniques
+            "host%2e%2e%u002f%2e%2e",
+            # Unicode escape sequences
+            "host\\u002e\\u002e\\u002f",
+            # Hex encoding variations
+            "host\\x2e\\x2e\\x2f",
+            # Overlong UTF-8 encoding attempts
+            "host%c0%ae%c0%ae%c0%af",
+            # Directory traversal with various encodings
+            "host%2e%2e%c0%af%2e%2e%c0%afetc%c0%afpasswd",
+        ]
+
+        for attack in comprehensive_attacks:
+            with pytest.raises(
+                ValueError,
+                match="(Invalid filename|Filename contains|prohibited characters|unsafe characters)",
+            ):
+                get_path_filter(attack, "map")
+
+    def test_get_path_filter_whitelist_validation(self):
+        """Test that only whitelisted characters are allowed."""
+        # Valid filenames that should pass
+        valid_filenames = [
+            "host.map",
+            "backend-config.conf",
+            "ssl_cert.pem",
+            "route_123.map",
+            "test-file_v2.config",
+            "a",
+            "A123",
+            "file.with.dots",
+        ]
+
+        for valid_filename in valid_filenames:
+            # Should not raise an exception
+            result = get_path_filter(valid_filename, "map")
+            assert "/etc/haproxy/maps/" in result
+            assert valid_filename in result
+
+        # Invalid characters that should be blocked
+        invalid_filenames = [
+            "host file.map",  # space
+            "host@file.map",  # special character
+            "host#file.map",  # hash
+            "host&file.map",  # ampersand
+            "host*file.map",  # asterisk
+            "host+file.map",  # plus
+            "host=file.map",  # equals
+            "host[file].map",  # brackets
+            "host{file}.map",  # braces
+            "host|file.map",  # pipe
+            "host:file.map",  # colon
+            "host;file.map",  # semicolon
+            "host,file.map",  # comma
+            "host<file>.map",  # angle brackets
+            "host?file.map",  # question mark
+            "!host.map",  # starts with special char
+            ".host.map",  # starts with dot
+            "-host.map",  # starts with dash
+            "_host.map",  # starts with underscore
+        ]
+
+        for invalid_filename in invalid_filenames:
+            with pytest.raises(ValueError, match="unsafe characters"):
+                get_path_filter(invalid_filename, "map")

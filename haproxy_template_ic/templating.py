@@ -7,6 +7,8 @@ functionality including support for template snippets and custom filters.
 
 import base64
 import os
+import unicodedata
+import urllib.parse
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
 
@@ -54,19 +56,56 @@ def get_path_filter(filename: str, content_type: str, config=None) -> str:
     Raises:
         ValueError: If filename contains invalid characters or content_type is unknown
     """
-    # Validate filename for security
+    # Validate filename for security with comprehensive normalization
     if not filename or not isinstance(filename, str):
         raise ValueError(f"Invalid filename: {filename}")
 
-    # Check for path traversal attempts and other dangerous characters
-    if (
-        ".." in filename
-        or "/" in filename
-        or "\\" in filename
-        or "\x00" in filename
-        or filename in (".", "..")
-    ):
-        raise ValueError(f"Invalid filename contains prohibited characters: {filename}")
+    # Defense in depth: Multiple layers of validation
+
+    # Layer 1: URL decode the filename to catch encoded attacks
+    try:
+        decoded_filename = urllib.parse.unquote(filename, errors="strict")
+    except UnicodeDecodeError:
+        raise ValueError(f"Invalid filename encoding: {filename}")
+
+    # Layer 2: Normalize Unicode to catch Unicode variations
+    normalized_filename = unicodedata.normalize("NFKC", decoded_filename)
+
+    # Layer 3: Check if normalization/decoding revealed encoded sequences
+    if "%" in normalized_filename:
+        raise ValueError(
+            f"Filename contains encoded sequences after normalization: {filename}"
+        )
+
+    # Layer 4: Check for path traversal attempts and dangerous characters
+    # Apply checks to both original and normalized filenames for completeness
+    for check_filename in [filename, normalized_filename]:
+        if (
+            ".." in check_filename
+            or "/" in check_filename
+            or "\\" in check_filename
+            or "\x00" in check_filename
+            or check_filename in (".", "..")
+            # Additional checks for common path separator Unicode variants
+            or "\u002f" in check_filename  # Unicode forward slash
+            or "\u005c" in check_filename  # Unicode backslash
+            or "\u2044" in check_filename  # Unicode fraction slash
+            or "\u2215" in check_filename  # Unicode division slash
+        ):
+            raise ValueError(
+                f"Invalid filename contains prohibited characters: {filename}"
+            )
+
+    # Layer 5: Final whitelist validation - only safe characters allowed
+    import re
+
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", normalized_filename):
+        raise ValueError(
+            f"Filename contains unsafe characters (only alphanumeric, dots, hyphens, underscores allowed): {filename}"
+        )
+
+    # Use normalized filename for further processing
+    filename = normalized_filename
 
     # Validate content_type
     valid_types = {"map", "certificate", "file"}

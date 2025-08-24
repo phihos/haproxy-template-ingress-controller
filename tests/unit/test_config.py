@@ -1926,10 +1926,10 @@ class TestFilenameSecurity:
             "error-404.http",
             "file123.txt",
             "a",  # Single character
-            "host file.map",  # Spaces allowed
             "file.with.multiple.dots.map",
-            "файл.map",  # Unicode characters
-            "αρχείο.map",  # Greek characters
+            "A123",  # Start with uppercase
+            "test_file_v2.config",
+            "backend-config.conf",
         ]
 
         for filename in valid_filenames:
@@ -1938,6 +1938,31 @@ class TestFilenameSecurity:
                 filename=filename, content="test content", content_type=ContentType.MAP
             )
             assert content.filename == filename
+
+    def test_filename_validation_invalid_characters_blocked(self):
+        """Test that filenames with invalid characters are blocked (now includes spaces and Unicode)."""
+        from haproxy_template_ic.config_models import RenderedContent, ContentType
+
+        invalid_filenames = [
+            "host file.map",  # Spaces no longer allowed for security
+            "файл.map",  # Unicode characters no longer allowed
+            "αρχείο.map",  # Greek characters no longer allowed
+            "host@file.map",  # Special characters blocked
+            "host#file.map",  # Hash
+            "host&file.map",  # Ampersand
+            "!host.map",  # Starts with special char
+            ".host.map",  # Starts with dot
+            "_host.map",  # Starts with underscore
+            "-host.map",  # Starts with dash
+        ]
+
+        for filename in invalid_filenames:
+            with pytest.raises(ValidationError, match="String should match pattern"):
+                RenderedContent(
+                    filename=filename,
+                    content="test content",
+                    content_type=ContentType.MAP,
+                )
 
     def test_filename_validation_path_traversal_blocked(self):
         """Test that path traversal attempts in filenames are blocked."""
@@ -1969,15 +1994,13 @@ class TestFilenameSecurity:
                 )
 
     def test_filename_validation_directory_names_blocked(self):
-        """Test that directory names like '.' and '..' are blocked."""
+        """Test that directory names like '.' and '..' are blocked by pattern validation."""
         from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         directory_names = [".", ".."]
 
         for dir_name in directory_names:
-            with pytest.raises(
-                ValidationError, match="Filename cannot be a directory name"
-            ):
+            with pytest.raises(ValidationError, match="String should match pattern"):
                 RenderedContent(
                     filename=dir_name,
                     content="test content",
