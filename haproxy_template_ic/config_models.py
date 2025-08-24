@@ -225,7 +225,7 @@ class Config(BaseModel):
 
     @field_validator("template_snippets")
     @classmethod
-    def validate_snippet_names(cls, v):
+    def validate_snippet_names(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Validate snippet names for template inclusion."""
         for name, snippet in v.items():
             if name != snippet.name:

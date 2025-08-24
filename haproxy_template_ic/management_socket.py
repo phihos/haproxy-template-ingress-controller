@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Protocol, Tuple, Union
 
+from haproxy_template_ic.constants import DEFAULT_SOCKET_PATH, SOCKET_BUFFER_SIZE
 from haproxy_template_ic.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
@@ -203,12 +204,75 @@ class ManagementSocketServer:
     def __init__(
         self,
         memo: Any,
-        socket_path: str = "/run/haproxy-template-ic/management.sock",
+        socket_path: str = DEFAULT_SOCKET_PATH,
     ) -> None:
         self.memo = memo
         self.logger = logger
         self.socket_path = Path(socket_path)
         self.server: Optional[asyncio.Server] = None
+
+    def _handle_dump_command(self, parts: List[str], metrics: Any) -> Dict[str, Any]:
+        """Handle dump subcommands."""
+        if len(parts) < 2:
+            return {
+                "error": "Missing command name. Usage: dump <all|indices|config|deployments>"
+            }
+
+        dump_commands = {
+            "all": ("dump_all", lambda: serialize_state(self.memo)),
+            "indices": ("dump_indices", self._dump_indices),
+            "config": ("dump_config", self._dump_config),
+            "deployments": ("dump_deployments", self._dump_deployments),
+        }
+
+        command_name = parts[1]
+        if command_name in dump_commands:
+            metric_name, handler = dump_commands[command_name]
+            metrics.record_management_socket_command(metric_name, "success")
+            return handler()
+        else:
+            metrics.record_management_socket_command("dump_unknown", "error")
+            return {
+                "error": f"Unknown dump command: {command_name}. "
+                f"Available: all, indices, config, deployments"
+            }
+
+    def _handle_get_command(self, parts: List[str]) -> Dict[str, Any]:
+        """Handle get subcommands."""
+        if len(parts) < 3:
+            return {
+                "error": "Missing arguments. Usage: get <maps|watched_resources|template_snippets|certificates|deployment> <identifier>"
+            }
+
+        collection_type = parts[1]
+        identifier = parts[2]
+
+        if collection_type == "deployment":
+            return self._get_deployment_history(identifier)
+
+        collections = {
+            "maps": self.memo.config.maps,
+            "watched_resources": self.memo.config.watched_resources,
+            "template_snippets": self.memo.config.template_snippets,
+            "certificates": self.memo.config.certificates,
+        }
+
+        if collection_type in collections:
+            item = collections[collection_type].get(identifier)
+            if item:
+                return {
+                    "result": item.model_dump(mode="json")
+                    if hasattr(item, "model_dump")
+                    else {"id": identifier, "data": str(item)}
+                }
+            return {
+                "error": f"{collection_type.rstrip('s').title()} not found: {identifier}"
+            }
+
+        return {
+            "error": f"Unknown collection type: {collection_type}. "
+            f"Available: maps, watched_resources, template_snippets, certificates, deployment"
+        }
 
     async def _process_command(self, command: str) -> Dict[str, Any]:
         """Process a management socket command and return response data."""
@@ -219,74 +283,14 @@ class ManagementSocketServer:
             metrics.record_management_socket_command("empty", "error")
             return {"error": "Empty command"}
 
-        if parts[0] == "dump":
-            if len(parts) < 2:
-                return {
-                    "error": "Missing command name. Usage: dump <all|indices|config|deployments>"
-                }
+        command_name = parts[0]
 
-            if parts[1] == "all":
-                metrics.record_management_socket_command("dump_all", "success")
-                return serialize_state(self.memo)
-
-            elif parts[1] == "indices":
-                metrics.record_management_socket_command("dump_indices", "success")
-                return self._dump_indices()
-
-            elif parts[1] == "config":
-                metrics.record_management_socket_command("dump_config", "success")
-                return self._dump_config()
-
-            elif parts[1] == "deployments":
-                metrics.record_management_socket_command("dump_deployments", "success")
-                return self._dump_deployments()
-
-            else:
-                metrics.record_management_socket_command("dump_unknown", "error")
-                return {
-                    "error": f"Unknown dump command: {parts[1]}. "
-                    f"Available: all, indices, config, deployments"
-                }
-
-        elif parts[0] == "get":
-            if len(parts) < 3:
-                return {
-                    "error": "Missing arguments. Usage: get <maps|watched_resources|template_snippets|certificates|deployment> <identifier>"
-                }
-
-            collection_type = parts[1]
-            identifier = parts[2]
-
-            collections = {
-                "maps": self.memo.config.maps,
-                "watched_resources": self.memo.config.watched_resources,
-                "template_snippets": self.memo.config.template_snippets,
-                "certificates": self.memo.config.certificates,
-            }
-
-            if collection_type == "deployment":
-                # Handle deployment history lookup
-                return self._get_deployment_history(identifier)
-            elif collection_type in collections:
-                item = collections[collection_type].get(identifier)
-                if item:
-                    return {
-                        "result": item.model_dump(mode="json")
-                        if hasattr(item, "model_dump")
-                        else {"id": identifier, "data": str(item)}
-                    }
-                return {
-                    "error": f"{collection_type.rstrip('s').title()} not found: {identifier}"
-                }
-
-            else:
-                return {
-                    "error": f"Unknown collection type: {collection_type}. "
-                    f"Available: maps, watched_resources, template_snippets, certificates, deployment"
-                }
-
+        if command_name == "dump":
+            return self._handle_dump_command(parts, metrics)
+        elif command_name == "get":
+            return self._handle_get_command(parts)
         else:
-            return {"error": f"Unknown command: {parts[0]}. Available: dump, get"}
+            return {"error": f"Unknown command: {command_name}. Available: dump, get"}
 
     def _dump_indices(self) -> Dict[str, Any]:
         """Dump all indices from memo."""
@@ -361,7 +365,7 @@ class ManagementSocketServer:
             self.server = await asyncio.start_unix_server(
                 self._handle_client,
                 path=str(self.socket_path),
-                limit=1024,
+                limit=SOCKET_BUFFER_SIZE,
             )
 
             self.logger.info(
@@ -398,7 +402,7 @@ class ManagementSocketServer:
             self.logger.debug("🔌 New management socket client connected")
 
             # Read command from client
-            command_data = await reader.read(1024)
+            command_data = await reader.read(SOCKET_BUFFER_SIZE)
             if not command_data:
                 command_data = b"dump all"  # Default command
 

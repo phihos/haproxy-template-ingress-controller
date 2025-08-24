@@ -3,9 +3,11 @@
 import base64
 import binascii
 import re
-from typing import Any, cast
+from typing import Any
 
 import click
+
+from haproxy_template_ic.constants import ERROR_MISSING_CREDENTIALS, MAX_K8S_NAME_LENGTH
 from pydantic import BaseModel, Field, SecretStr
 
 
@@ -41,28 +43,38 @@ class Credentials(BaseModel):
         Raises:
             ValueError: If required fields are missing or invalid
         """
-        fields = [
-            "dataplane_username",
-            "dataplane_password",
-            "validation_username",
-            "validation_password",
-        ]
+        # Decode individual fields with descriptive names
+        dataplane_username = _decode_field(data.get("dataplane_username"))
+        dataplane_password = _decode_field(data.get("dataplane_password"))
+        validation_username = _decode_field(data.get("validation_username"))
+        validation_password = _decode_field(data.get("validation_password"))
 
-        # Decode all fields
-        vals = [_decode_field(data.get(f)) for f in fields]
+        # Check for missing/invalid fields with early return
+        missing_fields = []
+        if dataplane_username is None:
+            missing_fields.append("dataplane_username")
+        if dataplane_password is None:
+            missing_fields.append("dataplane_password")
+        if validation_username is None:
+            missing_fields.append("validation_username")
+        if validation_password is None:
+            missing_fields.append("validation_password")
 
-        # Check for missing/invalid fields
-        if None in vals:
-            missing = [fields[i] for i, v in enumerate(vals) if v is None]
-            raise ValueError(f"Missing/invalid credential fields: {missing}")
+        if missing_fields:
+            raise ValueError(ERROR_MISSING_CREDENTIALS.format(fields=missing_fields))
 
-        # Create auth objects - vals are guaranteed to be str after None check
-        # Type assertions are safe because we've already validated that no values are None
+        # Additional type safety check - these should not be None after validation
+        assert dataplane_username is not None  # nosec B101
+        assert dataplane_password is not None  # nosec B101
+        assert validation_username is not None  # nosec B101
+        assert validation_password is not None  # nosec B101
+
+        # Create auth objects with validated fields
         dataplane_auth = DataplaneAuth(
-            username=cast(str, vals[0]), password=SecretStr(cast(str, vals[1]))
+            username=dataplane_username, password=SecretStr(dataplane_password)
         )
         validation_auth = DataplaneAuth(
-            username=cast(str, vals[2]), password=SecretStr(cast(str, vals[3]))
+            username=validation_username, password=SecretStr(validation_password)
         )
 
         return cls(dataplane=dataplane_auth, validation=validation_auth)
@@ -115,7 +127,7 @@ def validate_k8s_name(ctx, param, name: str) -> str:
     """
     if (
         not name
-        or len(name) > 253
+        or len(name) > MAX_K8S_NAME_LENGTH
         or not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", name)
     ):
         raise click.BadParameter("Invalid K8s name format")

@@ -22,6 +22,13 @@ if TYPE_CHECKING:
     from haproxy_template_ic.credentials import Credentials
 
 from haproxy_template_ic.config_models import HAProxyConfigContext
+from haproxy_template_ic.constants import (
+    DEFAULT_API_TIMEOUT,
+    DEFAULT_DATAPLANE_PASSWORD,
+    DEFAULT_DATAPLANE_USERNAME,
+    INITIAL_RETRY_WAIT_SECONDS,
+    MAX_RETRY_WAIT_SECONDS,
+)
 from haproxy_template_ic.metrics import get_metrics_collector
 from tenacity import (
     AsyncRetrying,
@@ -419,8 +426,11 @@ class DataplaneClient:
     def __init__(
         self,
         base_url: str,
-        timeout: float = 30.0,
-        auth: tuple[str, str] = ("admin", "adminpass"),
+        timeout: float = DEFAULT_API_TIMEOUT,
+        auth: tuple[str, str] = (
+            DEFAULT_DATAPLANE_USERNAME,
+            DEFAULT_DATAPLANE_PASSWORD,
+        ),
     ):
         """
         Initialize the client.
@@ -438,7 +448,7 @@ class DataplaneClient:
         # Defer client creation until first use
         self._client = None
 
-    def _get_client(self):
+    def _get_client(self) -> Any:
         """Lazy initialization of AuthenticatedClient object."""
         if self._client is None:
             import base64
@@ -660,7 +670,9 @@ class DataplaneClient:
                 # Simple retry with tenacity
                 async for attempt in AsyncRetrying(
                     stop=stop_after_attempt(5),
-                    wait=wait_exponential_jitter(initial=2, max=30),
+                    wait=wait_exponential_jitter(
+                        initial=INITIAL_RETRY_WAIT_SECONDS, max=MAX_RETRY_WAIT_SECONDS
+                    ),
                     retry=retry_if_exception(
                         lambda e: (
                             isinstance(e, httpx.RequestError)  # Network errors only
@@ -906,25 +918,39 @@ class ConfigSynchronizer:
         self.credentials = credentials
         self.deployment_history = deployment_history or DeploymentHistory()
 
-    async def sync_configuration(
+    def _prepare_sync_content(
         self, config_context: HAProxyConfigContext
-    ) -> Dict[str, Any]:
-        """Synchronize configuration to all endpoints."""
-        if not config_context.rendered_config:
-            raise DataplaneAPIError("No rendered HAProxy configuration available")
+    ) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+        """Prepare content for synchronization."""
+        return (
+            {rc.filename: rc.content for rc in config_context.rendered_maps},
+            {rc.filename: rc.content for rc in config_context.rendered_certificates},
+            {rc.filename: rc.content for rc in config_context.rendered_files},
+        )
 
-        config = config_context.rendered_config.content
+    async def _sync_content_to_client(
+        self,
+        client: DataplaneClient,
+        maps: Dict[str, str],
+        certificates: Dict[str, str],
+        files: Dict[str, str],
+        url: str,
+    ) -> None:
+        """Sync all content types to a single client."""
+        if maps:
+            logger.info(f"Syncing {len(maps)} maps to {url}")
+            await client.sync_maps(maps)
 
-        # Prepare all content for synchronization using filenames directly
-        maps_to_sync = {rc.filename: rc.content for rc in config_context.rendered_maps}
-        certificates_to_sync = {
-            rc.filename: rc.content for rc in config_context.rendered_certificates
-        }
-        files_to_sync = {
-            rc.filename: rc.content for rc in config_context.rendered_files
-        }
+        if certificates:
+            logger.info(f"Syncing {len(certificates)} certificates to {url}")
+            await client.sync_certificates(certificates)
 
-        # Step 1: Sync all content to validation instance first
+        if files:
+            logger.info(f"Syncing {len(files)} files to {url}")
+            await client.sync_files(files)
+
+    async def _validate_configuration(self, config: str) -> None:
+        """Validate configuration using the validation instance."""
         validation_client = DataplaneClient(
             self.validation_url,
             auth=(
@@ -933,30 +959,69 @@ class ConfigSynchronizer:
             ),
         )
 
-        # Sync maps, certificates, and files to validation instance
-        if maps_to_sync:
-            logger.info(f"Syncing {len(maps_to_sync)} maps to validation instance")
-            await validation_client.sync_maps(maps_to_sync)
-
-        if certificates_to_sync:
-            logger.info(
-                f"Syncing {len(certificates_to_sync)} certificates to validation instance"
-            )
-            await validation_client.sync_certificates(certificates_to_sync)
-
-        if files_to_sync:
-            logger.info(f"Syncing {len(files_to_sync)} files to validation instance")
-            await validation_client.sync_files(files_to_sync)
-
-        # Step 2: Validate configuration at localhost
         logger.info(f"Validating configuration at {self.validation_url}")
-
         try:
             await validation_client.validate_configuration(config)
         except Exception as e:
             raise ValidationError(f"Configuration validation failed: {e}") from e
 
-        # Step 3: Deploy to production instances
+    def _handle_deployment_error(
+        self, url: str, error: Exception, config: str, results: Dict[str, Any]
+    ) -> None:
+        """Handle deployment error with enhanced logging."""
+        self.deployment_history.record(url, "unknown", False, str(error))
+        results["failed"] += 1
+        results["errors"].append(f"{url}: {error}")
+
+        error_msg = f"❌ Failed to deploy to {url}: {error}"
+        if isinstance(
+            error, DataplaneAPIError
+        ) and "Configuration context around error:" in str(error):
+            logger.error(error_msg)
+        else:
+            try:
+                error_line, error_context = parse_validation_error_details(
+                    str(error), config
+                )
+                if error_context:
+                    error_msg += (
+                        f"\n\nConfiguration context around error:\n{error_context}"
+                    )
+            except Exception:  # nosec B110
+                pass
+            logger.error(error_msg)
+
+    async def sync_configuration(
+        self, config_context: HAProxyConfigContext
+    ) -> Dict[str, Any]:
+        """Synchronize configuration to all endpoints."""
+        if not config_context.rendered_config:
+            raise DataplaneAPIError("No rendered HAProxy configuration available")
+
+        config = config_context.rendered_config.content
+        maps_to_sync, certificates_to_sync, files_to_sync = self._prepare_sync_content(
+            config_context
+        )
+
+        # Step 1: Sync content to validation instance and validate
+        validation_client = DataplaneClient(
+            self.validation_url,
+            auth=(
+                self.credentials.validation.username,
+                self.credentials.validation.password.get_secret_value(),
+            ),
+        )
+
+        await self._sync_content_to_client(
+            validation_client,
+            maps_to_sync,
+            certificates_to_sync,
+            files_to_sync,
+            "validation instance",
+        )
+        await self._validate_configuration(config)
+
+        # Step 2: Deploy to production instances
         results: Dict[str, Any] = {"successful": 0, "failed": 0, "errors": []}
 
         for url in self.production_urls:
@@ -968,49 +1033,17 @@ class ConfigSynchronizer:
                 ),
             )
             try:
-                # Sync all content first, then deploy configuration
-                if maps_to_sync:
-                    logger.info(f"Syncing {len(maps_to_sync)} maps to {url}")
-                    await client.sync_maps(maps_to_sync)
-
-                if certificates_to_sync:
-                    logger.info(
-                        f"Syncing {len(certificates_to_sync)} certificates to {url}"
-                    )
-                    await client.sync_certificates(certificates_to_sync)
-
-                if files_to_sync:
-                    logger.info(f"Syncing {len(files_to_sync)} files to {url}")
-                    await client.sync_files(files_to_sync)
+                await self._sync_content_to_client(
+                    client, maps_to_sync, certificates_to_sync, files_to_sync, url
+                )
 
                 version = await client.deploy_configuration(config)
                 self.deployment_history.record(url, version, True)
                 results["successful"] += 1
                 logger.info(f"✅ Deployed to {url}, version: {version}")
-            except Exception as e:
-                self.deployment_history.record(url, "unknown", False, str(e))
-                results["failed"] += 1
-                results["errors"].append(f"{url}: {e}")
 
-                # Enhanced error logging with config context if available
-                error_msg = f"❌ Failed to deploy to {url}: {e}"
-                if isinstance(
-                    e, DataplaneAPIError
-                ) and "Configuration context around error:" in str(e):
-                    # The error already contains context, log it as-is
-                    logger.error(error_msg)
-                else:
-                    # Try to extract context for other types of errors
-                    try:
-                        error_line, error_context = parse_validation_error_details(
-                            str(e), config
-                        )
-                        if error_context:
-                            error_msg += f"\n\nConfiguration context around error:\n{error_context}"
-                    except Exception:  # nosec B110
-                        # If context extraction fails, continue with original error
-                        pass
-                    logger.error(error_msg)
+            except Exception as e:
+                self._handle_deployment_error(url, e, config, results)
 
         logger.info(
             f"Sync complete: {results['successful']} successful, {results['failed']} failed"

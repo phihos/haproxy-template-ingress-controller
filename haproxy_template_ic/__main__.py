@@ -11,6 +11,11 @@ from importlib.metadata import PackageNotFoundError
 
 import click
 
+from haproxy_template_ic.constants import (
+    DEFAULT_HEALTHZ_PORT,
+    DEFAULT_METRICS_PORT,
+    DEFAULT_SOCKET_PATH,
+)
 from haproxy_template_ic.credentials import validate_k8s_name
 from haproxy_template_ic.operator import run_operator_loop
 from haproxy_template_ic.structured_logging import setup_structured_logging
@@ -101,20 +106,20 @@ def cli(
 @click.option(
     "--healthz-port",
     envvar="HEALTHZ_PORT",
-    default=8080,
+    default=DEFAULT_HEALTHZ_PORT,
     help="Port for health check endpoint.",
 )
 @click.option(
     "--socket-path",
     envvar="SOCKET_PATH",
-    default="/run/haproxy-template-ic/management.sock",
+    default=DEFAULT_SOCKET_PATH,
     help="Path for management socket to expose internal state.",
 )
 @click.option(
     "-m",
     "--metrics-port",
     envvar="METRICS_PORT",
-    default=9090,
+    default=DEFAULT_METRICS_PORT,
     help="Port for Prometheus metrics endpoint.",
 )
 @click.option(

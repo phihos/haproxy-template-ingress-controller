@@ -48,6 +48,15 @@ from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.structured_logging import autolog, observe
 from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.credentials import Credentials
+from haproxy_template_ic.constants import (
+    CONTENT_TYPE_CERTIFICATE,
+    CONTENT_TYPE_FILE,
+    CONTENT_TYPE_HAPROXY_CONFIG,
+    CONTENT_TYPE_MAP,
+    DEFAULT_METRICS_PORT,
+    DEFAULT_WEBHOOK_PORT,
+    HAPROXY_PODS_INDEX,
+)
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -73,6 +82,125 @@ def get_current_namespace() -> str:
         return namespace if isinstance(namespace, str) else "default"
     except (KeyError, TypeError):
         return "default"
+
+
+def _validate_sync_prerequisites(memo: Any) -> bool:
+    """Validate prerequisites for HAProxy synchronization.
+
+    Returns:
+        True if sync can proceed, False otherwise
+    """
+    if not memo.config.pod_selector:
+        logger.warning(
+            "⚠️ No pod selector configured - skipping HAProxy synchronization"
+        )
+        return False
+
+    if not memo.haproxy_config_context.rendered_config:
+        logger.warning(
+            "⚠️ No rendered HAProxy config available - skipping synchronization"
+        )
+        return False
+
+    return True
+
+
+def _get_haproxy_pod_collection(memo: Any) -> Any:
+    """Get HAProxy pod collection from memo indices.
+
+    Returns:
+        IndexedResourceCollection or None if not available
+    """
+    if not hasattr(memo, "indices"):
+        logger.warning("🔍 No indices available - skipping synchronization")
+        return None
+
+    available_indices = list(memo.indices.keys())
+    logger.info(f"🔍 Available indices: {available_indices}")
+
+    if HAPROXY_PODS_INDEX not in memo.indices:
+        logger.warning("🔍 HAProxy pods index not found - skipping synchronization")
+        return None
+
+    haproxy_pods_store = memo.indices[HAPROXY_PODS_INDEX]
+    logger.info(f"🔍 HAProxy pods index contains {len(haproxy_pods_store)} entries")
+
+    from haproxy_template_ic.config_models import IndexedResourceCollection
+
+    haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(
+        haproxy_pods_store
+    )
+    logger.info(
+        f"🔍 Created IndexedResourceCollection with {len(haproxy_pods_collection)} pods"
+    )
+
+    return haproxy_pods_collection
+
+
+def _record_sync_metrics(
+    metrics: Any, successful_count: int, failed_count: int, production_count: int
+) -> None:
+    """Record synchronization metrics."""
+    metrics.record_haproxy_instances(
+        production_count,
+        1,  # validation instances = 1 (localhost sidecar)
+    )
+
+    if successful_count > 0:
+        for _ in range(successful_count):
+            metrics.record_dataplane_api_request("deploy", "success")
+        logger.info(
+            f"🚀 Successfully synchronized configuration to {successful_count} HAProxy instances"
+        )
+
+    if failed_count > 0:
+        for _ in range(failed_count):
+            metrics.record_dataplane_api_request("deploy", "error")
+            metrics.record_error("dataplane_deploy_failed", "dataplane")
+        logger.error(
+            f"❌ Failed to synchronize configuration to {failed_count} HAProxy instances"
+        )
+
+
+def _log_haproxy_error_hints(validation_error: ValidationError, memo: Any) -> None:
+    """Log helpful hints for HAProxy configuration errors."""
+    if validation_error.error_line:
+        logger.error(
+            f"💥 Error occurred at line {validation_error.error_line} in HAProxy configuration"
+        )
+
+    if validation_error.error_context:
+        logger.error("📝 Configuration context around the error:")
+        for line in validation_error.error_context.split("\n"):
+            logger.error(f"   {line}")
+
+    if validation_error.validation_details:
+        details_lower = validation_error.validation_details.lower()
+
+        if "'listen' or 'defaults' expected" in details_lower:
+            logger.error(
+                "💡 Hint: This error often occurs when a section is missing or has syntax errors. "
+                "Check that all frontend/backend/listen blocks are properly defined."
+            )
+        elif "unknown keyword" in details_lower:
+            logger.error(
+                "💡 Hint: Check for typos in HAProxy directives or unsupported configuration options."
+            )
+        elif "missing argument" in details_lower:
+            logger.error(
+                "💡 Hint: A configuration directive is missing required parameters."
+            )
+        elif "too many args" in details_lower:
+            logger.error("💡 Hint: A configuration directive has too many parameters.")
+
+    if memo.config and memo.config.template_snippets:
+        logger.error(
+            "🔧 Debug tip: Check your Jinja2 templates and snippets for syntax errors or missing includes"
+        )
+
+    logger.error(
+        "🔧 Debug tip: Use the management socket 'dump config' command to inspect the rendered configuration"
+    )
 
 
 def _is_valid_resource(resource: Any) -> bool:
@@ -351,32 +479,19 @@ async def update_resource_index(
     return {tuple(index_values): dict(body)}
 
 
-@observe(
-    component="operator",
-    span_name="render_haproxy_templates",
-    trace_attributes={"operation.category": "template_rendering"},
-)
-async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
-    """Render all HAProxy templates with current context data."""
-    # Logging context and tracing automatically injected by @observe decorator
-    logger.debug("Rendering HAProxy templates")
-    metrics = get_metrics_collector()
-
-    # Collect all indices as IndexedResourceCollections
+def _collect_resource_indices(memo: Any, metrics: Any) -> Dict[str, Any]:
+    """Collect all resource indices as IndexedResourceCollections."""
     from haproxy_template_ic.config_models import IndexedResourceCollection
 
     indices: Dict[str, IndexedResourceCollection] = {}
     for resource_id in memo.config.watched_resources:
         try:
-            # Get the index for this resource type - access Kopf Store directly
             if resource_id in memo.indices:
                 index_data = memo.indices[resource_id]
-                # Create IndexedResourceCollection from kopf Index
                 indices[resource_id] = IndexedResourceCollection.from_kopf_index(
                     index_data
                 )
             else:
-                # Create empty collection
                 indices[resource_id] = IndexedResourceCollection()
 
             logger.debug(
@@ -386,35 +501,39 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             logger.warning(f"⚠️ Could not retrieve index '{resource_id}': {e}")
             indices[resource_id] = IndexedResourceCollection()
 
-    # Record watched resource metrics - convert IndexedResourceCollections to dict format
+    _record_resource_metrics(metrics, indices)
+    return indices
+
+
+def _record_resource_metrics(metrics: Any, indices: Dict[str, Any]) -> None:
+    """Record metrics for watched resources."""
     metrics_data = {}
     for rid, collection in indices.items():
-        # Convert IndexedResourceCollection back to dict format expected by metrics
         resource_dict = {}
         for key, resource in collection.items():
-            # Convert tuple key to string for metrics compatibility
             str_key = "_".join(str(k) for k in key)
             resource_dict[str_key] = resource
         metrics_data[rid] = resource_dict
     metrics.record_watched_resources(metrics_data)
 
-    # Clear previous renders
+
+def _prepare_template_context(
+    memo: Any, indices: Dict[str, Any]
+) -> Tuple[TemplateContext, Dict[str, Any], list]:
+    """Prepare template context and variables for rendering."""
     memo.haproxy_config_context.rendered_content.clear()
-    memo.haproxy_config_context._clear_cache()  # Clear cached filtered lists
+    memo.haproxy_config_context._clear_cache()
     memo.haproxy_config_context.rendered_config = None
 
-    # Create a new template context instance each time
     template_context = TemplateContext(
         resources=indices, namespace=get_current_namespace()
     )
 
-    # Create a list to collect validation errors from templates
     validation_errors = []
 
     def register_error(
         resource_type: str, resource_uid: str, error_message: str
     ) -> None:
-        """Register a validation error from template processing."""
         validation_errors.append(
             {
                 "resource_type": resource_type,
@@ -429,39 +548,50 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             error=error_message,
         )
 
-    # Create template variables for rendering
     template_vars = {
         "resources": template_context.resources,
         "namespace": template_context.namespace,
         "register_error": register_error,
     }
 
-    # Render the HAProxy config template
+    return template_context, template_vars, validation_errors
+
+
+def _render_haproxy_config(
+    memo: Any, template_vars: Dict[str, Any], metrics: Any
+) -> None:
+    """Render the main HAProxy configuration template."""
     try:
-        with trace_template_render("haproxy_config"):
-            with metrics.time_template_render("haproxy_config"):
+        with trace_template_render(CONTENT_TYPE_HAPROXY_CONFIG):
+            with metrics.time_template_render(CONTENT_TYPE_HAPROXY_CONFIG):
                 rendered_content = memo.template_renderer.render(
                     memo.config.haproxy_config.template, **template_vars
                 )
+
         rendered_config = RenderedConfig(content=rendered_content)
         memo.haproxy_config_context.rendered_config = rendered_config
-        metrics.record_template_render("haproxy_config", "success")
+        metrics.record_template_render(CONTENT_TYPE_HAPROXY_CONFIG, "success")
         add_span_attributes(
             template_size=len(rendered_content), template_vars_count=len(template_vars)
         )
         record_span_event("haproxy_config_rendered")
         logger.debug("✅ Rendered HAProxy configuration template")
+
     except Exception as e:
-        metrics.record_template_render("haproxy_config", "error")
+        metrics.record_template_render(CONTENT_TYPE_HAPROXY_CONFIG, "error")
         metrics.record_error("template_render_failed", "operator")
         record_span_event("haproxy_config_render_failed", {"error": str(e)})
         logger.error(f"❌ Failed to render HAProxy configuration template: {e}")
 
-    # Render all content templates (maps, certificates, files) in unified loop
+
+def _render_content_templates(
+    memo: Any, template_vars: Dict[str, Any], metrics: Any
+) -> list:
+    """Render all content templates (maps, certificates, files)."""
     content_collections = [
-        ("map", memo.config.maps),
-        ("certificate", memo.config.certificates),
-        ("file", memo.config.files),
+        (CONTENT_TYPE_MAP, memo.config.maps),
+        (CONTENT_TYPE_CERTIFICATE, memo.config.certificates),
+        (CONTENT_TYPE_FILE, memo.config.files),
     ]
 
     template_errors = []
@@ -510,30 +640,52 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
                     f"❌ Failed to render {content_type} template for {filename}: {e}"
                 )
 
-    # Check for critical template errors that should abort deployment
-    if template_errors:
-        logger.warning(
-            f"Template rendering completed with {len(template_errors)} errors"
-        )
+    return template_errors
 
-        # Certificate errors are critical since they affect TLS functionality
-        critical_errors = [e for e in template_errors if e["type"] == "certificate"]
-        if critical_errors:
-            error_msg = f"Critical certificate template errors: {[e['filename'] + ': ' + e['error'] for e in critical_errors]}"
-            logger.error(f"❌ Aborting deployment due to critical errors: {error_msg}")
-            raise RuntimeError(error_msg)
 
-    # Clear cache once after all content has been rendered
+def _validate_template_errors(template_errors: list) -> None:
+    """Validate template errors and abort on critical ones."""
+    if not template_errors:
+        return
+
+    logger.warning(f"Template rendering completed with {len(template_errors)} errors")
+
+    critical_errors = [
+        e for e in template_errors if e["type"] == CONTENT_TYPE_CERTIFICATE
+    ]
+    if critical_errors:
+        error_msg = f"Critical certificate template errors: {[e['filename'] + ': ' + e['error'] for e in critical_errors]}"
+        logger.error(f"❌ Aborting deployment due to critical errors: {error_msg}")
+        raise RuntimeError(error_msg)
+
+
+@observe(
+    component="operator",
+    span_name="render_haproxy_templates",
+    trace_attributes={"operation.category": "template_rendering"},
+)
+async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
+    """Render all HAProxy templates with current context data."""
+    logger.debug("Rendering HAProxy templates")
+    metrics = get_metrics_collector()
+
+    indices = _collect_resource_indices(memo, metrics)
+    template_context, template_vars, validation_errors = _prepare_template_context(
+        memo, indices
+    )
+
+    _render_haproxy_config(memo, template_vars, metrics)
+    template_errors = _render_content_templates(memo, template_vars, metrics)
+    _validate_template_errors(template_errors)
+
     memo.haproxy_config_context._clear_cache()
 
-    # Log validation errors collected during template rendering
     if validation_errors:
         logger.warning(
             f"Template validation found {len(validation_errors)} errors",
             errors=validation_errors,
         )
 
-    # Synchronize rendered configuration with HAProxy instances
     await synchronize_with_haproxy_instances(memo)
 
 
@@ -542,57 +694,24 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
     logger.info("🚀 SYNC FUNCTION CALLED - Starting synchronization...")
     metrics = get_metrics_collector()
 
-    if not memo.config.pod_selector:
-        logger.warning(
-            "⚠️ No pod selector configured - skipping HAProxy synchronization"
-        )
-        return
-
-    if not memo.haproxy_config_context.rendered_config:
-        logger.warning(
-            "⚠️ No rendered HAProxy config available - skipping synchronization"
-        )
+    if not _validate_sync_prerequisites(memo):
         return
 
     try:
-        # Debug: Log available indices
-        available_indices = (
-            list(memo.indices.keys()) if hasattr(memo, "indices") else []
-        )
-        logger.info(f"🔍 Available indices: {available_indices}")
-
-        # Get indexed HAProxy pods and extract production URLs
-        if "haproxy_pods" not in memo.indices:
-            logger.warning("🔍 HAProxy pods index not found - skipping synchronization")
+        haproxy_pods_collection = _get_haproxy_pod_collection(memo)
+        if haproxy_pods_collection is None:
             return
 
-        haproxy_pods_store = memo.indices["haproxy_pods"]
-
-        logger.info(f"🔍 HAProxy pods index contains {len(haproxy_pods_store)} entries")
-
-        # Convert Kopf Store to IndexedResourceCollection for clean handling
-        from haproxy_template_ic.config_models import IndexedResourceCollection
-
-        haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(
-            haproxy_pods_store
-        )
-        logger.info(
-            f"🔍 Created IndexedResourceCollection with {len(haproxy_pods_collection)} pods"
-        )
-
         production_urls = get_production_urls_from_index(haproxy_pods_collection)
-
         if not production_urls:
             logger.warning(
                 "⚠️ No production HAProxy pods found - skipping synchronization"
             )
             return
 
-        # Initialize deployment history if not exists
         if not hasattr(memo, "deployment_history"):
             memo.deployment_history = DeploymentHistory()
 
-        # Create synchronizer and perform sync with credentials from Secret
         synchronizer = ConfigSynchronizer(
             production_urls=production_urls,
             validation_url=memo.config.validation_dataplane_url,
@@ -602,81 +721,26 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
 
         results = await synchronizer.sync_configuration(memo.haproxy_config_context)
 
-        # Log results and record metrics
         successful_count = results.get("successful", 0)
         failed_count = results.get("failed", 0)
         errors = results.get("errors", [])
 
-        # Record HAProxy instance counts and sync results
-        # We have 1 validation instance (fixed localhost URL) and production_urls count for production
-        metrics.record_haproxy_instances(
-            len(production_urls),
-            1,  # validation instances = 1 (localhost sidecar)
+        _record_sync_metrics(
+            metrics, successful_count, failed_count, len(production_urls)
         )
 
-        if successful_count > 0:
-            for _ in range(successful_count):
-                metrics.record_dataplane_api_request("deploy", "success")
-            logger.info(
-                f"🚀 Successfully synchronized configuration to {successful_count} HAProxy instances"
-            )
-
-        if failed_count > 0:
-            for _ in range(failed_count):
-                metrics.record_dataplane_api_request("deploy", "error")
-                metrics.record_error("dataplane_deploy_failed", "dataplane")
-            logger.error(
-                f"❌ Failed to synchronize configuration to {failed_count} HAProxy instances"
-            )
-            for error in errors:
-                logger.error(f"   - {error}")
+        for error in errors:
+            logger.error(f"   - {error}")
 
     except ValidationError as e:
         metrics.record_error("validation_failed", "dataplane")
         logger.error(f"❌ Configuration validation failed: {e}")
+        _log_haproxy_error_hints(e, memo)
 
-        # Log additional context if available
-        if e.error_line:
-            logger.error(
-                f"💥 Error occurred at line {e.error_line} in HAProxy configuration"
-            )
-        if e.error_context:
-            logger.error("📝 Configuration context around the error:")
-            # Split context by lines and log each line separately to preserve formatting
-            for line in e.error_context.split("\n"):
-                logger.error(f"   {line}")
-
-        # Additional hints for common HAProxy configuration errors
-        if e.validation_details:
-            details_lower = e.validation_details.lower()
-            if "'listen' or 'defaults' expected" in details_lower:
-                logger.error(
-                    "💡 Hint: This error often occurs when a section is missing or has syntax errors. Check that all frontend/backend/listen blocks are properly defined."
-                )
-            elif "unknown keyword" in details_lower:
-                logger.error(
-                    "💡 Hint: Check for typos in HAProxy directives or unsupported configuration options."
-                )
-            elif "missing argument" in details_lower:
-                logger.error(
-                    "💡 Hint: A configuration directive is missing required parameters."
-                )
-            elif "too many args" in details_lower:
-                logger.error(
-                    "💡 Hint: A configuration directive has too many parameters."
-                )
-
-        # Provide template debugging suggestions
-        if memo.config and memo.config.template_snippets:
-            logger.error(
-                "🔧 Debug tip: Check your Jinja2 templates and snippets for syntax errors or missing includes"
-            )
-        logger.error(
-            "🔧 Debug tip: Use the management socket 'dump config' command to inspect the rendered configuration"
-        )
     except DataplaneAPIError as e:
         metrics.record_error("dataplane_api_failed", "dataplane")
         logger.error(f"❌ Dataplane API error: {e}")
+
     except Exception as e:
         metrics.record_error("sync_unexpected_error", "dataplane")
         logger.error(f"❌ Unexpected error during synchronization: {e}")
@@ -741,7 +805,7 @@ def setup_haproxy_pod_indexing(memo: Any) -> None:
     logger.info(f"📋 Using label selector: {pod_labels}")
 
     # Register HAProxy pod indexing with label filtering
-    kopf.index("pods", id="haproxy_pods", param="haproxy_pods", labels=pod_labels)(
+    kopf.index("pods", id=HAPROXY_PODS_INDEX, param="haproxy_pods", labels=pod_labels)(
         haproxy_pods_index
     )  # type: ignore
 
@@ -863,7 +927,7 @@ async def init_management_socket(memo: Any, **kwargs: Any) -> None:
 async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
     """Initialize and start the Prometheus metrics server."""
     metrics = get_metrics_collector()
-    metrics_port = getattr(memo.cli_options, "metrics_port", 9090)
+    metrics_port = getattr(memo.cli_options, "metrics_port", DEFAULT_METRICS_PORT)
     # Start metrics server as a background task
     memo.metrics_server_task = asyncio.create_task(
         metrics.start_metrics_server(metrics_port)
@@ -927,13 +991,13 @@ def configure_webhook_server(
 
         settings.admission.server = kopf.WebhookServer(
             addr="0.0.0.0",  # nosec B104 - Kubernetes webhook must bind all interfaces
-            port=9443,
+            port=DEFAULT_WEBHOOK_PORT,
             certfile=cert_file,
             pkeyfile=key_file,
             cadump=ca_dump_file,
         )
         logger.info(
-            "✅ Webhook server configured on port 9443 with mounted TLS certificates"
+            f"✅ Webhook server configured on port {DEFAULT_WEBHOOK_PORT} with mounted TLS certificates"
         )
     else:
         # Create a writable temporary directory for self-signed certificates
@@ -945,11 +1009,11 @@ def configure_webhook_server(
 
         settings.admission.server = kopf.WebhookServer(
             addr="0.0.0.0",  # nosec B104 - Kubernetes webhook must bind all interfaces
-            port=9443,
+            port=DEFAULT_WEBHOOK_PORT,
             cadump=temp_ca_file,
         )
         logger.info(
-            "✅ Webhook server configured on port 9443 with self-signed certificates"
+            f"✅ Webhook server configured on port {DEFAULT_WEBHOOK_PORT} with self-signed certificates"
         )
 
     settings.admission.managed = "haproxy-template-ic.io"

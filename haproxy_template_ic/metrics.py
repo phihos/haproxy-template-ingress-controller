@@ -8,7 +8,7 @@ performance, resource counts, operation timing, and error rates.
 import time
 import logging
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional, TypeVar
 from functools import wraps
 
 from prometheus_async import aio
@@ -19,6 +19,8 @@ from prometheus_client import (
     Info,
     generate_latest,
 )
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 logger = logging.getLogger(__name__)
 
@@ -274,12 +276,14 @@ class MetricsCollector:
 # =============================================================================
 
 
-def timed_operation(metric_name: str, labels: Optional[Dict[str, str]] = None):
+def timed_operation(
+    metric_name: str, labels: Optional[Dict[str, str]] = None
+) -> Callable[[F], F]:
     """Decorator to time function execution and record in metrics."""
 
-    def decorator(func):
+    def decorator(func: F) -> F:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             start_time = time.time()
             try:
                 result = func(*args, **kwargs)
@@ -301,7 +305,7 @@ def timed_operation(metric_name: str, labels: Optional[Dict[str, str]] = None):
                         duration
                     )
 
-        return wrapper
+        return wrapper  # type: ignore
 
     return decorator
 
