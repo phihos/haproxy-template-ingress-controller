@@ -48,7 +48,9 @@ def b64decode_filter(value: str) -> str:
         raise ValueError(f"Failed to decode base64 value: {e}") from e
 
 
-def get_path_filter(filename: str, content_type: str, config=None) -> str:
+def get_path_filter(
+    filename: str, content_type: str, config: Optional[Any] = None
+) -> str:
     """Custom Jinja2 filter to resolve full paths from filenames with security validation.
 
     Args:

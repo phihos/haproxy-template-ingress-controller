@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import logging
 import re
 from typing import Any
 
@@ -9,6 +10,8 @@ import click
 
 from haproxy_template_ic.constants import ERROR_MISSING_CREDENTIALS, MAX_K8S_NAME_LENGTH
 from pydantic import BaseModel, Field, SecretStr
+
+logger = logging.getLogger(__name__)
 
 
 class DataplaneAuth(BaseModel):
@@ -64,10 +67,23 @@ class Credentials(BaseModel):
             raise ValueError(ERROR_MISSING_CREDENTIALS.format(fields=missing_fields))
 
         # Additional type safety check - these should not be None after validation
-        assert dataplane_username is not None  # nosec B101
-        assert dataplane_password is not None  # nosec B101
-        assert validation_username is not None  # nosec B101
-        assert validation_password is not None  # nosec B101
+        # Using explicit runtime checks instead of assertions for production safety
+        if dataplane_username is None:
+            raise RuntimeError(
+                "Internal error: dataplane_username should not be None after validation"
+            )
+        if dataplane_password is None:
+            raise RuntimeError(
+                "Internal error: dataplane_password should not be None after validation"
+            )
+        if validation_username is None:
+            raise RuntimeError(
+                "Internal error: validation_username should not be None after validation"
+            )
+        if validation_password is None:
+            raise RuntimeError(
+                "Internal error: validation_password should not be None after validation"
+            )
 
         # Create auth objects with validated fields
         dataplane_auth = DataplaneAuth(
@@ -95,7 +111,14 @@ def _decode_field(val: Any) -> str | None:
     if isinstance(val, bytes):
         try:
             return base64.b64decode(val).decode().strip()
-        except (binascii.Error, UnicodeDecodeError, ValueError):
+        except binascii.Error as e:
+            logger.debug(f"Base64 decode error for bytes value: {e}")
+            return None
+        except UnicodeDecodeError as e:
+            logger.debug(f"Unicode decode error for bytes value: {e}")
+            return None
+        except ValueError as e:
+            logger.debug(f"Value error decoding bytes: {e}")
             return None
 
     if isinstance(val, str):
@@ -103,9 +126,14 @@ def _decode_field(val: Any) -> str | None:
         # We need to decode them to get the actual credential values
         try:
             return base64.b64decode(val.strip()).decode().strip()
-        except (binascii.Error, UnicodeDecodeError, ValueError):
-            # If base64 decoding fails, return the original string
-            # This handles cases where the value might not be base64-encoded
+        except binascii.Error as e:
+            logger.debug(f"Base64 decode error for string value, using original: {e}")
+            return val.strip()
+        except UnicodeDecodeError as e:
+            logger.debug(f"Unicode decode error for string value, using original: {e}")
+            return val.strip()
+        except ValueError as e:
+            logger.debug(f"Value error decoding string, using original: {e}")
             return val.strip()
 
     return None

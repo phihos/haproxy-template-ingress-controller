@@ -56,6 +56,7 @@ from haproxy_template_ic.constants import (
     DEFAULT_METRICS_PORT,
     DEFAULT_WEBHOOK_PORT,
     HAPROXY_PODS_INDEX,
+    NAMESPACE_FILE_PATH,
 )
 from haproxy_template_ic.tracing import (
     add_span_attributes,
@@ -72,9 +73,8 @@ _DOT_SPLIT_PATTERN = re.compile(r"\.(?![^\[]*\])")
 
 def get_current_namespace() -> str:
     """Get the current Kubernetes namespace."""
-    ns_path = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-    if os.path.exists(ns_path):
-        with open(ns_path) as f:
+    if os.path.exists(NAMESPACE_FILE_PATH):
+        with open(NAMESPACE_FILE_PATH) as f:
             return f.read().strip()
     try:
         contexts, active_context = config.list_kube_config_contexts()
