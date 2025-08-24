@@ -215,8 +215,8 @@ def send_socket_command(
     if pod is None:
         raise ValueError("Pod cannot be None")
 
-    if not command or not isinstance(command, str):
-        raise ValueError("Command must be a non-empty string")
+    if command is None or not isinstance(command, str):
+        raise ValueError("Command must be a string")
 
     if not isinstance(retries, int) or retries < 1:
         logger.warning(
