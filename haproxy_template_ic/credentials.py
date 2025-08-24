@@ -66,6 +66,16 @@ class Credentials(BaseModel):
         if missing_fields:
             raise ValueError(ERROR_MISSING_CREDENTIALS.format(fields=missing_fields))
 
+        # Type narrowing: After validation, these fields are guaranteed to be non-None strings
+        # Using explicit checks for production safety (assertions get removed with -O)
+        if (
+            dataplane_username is None
+            or dataplane_password is None
+            or validation_username is None
+            or validation_password is None
+        ):
+            raise RuntimeError("Internal error: validated fields should not be None")
+
         # Create auth objects with validated fields
         dataplane_auth = DataplaneAuth(
             username=dataplane_username, password=SecretStr(dataplane_password)
