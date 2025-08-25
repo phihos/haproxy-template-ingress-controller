@@ -207,6 +207,12 @@ class Config(BaseModel):
         default_factory=dict, description="General-purpose files (by filename)"
     )
 
+    # Field filtering configuration
+    watched_resources_ignore_fields: List[str] = Field(
+        default_factory=lambda: ["metadata.managedFields"],
+        description="JSONPath expressions for fields to omit from indexed resources (e.g., 'metadata.managedFields')",
+    )
+
     # Storage directory configuration for HAProxy Dataplane API
     storage_maps_dir: str = Field(
         default="/etc/haproxy/maps",
@@ -243,6 +249,23 @@ class Config(BaseModel):
         if not os.path.isabs(v):
             raise ValueError(f"Storage directory must be absolute path: {v}")
         return v.rstrip("/")  # Remove trailing slash for consistency
+
+    @field_validator("watched_resources_ignore_fields")
+    @classmethod
+    def validate_ignore_fields(cls, v: List[str]) -> List[str]:
+        """Validate JSONPath expressions for field filtering."""
+        from haproxy_template_ic.field_filter import validate_ignore_fields
+
+        validated = validate_ignore_fields(v)
+        if len(validated) < len(v):
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Some ignore field expressions were invalid and removed. "
+                f"Original: {len(v)}, Valid: {len(validated)}"
+            )
+        return validated
 
     model_config = ConfigDict(
         # Forbid extra fields for strict validation
@@ -344,8 +367,18 @@ class IndexedResourceCollection(BaseModel):
     _max_size: int = PrivateAttr(default=10000)
 
     @classmethod
-    def from_kopf_index(cls, index: Any) -> "IndexedResourceCollection":
-        """Create from kopf Index with automatic Body/Store object conversion."""
+    def from_kopf_index(
+        cls, index: Any, ignore_fields: Optional[List[str]] = None
+    ) -> "IndexedResourceCollection":
+        """Create from kopf Index with automatic Body/Store object conversion.
+
+        Args:
+            index: Kopf index object containing resources
+            ignore_fields: Optional list of JSONPath expressions for fields to remove
+
+        Returns:
+            IndexedResourceCollection with filtered resources
+        """
         import logging
 
         from haproxy_template_ic.kopf_utils import normalize_kopf_resource
@@ -367,9 +400,11 @@ class IndexedResourceCollection(BaseModel):
                     if count >= collection._max_size:
                         break
 
-                    # Convert Kopf Body objects to regular dictionaries
+                    # Convert Kopf Body objects to regular dictionaries and apply field filtering
                     try:
-                        normalized_resource = normalize_kopf_resource(resource)
+                        normalized_resource = normalize_kopf_resource(
+                            resource, ignore_fields
+                        )
                     except ValueError as e:
                         logger.warning(
                             f"Failed to normalize resource with key {normalized_key}: {e}"

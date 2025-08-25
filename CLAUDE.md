@@ -199,11 +199,44 @@ The `index_by` parameter in `watched_resources` configures custom indexing for O
 - Ingress by host: `["spec.rules[0].host"]` 
 - Cross-resource matching: `["metadata.namespace", "metadata.labels['app']"]`
 
+### Field Filtering
+
+The `watched_resources_ignore_fields` configuration allows omitting unnecessary fields from indexed resources to reduce memory usage and improve performance.
+
+**Configuration**: Add a list of JSONPath expressions for fields to remove:
+```yaml
+watched_resources_ignore_fields:
+  - metadata.managedFields  # Default: removes Kubernetes server-side apply metadata
+  - metadata.resourceVersion  # Remove version tracking if not needed
+  - status  # Remove entire status section if not used in templates
+```
+
+**Default Configuration**: By default, `metadata.managedFields` is ignored as it's rarely needed in templates and can consume significant memory.
+
+**Common Fields to Consider Ignoring**:
+- `metadata.managedFields`: Server-side apply metadata (can be very large)
+- `metadata.resourceVersion`: Version tracking (changes frequently)
+- `metadata.generation`: Generation counter (if not used)
+- `metadata.annotations['kubectl.kubernetes.io/last-applied-configuration']`: Last applied config (can be large)
+- `status`: Status information (if not used in templates)
+
+**Performance Considerations**:
+- Field filtering occurs during resource indexing, reducing memory usage for large clusters
+- Uses deep copy to preserve original resources, which has a performance cost for very large resources
+- JSONPath expressions are compiled and cached (up to 256 unique paths) for better performance
+- Currently applies the same ignore_fields to all resource types (per-type filtering may be added in future)
+
+**Note**: Invalid JSONPath expressions are validated at config load time and logged with warnings.
+
 ```yaml
 data:
   config: |
     pod_selector:
       match_labels: {app: haproxy, component: loadbalancer}
+    
+    # Fields to omit from indexed resources (reduces memory usage)
+    watched_resources_ignore_fields:
+      - metadata.managedFields
     
     watched_resources:
       ingresses: 

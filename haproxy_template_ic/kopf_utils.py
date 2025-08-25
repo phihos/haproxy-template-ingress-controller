@@ -7,7 +7,7 @@ These utilities should only be used within IndexedResourceCollection.from_kopf_i
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,36 +36,49 @@ def convert_kopf_body_to_dict(body: Any) -> Dict[str, Any]:
         raise ValueError(f"Cannot convert Body object to dict: {e}") from e
 
 
-def normalize_kopf_resource(resource: Any) -> Dict[str, Any]:
+def normalize_kopf_resource(
+    resource: Any, ignore_fields: Optional[List[str]] = None
+) -> Dict[str, Any]:
     """
     Normalize a Kopf resource (Body object or dict) to a regular dictionary.
 
     Args:
         resource: A Kopf Body object, regular dict, or other dict-convertible object
+        ignore_fields: Optional list of JSONPath expressions for fields to remove
 
     Returns:
-        Dictionary representation of the resource
+        Dictionary representation of the resource with specified fields removed
 
     Raises:
         ValueError: If the resource cannot be normalized to a dictionary
     """
-    # If it's already a regular dict, return as-is
+    # If it's already a regular dict, use it directly
     if isinstance(resource, dict):
-        return resource
-
+        result = resource
     # Check if it's a Kopf Body object or similar dict-convertible object
-    if hasattr(resource, "__getitem__") or hasattr(resource, "items"):
+    elif hasattr(resource, "__getitem__") or hasattr(resource, "items"):
         try:
-            return convert_kopf_body_to_dict(resource)
+            result = convert_kopf_body_to_dict(resource)
         except ValueError:
             # Fall through to error case
-            pass
+            raise ValueError(
+                f"Cannot normalize resource of type {type(resource)} to dictionary. "
+                f"Expected dict or dict-convertible object."
+            )
+    else:
+        # If we can't handle it, raise an error
+        raise ValueError(
+            f"Cannot normalize resource of type {type(resource)} to dictionary. "
+            f"Expected dict or dict-convertible object."
+        )
 
-    # If we can't handle it, raise an error
-    raise ValueError(
-        f"Cannot normalize resource of type {type(resource)} to dictionary. "
-        f"Expected dict or dict-convertible object."
-    )
+    # Apply field filtering if specified
+    if ignore_fields:
+        from haproxy_template_ic.field_filter import remove_fields_from_resource
+
+        result = remove_fields_from_resource(result, ignore_fields)
+
+    return result
 
 
 def is_valid_kubernetes_resource(resource_dict: Any) -> bool:

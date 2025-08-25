@@ -116,6 +116,9 @@ webhook:
       match_labels:
         app: haproxy
         component: loadbalancer
+    # Fields to omit from indexed resources (reduces memory usage)
+    watched_resources_ignore_fields:
+      - metadata.managedFields
     watched_resources:
       ingresses:
         api_version: networking.k8s.io/v1
