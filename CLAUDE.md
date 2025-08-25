@@ -180,7 +180,19 @@ This simplifies configuration management and deployment templates across all env
 
 ### Resource Indexing
 
-The `index_by` parameter in `watched_resources` configures custom indexing for O(1) resource lookups. Default indexing is by `["metadata.namespace", "metadata.name"]`.
+The `index_by` parameter in `watched_resources` configures custom indexing for O(1) resource lookups using JSONPath expressions. Default indexing is by `["metadata.namespace", "metadata.name"]`.
+
+**JSONPath Implementation**: The system uses `python-jsonpath` library for field extraction, supporting standard JSONPath syntax including:
+- Dot notation: `metadata.name`
+- Bracket notation: `metadata.labels['kubernetes.io/service-name']`
+- Array indexing: `spec.rules[0].host`
+- Negative indexing: `spec.rules[-1].host`
+
+**Library Choice Rationale**: `python-jsonpath` was selected for its:
+- Full JSONPath standard compliance
+- Active maintenance and modern Python support
+- Comprehensive syntax support including filters and wildcards
+- Good performance characteristics (>10,000 ops/sec for typical queries)
 
 **Advanced indexing examples**:
 - Service by name: `["metadata.labels['kubernetes.io/service-name']"]`

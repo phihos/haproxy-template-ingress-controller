@@ -2027,12 +2027,6 @@ def test_extract_nested_field_malformed_brackets():
     assert extract_nested_field(obj, "metadata.labels[]") == ""  # Empty brackets
     assert extract_nested_field(obj, "metadata.labels[no_closing_bracket") == ""
 
-    # Mismatched quotes (should use as-is)
-    obj_with_mismatched = {"metadata": {"labels": {"'key\"": "value"}}}
-    assert (
-        extract_nested_field(obj_with_mismatched, "metadata.labels['key\"]") == "value"
-    )
-
 
 def test_extract_nested_field_non_dict_objects():
     """Test extract_nested_field with non-dict current values."""
@@ -2046,14 +2040,11 @@ def test_extract_nested_field_non_dict_objects():
     # Non-dict metadata returns the string value itself
     assert extract_nested_field(obj, "metadata") == "not-a-dict"
 
-    # But accessing fields on non-dict returns the non-dict as string
-    assert extract_nested_field(obj, "metadata.name") == "not-a-dict"
+    # But accessing fields on non-dict returns empty string (field extraction failed)
+    assert extract_nested_field(obj, "metadata.name") == ""
 
-    # List value converted to string when accessing further
-    assert (
-        extract_nested_field(obj, "spec.containers.name")
-        == "['container1', 'container2']"
-    )
+    # List value returns empty string when accessing further (field extraction failed)
+    assert extract_nested_field(obj, "spec.containers.name") == ""
 
 
 def test_extract_nested_field_none_values():
@@ -2065,6 +2056,220 @@ def test_extract_nested_field_none_values():
     # None values should return empty string
     assert extract_nested_field(obj, "metadata.name") == ""
     assert extract_nested_field(obj, "metadata.labels.app") == ""
+
+
+def test_extract_nested_field_never_returns_dict_as_string():
+    """Test that extract_nested_field never returns dict/list as string."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    obj = {
+        "metadata": {
+            "labels": {"app": "test", "kubernetes.io/service-name": "my-service"},
+            "annotations": {"key": "value"},
+        },
+        "spec": {"containers": [{"name": "container1"}], "ports": [80, 443]},
+    }
+
+    # Accessing a dict should return empty string, not stringified dict
+    result = extract_nested_field(obj, "metadata.labels")
+    assert result == ""
+    assert "app" not in result  # Ensure it's not a stringified dict
+
+    # Accessing a list should return empty string, not stringified list
+    result = extract_nested_field(obj, "spec.containers")
+    assert result == ""
+    assert "container1" not in result  # Ensure it's not a stringified list
+
+    # Accessing the root object should return empty string
+    result = extract_nested_field(obj, "")
+    assert result == ""
+    assert "metadata" not in result  # Ensure it's not a stringified dict
+
+
+def test_extract_nested_field_edge_cases():
+    """Test extract_nested_field with various edge cases."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    # Test with Unicode keys
+    obj_unicode = {
+        "metadata": {
+            "labels": {
+                "日本語": "value1",
+                "עברית": "value2",
+                "🚀": "rocket",
+            }
+        }
+    }
+    assert extract_nested_field(obj_unicode, "metadata.labels['日本語']") == "value1"
+    assert extract_nested_field(obj_unicode, "metadata.labels['עברית']") == "value2"
+    assert extract_nested_field(obj_unicode, "metadata.labels['🚀']") == "rocket"
+
+    # Test with deeply nested structure
+    obj_deep = {
+        "level1": {
+            "level2": {
+                "level3": {
+                    "level4": {
+                        "level5": {
+                            "level6": {
+                                "level7": {
+                                    "level8": {"level9": {"level10": "deep_value"}}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    path = "level1.level2.level3.level4.level5.level6.level7.level8.level9.level10"
+    assert extract_nested_field(obj_deep, path) == "deep_value"
+
+    # Test with numeric string values
+    obj_numeric = {
+        "metadata": {
+            "labels": {
+                "version": 42,
+                "port": 8080,
+                "replicas": "3",
+            }
+        }
+    }
+    assert extract_nested_field(obj_numeric, "metadata.labels.version") == "42"
+    assert extract_nested_field(obj_numeric, "metadata.labels.port") == "8080"
+    assert extract_nested_field(obj_numeric, "metadata.labels.replicas") == "3"
+
+    # Test with boolean values
+    obj_bool = {
+        "metadata": {
+            "labels": {
+                "enabled": True,
+                "disabled": False,
+            }
+        }
+    }
+    assert extract_nested_field(obj_bool, "metadata.labels.enabled") == "True"
+    assert extract_nested_field(obj_bool, "metadata.labels.disabled") == "False"
+
+
+def test_extract_nested_field_array_indexing():
+    """Test extract_nested_field with array indexing."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    obj = {
+        "spec": {
+            "rules": [
+                {"host": "example.com", "path": "/"},
+                {"host": "api.example.com", "path": "/api"},
+                {"host": "admin.example.com", "path": "/admin"},
+            ]
+        }
+    }
+
+    # Test array indexing
+    assert extract_nested_field(obj, "spec.rules[0].host") == "example.com"
+    assert extract_nested_field(obj, "spec.rules[1].host") == "api.example.com"
+    assert extract_nested_field(obj, "spec.rules[2].path") == "/admin"
+
+    # Test out of bounds
+    assert extract_nested_field(obj, "spec.rules[10].host") == ""
+
+    # Test negative indexing (JSONPath supports this)
+    assert extract_nested_field(obj, "spec.rules[-1].host") == "admin.example.com"
+
+
+def test_extract_nested_field_input_validation():
+    """Test extract_nested_field input validation."""
+    from haproxy_template_ic.operator import extract_nested_field
+
+    obj = {"metadata": {"name": "test"}}
+
+    # Test empty path
+    assert extract_nested_field(obj, "") == ""
+
+    # Test None path
+    assert extract_nested_field(obj, None) == ""
+
+    # Test non-string path
+    assert extract_nested_field(obj, 123) == ""
+    assert extract_nested_field(obj, []) == ""
+
+    # Test excessively long path (>500 chars)
+    long_path = "metadata." + ".".join(["field"] * 100)  # Creates a very long path
+    assert len(long_path) > 500
+    assert extract_nested_field(obj, long_path) == ""
+
+
+def test_extract_nested_field_performance():
+    """Benchmark extract_nested_field performance with typical Kubernetes resources."""
+    import time
+    from haproxy_template_ic.operator import extract_nested_field
+
+    # Create a realistic Kubernetes resource
+    resource = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": "test-service",
+            "namespace": "default",
+            "labels": {
+                "app": "web",
+                "version": "v1.0",
+                "kubernetes.io/service-name": "test-service",
+                "environment": "production",
+            },
+            "annotations": {
+                "description": "Test service for benchmarking",
+                "owner": "team-a",
+            },
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {"app": "web"},
+            "ports": [
+                {"name": "http", "port": 80, "targetPort": 8080},
+                {"name": "https", "port": 443, "targetPort": 8443},
+            ],
+        },
+    }
+
+    # Common extraction patterns
+    paths = [
+        "metadata.name",
+        "metadata.namespace",
+        "metadata.labels['kubernetes.io/service-name']",
+        "metadata.labels.app",
+        "spec.ports[0].port",
+        "spec.type",
+    ]
+
+    # Warm up JSONPath cache
+    for path in paths:
+        extract_nested_field(resource, path)
+
+    # Benchmark
+    iterations = 1000
+    start_time = time.perf_counter()
+
+    for _ in range(iterations):
+        for path in paths:
+            _ = extract_nested_field(resource, path)
+
+    end_time = time.perf_counter()
+    total_time = end_time - start_time
+    ops_per_second = (iterations * len(paths)) / total_time
+
+    # Performance assertion: Should handle at least 10,000 operations per second
+    # This is a reasonable baseline for resource indexing performance
+    assert ops_per_second > 10000, (
+        f"Performance regression detected: {ops_per_second:.0f} ops/sec"
+    )
+
+    # Log performance metrics for monitoring
+    print(f"Performance: {ops_per_second:.0f} operations/second")
+    print(
+        f"Average time per extraction: {(total_time / (iterations * len(paths))) * 1000:.3f}ms"
+    )
 
 
 @pytest.mark.asyncio
@@ -2713,7 +2918,7 @@ class TestOperatorCriticalPaths:
             assert memo.credentials is None
 
     def test_extract_nested_field_malformed_bracket_notation(self):
-        """Test extract_nested_field with malformed bracket notation (lines 313-315)."""
+        """Test extract_nested_field with malformed bracket notation."""
         from haproxy_template_ic.operator import extract_nested_field
 
         obj = {"metadata": {"labels": {"app": "test"}}}
