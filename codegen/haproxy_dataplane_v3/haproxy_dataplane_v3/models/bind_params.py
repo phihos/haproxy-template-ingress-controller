@@ -416,7 +416,6 @@ class BindParams:
             verify = self.verify.value
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update({})
         if accept_netscaler_cip is not UNSET:
             field_dict["accept_netscaler_cip"] = accept_netscaler_cip

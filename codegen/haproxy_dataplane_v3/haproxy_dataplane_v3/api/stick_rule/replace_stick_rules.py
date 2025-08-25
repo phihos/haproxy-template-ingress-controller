@@ -36,11 +36,12 @@ def _get_kwargs(
         "params": params,
     }
 
-    _kwargs["json"] = []
+    _body = []
     for componentsschemasstick_rules_item_data in body:
         componentsschemasstick_rules_item = componentsschemasstick_rules_item_data.to_dict()
-        _kwargs["json"].append(componentsschemasstick_rules_item)
+        _body.append(componentsschemasstick_rules_item)
 
+    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

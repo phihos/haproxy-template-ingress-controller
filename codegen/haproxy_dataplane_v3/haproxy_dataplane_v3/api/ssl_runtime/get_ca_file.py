@@ -6,6 +6,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error import Error
+from ...models.ssl_file_1 import SSLFile1
 from ...types import Response
 
 
@@ -20,7 +21,13 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Error]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Optional[Union[Error, SSLFile1]]:
+    if response.status_code == 200:
+        response_200 = SSLFile1.from_dict(response.json())
+
+        return response_200
     if response.status_code == 404:
         response_404 = Error.from_dict(response.json())
 
@@ -31,7 +38,9 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Error]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Error, SSLFile1]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -44,7 +53,7 @@ def sync_detailed(
     name: str,
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[Error]:
+) -> Response[Union[Error, SSLFile1]]:
     """Return an SSL CA file
 
      Returns an SSL CA file by name using the runtime socket.
@@ -57,7 +66,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Error]
+        Response[Union[Error, SSLFile1]]
     """
 
     kwargs = _get_kwargs(
@@ -75,7 +84,7 @@ def sync(
     name: str,
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[Error]:
+) -> Optional[Union[Error, SSLFile1]]:
     """Return an SSL CA file
 
      Returns an SSL CA file by name using the runtime socket.
@@ -88,7 +97,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Error
+        Union[Error, SSLFile1]
     """
 
     return sync_detailed(
@@ -101,7 +110,7 @@ async def asyncio_detailed(
     name: str,
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[Error]:
+) -> Response[Union[Error, SSLFile1]]:
     """Return an SSL CA file
 
      Returns an SSL CA file by name using the runtime socket.
@@ -114,7 +123,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Error]
+        Response[Union[Error, SSLFile1]]
     """
 
     kwargs = _get_kwargs(
@@ -130,7 +139,7 @@ async def asyncio(
     name: str,
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[Error]:
+) -> Optional[Union[Error, SSLFile1]]:
     """Return an SSL CA file
 
      Returns an SSL CA file by name using the runtime socket.
@@ -143,7 +152,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Error
+        Union[Error, SSLFile1]
     """
 
     return (

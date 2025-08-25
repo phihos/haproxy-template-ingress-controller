@@ -5,6 +5,7 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.backend import Backend
 from ...models.error import Error
 from ...types import UNSET, Response, Unset
 
@@ -32,7 +33,13 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Error]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Optional[Union[Backend, Error]]:
+    if response.status_code == 200:
+        response_200 = Backend.from_dict(response.json())
+
+        return response_200
     if response.status_code == 404:
         response_404 = Error.from_dict(response.json())
 
@@ -43,7 +50,9 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Error]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Backend, Error]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -58,7 +67,7 @@ def sync_detailed(
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
     full_section: Union[Unset, bool] = False,
-) -> Response[Error]:
+) -> Response[Union[Backend, Error]]:
     """Return a backend
 
      Returns one backend configuration by it's name.
@@ -73,7 +82,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Error]
+        Response[Union[Backend, Error]]
     """
 
     kwargs = _get_kwargs(
@@ -95,7 +104,7 @@ def sync(
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
     full_section: Union[Unset, bool] = False,
-) -> Optional[Error]:
+) -> Optional[Union[Backend, Error]]:
     """Return a backend
 
      Returns one backend configuration by it's name.
@@ -110,7 +119,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Error
+        Union[Backend, Error]
     """
 
     return sync_detailed(
@@ -127,7 +136,7 @@ async def asyncio_detailed(
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
     full_section: Union[Unset, bool] = False,
-) -> Response[Error]:
+) -> Response[Union[Backend, Error]]:
     """Return a backend
 
      Returns one backend configuration by it's name.
@@ -142,7 +151,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Error]
+        Response[Union[Backend, Error]]
     """
 
     kwargs = _get_kwargs(
@@ -162,7 +171,7 @@ async def asyncio(
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
     full_section: Union[Unset, bool] = False,
-) -> Optional[Error]:
+) -> Optional[Union[Backend, Error]]:
     """Return a backend
 
      Returns one backend configuration by it's name.
@@ -177,7 +186,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Error
+        Union[Backend, Error]
     """
 
     return (

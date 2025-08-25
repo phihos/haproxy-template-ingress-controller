@@ -35,7 +35,6 @@ class Traces:
         metadata = self.metadata
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update({})
         if entries is not UNSET:
             field_dict["entries"] = entries

@@ -22,8 +22,9 @@ def _get_kwargs(
         "url": f"/service_discovery/aws/{id}",
     }
 
-    _kwargs["json"] = body.to_dict()
+    _body = body.to_dict()
 
+    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

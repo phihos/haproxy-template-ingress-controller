@@ -6,6 +6,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error import Error
+from ...models.server_template import ServerTemplate
 from ...types import UNSET, Response, Unset
 
 
@@ -30,7 +31,13 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Error]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Optional[Union[Error, ServerTemplate]]:
+    if response.status_code == 200:
+        response_200 = ServerTemplate.from_dict(response.json())
+
+        return response_200
     if response.status_code == 404:
         response_404 = Error.from_dict(response.json())
 
@@ -41,7 +48,9 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Error]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Error, ServerTemplate]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -56,7 +65,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[Error]:
+) -> Response[Union[Error, ServerTemplate]]:
     """Return one server template
 
      Returns one server template configuration by it's prefix in the specified backend.
@@ -71,7 +80,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Error]
+        Response[Union[Error, ServerTemplate]]
     """
 
     kwargs = _get_kwargs(
@@ -93,7 +102,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[Error]:
+) -> Optional[Union[Error, ServerTemplate]]:
     """Return one server template
 
      Returns one server template configuration by it's prefix in the specified backend.
@@ -108,7 +117,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Error
+        Union[Error, ServerTemplate]
     """
 
     return sync_detailed(
@@ -125,7 +134,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[Error]:
+) -> Response[Union[Error, ServerTemplate]]:
     """Return one server template
 
      Returns one server template configuration by it's prefix in the specified backend.
@@ -140,7 +149,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Error]
+        Response[Union[Error, ServerTemplate]]
     """
 
     kwargs = _get_kwargs(
@@ -160,7 +169,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[Error]:
+) -> Optional[Union[Error, ServerTemplate]]:
     """Return one server template
 
      Returns one server template configuration by it's prefix in the specified backend.
@@ -175,7 +184,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Error
+        Union[Error, ServerTemplate]
     """
 
     return (

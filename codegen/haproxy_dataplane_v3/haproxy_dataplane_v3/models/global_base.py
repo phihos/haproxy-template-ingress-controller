@@ -464,7 +464,6 @@ class GlobalBase:
             wurfl_options = self.wurfl_options.to_dict()
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update({})
         if chroot is not UNSET:
             field_dict["chroot"] = chroot
