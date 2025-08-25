@@ -14,7 +14,61 @@ from haproxy_template_ic.management_socket import (
     ManagementSocketServer,
     serialize_state,
     run_management_socket_server,
+    _serialize_kopf_index,
 )
+
+
+class TestSerializeKopfIndex:
+    """Test the _serialize_kopf_index function."""
+
+    def test_serialize_kopf_index_with_tuple_keys(self):
+        """Test that tuple keys are properly formatted with ':' separator."""
+        index_data = {
+            ("namespace", "name"): [{"metadata": {"name": "resource1"}}],
+            ("default", "my-service"): [{"metadata": {"name": "resource2"}}],
+            ("echo-server",): [
+                {"metadata": {"name": "resource3"}}
+            ],  # Single-element tuple
+        }
+
+        result = _serialize_kopf_index(index_data)
+
+        # Check that tuple keys are converted to structured strings
+        assert "namespace:name" in result
+        assert "default:my-service" in result
+        assert "echo-server" in result  # Single element tuple becomes just the element
+
+        # Check that the resources are preserved
+        assert result["namespace:name"][0]["metadata"]["name"] == "resource1"
+        assert result["default:my-service"][0]["metadata"]["name"] == "resource2"
+        assert result["echo-server"][0]["metadata"]["name"] == "resource3"
+
+    def test_serialize_kopf_index_with_string_keys(self):
+        """Test that string keys are preserved as-is."""
+        index_data = {
+            "simple-key": [{"metadata": {"name": "resource1"}}],
+            "another-key": [{"metadata": {"name": "resource2"}}],
+        }
+
+        result = _serialize_kopf_index(index_data)
+
+        assert "simple-key" in result
+        assert "another-key" in result
+        assert result["simple-key"][0]["metadata"]["name"] == "resource1"
+        assert result["another-key"][0]["metadata"]["name"] == "resource2"
+
+    def test_serialize_kopf_index_empty(self):
+        """Test serializing an empty index."""
+        result = _serialize_kopf_index({})
+        assert result == {}
+
+    def test_serialize_kopf_index_invalid_data(self):
+        """Test serializing invalid data returns empty dict."""
+        result = _serialize_kopf_index(None)
+        assert result == {}
+
+        result = _serialize_kopf_index("not an index")
+        assert result == {}
 
 
 class TestSerializeState:
@@ -238,11 +292,16 @@ class TestManagementSocketServer:
     @pytest.mark.asyncio
     async def test_process_command_dump_indices(self, server):
         """Test 'dump indices' command."""
+        # Set up new-style indices
+        server.memo.indices = {}  # Empty dict instead of Mock
+
+        # Set up old-style indices for backward compatibility test
         server.memo.resource_index = {"res1": "data1"}
         server.memo.config_index = {"conf1": "data1"}
 
         with patch(
-            "builtins.dir", return_value=["resource_index", "config_index", "other"]
+            "builtins.dir",
+            return_value=["resource_index", "config_index", "other", "indices"],
         ):
             result = await server._process_command("dump indices")
 
@@ -363,22 +422,43 @@ class TestManagementSocketServer:
         assert "Unknown command" in result["error"]
 
     def test_dump_indices(self, server):
-        """Test _dump_indices method."""
+        """Test _dump_indices method with new memo.indices structure."""
+        # Test new-style memo.indices dictionary
+        server.memo.indices = {
+            "ingresses": {
+                ("default", "my-ingress"): [{"metadata": {"name": "my-ingress"}}],
+                ("kube-system", "system-ingress"): [
+                    {"metadata": {"name": "system-ingress"}}
+                ],
+            },
+            "endpoints": {
+                ("echo-server",): [{"metadata": {"name": "echo-endpoint"}}],
+            },
+        }
+
+        # Also test old-style _index attributes for backward compatibility
         server.memo.resource_index = {"res1": "data1"}
         server.memo.config_index = {"conf1": "data1"}
         server.memo.other_attr = "not an index"
 
         with patch(
             "builtins.dir",
-            return_value=["resource_index", "config_index", "other_attr"],
+            return_value=["resource_index", "config_index", "other_attr", "indices"],
         ):
             result = server._dump_indices()
 
         assert "indices" in result
-        assert len(result["indices"]) == 2
+        # Should have both new-style indices and old-style indices
+        assert "ingresses" in result["indices"]
+        assert "endpoints" in result["indices"]
         assert "resource_index" in result["indices"]
         assert "config_index" in result["indices"]
         assert "other_attr" not in result["indices"]
+
+        # Check that tuple keys are properly serialized with ':' separator
+        assert "default:my-ingress" in result["indices"]["ingresses"]
+        assert "kube-system:system-ingress" in result["indices"]["ingresses"]
+        assert "echo-server" in result["indices"]["endpoints"]
 
     def test_dump_config_with_context(self, server):
         """Test _dump_config method with context."""
