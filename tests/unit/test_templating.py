@@ -1049,5 +1049,7 @@ class TestGetPathFilterSecurity:
         ]
 
         for invalid_filename in invalid_filenames:
-            with pytest.raises(ValueError, match="unsafe characters"):
+            with pytest.raises(
+                ValueError, match="(unsafe characters|prohibited characters)"
+            ):
                 get_path_filter(invalid_filename, "map")
