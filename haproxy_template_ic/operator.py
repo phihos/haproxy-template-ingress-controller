@@ -203,6 +203,52 @@ def _log_haproxy_error_hints(validation_error: ValidationError, memo: Any) -> No
     )
 
 
+def _is_valid_dict_resource(resource: dict) -> bool:
+    """Validate dictionary resource has proper Kubernetes metadata.
+
+    Args:
+        resource: Dictionary resource to validate
+
+    Returns:
+        True if has valid metadata, False otherwise
+    """
+    metadata = resource.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return False
+    return bool(metadata.get("name") and metadata.get("namespace"))
+
+
+def _is_valid_sequence_resource(resource: Any) -> bool:
+    """Validate sequence resource is non-empty.
+
+    Args:
+        resource: List or tuple resource to validate
+
+    Returns:
+        True if non-empty, False otherwise
+    """
+    return len(resource) > 0
+
+
+def _is_valid_object_resource(resource: Any) -> bool:
+    """Validate object resource can be accessed for templating.
+
+    Args:
+        resource: Object resource to validate
+
+    Returns:
+        True if accessible for templating, False otherwise
+    """
+    try:
+        if hasattr(resource, "items"):
+            dict(resource)  # Test dict conversion
+        elif hasattr(resource, "__dict__"):
+            resource.__dict__  # Test attribute access
+        return True
+    except (TypeError, AttributeError):
+        return False
+
+
 def _is_valid_resource(resource: Any) -> bool:
     """Validate if a resource object is suitable for template rendering.
 
@@ -214,32 +260,15 @@ def _is_valid_resource(resource: Any) -> bool:
     """
     # Dictionary resources need basic metadata validation
     if isinstance(resource, dict):
-        # Check for basic Kubernetes resource metadata
-        metadata = resource.get("metadata", {})
-        if not isinstance(metadata, dict):
-            return False
-
-        # Validate essential metadata fields
-        if not metadata.get("name") or not metadata.get("namespace"):
-            return False
-
-        return True
+        return _is_valid_dict_resource(resource)
 
     # List/tuple resources should be non-empty
     if isinstance(resource, (list, tuple)):
-        return len(resource) > 0
+        return _is_valid_sequence_resource(resource)
 
     # Objects with dict-like interface or attributes are valid
     if hasattr(resource, "__dict__") or hasattr(resource, "get"):
-        try:
-            # Test that we can actually access the data for templating
-            if hasattr(resource, "items"):
-                dict(resource)
-            elif hasattr(resource, "__dict__"):
-                resource.__dict__
-            return True
-        except (TypeError, AttributeError):
-            return False
+        return _is_valid_object_resource(resource)
 
     # Primitives and other types are not valid resources
     return False

@@ -8,6 +8,7 @@ from haproxy_template_ic.credentials import (
     Credentials,
     DataplaneAuth,
     validate_k8s_name,
+    _decode_field,
 )
 
 # Test cases: (input_data, expected_success, expected_error_substring_or_None)
@@ -163,3 +164,75 @@ def test_k8s_name_validation(name, valid):
     else:
         with pytest.raises(click.BadParameter):
             validate_k8s_name(None, None, name)
+
+
+# Tests for _decode_field function to improve coverage
+
+
+def test_decode_field_empty_values():
+    """Test _decode_field with empty/None values."""
+    assert _decode_field(None) is None
+    assert _decode_field("") is None
+    assert _decode_field(b"") is None
+
+
+def test_decode_field_bytes_invalid_base64():
+    """Test _decode_field with bytes that are not valid base64."""
+    # Invalid base64 bytes
+    invalid_base64 = b"not-valid-base64!!!"
+    result = _decode_field(invalid_base64)
+    assert result is None
+
+
+def test_decode_field_bytes_invalid_unicode():
+    """Test _decode_field with bytes that decode to invalid unicode."""
+    # This creates bytes that are valid base64 but decode to invalid unicode
+    import base64
+
+    invalid_unicode_bytes = base64.b64encode(b"\xff\xfe\xfd")
+    result = _decode_field(invalid_unicode_bytes)
+    assert result is None
+
+
+def test_decode_field_bytes_value_error():
+    """Test _decode_field with bytes that cause ValueError in base64 decode."""
+    # Use invalid base64 length to trigger Error (which is subclass of ValueError)
+    malformed_bytes = b"A"  # Single character - invalid base64 length
+    result = _decode_field(malformed_bytes)
+    assert result is None
+
+
+def test_decode_field_string_fallback():
+    """Test _decode_field string fallback when base64 decode fails."""
+    # String that's not valid base64 - should return original
+    non_base64_string = "plain-text-credential"
+    result = _decode_field(non_base64_string)
+    assert result == "plain-text-credential"
+
+
+def test_decode_field_string_unicode_error_fallback():
+    """Test _decode_field string unicode error fallback."""
+    # Create a base64 string that decodes to invalid unicode
+    import base64
+
+    invalid_unicode_b64 = base64.b64encode(b"\xff\xfe\xfd").decode("ascii")
+    result = _decode_field(invalid_unicode_b64)
+    # Should fall back to original string
+    assert result == invalid_unicode_b64
+
+
+def test_decode_field_string_value_error_fallback():
+    """Test _decode_field string ValueError fallback."""
+    # String with invalid base64 padding
+    invalid_padding = "YWRtaW4"  # Missing padding
+    result = _decode_field(invalid_padding)
+    # Should fall back to original string
+    assert result == "YWRtaW4"
+
+
+def test_decode_field_non_string_non_bytes():
+    """Test _decode_field with non-string, non-bytes input."""
+    assert _decode_field(123) is None
+    assert _decode_field([]) is None
+    assert _decode_field({}) is None
+    assert _decode_field(object()) is None

@@ -201,6 +201,17 @@ class TestTemplateEnvironmentFactory:
         assert callable(env.filters["b64decode"])
         assert callable(env.filters["get_path"])
 
+    def test_create_environment_with_problematic_config(self):
+        """Test factory with config that might cause issues."""
+
+        class ProblematicConfig:
+            def __getattr__(self, name):
+                raise AttributeError(f"Config error accessing {name}")
+
+        # Should handle gracefully even with problematic config
+        env = TemplateEnvironmentFactory.create_environment(None, ProblematicConfig())
+        assert isinstance(env, Environment)
+
 
 class TestTemplateCompiler:
     """Test the TemplateCompiler class."""

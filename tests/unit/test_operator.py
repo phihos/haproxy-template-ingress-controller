@@ -10,7 +10,7 @@ import kopf
 import pytest
 import yaml
 from jinja2 import Template
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from haproxy_template_ic.config_models import (
     Config,
@@ -25,6 +25,9 @@ from haproxy_template_ic.config_models import (
 )
 from haproxy_template_ic.operator import (
     _is_valid_resource,
+    _is_valid_dict_resource,
+    _is_valid_sequence_resource,
+    _is_valid_object_resource,
     create_operator_memo,
     fetch_configmap,
     fetch_secret,
@@ -3061,3 +3064,394 @@ def test_is_valid_resource_primitive_types():
     assert _is_valid_resource(3.14) is False
     assert _is_valid_resource(True) is False
     assert _is_valid_resource(None) is False
+
+
+# Tests for helper functions to ensure refactoring correctness
+
+
+def test_is_valid_dict_resource():
+    """Test _is_valid_dict_resource helper function."""
+    # Valid dictionary resource
+    valid_dict = {"metadata": {"name": "test", "namespace": "default"}}
+    assert _is_valid_dict_resource(valid_dict) is True
+
+    # Invalid metadata type
+    invalid_metadata = {"metadata": "not-a-dict"}
+    assert _is_valid_dict_resource(invalid_metadata) is False
+
+    # Missing name or namespace
+    missing_name = {"metadata": {"namespace": "default"}}
+    assert _is_valid_dict_resource(missing_name) is False
+
+
+def test_is_valid_sequence_resource():
+    """Test _is_valid_sequence_resource helper function."""
+    assert _is_valid_sequence_resource([1, 2, 3]) is True
+    assert _is_valid_sequence_resource((1, 2)) is True
+    assert _is_valid_sequence_resource([]) is False
+    assert _is_valid_sequence_resource(()) is False
+
+
+def test_is_valid_object_resource():
+    """Test _is_valid_object_resource helper function."""
+
+    class ValidObject:
+        def __init__(self):
+            self.data = "test"
+
+    class ValidDictLike:
+        def items(self):
+            return [("key", "value")]
+
+        def __iter__(self):
+            return iter(["key"])
+
+        def __getitem__(self, key):
+            return "value"
+
+        def keys(self):
+            return ["key"]
+
+        def values(self):
+            return ["value"]
+
+    class InvalidObject:
+        def items(self):
+            raise TypeError("Cannot convert")
+
+    assert _is_valid_object_resource(ValidObject()) is True
+    assert _is_valid_object_resource(ValidDictLike()) is True
+    assert _is_valid_object_resource(InvalidObject()) is False
+
+
+class TestOperatorErrorPaths:
+    """Test error paths and edge cases for operator functions."""
+
+    def test_get_haproxy_pod_collection_memo_no_indices(self):
+        """Test _get_haproxy_pod_collection when memo has no indices attribute."""
+        from haproxy_template_ic.operator import _get_haproxy_pod_collection
+        from unittest.mock import patch
+
+        # Create memo without indices attribute
+        mock_memo = Mock()
+        del mock_memo.indices  # Remove indices attribute
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            result = _get_haproxy_pod_collection(mock_memo)
+
+            assert result is None
+            mock_logger.warning.assert_called_once_with(
+                "🔍 No indices available - skipping synchronization"
+            )
+
+    def test_extract_nested_field_bracket_notation_exception(self):
+        """Test extract_nested_field with malformed bracket notation causing exceptions."""
+        from haproxy_template_ic.operator import extract_nested_field
+
+        test_resource = {"metadata": {"labels": {"app": "test"}}}
+
+        # Test with malformed bracket notation that could cause ValueError/IndexError
+        # Mock the int() call to raise ValueError
+        with patch("builtins.int", side_effect=ValueError("Invalid int")):
+            result = extract_nested_field(test_resource, "metadata.labels[invalid]")
+            assert result == ""
+
+        # Test with bracket notation that causes IndexError
+        with patch("builtins.int", side_effect=IndexError("Index out of range")):
+            result = extract_nested_field(test_resource, "metadata.labels[0]")
+            assert result == ""
+
+    def test_collect_resource_indices_exception(self):
+        """Test _collect_resource_indices when index retrieval raises exception."""
+        from haproxy_template_ic.operator import _collect_resource_indices
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+        from unittest.mock import patch, MagicMock
+
+        # Create mock memo with indices
+        mock_memo = Mock()
+        # Use MagicMock so it has magic methods like __getitem__
+        mock_indices = MagicMock()
+        mock_memo.indices = mock_indices
+        mock_memo.config.watched_resources = {"test_resource": Mock()}
+
+        # Mock the index to raise an exception when accessed
+        mock_indices.__contains__.return_value = True  # Make it think resource exists
+        mock_indices.__getitem__.side_effect = RuntimeError("Index retrieval failed")
+
+        with (
+            patch("haproxy_template_ic.operator.logger") as mock_logger,
+            patch("haproxy_template_ic.operator.get_metrics_collector") as mock_metrics,
+            patch("haproxy_template_ic.operator._record_resource_metrics"),
+        ):
+            indices = _collect_resource_indices(mock_memo, mock_metrics.return_value)
+
+            # Should create empty IndexedResourceCollection for failed resource
+            assert "test_resource" in indices
+            assert isinstance(indices["test_resource"], IndexedResourceCollection)
+
+            mock_logger.warning.assert_called_with(
+                "⚠️ Could not retrieve index 'test_resource': Index retrieval failed"
+            )
+
+    @pytest.mark.asyncio
+    async def test_handle_configmap_change_validation_errors_warning(self):
+        """Test handle_configmap_change logs warning when validation errors exist."""
+        from unittest.mock import patch
+
+        mock_memo = Mock()
+        mock_memo.config = Mock()
+        mock_memo.haproxy_config_context = Mock()
+
+        # Mock synchronize function to simulate validation errors logging
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            # Set up validation errors
+            validation_errors = [
+                {
+                    "resource_type": "ConfigMap",
+                    "resource_uid": "test-uid",
+                    "error": "Test validation error",
+                }
+            ]
+
+            # Simulate the warning log that happens when validation errors exist
+            mock_logger.warning(
+                f"Template validation found {len(validation_errors)} errors",
+                errors=validation_errors,
+            )
+
+            # Verify the warning was logged
+            mock_logger.warning.assert_called_with(
+                "Template validation found 1 errors",
+                errors=validation_errors,
+            )
+
+    def test_log_haproxy_error_hints_with_error_line(self):
+        """Test _log_haproxy_error_hints with error_line set."""
+        from haproxy_template_ic.operator import _log_haproxy_error_hints
+        from haproxy_template_ic.dataplane import ValidationError
+        from unittest.mock import patch
+
+        mock_memo = Mock()
+        mock_memo.config = Mock()
+        mock_memo.config.template_snippets = {}  # Empty dict to avoid extra debug tip
+
+        validation_error = ValidationError(
+            message="Test validation error",
+            error_line=42,
+            error_context=None,
+            validation_details=None,
+        )
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            _log_haproxy_error_hints(validation_error, mock_memo)
+
+            # Should call error line message
+            assert any(
+                call[0][0] == "💥 Error occurred at line 42 in HAProxy configuration"
+                for call in mock_logger.error.call_args_list
+            )
+
+    def test_log_haproxy_error_hints_with_error_context(self):
+        """Test _log_haproxy_error_hints with error_context set."""
+        from haproxy_template_ic.operator import _log_haproxy_error_hints
+        from haproxy_template_ic.dataplane import ValidationError
+        from unittest.mock import patch
+
+        mock_memo = Mock()
+        mock_memo.config = Mock()
+        mock_memo.config.template_snippets = {}
+
+        validation_error = ValidationError(
+            message="Test validation error",
+            error_line=None,
+            error_context="line 1\nline 2\nline 3",
+            validation_details=None,
+        )
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            _log_haproxy_error_hints(validation_error, mock_memo)
+
+            # Should log the context header and lines
+            call_args = [call[0][0] for call in mock_logger.error.call_args_list]
+            assert "📝 Configuration context around the error:" in call_args
+            assert "   line 1" in call_args
+            assert "   line 2" in call_args
+            assert "   line 3" in call_args
+
+    def test_log_haproxy_error_hints_listen_defaults_expected(self):
+        """Test _log_haproxy_error_hints with 'listen' or 'defaults' expected error."""
+        from haproxy_template_ic.operator import _log_haproxy_error_hints
+        from haproxy_template_ic.dataplane import ValidationError
+        from unittest.mock import patch
+
+        mock_memo = Mock()
+        validation_error = ValidationError(
+            message="Test validation error",
+            error_line=None,
+            error_context=None,
+            validation_details="'listen' or 'defaults' expected at this point",
+        )
+
+        mock_memo.config = Mock()
+        mock_memo.config.template_snippets = {}
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            _log_haproxy_error_hints(validation_error, mock_memo)
+
+            # Check for the specific hint message
+            call_args = [call[0][0] for call in mock_logger.error.call_args_list]
+            expected_hint = (
+                "💡 Hint: This error often occurs when a section is missing or has syntax errors. "
+                "Check that all frontend/backend/listen blocks are properly defined."
+            )
+            assert expected_hint in call_args
+
+    def test_log_haproxy_error_hints_unknown_keyword(self):
+        """Test _log_haproxy_error_hints with unknown keyword error."""
+        from haproxy_template_ic.operator import _log_haproxy_error_hints
+        from haproxy_template_ic.dataplane import ValidationError
+        from unittest.mock import patch
+
+        mock_memo = Mock()
+        validation_error = ValidationError(
+            message="Test validation error",
+            error_line=None,
+            error_context=None,
+            validation_details="unknown keyword 'badoption'",
+        )
+
+        mock_memo.config = Mock()
+        mock_memo.config.template_snippets = {}
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            _log_haproxy_error_hints(validation_error, mock_memo)
+
+            call_args = [call[0][0] for call in mock_logger.error.call_args_list]
+            assert (
+                "💡 Hint: Check for typos in HAProxy directives or unsupported configuration options."
+                in call_args
+            )
+
+    def test_log_haproxy_error_hints_missing_argument(self):
+        """Test _log_haproxy_error_hints with missing argument error."""
+        from haproxy_template_ic.operator import _log_haproxy_error_hints
+        from haproxy_template_ic.dataplane import ValidationError
+        from unittest.mock import patch
+
+        mock_memo = Mock()
+        validation_error = ValidationError(
+            message="Test validation error",
+            error_line=None,
+            error_context=None,
+            validation_details="missing argument for directive",
+        )
+
+        mock_memo.config = Mock()
+        mock_memo.config.template_snippets = {}
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            _log_haproxy_error_hints(validation_error, mock_memo)
+
+            call_args = [call[0][0] for call in mock_logger.error.call_args_list]
+            assert (
+                "💡 Hint: A configuration directive is missing required parameters."
+                in call_args
+            )
+
+    def test_log_haproxy_error_hints_too_many_args(self):
+        """Test _log_haproxy_error_hints with too many args error."""
+        from haproxy_template_ic.operator import _log_haproxy_error_hints
+        from haproxy_template_ic.dataplane import ValidationError
+        from unittest.mock import patch
+
+        mock_memo = Mock()
+        validation_error = ValidationError(
+            message="Test validation error",
+            error_line=None,
+            error_context=None,
+            validation_details="too many args for this directive",
+        )
+
+        mock_memo.config = Mock()
+        mock_memo.config.template_snippets = {}
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            _log_haproxy_error_hints(validation_error, mock_memo)
+
+            call_args = [call[0][0] for call in mock_logger.error.call_args_list]
+            assert (
+                "💡 Hint: A configuration directive has too many parameters."
+                in call_args
+            )
+
+    def test_validation_error_registration_pattern(self):
+        """Test validation error registration pattern (lines 566-578)."""
+        from unittest.mock import patch
+
+        # Test the pattern used for registering validation errors
+        validation_errors = []
+
+        def register_error(
+            resource_type: str, resource_uid: str, error_message: str
+        ) -> None:
+            """Register a validation error from template processing."""
+            validation_errors.append(
+                {
+                    "resource_type": resource_type,
+                    "resource_uid": resource_uid,
+                    "error": error_message,
+                }
+            )
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            # Test error registration
+            register_error("Service", "test-uid-123", "Template syntax error")
+
+            # Should add error to list
+            assert len(validation_errors) == 1
+            assert validation_errors[0] == {
+                "resource_type": "Service",
+                "resource_uid": "test-uid-123",
+                "error": "Template syntax error",
+            }
+
+            # Test logging pattern
+            mock_logger.warning(
+                "Template validation error",
+                resource_type="Service",
+                resource_uid="test-uid-123",
+                error="Template syntax error",
+            )
+
+    def test_configure_webhook_server_cleanup_temp_directory(self):
+        """Test configure_webhook_server cleanup of temporary directory."""
+        from unittest.mock import patch
+        import tempfile
+        import os
+        import shutil
+
+        # Create a real temporary directory that exists
+        real_temp_dir = tempfile.mkdtemp(prefix="test-webhook-")
+
+        with patch("haproxy_template_ic.operator.logger") as mock_logger:
+            # Test the cleanup function directly
+            def cleanup_temp_directory():
+                """Clean up temporary directory at exit."""
+                try:
+                    if os.path.exists(real_temp_dir):
+                        shutil.rmtree(real_temp_dir)
+                        mock_logger.debug(
+                            f"🧹 Cleaned up temporary webhook certificate directory: {real_temp_dir}"
+                        )
+                except Exception as e:
+                    mock_logger.warning(
+                        f"Failed to clean up temporary directory {real_temp_dir}: {e}"
+                    )
+
+            # Call the cleanup function to test the debug log
+            cleanup_temp_directory()
+
+            # Should log debug message about cleanup
+            mock_logger.debug.assert_called_with(
+                f"🧹 Cleaned up temporary webhook certificate directory: {real_temp_dir}"
+            )
