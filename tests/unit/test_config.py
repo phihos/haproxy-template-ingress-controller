@@ -2189,3 +2189,559 @@ class TestFilenameSecurity:
                 content="test content",
                 content_type="invalid_type",  # Not a valid ContentType enum value
             )
+
+
+# =============================================================================
+# Additional Coverage Tests for config_models.py
+# =============================================================================
+
+
+class TestFieldValidators:
+    """Test field validator functions."""
+
+    def test_validate_storage_dir_non_absolute_path(self):
+        """Test that non-absolute paths raise ValueError."""
+        with pytest.raises(ValueError, match="Storage directory must be absolute path"):
+            Config(
+                pod_selector={"match_labels": {"app": "test"}},
+                haproxy_config={"template": "test"},
+                storage_maps_dir="relative/path",  # Non-absolute path
+            )
+
+    def test_validate_storage_ssl_dir_non_absolute_path(self):
+        """Test SSL dir validation with non-absolute path."""
+        with pytest.raises(ValueError, match="Storage directory must be absolute path"):
+            Config(
+                pod_selector={"match_labels": {"app": "test"}},
+                haproxy_config={"template": "test"},
+                storage_ssl_dir="ssl",  # Non-absolute path
+            )
+
+    def test_validate_ignore_fields_with_invalid_expressions(self):
+        """Test that invalid JSONPath expressions trigger warning."""
+        from unittest.mock import patch, MagicMock
+
+        with patch(
+            "haproxy_template_ic.field_filter.validate_ignore_fields"
+        ) as mock_validate:
+            # Return fewer fields than input (simulating some invalid)
+            mock_validate.return_value = ["metadata.managedFields"]
+
+            with patch("logging.getLogger") as mock_get_logger:
+                mock_logger = MagicMock()
+                mock_get_logger.return_value = mock_logger
+
+                config = Config(
+                    pod_selector={"match_labels": {"app": "test"}},
+                    haproxy_config={"template": "test"},
+                    watched_resources_ignore_fields=[
+                        "metadata.managedFields",
+                        "[[[invalid",  # Invalid expression
+                        "",  # Empty
+                    ],
+                )
+
+                # Check that warning was logged
+                mock_logger.warning.assert_called_once()
+                assert "Some ignore field expressions were invalid" in str(
+                    mock_logger.warning.call_args
+                )
+
+                # Check that only valid fields remain
+                assert config.watched_resources_ignore_fields == [
+                    "metadata.managedFields"
+                ]
+
+
+class TestIndexedResourceCollectionFromKopfIndex:
+    """Test IndexedResourceCollection.from_kopf_index error paths."""
+
+    def test_from_kopf_index_size_limit_reached(self):
+        """Test warning when size limit is reached."""
+        from unittest.mock import MagicMock, patch
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        # Create a mock index with more items than max_size
+        mock_index = MagicMock()
+
+        # Create many keys to exceed size limit
+        keys = [f"key{i}" for i in range(100)]
+        mock_index.__iter__.return_value = iter(keys)
+
+        # Return a generator for each key
+        def get_resources(key):
+            return iter(
+                [{"metadata": {"name": f"resource{key}", "namespace": "default"}}]
+            )
+
+        mock_index.__getitem__.side_effect = get_resources
+
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+
+            # Create collection with patched _max_size
+            with patch.object(IndexedResourceCollection, "_max_size", 5):
+                collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+                # Should have logged size limit warning
+                warning_found = any(
+                    "Size limit reached" in str(call)
+                    for call in mock_logger.warning.call_args_list
+                )
+                assert warning_found or len(collection) <= 5
+
+    def test_from_kopf_index_normalization_failure(self):
+        """Test handling of resource normalization failures."""
+        from unittest.mock import MagicMock, patch
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        mock_index = MagicMock()
+        mock_index.__iter__.return_value = iter([("key1",)])
+        mock_index.__getitem__.return_value = iter(
+            [
+                "invalid_resource_type"  # This should fail normalization
+            ]
+        )
+
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+
+            collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+            # Should log warning about normalization failure
+            assert any(
+                "Failed to normalize resource" in str(call)
+                for call in mock_logger.warning.call_args_list
+            )
+
+            # Collection should be empty
+            assert len(collection) == 0
+
+    def test_from_kopf_index_invalid_resource(self):
+        """Test warning for invalid resources."""
+        from unittest.mock import MagicMock, patch
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        mock_index = MagicMock()
+        mock_index.__iter__.return_value = iter([("key1",)])
+        mock_index.__getitem__.return_value = iter(
+            [
+                {"metadata": {"no_name": "missing_name"}}  # Invalid: no name
+            ]
+        )
+
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+
+            collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+            # Should log warning about invalid resource
+            assert any(
+                "Skipping invalid resource" in str(call)
+                for call in mock_logger.warning.call_args_list
+            )
+
+            # Collection should be empty
+            assert len(collection) == 0
+
+    def test_from_kopf_index_general_exception(self):
+        """Test handling of general exceptions during indexing."""
+        from unittest.mock import MagicMock, patch
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        mock_index = MagicMock()
+        mock_index.__iter__.return_value = iter([("key1",)])
+        mock_index.__getitem__.side_effect = RuntimeError("Unexpected error")
+
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+
+            collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+            # Should log warning about error
+            assert any(
+                "Error with key" in str(call)
+                for call in mock_logger.warning.call_args_list
+            )
+
+            # Collection should be empty
+            assert len(collection) == 0
+
+
+class TestIndexedResourceCollectionHelperMethods:
+    """Test IndexedResourceCollection helper methods."""
+
+    def test_normalize_key_with_tuple_input(self):
+        """Test _normalize_key with tuple input."""
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+        import unicodedata
+
+        collection = IndexedResourceCollection()
+
+        # Test with tuple input (single arg that is tuple)
+        key = collection._normalize_key(("namespace", "name"))
+        assert key == (
+            unicodedata.normalize("NFC", "namespace"),
+            unicodedata.normalize("NFC", "name"),
+        )
+
+        # Test with list input (single arg that is list)
+        key = collection._normalize_key(["namespace", "name"])
+        assert key == (
+            unicodedata.normalize("NFC", "namespace"),
+            unicodedata.normalize("NFC", "name"),
+        )
+
+        # Test with multiple args
+        key = collection._normalize_key("namespace", "name")
+        assert key == (
+            unicodedata.normalize("NFC", "namespace"),
+            unicodedata.normalize("NFC", "name"),
+        )
+
+        # Test with None values
+        key = collection._normalize_key(None, "name")
+        assert key == ("", unicodedata.normalize("NFC", "name"))
+
+    def test_validate_resource_with_object(self):
+        """Test _validate_resource with object having metadata attribute."""
+        from unittest.mock import MagicMock
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Create mock object with metadata
+        mock_resource = MagicMock()
+        mock_resource.metadata.name = "test-resource"
+
+        assert collection._validate_resource(mock_resource) is True
+
+        # Test with empty name
+        mock_resource.metadata.name = ""
+        assert collection._validate_resource(mock_resource) is False
+
+        # Test with None name
+        mock_resource.metadata.name = None
+        assert collection._validate_resource(mock_resource) is False
+
+    def test_validate_resource_edge_cases(self):
+        """Test _validate_resource with edge cases."""
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Test with non-dict metadata
+        resource = {"metadata": "not_a_dict"}
+        assert collection._validate_resource(resource) is False
+
+        # Test with empty name after strip
+        resource = {"metadata": {"name": "   "}}
+        assert collection._validate_resource(resource) is False
+
+        # Test with missing metadata
+        resource = {"no_metadata": {}}
+        assert collection._validate_resource(resource) is False
+
+    def test_extract_resource_id_with_object(self):
+        """Test _extract_resource_id with object having metadata."""
+        from unittest.mock import MagicMock
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Create mock object with metadata
+        mock_resource = MagicMock()
+        mock_resource.kind = "Service"
+        mock_resource.metadata.namespace = "default"
+        mock_resource.metadata.name = "my-service"
+
+        resource_id = collection._extract_resource_id(mock_resource)
+        assert resource_id == "Service:default/my-service"
+
+        # Test with missing kind
+        del mock_resource.kind
+        resource_id = collection._extract_resource_id(mock_resource)
+        assert resource_id == "unknown:default/my-service"
+
+    def test_extract_resource_id_with_dict(self):
+        """Test _extract_resource_id with dictionary."""
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        resource = {
+            "kind": "Pod",
+            "metadata": {"namespace": "kube-system", "name": "coredns"},
+        }
+
+        resource_id = collection._extract_resource_id(resource)
+        assert resource_id == "Pod:kube-system/coredns"
+
+        # Test with missing fields
+        resource = {"metadata": {"name": "test"}}
+        resource_id = collection._extract_resource_id(resource)
+        assert resource_id == "unknown:unknown/test"
+
+    def test_extract_resource_id_exception(self):
+        """Test _extract_resource_id exception handling."""
+        from unittest.mock import MagicMock, PropertyMock
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Test with object that causes exception when accessing metadata.name
+        # We need to mock the actual property access
+        resource = MagicMock()
+        mock_metadata = MagicMock()
+        resource.metadata = mock_metadata
+        # Make the name property raise an exception
+        type(mock_metadata).name = PropertyMock(side_effect=RuntimeError("Error"))
+
+        resource_id = collection._extract_resource_id(resource)
+        assert resource_id == "<error>"
+
+        # Test with None - this returns "<unknown>" because None doesn't have
+        # a metadata attribute, not because of an exception
+        resource_id = collection._extract_resource_id(None)
+        assert resource_id == "<unknown>"
+
+
+class TestIndexedResourceCollectionQueryMethods:
+    """Test IndexedResourceCollection query methods."""
+
+    def test_get_indexed_iter(self):
+        """Test get_indexed_iter method."""
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Add some test data
+        collection._internal_dict[("default", "service1")] = [
+            {"name": "resource1"},
+            {"name": "resource2"},
+        ]
+
+        # Test iterator
+        resources = list(collection.get_indexed_iter("default", "service1"))
+        assert len(resources) == 2
+        assert resources[0]["name"] == "resource1"
+        assert resources[1]["name"] == "resource2"
+
+        # Test with non-existent key
+        resources = list(collection.get_indexed_iter("other", "service"))
+        assert len(resources) == 0
+
+    def test_get_indexed_single_multiple_resources(self):
+        """Test get_indexed_single with multiple resources."""
+        from unittest.mock import patch, MagicMock
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Add multiple resources with same key
+        collection._internal_dict[("default", "service1")] = [
+            {"metadata": {"name": "resource1"}},
+            {"metadata": {"name": "resource2"}},
+            {"metadata": {"name": "resource3"}},
+        ]
+
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+
+            # Should raise ValueError
+            with pytest.raises(ValueError, match="Multiple resources found"):
+                collection.get_indexed_single("default", "service1")
+
+            # Should have logged error
+            mock_logger.error.assert_called_once()
+
+    def test_items_iteration(self):
+        """Test items method."""
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Add test data
+        collection._internal_dict[("ns1", "res1")] = [{"name": "r1"}]
+        collection._internal_dict[("ns2", "res2")] = [{"name": "r2"}, {"name": "r3"}]
+
+        items = list(collection.items())
+        assert len(items) == 3
+
+        # Check that we get tuples of (key, resource)
+        assert items[0][0] == ("ns1", "res1")
+        assert items[0][1]["name"] == "r1"
+
+    def test_values_iteration(self):
+        """Test values method."""
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Add test data
+        collection._internal_dict[("ns1", "res1")] = [{"name": "r1"}]
+        collection._internal_dict[("ns2", "res2")] = [{"name": "r2"}, {"name": "r3"}]
+
+        values = list(collection.values())
+        assert len(values) == 3
+        assert values[0]["name"] == "r1"
+        assert values[1]["name"] == "r2"
+        assert values[2]["name"] == "r3"
+
+    def test_contains_check(self):
+        """Test __contains__ method."""
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Add test data
+        collection._internal_dict[("ns1", "res1")] = [{"name": "r1"}]
+
+        # Test with tuple key
+        assert ("ns1", "res1") in collection
+        assert ("ns2", "res2") not in collection
+
+    def test_keys_iteration(self):
+        """Test keys method."""
+        from haproxy_template_ic.config_models import IndexedResourceCollection
+
+        collection = IndexedResourceCollection()
+
+        # Add test data
+        collection._internal_dict[("ns1", "res1")] = [{"name": "r1"}]
+        collection._internal_dict[("ns2", "res2")] = [{"name": "r2"}]
+
+        keys = list(collection.keys())
+        assert len(keys) == 2
+        assert ("ns1", "res1") in keys
+        assert ("ns2", "res2") in keys
+
+
+class TestHAProxyConfigContextMethods:
+    """Test HAProxyConfigContext methods."""
+
+    def test_get_content_by_filename_not_found(self):
+        """Test get_content_by_filename when content not found."""
+        from haproxy_template_ic.config_models import (
+            Config,
+            HAProxyConfigContext,
+            TemplateContext,
+            RenderedContent,
+        )
+
+        config = Config(
+            pod_selector={"match_labels": {"app": "test"}},
+            haproxy_config={"template": "test"},
+        )
+
+        context = HAProxyConfigContext(
+            config=config,
+            template_context=TemplateContext(),
+            rendered_content=[
+                RenderedContent(filename="file1.txt", content="content1"),
+                RenderedContent(filename="file2.txt", content="content2"),
+            ],
+        )
+
+        # Test finding existing file
+        content = context.get_content_by_filename("file1.txt")
+        assert content is not None
+        assert content.filename == "file1.txt"
+        assert content.content == "content1"
+
+        # Test not finding file (lines 574-575)
+        content = context.get_content_by_filename("nonexistent.txt")
+        assert content is None
+
+
+class TestConfigFromDictErrorHandling:
+    """Test config_from_dict error handling."""
+
+    def test_config_from_dict_template_snippets_error(self):
+        """Test helpful error message for template_snippets format error."""
+        data = {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": {"template": "test"},
+            "template_snippets": {
+                # Wrong format - should be dict with name and template
+                "snippet1": "just a string"
+            },
+        }
+
+        with pytest.raises(ValueError) as exc_info:
+            config_from_dict(data)
+
+        error_msg = str(exc_info.value)
+        assert "TEMPLATE SNIPPETS FORMAT ERROR" in error_msg
+        assert "INCORRECT FORMAT" in error_msg
+        assert "CORRECT FORMAT" in error_msg
+
+    def test_config_from_dict_watched_resources_error(self):
+        """Test helpful error message for watched_resources error."""
+        data = {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": {"template": "test"},
+            "watched_resources": {
+                "invalid": {
+                    # Missing required fields
+                    "kind": "Service"
+                }
+            },
+        }
+
+        with pytest.raises(ValueError) as exc_info:
+            config_from_dict(data)
+
+        error_msg = str(exc_info.value)
+        assert "WATCHED RESOURCES ERROR" in error_msg or "api_version" in error_msg
+
+    def test_config_from_dict_pod_selector_error(self):
+        """Test helpful error message for pod_selector error."""
+        data = {
+            "pod_selector": "invalid",  # Should be dict
+            "haproxy_config": {"template": "test"},
+        }
+
+        with pytest.raises(ValueError) as exc_info:
+            config_from_dict(data)
+
+        error_msg = str(exc_info.value)
+        assert "POD SELECTOR ERROR" in error_msg or "pod_selector" in error_msg.lower()
+
+    def test_config_from_dict_haproxy_config_error(self):
+        """Test helpful error message for haproxy_config error."""
+        data = {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": "invalid",  # Should be dict with template
+        }
+
+        with pytest.raises(ValueError) as exc_info:
+            config_from_dict(data)
+
+        error_msg = str(exc_info.value)
+        assert (
+            "HAPROXY CONFIG ERROR" in error_msg or "haproxy_config" in error_msg.lower()
+        )
+
+    def test_config_from_dict_auth_fields_error(self):
+        """Test error message for deprecated auth fields."""
+        data = {
+            "pod_selector": {"match_labels": {"app": "test"}},
+            "haproxy_config": {"template": "test"},
+            "dataplane_auth": {"username": "admin"},  # Deprecated field
+        }
+
+        with pytest.raises(ValueError) as exc_info:
+            config_from_dict(data)
+
+        error_msg = str(exc_info.value)
+        # Could be either the custom message or Pydantic's forbid extra message
+        assert (
+            "CREDENTIALS MOVED TO SECRET" in error_msg
+            or "Extra inputs are not permitted" in error_msg.lower()
+        )
