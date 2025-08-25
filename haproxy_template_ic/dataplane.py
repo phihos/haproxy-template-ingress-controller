@@ -1370,7 +1370,7 @@ class ConfigSynchronizer:
                     error_msg += (
                         f"\n\nConfiguration context around error:\n{error_context}"
                     )
-            except (ValueError, IndexError, AttributeError) as parse_error:
+            except Exception as parse_error:  # Be defensive in error handling
                 # Log parse error but continue with original error message
                 logger.debug(f"Could not parse validation error details: {parse_error}")
             logger.error(error_msg)
