@@ -225,6 +225,170 @@ class TestFieldFilter:
         validated = validate_ignore_fields(valid_fields)
         assert len(validated) == 3
 
+    def test_invalid_field_path_in_remove(self):
+        """Test handling of invalid field paths in remove_fields_from_resource."""
+        resource = {"metadata": {"name": "test"}}
+
+        # Test with non-string field paths
+        with patch("haproxy_template_ic.field_filter.logger") as mock_logger:
+            result = remove_fields_from_resource(
+                resource,
+                [None, 123, [], "valid.path"],  # Mix of invalid and valid
+            )
+            # Should skip invalid ones and process valid ones
+            assert result == resource  # valid.path doesn't exist so no change
+            assert mock_logger.debug.call_count >= 3  # For None, 123, and []
+
+    def test_field_path_too_long_in_remove(self):
+        """Test handling of overly long field paths in remove_fields_from_resource."""
+        resource = {"metadata": {"name": "test"}}
+
+        # Create a path > 500 characters
+        long_path = "a" * 501
+
+        with patch("haproxy_template_ic.field_filter.logger") as mock_logger:
+            result = remove_fields_from_resource(resource, [long_path])
+            assert result == resource  # Should skip the long path
+            mock_logger.warning.assert_called_once()
+            assert "Field path too long" in str(mock_logger.warning.call_args)
+
+    def test_unexpected_error_in_remove(self):
+        """Test handling of unexpected errors during field removal."""
+        resource = {"metadata": {"name": "test"}}
+
+        with patch(
+            "haproxy_template_ic.field_filter._compile_jsonpath_filter"
+        ) as mock_compile:
+            # Make it raise an unexpected exception
+            mock_compile.side_effect = RuntimeError("Unexpected error")
+
+            with patch("haproxy_template_ic.field_filter.logger") as mock_logger:
+                result = remove_fields_from_resource(resource, ["metadata.name"])
+                # Should handle the error gracefully
+                assert result == resource
+                mock_logger.warning.assert_called_once()
+                assert "Unexpected error processing field filter" in str(
+                    mock_logger.warning.call_args
+                )
+
+    def test_match_without_parts(self):
+        """Test _remove_field_at_path with match lacking parts attribute."""
+        from haproxy_template_ic.field_filter import _remove_field_at_path
+
+        resource = {"metadata": {"name": "test"}}
+
+        # Create a mock match without parts
+        mock_match = MagicMock()
+        del mock_match.parts  # Remove parts attribute
+
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"metadata": {"name": "test"}}  # Should remain unchanged
+
+    def test_empty_parts_in_match(self):
+        """Test _remove_field_at_path with empty parts list."""
+        from haproxy_template_ic.field_filter import _remove_field_at_path
+
+        resource = {"metadata": {"name": "test"}}
+
+        # Create a mock match with empty parts - this hits line 111
+        mock_match = MagicMock()
+        mock_match.parts = []
+
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"metadata": {"name": "test"}}  # Should remain unchanged
+
+        # Also test parts = None which should trigger line 104
+        mock_match.parts = None
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"metadata": {"name": "test"}}  # Should remain unchanged
+
+    def test_path_not_in_dict(self):
+        """Test navigation when path doesn't exist in dict."""
+        from haproxy_template_ic.field_filter import _remove_field_at_path
+
+        resource = {"metadata": {"name": "test"}}
+
+        # Create a mock match with non-existent path
+        mock_match = MagicMock()
+        mock_match.parts = ["spec", "containers"]  # spec doesn't exist
+
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"metadata": {"name": "test"}}  # Should remain unchanged
+
+    def test_list_navigation_errors(self):
+        """Test errors during list navigation."""
+        from haproxy_template_ic.field_filter import _remove_field_at_path
+
+        resource = {"items": ["a", "b", "c"]}
+
+        # Test with out-of-range index
+        mock_match = MagicMock()
+        mock_match.parts = ["items", "10"]  # Index out of range
+
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"items": ["a", "b", "c"]}  # Should remain unchanged
+
+        # Test with non-integer index
+        mock_match.parts = ["items", "not_a_number"]
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"items": ["a", "b", "c"]}  # Should remain unchanged
+
+        # Test navigation through non-dict/list (hits line 132)
+        resource = {"value": 42}
+        mock_match.parts = ["value", "subfield"]  # Can't navigate through int
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"value": 42}  # Should remain unchanged
+
+        # Another case: trying to navigate through string
+        resource = {"text": "hello"}
+        mock_match.parts = ["text", "charAt", "0"]  # Can't navigate through string
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"text": "hello"}  # Should remain unchanged
+
+    def test_nested_list_navigation(self):
+        """Test complex list navigation scenarios."""
+        from haproxy_template_ic.field_filter import _remove_field_at_path
+
+        # Test navigating through nested structures with lists
+        resource = {
+            "items": [{"name": "first", "value": 1}, {"name": "second", "value": 2}]
+        }
+
+        # Successfully navigate and remove
+        mock_match = MagicMock()
+        mock_match.parts = ["items", "0", "value"]
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {
+            "items": [
+                {"name": "first"},  # value removed
+                {"name": "second", "value": 2},
+            ]
+        }
+
+        # Test with invalid index in middle of path
+        resource = {"data": [{"nested": {"field": "value"}}]}
+        mock_match.parts = ["data", "invalid", "nested", "field"]
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"data": [{"nested": {"field": "value"}}]}  # Unchanged
+
+        # Test navigation through list with negative index (should fail with ValueError)
+        mock_match.parts = ["data", "-1", "nested"]
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"data": [{"nested": {"field": "value"}}]}  # Unchanged
+
+    def test_final_part_list_errors(self):
+        """Test errors when removing final part from list."""
+        from haproxy_template_ic.field_filter import _remove_field_at_path
+
+        resource = {"items": ["a", "b", "c"]}
+
+        # Test with invalid index for final part
+        mock_match = MagicMock()
+        mock_match.parts = ["items", "invalid"]
+
+        _remove_field_at_path(resource, mock_match)
+        assert resource == {"items": ["a", "b", "c"]}  # Should remain unchanged
+
     def test_validate_ignore_fields_with_invalid(self):
         """Test validation filters out invalid expressions."""
         fields = [
