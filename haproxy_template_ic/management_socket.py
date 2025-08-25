@@ -74,13 +74,28 @@ def _serialize_kopf_index(index_data: KopfIndexData) -> Dict[str, List[ResourceD
     Raises:
         TypeError: If index_data cannot be serialized
     """
-    if not (hasattr(index_data, "__iter__") and hasattr(index_data, "__getitem__")):
+    # Check if it's a dict-like object (not just iterable like strings)
+    if not (
+        hasattr(index_data, "__iter__")
+        and hasattr(index_data, "__getitem__")
+        and hasattr(index_data, "items")
+    ):
         return {}
 
     serialized_index = {}
-    for key in index_data:
-        resources = index_data[key]
-        serialized_index[str(key)] = _serialize_resource_collection(resources)
+    try:
+        for key in index_data:
+            resources = index_data[key]
+            # Convert tuple keys to structured strings with ':' separator
+            # e.g., ('namespace', 'name') becomes 'namespace:name'
+            if isinstance(key, tuple):
+                serialized_key = ":".join(str(k) for k in key)
+            else:
+                serialized_key = str(key)
+            serialized_index[serialized_key] = _serialize_resource_collection(resources)
+    except (TypeError, KeyError):
+        # Handle cases where index_data doesn't behave like a dict
+        return {}
 
     return serialized_index
 
@@ -294,15 +309,30 @@ class ManagementSocketServer:
 
     def _dump_indices(self) -> Dict[str, Any]:
         """Dump all indices from memo."""
-        return {
-            "indices": {
-                name: dict(getattr(self.memo, name))
-                for name in dir(self.memo)
-                if name.endswith("_index")
+        indices: Dict[str, Any] = {}
+
+        # Handle new memo.indices dictionary structure
+        if hasattr(self.memo, "indices") and self.memo.indices:
+            for name, index_data in self.memo.indices.items():
+                try:
+                    indices[name] = _serialize_kopf_index(index_data)
+                except Exception as e:
+                    indices[name] = {"error": f"Failed to serialize: {e}"}
+
+        # Also check for old-style _index attributes for backward compatibility
+        for name in dir(self.memo):
+            if (
+                name.endswith("_index")
                 and not name.startswith("_")
                 and hasattr(getattr(self.memo, name), "items")
-            }
-        }
+            ):
+                if name not in indices:  # Don't override new-style indices
+                    try:
+                        indices[name] = dict(getattr(self.memo, name))
+                    except Exception as e:
+                        indices[name] = {"error": f"Failed to serialize: {e}"}
+
+        return {"indices": indices}
 
     def _dump_config(self) -> Dict[str, Any]:
         """Dump HAProxy configuration context."""
