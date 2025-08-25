@@ -14,6 +14,7 @@ import asyncio
 import io
 import logging
 import re
+import time
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple
 from urllib.parse import urlparse, urlunparse
@@ -1144,10 +1145,9 @@ class ConfigSynchronizer:
         Returns:
             List of change descriptions, empty if configs are identical
         """
-        import time
-
         start_time = time.time()
         changes: List[str] = []
+        max_changes_before_exit = 10  # Early exit after finding this many changes
 
         # Helper function to convert to dict if has to_dict method
         def to_dict_safe(obj):
@@ -1170,12 +1170,29 @@ class ConfigSynchronizer:
         new_names = set(new_backends.keys())
 
         changes.extend(f"remove backend {name}" for name in current_names - new_names)
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
         changes.extend(f"add backend {name}" for name in new_names - current_names)
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
         changes.extend(
             f"modify backend {name}"
             for name in current_names & new_names
             if current_backends[name] != new_backends[name]
         )
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
 
         # Compare frontends - same optimization
         current_frontends = {
@@ -1193,12 +1210,29 @@ class ConfigSynchronizer:
         new_names = set(new_frontends.keys())
 
         changes.extend(f"remove frontend {name}" for name in current_names - new_names)
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
         changes.extend(f"add frontend {name}" for name in new_names - current_names)
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
         changes.extend(
             f"modify frontend {name}"
             for name in current_names & new_names
             if current_frontends[name] != new_frontends[name]
         )
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
 
         # Compare defaults sections
         current_defaults = [to_dict_safe(d) for d in current.get("defaults", [])]
@@ -1294,6 +1328,11 @@ class ConfigSynchronizer:
             logger.warning(
                 f"⚠️  Structured comparison failed for {url}, falling back to conditional: {fetch_error}"
             )
+
+            # Record fallback metrics
+            metrics = get_metrics_collector()
+            metrics.increment_dataplane_fallback("structured_to_conditional")
+
             try:
                 version = await client.deploy_configuration_conditionally(config)
                 return {"method": "conditional", "version": version}
@@ -1302,6 +1341,10 @@ class ConfigSynchronizer:
                 logger.warning(
                     f"⚠️  Conditional deployment also failed for {url}, using regular deployment: {conditional_error}"
                 )
+
+                # Record double fallback metrics
+                metrics.increment_dataplane_fallback("conditional_to_regular")
+
                 version = await client.deploy_configuration(config)
                 return {"method": "fallback", "version": version}
 
@@ -1327,8 +1370,9 @@ class ConfigSynchronizer:
                     error_msg += (
                         f"\n\nConfiguration context around error:\n{error_context}"
                     )
-            except Exception:  # nosec B110
-                pass
+            except (ValueError, IndexError, AttributeError) as parse_error:
+                # Log parse error but continue with original error message
+                logger.debug(f"Could not parse validation error details: {parse_error}")
             logger.error(error_msg)
 
     async def sync_configuration(

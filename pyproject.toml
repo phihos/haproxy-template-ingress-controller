@@ -43,7 +43,6 @@ dev = [
     "filelock>=3.19.1",
     "lint>=1.2.1",
     "mypy>=1.8.0",
-    "openapi-python-client>=0.25.3",
     "oscrypto @ git+https://github.com/wbond/oscrypto.git@d5f3437", # Fix for OpenSSL 3.0.10+ version detection bug
     "prometheus-client>=0.22.1",
     "pytest>=8.4.1",

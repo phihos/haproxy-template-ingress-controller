@@ -24,6 +24,8 @@ jobs:
         uses: anthropics/claude-code-action@beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          trusted_bots: |
+            dependabot[bot]
           direct_prompt: |
             Review this pull request concisely. Focus on necessary improvements and actionable feedback. Keep the review under typical monitor height.
             
