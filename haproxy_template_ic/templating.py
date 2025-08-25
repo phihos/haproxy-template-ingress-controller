@@ -7,11 +7,12 @@ functionality including support for template snippets and custom filters.
 
 import base64
 import os
-import unicodedata
-import urllib.parse
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
 
+from pathvalidate import ValidationError, is_valid_filename, sanitize_filename
+
+import jinja2
 from jinja2 import (
     BaseLoader,
     Environment,
@@ -24,6 +25,15 @@ from jinja2 import (
 from .config_models import (
     TemplateSnippetCollection,
 )
+from .constants import (
+    ERROR_TEMPLATE_COMPILATION,
+    ERROR_TEMPLATE_GENERIC,
+    ERROR_TEMPLATE_INVALID_SYNTAX,
+    ERROR_TEMPLATE_RENDER,
+    ERROR_TEMPLATE_SNIPPET_NOT_FOUND,
+    ERROR_TEMPLATE_SYNTAX,
+    TEMPLATE_CACHE_SIZE,
+)
 
 # -----------------------------------------------------------------------------
 # Jinja2 setup and template functionality
@@ -34,11 +44,13 @@ def b64decode_filter(value: str) -> str:
     """Custom Jinja2 filter to decode base64 strings."""
     try:
         return base64.b64decode(value).decode("utf-8")
-    except Exception as e:
+    except (ValueError, TypeError, UnicodeDecodeError) as e:
         raise ValueError(f"Failed to decode base64 value: {e}") from e
 
 
-def get_path_filter(filename: str, content_type: str, config=None) -> str:
+def get_path_filter(
+    filename: str, content_type: str, config: Optional[Any] = None
+) -> str:
     """Custom Jinja2 filter to resolve full paths from filenames with security validation.
 
     Args:
@@ -56,56 +68,34 @@ def get_path_filter(filename: str, content_type: str, config=None) -> str:
     Raises:
         ValueError: If filename contains invalid characters or content_type is unknown
     """
-    # Validate filename for security with comprehensive normalization
+    # Validate and sanitize filename for security using pathvalidate + additional restrictions
     if not filename or not isinstance(filename, str):
         raise ValueError(f"Invalid filename: {filename}")
 
-    # Defense in depth: Multiple layers of validation
+    # First validate with pathvalidate - handles platform-specific and Unicode issues
+    if not is_valid_filename(filename):
+        raise ValueError(f"Invalid filename contains prohibited characters: {filename}")
 
-    # Layer 1: URL decode the filename to catch encoded attacks
-    try:
-        decoded_filename = urllib.parse.unquote(filename, errors="strict")
-    except UnicodeDecodeError:
-        raise ValueError(f"Invalid filename encoding: {filename}")
-
-    # Layer 2: Normalize Unicode to catch Unicode variations
-    normalized_filename = unicodedata.normalize("NFKC", decoded_filename)
-
-    # Layer 3: Check if normalization/decoding revealed encoded sequences
-    if "%" in normalized_filename:
-        raise ValueError(
-            f"Filename contains encoded sequences after normalization: {filename}"
-        )
-
-    # Layer 4: Check for path traversal attempts and dangerous characters
-    # Apply checks to both original and normalized filenames for completeness
-    for check_filename in [filename, normalized_filename]:
-        if (
-            ".." in check_filename
-            or "/" in check_filename
-            or "\\" in check_filename
-            or "\x00" in check_filename
-            or check_filename in (".", "..")
-            # Additional checks for common path separator Unicode variants
-            or "\u002f" in check_filename  # Unicode forward slash
-            or "\u005c" in check_filename  # Unicode backslash
-            or "\u2044" in check_filename  # Unicode fraction slash
-            or "\u2215" in check_filename  # Unicode division slash
-        ):
-            raise ValueError(
-                f"Invalid filename contains prohibited characters: {filename}"
-            )
-
-    # Layer 5: Final whitelist validation - only safe characters allowed
+    # Additional security checks for our specific use case (stricter than pathvalidate)
     import re
 
-    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", normalized_filename):
+    # Block directory names and path components
+    if filename in (".", ".."):
+        raise ValueError(f"Invalid filename contains prohibited characters: {filename}")
+
+    # Block files with spaces, special chars, or starting with dots/dashes/underscores
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", filename):
         raise ValueError(
             f"Filename contains unsafe characters (only alphanumeric, dots, hyphens, underscores allowed): {filename}"
         )
 
-    # Use normalized filename for further processing
-    filename = normalized_filename
+    try:
+        # Then sanitize for additional safety (handles edge cases and normalization)
+        safe_filename = sanitize_filename(filename, platform="auto")
+        if not safe_filename:  # Empty result means entirely invalid
+            raise ValueError(f"Invalid filename: {filename}")
+    except ValidationError as e:
+        raise ValueError(f"Invalid filename: {str(e)}") from e
 
     # Validate content_type
     valid_types = {"map", "certificate", "file"}
@@ -132,12 +122,12 @@ def get_path_filter(filename: str, content_type: str, config=None) -> str:
         }
         base_dir = base_dirs[content_type]
 
-    # Construct and validate path
-    full_path = os.path.join(base_dir, filename)
+    # Construct and validate path using pathlib for additional security
+    full_path = os.path.join(base_dir, safe_filename)
     normalized_path = os.path.normpath(full_path)
     normalized_base = os.path.normpath(base_dir)
 
-    # Ensure path doesn't escape base directory
+    # Ensure path doesn't escape base directory (additional defense)
     if (
         not normalized_path.startswith(normalized_base + os.sep)
         and normalized_path != normalized_base
@@ -232,7 +222,7 @@ class TemplateCompiler:
 # -----------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=TEMPLATE_CACHE_SIZE)
 def compile_template(
     template_str: str, snippets_tuple: Optional[tuple] = None
 ) -> Template:
@@ -244,7 +234,7 @@ def compile_template(
     try:
         return env.from_string(template_str)
     except TemplateSyntaxError as e:
-        raise ValueError(f"Template syntax error: {e}") from e
+        raise ValueError(ERROR_TEMPLATE_SYNTAX.format(error=e)) from e
 
 
 def render_template(
@@ -259,8 +249,8 @@ def render_template(
     try:
         template = compile_template(template_str, snippets_tuple)
         return template.render(**context)
-    except Exception as e:
-        raise ValueError(f"Template rendering failed: {e}") from e
+    except (jinja2.TemplateError, ValueError, TypeError) as e:
+        raise ValueError(ERROR_TEMPLATE_RENDER.format(error=e)) from e
 
 
 # -----------------------------------------------------------------------------
@@ -316,7 +306,7 @@ class TemplateRenderer:
             template = self.get_compiled(template_str)
             return template.render(**context)
         except Exception as e:
-            raise ValueError(f"Template rendering failed: {e}") from e
+            raise ValueError(ERROR_TEMPLATE_RENDER.format(error=e)) from e
 
     def get_compiled(self, template_str: str) -> Template:
         """Get compiled template (for cases where render is called separately).
@@ -338,7 +328,7 @@ class TemplateRenderer:
                     self._compiler.compile_template(template_str)
                 )
             except Exception as e:
-                raise ValueError(f"Template compilation failed: {e}") from e
+                raise ValueError(ERROR_TEMPLATE_COMPILATION.format(error=e)) from e
 
         return self._compiled_templates[template_str]
 
@@ -370,63 +360,94 @@ class TemplateRenderer:
             # Try to render with empty context to catch TemplateNotFound errors
             compiled_template.render({})
         except TemplateSyntaxError as e:
-            warnings.append(f"Invalid template syntax: {e}")
+            warnings.append(ERROR_TEMPLATE_INVALID_SYNTAX.format(error=e))
         except TemplateNotFound as e:
-            warnings.append(f"Template snippet not found: {e}")
+            warnings.append(ERROR_TEMPLATE_SNIPPET_NOT_FOUND.format(error=e))
         except Exception as e:
-            warnings.append(f"Template error: {e}")
+            warnings.append(ERROR_TEMPLATE_GENERIC.format(error=e))
         return warnings
 
 
-def validate_config_templates(config_dict: dict) -> list[str]:
-    """Validate all templates in a configuration dictionary."""
-    warnings = []
+def _extract_snippet_templates(config_dict: dict) -> TemplateSnippetCollection:
+    """Extract snippet templates from config dictionary."""
+    from .config_models import TemplateSnippet
 
-    # Extract snippets for validation environment
     snippets = {}
     snippets_raw = config_dict.get("template_snippets", {})
+
     for snippet_name, snippet_data in snippets_raw.items():
+        template_content = None
         if isinstance(snippet_data, dict) and "template" in snippet_data:
-            snippets[snippet_name] = snippet_data["template"]
+            template_content = snippet_data["template"]
         elif isinstance(snippet_data, str):
-            snippets[snippet_name] = snippet_data
+            template_content = snippet_data
         else:
             try:
-                snippets[snippet_name] = getattr(
-                    snippet_data, "template", str(snippet_data)
-                )
+                template_content = getattr(snippet_data, "template", str(snippet_data))
             except Exception:
-                snippets[snippet_name] = str(snippet_data)
+                template_content = str(snippet_data)
 
-    renderer = TemplateRenderer(snippets)
+        if template_content:
+            snippets[snippet_name] = TemplateSnippet(
+                name=snippet_name, template=template_content
+            )
 
-    # Validate template snippets
-    for snippet_name, snippet_template in snippets.items():
-        snippet_warnings = renderer.validate_template(snippet_template)
+    return snippets
+
+
+def _validate_snippets(
+    snippets: TemplateSnippetCollection, renderer: TemplateRenderer
+) -> list[str]:
+    """Validate template snippets."""
+    warnings = []
+    for snippet_name, snippet_obj in snippets.items():
+        snippet_warnings = renderer.validate_template(snippet_obj.template)
         for warning in snippet_warnings:
             warnings.append(f"Snippet '{snippet_name}': {warning}")
+    return warnings
 
-    # Validate maps
-    maps = config_dict.get("maps", {})
-    for map_path, map_config in maps.items():
-        if isinstance(map_config, dict) and "template" in map_config:
-            map_warnings = renderer.validate_template(map_config["template"])
-            for warning in map_warnings:
-                warnings.append(f"Map '{map_path}': {warning}")
 
-    # Validate HAProxy config
+def _validate_template_collection(
+    collection: dict, renderer: TemplateRenderer, collection_type: str
+) -> list[str]:
+    """Validate a collection of templates (maps, certificates, etc.)."""
+    warnings = []
+    for item_name, item_config in collection.items():
+        if isinstance(item_config, dict) and "template" in item_config:
+            item_warnings = renderer.validate_template(item_config["template"])
+            for warning in item_warnings:
+                warnings.append(f"{collection_type} '{item_name}': {warning}")
+    return warnings
+
+
+def _validate_haproxy_config(
+    config_dict: dict, renderer: TemplateRenderer
+) -> list[str]:
+    """Validate HAProxy main configuration template."""
+    warnings = []
     haproxy_config = config_dict.get("haproxy_config", {})
     if isinstance(haproxy_config, dict) and "template" in haproxy_config:
         haproxy_warnings = renderer.validate_template(haproxy_config["template"])
         for warning in haproxy_warnings:
             warnings.append(f"HAProxy config: {warning}")
+    return warnings
 
-    # Validate certificates
-    certificates = config_dict.get("certificates", {})
-    for cert_path, cert_config in certificates.items():
-        if isinstance(cert_config, dict) and "template" in cert_config:
-            cert_warnings = renderer.validate_template(cert_config["template"])
-            for warning in cert_warnings:
-                warnings.append(f"Certificate '{cert_path}': {warning}")
+
+def validate_config_templates(config_dict: dict) -> list[str]:
+    """Validate all templates in a configuration dictionary."""
+    snippets = _extract_snippet_templates(config_dict)
+    renderer = TemplateRenderer(snippets)
+
+    warnings = []
+    warnings.extend(_validate_snippets(snippets, renderer))
+    warnings.extend(
+        _validate_template_collection(config_dict.get("maps", {}), renderer, "Map")
+    )
+    warnings.extend(_validate_haproxy_config(config_dict, renderer))
+    warnings.extend(
+        _validate_template_collection(
+            config_dict.get("certificates", {}), renderer, "Certificate"
+        )
+    )
 
     return warnings

@@ -34,6 +34,8 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic.types import StringConstraints
 
+from haproxy_template_ic.constants import DEFAULT_DATAPLANE_PORT, DEFAULT_HEALTH_PORT
+
 if TYPE_CHECKING:
     pass
 
@@ -219,13 +221,13 @@ class Config(BaseModel):
         description="Directory for general files in Dataplane API",
     )
     validation_dataplane_url: str = Field(
-        default="http://localhost:5555",
+        default=f"http://localhost:{DEFAULT_DATAPLANE_PORT}",
         description="URL for validation sidecar Dataplane API",
     )
 
     @field_validator("template_snippets")
     @classmethod
-    def validate_snippet_names(cls, v):
+    def validate_snippet_names(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         """Validate snippet names for template inclusion."""
         for name, snippet in v.items():
             if name != snippet.name:
@@ -259,7 +261,7 @@ class Config(BaseModel):
                         "match_labels": {"app": "haproxy", "component": "loadbalancer"}
                     },
                     "haproxy_config": {
-                        "template": 'global\n    daemon\n\ndefaults\n    mode http\n    timeout connect 5000ms\n    timeout client 50000ms\n    timeout server 50000ms\n\nfrontend health\n    bind *:8404\n    http-request return status 200 content-type text/plain string "OK" if { path /healthz }\n\nfrontend main\n    bind *:80\n    # Add your routing logic here'
+                        "template": f'global\n    daemon\n\ndefaults\n    mode http\n    timeout connect 5000ms\n    timeout client 50000ms\n    timeout server 50000ms\n\nfrontend health\n    bind *:{DEFAULT_HEALTH_PORT}\n    http-request return status 200 content-type text/plain string "OK" if {{ path /healthz }}\n\nfrontend main\n    bind *:80\n    # Add your routing logic here'
                     },
                     "watched_resources": {
                         "ingresses": {

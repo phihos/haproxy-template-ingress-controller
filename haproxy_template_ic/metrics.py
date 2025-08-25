@@ -8,7 +8,7 @@ performance, resource counts, operation timing, and error rates.
 import time
 import logging
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional, TypeVar
 from functools import wraps
 
 from prometheus_async import aio
@@ -19,6 +19,10 @@ from prometheus_client import (
     Info,
     generate_latest,
 )
+
+from haproxy_template_ic.constants import DEFAULT_METRICS_PORT
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +140,7 @@ class MetricsCollector:
         self.start_time = time.time()
         self._server_started = False
 
-    async def start_metrics_server(self, port: int = 9090) -> None:
+    async def start_metrics_server(self, port: int = DEFAULT_METRICS_PORT) -> None:
         """Start the Prometheus metrics HTTP server using asyncio."""
         if self._server_started:
             logger.warning("Metrics server already started")
@@ -274,12 +278,14 @@ class MetricsCollector:
 # =============================================================================
 
 
-def timed_operation(metric_name: str, labels: Optional[Dict[str, str]] = None):
+def timed_operation(
+    metric_name: str, labels: Optional[Dict[str, str]] = None
+) -> Callable[[F], F]:
     """Decorator to time function execution and record in metrics."""
 
-    def decorator(func):
+    def decorator(func: F) -> F:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             start_time = time.time()
             try:
                 result = func(*args, **kwargs)
@@ -301,7 +307,7 @@ def timed_operation(metric_name: str, labels: Optional[Dict[str, str]] = None):
                         duration
                     )
 
-        return wrapper
+        return wrapper  # type: ignore
 
     return decorator
 

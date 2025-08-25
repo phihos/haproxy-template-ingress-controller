@@ -2,11 +2,16 @@
 
 import base64
 import binascii
+import logging
 import re
-from typing import Any, cast
+from typing import Any
 
 import click
+
+from haproxy_template_ic.constants import ERROR_MISSING_CREDENTIALS, MAX_K8S_NAME_LENGTH
 from pydantic import BaseModel, Field, SecretStr
+
+logger = logging.getLogger(__name__)
 
 
 class DataplaneAuth(BaseModel):
@@ -41,28 +46,42 @@ class Credentials(BaseModel):
         Raises:
             ValueError: If required fields are missing or invalid
         """
-        fields = [
-            "dataplane_username",
-            "dataplane_password",
-            "validation_username",
-            "validation_password",
-        ]
+        # Decode individual fields with descriptive names
+        dataplane_username = _decode_field(data.get("dataplane_username"))
+        dataplane_password = _decode_field(data.get("dataplane_password"))
+        validation_username = _decode_field(data.get("validation_username"))
+        validation_password = _decode_field(data.get("validation_password"))
 
-        # Decode all fields
-        vals = [_decode_field(data.get(f)) for f in fields]
+        # Check for missing/invalid fields with early return
+        missing_fields = []
+        if dataplane_username is None:
+            missing_fields.append("dataplane_username")
+        if dataplane_password is None:
+            missing_fields.append("dataplane_password")
+        if validation_username is None:
+            missing_fields.append("validation_username")
+        if validation_password is None:
+            missing_fields.append("validation_password")
 
-        # Check for missing/invalid fields
-        if None in vals:
-            missing = [fields[i] for i, v in enumerate(vals) if v is None]
-            raise ValueError(f"Missing/invalid credential fields: {missing}")
+        if missing_fields:
+            raise ValueError(ERROR_MISSING_CREDENTIALS.format(fields=missing_fields))
 
-        # Create auth objects - vals are guaranteed to be str after None check
-        # Type assertions are safe because we've already validated that no values are None
+        # Type narrowing: After validation, these fields are guaranteed to be non-None strings
+        # Using explicit checks for production safety (assertions get removed with -O)
+        if (
+            dataplane_username is None
+            or dataplane_password is None
+            or validation_username is None
+            or validation_password is None
+        ):
+            raise RuntimeError("Internal error: validated fields should not be None")
+
+        # Create auth objects with validated fields
         dataplane_auth = DataplaneAuth(
-            username=cast(str, vals[0]), password=SecretStr(cast(str, vals[1]))
+            username=dataplane_username, password=SecretStr(dataplane_password)
         )
         validation_auth = DataplaneAuth(
-            username=cast(str, vals[2]), password=SecretStr(cast(str, vals[3]))
+            username=validation_username, password=SecretStr(validation_password)
         )
 
         return cls(dataplane=dataplane_auth, validation=validation_auth)
@@ -83,7 +102,14 @@ def _decode_field(val: Any) -> str | None:
     if isinstance(val, bytes):
         try:
             return base64.b64decode(val).decode().strip()
-        except (binascii.Error, UnicodeDecodeError, ValueError):
+        except binascii.Error as e:
+            logger.debug(f"Base64 decode error for bytes value: {e}")
+            return None
+        except UnicodeDecodeError as e:
+            logger.debug(f"Unicode decode error for bytes value: {e}")
+            return None
+        except ValueError as e:
+            logger.debug(f"Value error decoding bytes: {e}")
             return None
 
     if isinstance(val, str):
@@ -91,9 +117,14 @@ def _decode_field(val: Any) -> str | None:
         # We need to decode them to get the actual credential values
         try:
             return base64.b64decode(val.strip()).decode().strip()
-        except (binascii.Error, UnicodeDecodeError, ValueError):
-            # If base64 decoding fails, return the original string
-            # This handles cases where the value might not be base64-encoded
+        except binascii.Error as e:
+            logger.debug(f"Base64 decode error for string value, using original: {e}")
+            return val.strip()
+        except UnicodeDecodeError as e:
+            logger.debug(f"Unicode decode error for string value, using original: {e}")
+            return val.strip()
+        except ValueError as e:
+            logger.debug(f"Value error decoding string, using original: {e}")
             return val.strip()
 
     return None
@@ -115,7 +146,7 @@ def validate_k8s_name(ctx, param, name: str) -> str:
     """
     if (
         not name
-        or len(name) > 253
+        or len(name) > MAX_K8S_NAME_LENGTH
         or not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", name)
     ):
         raise click.BadParameter("Invalid K8s name format")
