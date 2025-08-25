@@ -36,7 +36,6 @@ class ACLLines:
         value = self.value
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "acl_name": acl_name,

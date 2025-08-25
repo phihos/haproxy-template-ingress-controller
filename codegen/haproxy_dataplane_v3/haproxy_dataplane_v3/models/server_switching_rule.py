@@ -40,7 +40,6 @@ class ServerSwitchingRule:
         metadata = self.metadata
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "target_server": target_server,

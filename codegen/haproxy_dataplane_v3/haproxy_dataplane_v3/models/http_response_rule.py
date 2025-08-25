@@ -313,7 +313,6 @@ class HTTPResponseRule:
             wait_time = self.wait_time
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "type": type_,

@@ -50,7 +50,6 @@ class StickRule:
         table = self.table
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "pattern": pattern,

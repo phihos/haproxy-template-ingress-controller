@@ -47,7 +47,6 @@ class CertificateStore:
         metadata = self.metadata
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "name": name,

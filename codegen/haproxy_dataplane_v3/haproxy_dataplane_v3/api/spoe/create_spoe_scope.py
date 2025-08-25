@@ -32,8 +32,9 @@ def _get_kwargs(
         "params": params,
     }
 
-    _kwargs["json"] = body
+    _body = body
 
+    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

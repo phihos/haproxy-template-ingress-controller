@@ -67,7 +67,6 @@ class HTTPErrorRule:
                 return_hdrs.append(return_hdrs_item)
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "status": status,

@@ -22,11 +22,12 @@ def _get_kwargs(
         "url": f"/services/haproxy/runtime/acls/{parent_name}/entries",
     }
 
-    _kwargs["json"] = []
+    _body = []
     for componentsschemasacl_files_entries_item_data in body:
         componentsschemasacl_files_entries_item = componentsschemasacl_files_entries_item_data.to_dict()
-        _kwargs["json"].append(componentsschemasacl_files_entries_item)
+        _body.append(componentsschemasacl_files_entries_item)
 
+    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

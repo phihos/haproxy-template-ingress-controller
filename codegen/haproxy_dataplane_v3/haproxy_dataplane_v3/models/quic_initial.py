@@ -41,7 +41,6 @@ class QUICInitial:
         metadata = self.metadata
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "type": type_,

@@ -41,7 +41,6 @@ class HttpErrorsSection:
         metadata = self.metadata
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "error_files": error_files,

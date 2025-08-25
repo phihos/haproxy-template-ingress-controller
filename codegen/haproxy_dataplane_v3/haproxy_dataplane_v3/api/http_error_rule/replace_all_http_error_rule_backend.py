@@ -36,11 +36,12 @@ def _get_kwargs(
         "params": params,
     }
 
-    _kwargs["json"] = []
+    _body = []
     for componentsschemashttp_error_rules_item_data in body:
         componentsschemashttp_error_rules_item = componentsschemashttp_error_rules_item_data.to_dict()
-        _kwargs["json"].append(componentsschemashttp_error_rules_item)
+        _body.append(componentsschemashttp_error_rules_item)
 
+    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

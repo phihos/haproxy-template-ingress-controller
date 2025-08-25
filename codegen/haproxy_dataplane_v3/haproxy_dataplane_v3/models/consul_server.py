@@ -125,7 +125,6 @@ class ConsulServer:
         token = self.token
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "address": address,

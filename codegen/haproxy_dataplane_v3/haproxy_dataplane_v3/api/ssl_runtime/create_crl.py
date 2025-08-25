@@ -21,7 +21,9 @@ def _get_kwargs(
         "url": "/services/haproxy/runtime/ssl_crl_files",
     }
 
-    _kwargs["files"] = body.to_multipart()
+    _body = body.to_multipart()
+
+    _kwargs["files"] = _body
 
     _kwargs["headers"] = headers
     return _kwargs

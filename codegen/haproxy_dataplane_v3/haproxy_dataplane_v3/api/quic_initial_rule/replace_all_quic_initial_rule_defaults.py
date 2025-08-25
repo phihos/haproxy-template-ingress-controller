@@ -36,11 +36,12 @@ def _get_kwargs(
         "params": params,
     }
 
-    _kwargs["json"] = []
+    _body = []
     for componentsschemasquic_initial_rules_item_data in body:
         componentsschemasquic_initial_rules_item = componentsschemasquic_initial_rules_item_data.to_dict()
-        _kwargs["json"].append(componentsschemasquic_initial_rules_item)
+        _body.append(componentsschemasquic_initial_rules_item)
 
+    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

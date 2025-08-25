@@ -5,6 +5,7 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.ssl_file_1 import SSLFile1
 from ...types import Response
 
 
@@ -17,14 +18,27 @@ def _get_kwargs() -> dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Any]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Optional[list["SSLFile1"]]:
+    if response.status_code == 200:
+        response_200 = []
+        _response_200 = response.json()
+        for componentsschemasssl_ca_files_item_data in _response_200:
+            componentsschemasssl_ca_files_item = SSLFile1.from_dict(componentsschemasssl_ca_files_item_data)
+
+            response_200.append(componentsschemasssl_ca_files_item)
+
+        return response_200
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Any]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[list["SSLFile1"]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -36,7 +50,7 @@ def _build_response(*, client: Union[AuthenticatedClient, Client], response: htt
 def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[Any]:
+) -> Response[list["SSLFile1"]]:
     """Return an array of all SSL CA files
 
      Returns all SSL CA files using the runtime socket.
@@ -46,7 +60,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any]
+        Response[list['SSLFile1']]
     """
 
     kwargs = _get_kwargs()
@@ -58,10 +72,10 @@ def sync_detailed(
     return _build_response(client=client, response=response)
 
 
-async def asyncio_detailed(
+def sync(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[Any]:
+) -> Optional[list["SSLFile1"]]:
     """Return an array of all SSL CA files
 
      Returns all SSL CA files using the runtime socket.
@@ -71,7 +85,28 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any]
+        list['SSLFile1']
+    """
+
+    return sync_detailed(
+        client=client,
+    ).parsed
+
+
+async def asyncio_detailed(
+    *,
+    client: Union[AuthenticatedClient, Client],
+) -> Response[list["SSLFile1"]]:
+    """Return an array of all SSL CA files
+
+     Returns all SSL CA files using the runtime socket.
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[list['SSLFile1']]
     """
 
     kwargs = _get_kwargs()
@@ -79,3 +114,26 @@ async def asyncio_detailed(
     response = await client.get_async_httpx_client().request(**kwargs)
 
     return _build_response(client=client, response=response)
+
+
+async def asyncio(
+    *,
+    client: Union[AuthenticatedClient, Client],
+) -> Optional[list["SSLFile1"]]:
+    """Return an array of all SSL CA files
+
+     Returns all SSL CA files using the runtime socket.
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        list['SSLFile1']
+    """
+
+    return (
+        await asyncio_detailed(
+            client=client,
+        )
+    ).parsed

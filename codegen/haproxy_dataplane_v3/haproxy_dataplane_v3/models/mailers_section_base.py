@@ -34,7 +34,6 @@ class MailersSectionBase:
             timeout = self.timeout
 
         field_dict: dict[str, Any] = {}
-
         field_dict.update(
             {
                 "name": name,

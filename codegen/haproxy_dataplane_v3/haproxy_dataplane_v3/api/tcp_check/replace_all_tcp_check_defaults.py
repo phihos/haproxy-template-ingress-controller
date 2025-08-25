@@ -36,11 +36,12 @@ def _get_kwargs(
         "params": params,
     }
 
-    _kwargs["json"] = []
+    _body = []
     for componentsschemastcp_checks_item_data in body:
         componentsschemastcp_checks_item = componentsschemastcp_checks_item_data.to_dict()
-        _kwargs["json"].append(componentsschemastcp_checks_item)
+        _body.append(componentsschemastcp_checks_item)
 
+    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

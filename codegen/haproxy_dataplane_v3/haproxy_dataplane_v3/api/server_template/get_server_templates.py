@@ -5,6 +5,7 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.server_template import ServerTemplate
 from ...types import UNSET, Response, Unset
 
 
@@ -28,14 +29,29 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Any]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Optional[list["ServerTemplate"]]:
+    if response.status_code == 200:
+        response_200 = []
+        _response_200 = response.json()
+        for componentsschemasserver_templates_item_data in _response_200:
+            componentsschemasserver_templates_item = ServerTemplate.from_dict(
+                componentsschemasserver_templates_item_data
+            )
+
+            response_200.append(componentsschemasserver_templates_item)
+
+        return response_200
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Any]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[list["ServerTemplate"]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -49,7 +65,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[Any]:
+) -> Response[list["ServerTemplate"]]:
     """Return an array of server templates
 
      Returns an array of all server templates that are configured in specified backend.
@@ -63,7 +79,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any]
+        Response[list['ServerTemplate']]
     """
 
     kwargs = _get_kwargs(
@@ -78,12 +94,12 @@ def sync_detailed(
     return _build_response(client=client, response=response)
 
 
-async def asyncio_detailed(
+def sync(
     parent_name: str,
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[Any]:
+) -> Optional[list["ServerTemplate"]]:
     """Return an array of server templates
 
      Returns an array of all server templates that are configured in specified backend.
@@ -97,7 +113,36 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any]
+        list['ServerTemplate']
+    """
+
+    return sync_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    ).parsed
+
+
+async def asyncio_detailed(
+    parent_name: str,
+    *,
+    client: Union[AuthenticatedClient, Client],
+    transaction_id: Union[Unset, str] = UNSET,
+) -> Response[list["ServerTemplate"]]:
+    """Return an array of server templates
+
+     Returns an array of all server templates that are configured in specified backend.
+
+    Args:
+        parent_name (str):
+        transaction_id (Union[Unset, str]):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[list['ServerTemplate']]
     """
 
     kwargs = _get_kwargs(
@@ -108,3 +153,34 @@ async def asyncio_detailed(
     response = await client.get_async_httpx_client().request(**kwargs)
 
     return _build_response(client=client, response=response)
+
+
+async def asyncio(
+    parent_name: str,
+    *,
+    client: Union[AuthenticatedClient, Client],
+    transaction_id: Union[Unset, str] = UNSET,
+) -> Optional[list["ServerTemplate"]]:
+    """Return an array of server templates
+
+     Returns an array of all server templates that are configured in specified backend.
+
+    Args:
+        parent_name (str):
+        transaction_id (Union[Unset, str]):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        list['ServerTemplate']
+    """
+
+    return (
+        await asyncio_detailed(
+            parent_name=parent_name,
+            client=client,
+            transaction_id=transaction_id,
+        )
+    ).parsed

@@ -341,10 +341,48 @@ class TestConfigSynchronizerMethods:
                 mock_client = Mock()
                 mock_client.validate_configuration = AsyncMock(return_value=None)
 
-                if "test1" in url:
+                # Add methods for validation client
+                if "localhost" in url:  # Validation URL
                     mock_client.deploy_configuration = AsyncMock(return_value="v1.0")
+                    mock_client.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": {"daemon": True},
+                        }
+                    )
+                    mock_client.sync_maps = AsyncMock(return_value=None)
+                    mock_client.sync_certificates = AsyncMock(return_value=None)
+                    mock_client.sync_files = AsyncMock(return_value=None)
+                elif "test1" in url:
+                    mock_client.deploy_configuration = AsyncMock(return_value="v1.0")
+                    # Return different config to trigger deployment
+                    mock_client.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": {"daemon": False},  # Different from validation
+                        }
+                    )
+                    mock_client.sync_maps = AsyncMock(return_value=None)
+                    mock_client.sync_certificates = AsyncMock(return_value=None)
+                    mock_client.sync_files = AsyncMock(return_value=None)
+                    mock_client.deploy_configuration_conditionally = AsyncMock(
+                        return_value="v1.0"
+                    )
                 else:
                     mock_client.deploy_configuration = AsyncMock(
+                        side_effect=Exception("Connection failed")
+                    )
+                    mock_client.fetch_structured_configuration = AsyncMock(
+                        side_effect=Exception("Connection failed")
+                    )
+                    mock_client.sync_maps = AsyncMock(return_value=None)
+                    mock_client.sync_certificates = AsyncMock(return_value=None)
+                    mock_client.sync_files = AsyncMock(return_value=None)
+                    mock_client.deploy_configuration_conditionally = AsyncMock(
                         side_effect=Exception("Connection failed")
                     )
 
@@ -693,6 +731,35 @@ class TestConfigSynchronizerSuccessPath:
             mock_client = Mock()
             mock_client.validate_configuration = AsyncMock(return_value=None)
             mock_client.deploy_configuration = AsyncMock(return_value="v1.0")
+
+            # Create a counter to return different configs on different calls
+            call_count = {"count": 0}
+
+            def get_structured_config():
+                call_count["count"] += 1
+                if call_count["count"] == 1:
+                    # Validation instance - first call
+                    return {
+                        "backends": [],
+                        "frontends": [],
+                        "defaults": [],
+                        "global": {"daemon": True},
+                    }
+                else:
+                    # Production instance - different to trigger deployment
+                    return {
+                        "backends": [],
+                        "frontends": [],
+                        "defaults": [],
+                        "global": {"daemon": False},
+                    }
+
+            mock_client.fetch_structured_configuration = AsyncMock(
+                side_effect=get_structured_config
+            )
+            mock_client.sync_maps = AsyncMock(return_value=None)
+            mock_client.sync_certificates = AsyncMock(return_value=None)
+            mock_client.sync_files = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
 
             results = await synchronizer.sync_configuration(context)
@@ -1531,6 +1598,32 @@ class TestConfigSynchronizerSyncMethods:
             mock_client = Mock()
             mock_client.validate_configuration = AsyncMock(return_value=None)
             mock_client.deploy_configuration = AsyncMock(return_value="v1.0")
+
+            # Return different configs for validation vs production to trigger deployment
+            call_count = {"count": 0}
+
+            def get_structured_config():
+                call_count["count"] += 1
+                if call_count["count"] == 1:
+                    # Validation instance - first call
+                    return {
+                        "backends": [],
+                        "frontends": [],
+                        "defaults": [],
+                        "global": {"daemon": True},
+                    }
+                else:
+                    # Production instance - different to trigger deployment
+                    return {
+                        "backends": [],
+                        "frontends": [],
+                        "defaults": [],
+                        "global": {"daemon": False},
+                    }
+
+            mock_client.fetch_structured_configuration = AsyncMock(
+                side_effect=get_structured_config
+            )
             mock_client.sync_maps = AsyncMock(return_value=None)
             mock_client.sync_certificates = AsyncMock(return_value=None)
             mock_client.sync_files = AsyncMock(return_value=None)
@@ -1584,7 +1677,30 @@ defaults
                 mock_client = Mock()
                 if "localhost" in url:  # Validation client
                     mock_client.validate_configuration = AsyncMock(return_value=None)
+                    mock_client.deploy_configuration = AsyncMock(return_value="v1.0")
+                    mock_client.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": {"daemon": True},
+                        }
+                    )
+                    mock_client.sync_maps = AsyncMock(return_value=None)
+                    mock_client.sync_certificates = AsyncMock(return_value=None)
+                    mock_client.sync_files = AsyncMock(return_value=None)
                 else:  # Production client
+                    # Return different config to trigger deployment attempt
+                    mock_client.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": {
+                                "daemon": False
+                            },  # Different to trigger deployment
+                        }
+                    )
                     # Simulate deployment error with line reference
                     error_with_line = Exception(
                         "config parsing [/tmp/haproxy.cfg:4]: unknown keyword 'invalid-directive'"
@@ -1592,6 +1708,9 @@ defaults
                     mock_client.deploy_configuration = AsyncMock(
                         side_effect=error_with_line
                     )
+                    mock_client.sync_maps = AsyncMock(return_value=None)
+                    mock_client.sync_certificates = AsyncMock(return_value=None)
+                    mock_client.sync_files = AsyncMock(return_value=None)
                 return mock_client
 
             mock_client_class.side_effect = create_mock_client
@@ -1639,7 +1758,30 @@ defaults
                 mock_client = Mock()
                 if "localhost" in url:  # Validation client
                     mock_client.validate_configuration = AsyncMock(return_value=None)
+                    mock_client.deploy_configuration = AsyncMock(return_value="v1.0")
+                    mock_client.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": {"daemon": True},
+                        }
+                    )
+                    mock_client.sync_maps = AsyncMock(return_value=None)
+                    mock_client.sync_certificates = AsyncMock(return_value=None)
+                    mock_client.sync_files = AsyncMock(return_value=None)
                 else:  # Production client
+                    # Return different config to trigger deployment attempt
+                    mock_client.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": {
+                                "daemon": False
+                            },  # Different to trigger deployment
+                        }
+                    )
                     # Create error that already contains context
                     error_with_context = DataplaneAPIError(
                         "Deploy failed\n\nConfiguration context around error:\n> 4: invalid line"
@@ -1647,6 +1789,9 @@ defaults
                     mock_client.deploy_configuration = AsyncMock(
                         side_effect=error_with_context
                     )
+                    mock_client.sync_maps = AsyncMock(return_value=None)
+                    mock_client.sync_certificates = AsyncMock(return_value=None)
+                    mock_client.sync_files = AsyncMock(return_value=None)
                 return mock_client
 
             mock_client_class.side_effect = create_mock_client
@@ -1695,10 +1840,38 @@ defaults
                         mock_client.validate_configuration = AsyncMock(
                             return_value=None
                         )
+                        mock_client.deploy_configuration = AsyncMock(
+                            return_value="v1.0"
+                        )
+                        mock_client.fetch_structured_configuration = AsyncMock(
+                            return_value={
+                                "backends": [],
+                                "frontends": [],
+                                "defaults": [],
+                                "global": {"daemon": True},
+                            }
+                        )
+                        mock_client.sync_maps = AsyncMock(return_value=None)
+                        mock_client.sync_certificates = AsyncMock(return_value=None)
+                        mock_client.sync_files = AsyncMock(return_value=None)
                     else:  # Production client
+                        # Return different config to trigger deployment attempt
+                        mock_client.fetch_structured_configuration = AsyncMock(
+                            return_value={
+                                "backends": [],
+                                "frontends": [],
+                                "defaults": [],
+                                "global": {
+                                    "daemon": False
+                                },  # Different to trigger deployment
+                            }
+                        )
                         mock_client.deploy_configuration = AsyncMock(
                             side_effect=Exception("Generic deployment error")
                         )
+                        mock_client.sync_maps = AsyncMock(return_value=None)
+                        mock_client.sync_certificates = AsyncMock(return_value=None)
+                        mock_client.sync_files = AsyncMock(return_value=None)
                     return mock_client
 
                 # Make context extraction raise an exception
@@ -1844,3 +2017,361 @@ class TestDataplaneClientDeploymentRetryLogic:
 
                 assert "Configuration deployment failed" in str(exc_info.value)
                 assert exc_info.value.operation == "deploy"
+
+
+class TestConditionalDeployment:
+    """Test conditional deployment functionality that minimizes HAProxy reloads."""
+
+    @pytest.mark.asyncio
+    async def test_get_current_configuration_success(self):
+        """Test successful retrieval of current configuration."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+
+        with patch.object(client, "_get_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_get_client.return_value = mock_client
+
+            # Mock successful get_ha_proxy_configuration call
+            with patch(
+                "haproxy_template_ic.dataplane.get_ha_proxy_configuration"
+            ) as mock_get_config:
+                mock_get_config.asyncio = AsyncMock(return_value="global\n    daemon\n")
+
+                result = await client.get_current_configuration()
+
+                assert result == "global\n    daemon\n"
+                mock_get_config.asyncio.assert_called_once_with(client=mock_client)
+
+    @pytest.mark.asyncio
+    async def test_get_current_configuration_error(self):
+        """Test handling of errors when getting current configuration."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+
+        with patch.object(client, "_get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+
+            # Mock exception in get_ha_proxy_configuration
+            with patch(
+                "haproxy_template_ic.dataplane.get_ha_proxy_configuration"
+            ) as mock_get_config:
+                mock_get_config.asyncio.side_effect = Exception("API Error")
+
+                result = await client.get_current_configuration()
+
+                assert result is None
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_conditionally_config_unchanged(self):
+        """Test conditional deployment when configuration is unchanged."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        current_config = "global\n    daemon\n"
+
+        with patch.object(client, "get_current_configuration") as mock_get_current:
+            mock_get_current.return_value = current_config
+
+            with patch.object(client, "_get_client") as mock_get_client:
+                mock_client = AsyncMock()
+                mock_get_client.return_value = mock_client
+
+                # Mock version retrieval
+                with patch(
+                    "haproxy_template_ic.dataplane.get_configuration_version"
+                ) as mock_get_version:
+                    mock_get_version.asyncio = AsyncMock(return_value=5)
+
+                    # Should skip deployment and return current version
+                    result = await client.deploy_configuration_conditionally(
+                        current_config
+                    )
+
+                    assert result == "5"
+                    mock_get_version.asyncio.assert_called_once_with(client=mock_client)
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_conditionally_config_changed(self):
+        """Test conditional deployment when configuration has changed."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        current_config = "global\n    daemon\n"
+        new_config = "global\n    daemon\n    maxconn 1000\n"
+
+        with patch.object(client, "get_current_configuration") as mock_get_current:
+            mock_get_current.return_value = current_config
+
+            with patch.object(client, "deploy_configuration") as mock_deploy:
+                mock_deploy.return_value = "6"
+
+                # Should deploy and return new version
+                result = await client.deploy_configuration_conditionally(new_config)
+
+                assert result == "6"
+                mock_deploy.assert_called_once_with(new_config)
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_conditionally_force_deployment(self):
+        """Test conditional deployment with force=True."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        config = "global\n    daemon\n"
+
+        with patch.object(client, "deploy_configuration") as mock_deploy:
+            mock_deploy.return_value = "7"
+
+            # Should deploy even without checking current config
+            result = await client.deploy_configuration_conditionally(config, force=True)
+
+            assert result == "7"
+            mock_deploy.assert_called_once_with(config)
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_conditionally_no_current_config(self):
+        """Test conditional deployment when current config is not available."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+        new_config = "global\n    daemon\n"
+
+        with patch.object(client, "get_current_configuration") as mock_get_current:
+            mock_get_current.return_value = None  # Cannot get current config
+
+            with patch.object(client, "deploy_configuration") as mock_deploy:
+                mock_deploy.return_value = "8"
+
+                # Should deploy since we can't compare
+                result = await client.deploy_configuration_conditionally(new_config)
+
+                assert result == "8"
+                mock_deploy.assert_called_once_with(new_config)
+
+    def test_config_normalization(self):
+        """Test configuration normalization for comparison."""
+        from haproxy_template_ic.dataplane import DataplaneClient
+
+        client = DataplaneClient("http://localhost:5555")
+
+        # Access the normalize function through a mock deployment call
+        with patch.object(client, "get_current_configuration") as mock_get_current:
+            with patch.object(client, "deploy_configuration") as mock_deploy:
+                config1 = "global\n    daemon\n\n\n"  # Extra newlines
+                config3 = "global\n    daemon\n"  # Clean
+
+                # All should normalize to the same thing
+                mock_get_current.return_value = config1
+                mock_deploy.return_value = "9"
+
+                import asyncio
+
+                # The normalization logic is embedded in the method,
+                # so we test it indirectly by ensuring identical normalized configs are detected
+                async def test_normalization():
+                    # This should skip deployment since normalized configs are identical
+                    with patch.object(client, "_get_client") as mock_get_client:
+                        mock_client = AsyncMock()
+                        mock_get_client.return_value = mock_client
+
+                        with patch(
+                            "haproxy_template_ic.dataplane.get_configuration_version"
+                        ) as mock_get_version:
+                            mock_get_version.asyncio = AsyncMock(return_value=10)
+
+                            result = await client.deploy_configuration_conditionally(
+                                config3
+                            )
+                            assert (
+                                result == "10"
+                            )  # Should return current version, not deploy
+
+                asyncio.run(test_normalization())
+
+
+class TestConfigSynchronizerEnhancements:
+    """Test enhancements to ConfigSynchronizer with conditional deployment."""
+
+    @pytest.mark.asyncio
+    async def test_sync_configuration_with_skipped_deployments(self):
+        """Test sync_configuration with some deployments skipped due to unchanged config."""
+        from haproxy_template_ic.dataplane import ConfigSynchronizer
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+        from pydantic import SecretStr
+
+        # Setup test data
+        production_urls = ["http://prod1:5555", "http://prod2:5555"]
+        validation_url = "http://validation:5555"
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password=SecretStr("pass")),
+            validation=DataplaneAuth(
+                username="admin", password=SecretStr("validationpass")
+            ),
+        )
+
+        synchronizer = ConfigSynchronizer(production_urls, validation_url, credentials)
+
+        # Mock config context
+        mock_config_context = MagicMock()
+        mock_config_context.rendered_config.content = "global\n    daemon\n"
+        mock_config_context.rendered_maps = []
+        mock_config_context.rendered_certificates = []
+        mock_config_context.rendered_files = []
+
+        with patch.object(synchronizer, "_sync_content_to_client"):
+            with patch.object(synchronizer, "_validate_configuration"):
+                # Mock conditional deployment - first succeeds, second skips
+                with patch(
+                    "haproxy_template_ic.dataplane.DataplaneClient"
+                ) as MockDataplaneClient:
+                    # Validation instance
+                    mock_validation_client = AsyncMock()
+                    # Production instances
+                    mock_prod_client_1 = AsyncMock()
+                    mock_prod_client_2 = AsyncMock()
+
+                    MockDataplaneClient.side_effect = [
+                        mock_validation_client,  # validation client
+                        mock_prod_client_1,  # first production client
+                        mock_prod_client_2,  # second production client
+                    ]
+
+                    # Mock structured configuration fetch to work properly
+                    # First client has different config, second has same config
+                    mock_prod_client_1.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": type(
+                                "obj",
+                                (object,),
+                                {"to_dict": lambda self: {"old": "config"}},
+                            )(),
+                        }
+                    )
+                    mock_prod_client_1.deploy_configuration = AsyncMock(
+                        return_value="5"
+                    )
+
+                    mock_prod_client_2.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": type(
+                                "obj",
+                                (object,),
+                                {"to_dict": lambda self: {"new": "config"}},
+                            )(),
+                        }
+                    )
+                    # Second client should not deploy because config matches validation
+
+                    # Mock validation client to deploy and fetch structured config
+                    mock_validation_client.deploy_configuration = AsyncMock()
+                    mock_validation_client.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": type(
+                                "obj",
+                                (object,),
+                                {"to_dict": lambda self: {"new": "config"}},
+                            )(),
+                        }
+                    )
+
+                    # Mock deployment history to simulate version tracking
+                    synchronizer.deployment_history._history = {
+                        "http://prod1:5555": {
+                            "version": "4"
+                        },  # Different version, should deploy
+                        "http://prod2:5555": {
+                            "version": "3"
+                        },  # Same version, should skip
+                    }
+
+                    result = await synchronizer.sync_configuration(mock_config_context)
+
+                    # Should have 1 successful deployment and 1 skipped
+                    assert result["successful"] == 1
+                    assert result["skipped"] == 1
+                    assert result["failed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_configuration_with_fallback_deployment(self):
+        """Test sync_configuration with fallback to regular deployment when conditional fails."""
+        from haproxy_template_ic.dataplane import ConfigSynchronizer
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+        from pydantic import SecretStr
+
+        # Setup test data
+        production_urls = ["http://prod1:5555"]
+        validation_url = "http://validation:5555"
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password=SecretStr("pass")),
+            validation=DataplaneAuth(
+                username="admin", password=SecretStr("validationpass")
+            ),
+        )
+
+        synchronizer = ConfigSynchronizer(production_urls, validation_url, credentials)
+
+        # Mock config context
+        mock_config_context = MagicMock()
+        mock_config_context.rendered_config.content = "global\n    daemon\n"
+        mock_config_context.rendered_maps = []
+        mock_config_context.rendered_certificates = []
+        mock_config_context.rendered_files = []
+
+        with patch.object(synchronizer, "_sync_content_to_client"):
+            with patch.object(synchronizer, "_validate_configuration"):
+                with patch(
+                    "haproxy_template_ic.dataplane.DataplaneClient"
+                ) as MockDataplaneClient:
+                    # Validation instance
+                    mock_validation_client = AsyncMock()
+                    # Production instance
+                    mock_prod_client = AsyncMock()
+
+                    MockDataplaneClient.side_effect = [
+                        mock_validation_client,  # validation client
+                        mock_prod_client,  # production client
+                    ]
+
+                    # Mock structured fetch and conditional deployment to fail, regular deployment to succeed
+                    mock_prod_client.fetch_structured_configuration = AsyncMock(
+                        side_effect=Exception("Structured failed")
+                    )
+                    mock_prod_client.deploy_configuration_conditionally = AsyncMock(
+                        side_effect=Exception("Conditional failed")
+                    )
+                    mock_prod_client.deploy_configuration = AsyncMock(return_value="6")
+
+                    # Mock validation client to deploy and fetch structured config
+                    mock_validation_client.deploy_configuration = AsyncMock()
+                    mock_validation_client.fetch_structured_configuration = AsyncMock(
+                        return_value={
+                            "backends": [],
+                            "frontends": [],
+                            "defaults": [],
+                            "global": None,
+                        }
+                    )
+
+                    result = await synchronizer.sync_configuration(mock_config_context)
+
+                    # Should have 1 successful deployment (via fallback)
+                    assert result["successful"] == 1
+                    assert result["failed"] == 0
+
+                    # Verify fallback chain was used
+                    mock_prod_client.fetch_structured_configuration.assert_called_once()
+                    mock_prod_client.deploy_configuration_conditionally.assert_called_once()
+                    mock_prod_client.deploy_configuration.assert_called_once()

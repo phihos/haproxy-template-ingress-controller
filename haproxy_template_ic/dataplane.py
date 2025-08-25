@@ -10,9 +10,11 @@ This module provides functionality to:
 Uses the complete generated HAProxy Dataplane API v3 client for all operations.
 """
 
+import asyncio
 import io
 import logging
 import re
+import time
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple
 from urllib.parse import urlparse, urlunparse
@@ -47,6 +49,20 @@ from haproxy_template_ic.tracing import (
 # Import HAProxy Dataplane API v3 client generated with openapi-python-client
 from haproxy_dataplane_v3 import AuthenticatedClient
 from haproxy_dataplane_v3.api.information import get_info
+from haproxy_dataplane_v3.api.configuration import (
+    get_configuration_version,
+    get_ha_proxy_configuration,
+)
+from haproxy_dataplane_v3.api.backend import (
+    get_backends,
+)
+from haproxy_dataplane_v3.api.frontend import (
+    get_frontends,
+)
+from haproxy_dataplane_v3.api.global_ import get_global
+from haproxy_dataplane_v3.api.defaults import (
+    get_defaults_sections,
+)
 from haproxy_dataplane_v3.api.storage import (
     get_all_storage_map_files,
     get_all_storage_ssl_certificates,
@@ -905,6 +921,155 @@ class DataplaneClient:
                     f"File sync failed: {e}", operation="sync_files"
                 ) from e
 
+    async def get_current_configuration(self) -> Optional[str]:
+        """Get current raw HAProxy configuration.
+
+        Returns:
+            Current HAProxy configuration as string, or None if not available
+        """
+        try:
+            client = self._get_client()
+            config = await get_ha_proxy_configuration.asyncio(client=client)
+            return config
+        except Exception as e:
+            logger.debug(f"Could not fetch current configuration: {e}")
+            return None
+
+    async def deploy_configuration_conditionally(
+        self, config_content: str, force: bool = False
+    ) -> str:
+        """Deploy HAProxy configuration only if it differs from current config.
+
+        This method compares the new configuration with the current one and only
+        deploys if they differ or if force=True. This helps minimize unnecessary
+        HAProxy reloads.
+
+        Args:
+            config_content: New configuration to deploy
+            force: If True, deploy even if configs are identical
+
+        Returns:
+            Configuration version after deployment
+
+        Raises:
+            ValidationError: If configuration validation fails
+            DataplaneAPIError: If deployment fails
+        """
+
+        with trace_dataplane_operation("deploy_conditional", self.base_url):
+            add_span_attributes(
+                config_size=len(config_content),
+                dataplane_url=self.base_url,
+                force_deployment=force,
+            )
+
+            # Get current configuration for comparison
+            current_config = None
+            if not force:
+                current_config = await self.get_current_configuration()
+
+            # Normalize both configs for comparison (remove extra whitespace, etc.)
+            def normalize_config(config: str) -> str:
+                if not config:
+                    return ""
+                # Remove trailing whitespace from each line and normalize line endings
+                lines = [line.rstrip() for line in config.splitlines()]
+                # Remove empty lines at the end
+                while lines and not lines[-1]:
+                    lines.pop()
+                return "\n".join(lines) + "\n" if lines else ""
+
+            new_config_normalized = normalize_config(config_content)
+            current_config_normalized = (
+                normalize_config(current_config) if current_config else ""
+            )
+
+            # Skip deployment if configs are identical
+            if not force and new_config_normalized == current_config_normalized:
+                logger.info(
+                    f"⏭️  Configuration unchanged, skipping deployment to {self.base_url}"
+                )
+                add_span_attributes(deployment_skipped=True)
+                record_span_event("deployment_skipped", {"reason": "config_unchanged"})
+
+                # Get current version
+                try:
+                    client = self._get_client()
+                    version_response = await get_configuration_version.asyncio(
+                        client=client
+                    )
+                    return str(version_response) if version_response else "unknown"
+                except Exception:
+                    return "unknown"
+
+            # Deploy the configuration (it's different or forced)
+            logger.info(
+                f"📤 Deploying configuration to {self.base_url} (changed: {current_config is not None})"
+            )
+            add_span_attributes(
+                deployment_skipped=False, config_changed=current_config is not None
+            )
+            return await self.deploy_configuration(new_config_normalized)
+
+    async def fetch_structured_configuration(self) -> Dict[str, Any]:
+        """Fetch structured configuration components from this HAProxy instance.
+
+        Returns:
+            Dictionary containing:
+            - backends: List of backend configurations
+            - frontends: List of frontend configurations
+            - defaults: List of defaults sections
+            - global: Global configuration section
+
+        Raises:
+            DataplaneAPIError: If fetching configuration fails
+        """
+        metrics = get_metrics_collector()
+
+        with metrics.time_dataplane_api_operation("fetch_structured"):
+            client = self._get_client()
+
+            try:
+                # Fetch all components with timing
+                with metrics.time_dataplane_api_operation("fetch_backends"):
+                    backends = await get_backends.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_frontends"):
+                    frontends = await get_frontends.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_defaults"):
+                    defaults = await get_defaults_sections.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_global"):
+                    global_config = await get_global.asyncio(client=client)
+
+                # Record successful fetch
+                metrics.record_dataplane_api_request("fetch_structured", "success")
+
+                # Record component counts
+                add_span_attributes(
+                    backends_count=len(backends),
+                    frontends_count=len(frontends),
+                    defaults_count=len(defaults),
+                    has_global=global_config is not None,
+                )
+
+                return {
+                    "backends": backends,
+                    "frontends": frontends,
+                    "defaults": defaults,
+                    "global": global_config,
+                }
+            except Exception as e:
+                metrics.record_dataplane_api_request("fetch_structured", "error")
+                logger.debug(f"Could not fetch structured configuration: {e}")
+                raise DataplaneAPIError(
+                    f"Failed to fetch structured configuration: {e}",
+                    endpoint=self.base_url,
+                    operation="fetch_structured",
+                    original_error=e,
+                ) from e
+
 
 class ConfigSynchronizer:
     """Simple configuration synchronizer for HAProxy instances."""
@@ -968,6 +1133,221 @@ class ConfigSynchronizer:
         except Exception as e:
             raise ValidationError(f"Configuration validation failed: {e}") from e
 
+    def _compare_structured_configs(
+        self, current: Dict[str, Any], new: Dict[str, Any]
+    ) -> List[str]:
+        """Compare two structured configurations and return list of changes.
+
+        Args:
+            current: Current structured configuration
+            new: New structured configuration
+
+        Returns:
+            List of change descriptions, empty if configs are identical
+        """
+        start_time = time.time()
+        changes: List[str] = []
+        max_changes_before_exit = 10  # Early exit after finding this many changes
+
+        # Helper function to convert to dict if has to_dict method
+        def to_dict_safe(obj):
+            return obj.to_dict() if hasattr(obj, "to_dict") else obj
+
+        # Compare backends - optimized with dict comprehensions
+        current_backends = {
+            b.name: to_dict_safe(b)
+            for b in current.get("backends", [])
+            if hasattr(b, "name")
+        }
+        new_backends = {
+            b.name: to_dict_safe(b)
+            for b in new.get("backends", [])
+            if hasattr(b, "name")
+        }
+
+        # Find changes in backends efficiently
+        current_names = set(current_backends.keys())
+        new_names = set(new_backends.keys())
+
+        changes.extend(f"remove backend {name}" for name in current_names - new_names)
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
+        changes.extend(f"add backend {name}" for name in new_names - current_names)
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
+        changes.extend(
+            f"modify backend {name}"
+            for name in current_names & new_names
+            if current_backends[name] != new_backends[name]
+        )
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
+        # Compare frontends - same optimization
+        current_frontends = {
+            f.name: to_dict_safe(f)
+            for f in current.get("frontends", [])
+            if hasattr(f, "name")
+        }
+        new_frontends = {
+            f.name: to_dict_safe(f)
+            for f in new.get("frontends", [])
+            if hasattr(f, "name")
+        }
+
+        current_names = set(current_frontends.keys())
+        new_names = set(new_frontends.keys())
+
+        changes.extend(f"remove frontend {name}" for name in current_names - new_names)
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
+        changes.extend(f"add frontend {name}" for name in new_names - current_names)
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
+        changes.extend(
+            f"modify frontend {name}"
+            for name in current_names & new_names
+            if current_frontends[name] != new_frontends[name]
+        )
+        if len(changes) >= max_changes_before_exit:
+            changes.append(
+                f"... and more (stopped after {max_changes_before_exit} changes)"
+            )
+            return changes
+
+        # Compare defaults sections
+        current_defaults = [to_dict_safe(d) for d in current.get("defaults", [])]
+        new_defaults = [to_dict_safe(d) for d in new.get("defaults", [])]
+
+        if len(current_defaults) != len(new_defaults):
+            changes.append(
+                f"defaults count changed from {len(current_defaults)} to {len(new_defaults)}"
+            )
+        else:
+            changes.extend(
+                f"modify defaults section {i}"
+                for i, (curr, new_def) in enumerate(zip(current_defaults, new_defaults))
+                if curr != new_def
+            )
+
+        # Compare global section
+        current_global = to_dict_safe(current.get("global"))
+        new_global = to_dict_safe(new.get("global"))
+
+        if current_global and new_global:
+            if current_global != new_global:
+                changes.append("modify global")
+        elif new_global and not current_global:
+            changes.append("add global")
+        elif current_global and not new_global:
+            changes.append("remove global")
+
+        # Log comparison performance
+        elapsed = time.time() - start_time
+        logger.debug(
+            f"⏱️ Structured config comparison took {elapsed:.3f}s, found {len(changes)} changes"
+        )
+
+        # Record metrics
+        metrics = get_metrics_collector()
+        if hasattr(metrics, "record_custom_metric"):
+            metrics.record_custom_metric("structured_comparison_time", elapsed)
+            metrics.record_custom_metric("structured_changes_count", len(changes))
+
+        return changes
+
+    async def _deploy_to_single_instance(
+        self,
+        url: str,
+        config: str,
+        maps_to_sync: Dict[str, str],
+        certificates_to_sync: Dict[str, str],
+        files_to_sync: Dict[str, str],
+        validation_structured: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Deploy to a single production instance with structured comparison.
+
+        Returns:
+            Dict with keys: method, version
+        """
+        client = DataplaneClient(
+            url,
+            auth=(
+                self.credentials.dataplane.username,
+                self.credentials.dataplane.password.get_secret_value(),
+            ),
+        )
+
+        # Sync auxiliary content first (maps, certs, files)
+        await self._sync_content_to_client(
+            client, maps_to_sync, certificates_to_sync, files_to_sync, url
+        )
+
+        # Fetch current structured config from production instance
+        try:
+            production_structured = await client.fetch_structured_configuration()
+
+            # Compare structured configurations
+            changes_needed = self._compare_structured_configs(
+                production_structured, validation_structured
+            )
+
+            if not changes_needed:
+                # No changes needed - skip deployment
+                logger.info(f"⏭️  No structural changes for {url}, skipping deployment")
+                return {"method": "skipped", "version": "unchanged"}
+            else:
+                # Changes detected - deploy
+                logger.debug(
+                    f"📝 {len(changes_needed)} changes detected for {url}: {', '.join(changes_needed[:5])}"
+                )
+                version = await client.deploy_configuration(config)
+                return {"method": "structured", "version": version}
+
+        except Exception as fetch_error:
+            # Fallback to conditional deployment if structured comparison fails
+            logger.warning(
+                f"⚠️  Structured comparison failed for {url}, falling back to conditional: {fetch_error}"
+            )
+
+            # Record fallback metrics
+            metrics = get_metrics_collector()
+            metrics.increment_dataplane_fallback("structured_to_conditional")
+
+            try:
+                version = await client.deploy_configuration_conditionally(config)
+                return {"method": "conditional", "version": version}
+            except Exception as conditional_error:
+                # Final fallback to regular deployment
+                logger.warning(
+                    f"⚠️  Conditional deployment also failed for {url}, using regular deployment: {conditional_error}"
+                )
+
+                # Record double fallback metrics
+                metrics.increment_dataplane_fallback("conditional_to_regular")
+
+                version = await client.deploy_configuration(config)
+                return {"method": "fallback", "version": version}
+
     def _handle_deployment_error(
         self, url: str, error: Exception, config: str, results: Dict[str, Any]
     ) -> None:
@@ -990,14 +1370,24 @@ class ConfigSynchronizer:
                     error_msg += (
                         f"\n\nConfiguration context around error:\n{error_context}"
                     )
-            except Exception:  # nosec B110
-                pass
+            except Exception as parse_error:  # Be defensive in error handling
+                # Log parse error but continue with original error message
+                logger.debug(f"Could not parse validation error details: {parse_error}")
             logger.error(error_msg)
 
     async def sync_configuration(
         self, config_context: HAProxyConfigContext
     ) -> Dict[str, Any]:
-        """Synchronize configuration to all endpoints."""
+        """Synchronize configuration to all endpoints with validation-first deployment.
+
+        This method implements an improved approach that minimizes HAProxy reloads:
+        1. Sync maps/certs/files to validation instance and validate config
+        2. Deploy to production instances only if configuration changed
+        3. Use structured deployment with automatic fallbacks to avoid unnecessary reloads
+
+        Args:
+            config_context: The rendered configuration context
+        """
         if not config_context.rendered_config:
             raise DataplaneAPIError("No rendered HAProxy configuration available")
 
@@ -1015,6 +1405,7 @@ class ConfigSynchronizer:
             ),
         )
 
+        logger.info("🔍 Validating configuration and syncing auxiliary content")
         await self._sync_content_to_client(
             validation_client,
             maps_to_sync,
@@ -1024,31 +1415,85 @@ class ConfigSynchronizer:
         )
         await self._validate_configuration(config)
 
-        # Step 2: Deploy to production instances
-        results: Dict[str, Any] = {"successful": 0, "failed": 0, "errors": []}
+        # Step 2: Deploy config to validation instance and fetch structured components
+        logger.info(
+            "📤 Deploying config to validation instance for structured comparison"
+        )
+        await validation_client.deploy_configuration(config)
 
+        # Fetch structured config from validation instance
+        logger.info("🔍 Fetching structured configuration from validation instance")
+        validation_structured = await validation_client.fetch_structured_configuration()
+
+        # Step 3: Deploy to production instances using structured comparison
+        results: Dict[str, Any] = {
+            "successful": 0,
+            "failed": 0,
+            "skipped": 0,
+            "errors": [],
+        }
+
+        logger.info(f"🚀 Deploying to {len(self.production_urls)} production instances")
+
+        # Create deployment tasks for parallel execution
+        deployment_tasks = []
         for url in self.production_urls:
-            client = DataplaneClient(
+            task = self._deploy_to_single_instance(
                 url,
-                auth=(
-                    self.credentials.dataplane.username,
-                    self.credentials.dataplane.password.get_secret_value(),
-                ),
+                config,
+                maps_to_sync,
+                certificates_to_sync,
+                files_to_sync,
+                validation_structured,
             )
-            try:
-                await self._sync_content_to_client(
-                    client, maps_to_sync, certificates_to_sync, files_to_sync, url
+            deployment_tasks.append(task)
+
+        # Execute all deployments in parallel
+        deployment_results = await asyncio.gather(
+            *deployment_tasks, return_exceptions=True
+        )
+
+        # Process results
+        for url, result in zip(self.production_urls, deployment_results):
+            if isinstance(result, Exception):
+                # Task failed with exception
+                self._handle_deployment_error(url, result, config, results)
+            elif isinstance(result, dict):
+                # Successful result
+                if result["method"] == "skipped":
+                    results["skipped"] += 1
+                else:
+                    results["successful"] += 1
+
+                    method_emojis = {
+                        "structured": "🏗️",
+                        "conditional": "✅",
+                        "fallback": "🔄",
+                    }
+                    method_emoji = method_emojis.get(result["method"], "✅")
+                    logger.info(
+                        f"{method_emoji} Deployed to {url} ({result['method']}), version: {result['version']}"
+                    )
+
+                self.deployment_history.record(url, result["version"], True)
+            else:
+                # Unexpected result type
+                error_msg = f"Unexpected result type from deployment: {type(result)}"
+                self._handle_deployment_error(
+                    url, Exception(error_msg), config, results
                 )
 
-                version = await client.deploy_configuration(config)
-                self.deployment_history.record(url, version, True)
-                results["successful"] += 1
-                logger.info(f"✅ Deployed to {url}, version: {version}")
+        # Enhanced logging with skip information
+        total_instances = len(self.production_urls)
+        if results["skipped"] > 0:
+            logger.info(
+                f"🎯 Sync complete: {results['successful']} deployed, "
+                f"{results['skipped']} skipped (unchanged), "
+                f"{results['failed']} failed out of {total_instances} instances"
+            )
+        else:
+            logger.info(
+                f"Sync complete: {results['successful']} successful, {results['failed']} failed"
+            )
 
-            except Exception as e:
-                self._handle_deployment_error(url, e, config, results)
-
-        logger.info(
-            f"Sync complete: {results['successful']} successful, {results['failed']} failed"
-        )
         return results

@@ -76,6 +76,12 @@ dataplane_api_duration_seconds = Histogram(
     buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
 )
 
+dataplane_fallback_deployments_total = Counter(
+    "haproxy_template_ic_dataplane_fallback_deployments_total",
+    "Total number of fallback deployments when structured approach fails",
+    ["fallback_type"],
+)
+
 # HAProxy instances
 haproxy_instances_total = Gauge(
     "haproxy_template_ic_haproxy_instances_total",
@@ -255,6 +261,14 @@ class MetricsCollector:
         finally:
             duration = time.time() - start_time
             dataplane_api_duration_seconds.labels(operation=operation).observe(duration)
+
+    def increment_dataplane_fallback(self, fallback_type: str) -> None:
+        """Increment the counter for dataplane deployment fallbacks.
+
+        Args:
+            fallback_type: Type of fallback (e.g., 'structured_to_conditional', 'conditional_to_regular')
+        """
+        dataplane_fallback_deployments_total.labels(fallback_type=fallback_type).inc()
 
     @contextmanager
     def time_webhook_request(self) -> Iterator[None]:
