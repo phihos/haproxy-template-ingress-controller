@@ -532,12 +532,16 @@ def _collect_resource_indices(memo: Any, metrics: Any) -> Dict[str, Any]:
     from haproxy_template_ic.config_models import IndexedResourceCollection
 
     indices: Dict[str, IndexedResourceCollection] = {}
+
+    # Get the ignore_fields configuration
+    ignore_fields = getattr(memo.config, "watched_resources_ignore_fields", None)
+
     for resource_id in memo.config.watched_resources:
         try:
             if resource_id in memo.indices:
                 index_data = memo.indices[resource_id]
                 indices[resource_id] = IndexedResourceCollection.from_kopf_index(
-                    index_data
+                    index_data, ignore_fields=ignore_fields
                 )
             else:
                 indices[resource_id] = IndexedResourceCollection()
