@@ -203,6 +203,16 @@ def serialize_state(memo: Any) -> Dict[str, Any]:
         errors.append(f"indices serialization: {e}")
         state["indices"] = {}
 
+    # Serialize debouncer stats with specific error handling
+    try:
+        if hasattr(memo, "debouncer") and memo.debouncer:
+            state["debouncer"] = memo.debouncer.get_stats()
+        else:
+            state["debouncer"] = None
+    except (AttributeError, TypeError) as e:
+        errors.append(f"debouncer serialization: {e}")
+        state["debouncer"] = None
+
     # Add any serialization errors to the response
     if errors:
         state["serialization_errors"] = errors
@@ -230,7 +240,7 @@ class ManagementSocketServer:
         """Handle dump subcommands."""
         if len(parts) < 2:
             return {
-                "error": "Missing command name. Usage: dump <all|indices|config|deployments>"
+                "error": "Missing command name. Usage: dump <all|indices|config|deployments|debouncer>"
             }
 
         dump_commands = {
@@ -238,6 +248,7 @@ class ManagementSocketServer:
             "indices": ("dump_indices", self._dump_indices),
             "config": ("dump_config", self._dump_config),
             "deployments": ("dump_deployments", self._dump_deployments),
+            "debouncer": ("dump_debouncer", self._dump_debouncer),
         }
 
         command_name = parts[1]
@@ -249,7 +260,7 @@ class ManagementSocketServer:
             metrics.record_management_socket_command("dump_unknown", "error")
             return {
                 "error": f"Unknown dump command: {command_name}. "
-                f"Available: all, indices, config, deployments"
+                f"Available: all, indices, config, deployments, debouncer"
             }
 
     def _handle_get_command(self, parts: List[str]) -> Dict[str, Any]:
@@ -368,6 +379,12 @@ class ManagementSocketServer:
         if hasattr(self.memo, "deployment_history") and self.memo.deployment_history:
             return self.memo.deployment_history.to_dict()
         return {"deployment_history": {}}
+
+    def _dump_debouncer(self) -> Dict[str, Any]:
+        """Dump template debouncer statistics."""
+        if hasattr(self.memo, "debouncer") and self.memo.debouncer:
+            return {"debouncer": self.memo.debouncer.get_stats()}
+        return {"debouncer": None}
 
     def _get_deployment_history(self, endpoint_url: str) -> Dict[str, Any]:
         """Get deployment history for a specific endpoint."""

@@ -184,6 +184,37 @@ class PodSelector(BaseModel):
         frozen = True
 
 
+class TemplateRenderingConfig(BaseModel):
+    """Configuration for template rendering behavior."""
+
+    min_render_interval: int = Field(
+        default=5,
+        ge=1,
+        le=3600,
+        description="Minimum seconds between template renders (default: 5)",
+    )
+    max_render_interval: int = Field(
+        default=60,
+        ge=1,
+        le=3600,
+        description="Maximum seconds without render for guaranteed refresh (default: 60)",
+    )
+
+    @field_validator("max_render_interval")
+    @classmethod
+    def validate_intervals(cls, v: int, info) -> int:
+        """Ensure max_render_interval >= min_render_interval."""
+        if "min_render_interval" in info.data:
+            min_interval = info.data["min_render_interval"]
+            if v < min_interval:
+                raise ValueError(
+                    f"max_render_interval ({v}) must be >= min_render_interval ({min_interval})"
+                )
+        return v
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 class Config(BaseModel):
     """Root configuration for HAProxy Template IC."""
 
@@ -232,6 +263,12 @@ class Config(BaseModel):
     validation_dataplane_url: str = Field(
         default=f"http://localhost:{DEFAULT_DATAPLANE_PORT}",
         description="URL for validation sidecar Dataplane API",
+    )
+
+    # Template rendering configuration
+    template_rendering: TemplateRenderingConfig = Field(
+        default_factory=TemplateRenderingConfig,
+        description="Template rendering timing configuration",
     )
 
     @field_validator("template_snippets")
