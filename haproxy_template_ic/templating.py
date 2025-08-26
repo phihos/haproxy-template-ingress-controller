@@ -263,8 +263,8 @@ def format_template_error(
                 )
             tb = tb.tb_next
 
-    # For syntax errors, use the lineno attribute
-    if hasattr(e, "lineno") and e.lineno:
+    # For syntax errors, use the lineno attribute only if we don't have frames
+    if not template_frames and hasattr(e, "lineno") and e.lineno:
         template_frames = [{"line": e.lineno, "frame": None, "filename": "<template>"}]
 
     # Determine if this is an include error (multiple template frames)
