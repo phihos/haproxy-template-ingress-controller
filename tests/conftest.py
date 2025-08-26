@@ -575,7 +575,7 @@ frontend main
     bind *:80
     default_backend servers
 
-frontend health
+frontend status
     bind *:8404
     http-request return status 200 content-type text/plain string "OK" if { path /healthz }
 
@@ -755,7 +755,7 @@ frontend main
     bind *:80
     default_backend servers
 
-frontend health
+frontend status
     bind *:8404
     http-request return status 200 content-type text/plain string "OK" if { path /healthz }
 
@@ -824,7 +824,7 @@ defaults
     timeout client 1s
     timeout server 1s
 
-frontend health
+frontend status
     bind *:8404
     http-request return status 200 content-type text/plain string "OK" if { path /healthz }
         
@@ -1843,7 +1843,7 @@ frontend main
     bind *:80
     default_backend servers
     
-frontend health
+frontend status
     bind *:8404
     http-request return status 200 content-type text/plain string "OK" if { path /healthz }
     

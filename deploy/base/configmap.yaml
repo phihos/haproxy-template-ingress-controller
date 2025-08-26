@@ -267,9 +267,10 @@ data:
             errorfile 503 {{ "503.http" | get_path("file") }}
             errorfile 504 {{ "504.http" | get_path("file") }}
 
-        frontend health
+        frontend status
             bind *:8404
             http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+            http-request return status 200 content-type text/plain string "READY" if { path /ready }
 
         frontend http_frontend
             bind *:80

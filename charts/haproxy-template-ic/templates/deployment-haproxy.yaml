@@ -73,7 +73,7 @@ spec:
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /ready
               port: {{ .Values.haproxy.ports.health }}
             initialDelaySeconds: 5
             periodSeconds: 5

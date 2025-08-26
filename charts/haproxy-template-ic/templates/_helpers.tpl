@@ -127,7 +127,7 @@ defaults
     timeout client 1s
     timeout server 1s
 
-frontend health
+frontend status
     bind *:{{ .healthPort }}
     http-request return status 200 content-type text/plain string "OK" if { path /healthz }
 {{- end }}
