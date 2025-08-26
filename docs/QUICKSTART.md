@@ -109,7 +109,7 @@ spec:
     spec:
       containers:
       - name: haproxy
-        image: haproxytech/haproxy-alpine:3.1
+        image: haproxytech/haproxy-alpine:3.1  # 3.1+ required for fast startup
         ports:
         - containerPort: 80
         - containerPort: 8404
@@ -126,7 +126,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
       - name: dataplane
-        image: haproxytech/haproxy-alpine:3.1
+        image: haproxytech/haproxy-alpine:3.1  # 3.1+ required for fast startup
         command: ["/usr/bin/dataplaneapi"]
         args:
         - --host=0.0.0.0
@@ -146,26 +146,6 @@ spec:
             port: 5555
           initialDelaySeconds: 5
           periodSeconds: 5
-      - name: haproxy
-        image: haproxytech/haproxy-alpine:3.1
-        ports:
-        - containerPort: 80
-        - containerPort: 8404
-        volumeMounts:
-        - name: haproxy-config
-          mountPath: /etc/haproxy
-        readinessProbe:
-          httpGet:
-            path: /healthz
-            port: 8404
-          initialDelaySeconds: 5
-          periodSeconds: 5
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8404
-          initialDelaySeconds: 10
-          periodSeconds: 10
       volumes:
       - name: haproxy-config
         emptyDir: {}

@@ -22,8 +22,8 @@ kind create cluster --name haproxy-ic
 # Deploy controller
 kubectl apply -k deploy/overlays/dev
 
-# Apply configuration
-kubectl apply -f examples/basic/configmap.yaml
+# Apply example configuration
+kubectl apply -f examples/config-schema-example.yaml
 
 # Check status
 kubectl logs -l app=haproxy-template-ic
@@ -45,6 +45,10 @@ data:
       ingresses:
         api_version: networking.k8s.io/v1
         kind: Ingress
+      services:
+        api_version: v1
+        kind: Service
+        index_by: ["metadata.name"]  # Index by name for get_indexed_single()
     
     haproxy_config:
       template: |
@@ -69,7 +73,8 @@ data:
         {% for _, ingress in resources.get('ingresses', {}).items() %}
         {% for rule in ingress.spec.rules %}
         backend {{ rule.backend.service.name }}
-            {% set svc = resources.get('services').get_indexed_single(rule.backend.service.name) %}
+            # Services must be indexed by name in watched_resources config
+            {% set svc = resources.get('services', {}).get_indexed_single(rule.backend.service.name) %}
             {% if svc %}
             server srv {{ svc.spec.clusterIP }}:{{ rule.backend.service.port.number }}
             {% endif %}
@@ -92,7 +97,7 @@ data:
 ## Requirements
 
 - Kubernetes 1.28+
-- HAProxy 3.1+ (critical for performance)
+- HAProxy 3.1 or later (critical for performance)
 - Python 3.13+ (development only)
 
 ## Status

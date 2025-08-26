@@ -55,34 +55,12 @@ Current namespace:
 {{ namespace }}  # e.g., "default"
 ```
 
-### env
-Environment variables from controller pod:
+### register_error
+Internal error registration function (advanced use only):
 
 ```jinja2
-{{ env.get('CLUSTER_NAME', 'unknown') }}
-{{ env.get('NODE_NAME', 'localhost') }}
-
-# Check debug mode
-{% if env.get('DEBUG') == 'true' %}
-# Debug configuration here
-{% endif %}
-```
-
-Available environment variables depend on what's set in the controller deployment.
-
-### cli_args
-CLI arguments passed to the controller:
-
-```jinja2
-{{ cli_args.get('configmap_name') }}       # ConfigMap name
-{{ cli_args.get('verbose') }}              # Log level (0-2)
-{{ cli_args.get('healthz_port') }}         # Health port
-{{ cli_args.get('metrics_port') }}         # Metrics port
-
-# Example conditional config
-{% if cli_args.get('verbose', 0) >= 2 %}
-# Add debug logging configuration
-{% endif %}
+# Used internally by the controller for error tracking
+# Not typically used in user templates
 ```
 
 ## Filters
