@@ -1215,6 +1215,9 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         # Configure webhook server for admission control
         kopf.on.startup()(configure_webhook_server)
 
+        # Register cleanup handler for debouncer
+        kopf.on.cleanup()(cleanup_template_debouncer)
+
         # Run operator
         kopf.run(
             clusterwide=True,
@@ -1225,12 +1228,6 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             registry=registry,
             indexers=indexers,
         )
-
-        # Clean up debouncer before exit/reload
-        if hasattr(memo, "debouncer") and memo.debouncer:
-            asyncio.run_coroutine_threadsafe(
-                cleanup_template_debouncer(memo), loop
-            ).result(timeout=5)
 
         # Check if we should exit or reload
         if not memo.config_reload_flag.done():
