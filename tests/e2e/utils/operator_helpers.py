@@ -173,7 +173,6 @@ def count_log_occurrences(pod, pattern, timeout=30):
     Returns:
         int: Number of times the pattern was found in logs
     """
-    import time
 
     collected_logs = []
     start_time = time.time()

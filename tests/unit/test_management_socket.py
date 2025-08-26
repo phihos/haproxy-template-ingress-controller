@@ -12,6 +12,7 @@ from unittest.mock import Mock, AsyncMock, patch
 
 from haproxy_template_ic.management_socket import (
     ManagementSocketServer,
+    _serialize_resource_collection,
     serialize_state,
     run_management_socket_server,
     _serialize_kopf_index,
@@ -884,7 +885,6 @@ class TestManagementSocketCriticalPaths:
 
     def test_serialize_resource_collection_dict_fallback(self):
         """Test _serialize_resource_collection fallback for dicts (line 58)."""
-        from haproxy_template_ic.management_socket import _serialize_resource_collection
 
         # Test with a single dict resource - dicts are iterable so they iterate over keys
         resource_dict = {"name": "test-resource", "status": "active"}
@@ -899,7 +899,6 @@ class TestManagementSocketCriticalPaths:
 
     def test_serialize_state_metadata_serialization_error(self):
         """Test serialize_state metadata serialization error (lines 162-164)."""
-        from haproxy_template_ic.management_socket import serialize_state
 
         memo = Mock()
         memo.config = Mock()
@@ -928,7 +927,6 @@ class TestManagementSocketCriticalPaths:
 
     def test_serialize_state_cli_options_serialization_error(self):
         """Test serialize_state CLI options serialization error (lines 177-179)."""
-        from haproxy_template_ic.management_socket import serialize_state
 
         memo = Mock()
         memo.config = Mock()

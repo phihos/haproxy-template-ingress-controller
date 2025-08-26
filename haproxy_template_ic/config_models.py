@@ -26,6 +26,7 @@ custom validators, providing better maintainability and standardized error messa
 """
 
 from typing import Annotated, Any, Dict, Iterator, List, Optional, Tuple, TYPE_CHECKING
+import logging
 import os
 import unicodedata
 from collections import defaultdict
@@ -35,6 +36,8 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic.types import StringConstraints
 
 from haproxy_template_ic.constants import DEFAULT_DATAPLANE_PORT, DEFAULT_HEALTH_PORT
+from haproxy_template_ic.field_filter import validate_ignore_fields
+from haproxy_template_ic.kopf_utils import normalize_kopf_resource
 
 if TYPE_CHECKING:
     pass
@@ -254,12 +257,8 @@ class Config(BaseModel):
     @classmethod
     def validate_ignore_fields(cls, v: List[str]) -> List[str]:
         """Validate JSONPath expressions for field filtering."""
-        from haproxy_template_ic.field_filter import validate_ignore_fields
-
         validated = validate_ignore_fields(v)
         if len(validated) < len(v):
-            import logging
-
             logger = logging.getLogger(__name__)
             logger.warning(
                 f"Some ignore field expressions were invalid and removed. "
@@ -379,10 +378,6 @@ class IndexedResourceCollection(BaseModel):
         Returns:
             IndexedResourceCollection with filtered resources
         """
-        import logging
-
-        from haproxy_template_ic.kopf_utils import normalize_kopf_resource
-
         logger = logging.getLogger(__name__)
 
         collection = cls()
@@ -436,8 +431,6 @@ class IndexedResourceCollection(BaseModel):
         """Get single resource or raise if multiple found."""
         results = self.get_indexed(*args)
         if len(results) > 1:
-            import logging
-
             resource_ids = [self._extract_resource_id(r) for r in results[:3]]
             error_msg = (
                 f"Multiple resources found for key {args}: {len(results)} matches"

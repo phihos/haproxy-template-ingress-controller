@@ -6,6 +6,10 @@ to test interactions with HAProxy and Dataplane API.
 """
 
 import asyncio
+import logging
+import os
+import threading
+from pathlib import Path
 from typing import Dict, Tuple
 
 import httpx
@@ -28,7 +32,6 @@ from pytest_shared_session_scope import (
     shared_session_scope_pickle,
 )
 from python_on_whales import DockerClient
-from pathlib import Path
 
 
 # Store test results for --keep-containers on-failure
@@ -211,7 +214,6 @@ def event_loop():
 @pytest.fixture(scope="session")
 def docker_resource_semaphore():
     """Limit concurrent Docker operations to prevent resource exhaustion."""
-    import threading
 
     # Allow max 6 concurrent Docker operations to reduce port contention
     semaphore = threading.Semaphore(6)
@@ -310,8 +312,6 @@ def pytest_configure(config):
     pytest.current_config = config
 
     # Configure logging for pytest-xdist compatibility
-    import os
-    import logging
 
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     if worker_id is not None:

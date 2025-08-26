@@ -6,15 +6,22 @@ critical paths and edge cases that are likely to detect bugs.
 """
 
 import asyncio
+import logging
+import os
+import shutil
+import tempfile
+import time
 import kopf
 import pytest
 import yaml
 from jinja2 import Template
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+from haproxy_template_ic.__main__ import CliOptions
 from haproxy_template_ic.config_models import (
     Config,
     HAProxyConfigContext,
+    IndexedResourceCollection,
     PodSelector,
     RenderedContent,
     RenderedConfig,
@@ -23,20 +30,34 @@ from haproxy_template_ic.config_models import (
     WatchResourceConfig,
     config_from_dict,
 )
+from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+from haproxy_template_ic.dataplane import DataplaneAPIError, ValidationError
 from haproxy_template_ic.operator import (
+    _collect_resource_indices,
+    _get_haproxy_pod_collection,
     _is_valid_resource,
     _is_valid_dict_resource,
     _is_valid_sequence_resource,
     _is_valid_object_resource,
+    _log_haproxy_error_hints,
+    configure_webhook_server,
     create_operator_memo,
+    extract_nested_field,
     fetch_configmap,
     fetch_secret,
     get_current_namespace,
     handle_configmap_change,
+    handle_haproxy_pod_create,
+    handle_secret_change,
     haproxy_pods_index,
+    init_management_socket,
+    init_metrics_server,
+    init_watch_configmap,
     initialize_configuration,
     load_config_from_configmap,
     render_haproxy_templates,
+    run_operator_loop,
+    setup_haproxy_pod_indexing,
     setup_resource_watchers,
     synchronize_with_haproxy_instances,
     trigger_reload,
@@ -735,7 +756,6 @@ async def test_synchronize_with_haproxy_instances_success(
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
     # Set up credentials in memo (no longer in config)
-    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
     memo.credentials = Credentials(
         dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -776,7 +796,6 @@ async def test_synchronize_with_haproxy_instances_success(
     # Verify the argument is an IndexedResourceCollection
     call_args = mock_get_urls.call_args[0]
     assert len(call_args) == 1
-    from haproxy_template_ic.config_models import IndexedResourceCollection
 
     assert isinstance(call_args[0], IndexedResourceCollection)
     mock_synchronizer_class.assert_called_once_with(
@@ -822,12 +841,10 @@ async def test_synchronize_with_haproxy_instances_validation_error(
     mock_synchronizer_class, mock_get_urls
 ):
     """Test synchronization handling validation errors."""
-    from haproxy_template_ic.dataplane import ValidationError
 
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
     # Set up credentials in memo (no longer in config)
-    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
     memo.credentials = Credentials(
         dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -861,7 +878,6 @@ async def test_synchronize_with_haproxy_instances_with_failures(
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
     # Set up credentials in memo (no longer in config)
-    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
     memo.credentials = Credentials(
         dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -898,7 +914,6 @@ async def test_synchronize_with_haproxy_instances_with_failures(
 
 def test_create_operator_memo():
     """Test operator memo creation."""
-    from haproxy_template_ic.__main__ import CliOptions
 
     cli_options = CliOptions(
         configmap_name="test-config",
@@ -1003,7 +1018,6 @@ async def test_initialize_configuration(
     mock_get_namespace,
 ):
     """Test initialize_configuration function."""
-    from haproxy_template_ic.__main__ import CliOptions
 
     # Set up mocks
     mock_get_namespace.return_value = "test-namespace"
@@ -1022,7 +1036,6 @@ async def test_initialize_configuration(
     }
     mock_fetch_secret.return_value = mock_secret
     # Set up credentials mock
-    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
     mock_credentials = Credentials(
         dataplane=DataplaneAuth(username="admin", password="pass"),
@@ -1131,7 +1144,6 @@ class TestSynchronizeErrorPaths:
         memo = MagicMock()
         memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
         # Set up credentials in memo (no longer in config)
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         memo.credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -1483,7 +1495,6 @@ async def test_synchronize_success_and_failure_logging(
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
     # Set up credentials in memo (no longer in config)
-    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
     memo.credentials = Credentials(
         dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -1523,12 +1534,10 @@ async def test_synchronize_dataplane_api_error(
     mock_logger, mock_synchronizer_class, mock_get_urls
 ):
     """Test DataplaneAPIError handling in synchronization."""
-    from haproxy_template_ic.dataplane import DataplaneAPIError
 
     memo = MagicMock()
     memo.config.pod_selector = PodSelector(match_labels={"app": "haproxy"})
     # Set up credentials in memo (no longer in config)
-    from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
     memo.credentials = Credentials(
         dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -1566,7 +1575,6 @@ async def test_initialize_configuration_failure(
     mock_logger, mock_load_config, mock_fetch_configmap, mock_get_namespace
 ):
     """Test initialize_configuration failure handling."""
-    from haproxy_template_ic.__main__ import CliOptions
 
     # Set up failure scenario
     mock_get_namespace.return_value = "test-namespace"
@@ -1600,8 +1608,6 @@ async def test_initialize_configuration_failure(
 @patch("haproxy_template_ic.operator.get_current_namespace")
 async def test_init_watch_configmap(mock_get_namespace, mock_event):
     """Test init_watch_configmap startup handler."""
-    from haproxy_template_ic.operator import init_watch_configmap
-    from haproxy_template_ic.__main__ import CliOptions
 
     memo = MagicMock()
     cli_options = CliOptions(
@@ -1640,8 +1646,6 @@ async def test_init_watch_configmap(mock_get_namespace, mock_event):
 @patch("haproxy_template_ic.operator.run_management_socket_server")
 async def test_init_management_socket(mock_run_socket, mock_create_task):
     """Test init_management_socket startup handler."""
-    from haproxy_template_ic.operator import init_management_socket
-    from haproxy_template_ic.__main__ import CliOptions
 
     memo = MagicMock()
     cli_options = CliOptions(
@@ -1671,8 +1675,6 @@ async def test_init_management_socket(mock_run_socket, mock_create_task):
 @patch("haproxy_template_ic.operator.get_metrics_collector")
 async def test_init_metrics_server(mock_get_metrics, mock_create_task):
     """Test init_metrics_server startup handler."""
-    from haproxy_template_ic.operator import init_metrics_server
-    from haproxy_template_ic.__main__ import CliOptions
 
     memo = MagicMock()
     cli_options = CliOptions(
@@ -1717,7 +1719,6 @@ async def test_init_metrics_server(mock_get_metrics, mock_create_task):
 @patch("haproxy_template_ic.operator.logger")
 def test_configure_webhook_server_no_webhooks(mock_logger):
     """Test webhook server configuration with no webhooks enabled."""
-    from haproxy_template_ic.operator import configure_webhook_server
 
     settings = MagicMock()
     memo = MagicMock()
@@ -1742,7 +1743,6 @@ def test_configure_webhook_server_with_existing_certs(
     mock_logger, mock_mkdtemp, mock_exists
 ):
     """Test webhook server configuration with existing TLS certificates."""
-    from haproxy_template_ic.operator import configure_webhook_server
 
     settings = MagicMock()
     memo = MagicMock()
@@ -1774,7 +1774,6 @@ def test_configure_webhook_server_with_existing_certs(
 @patch("haproxy_template_ic.operator.logger")
 def test_configure_webhook_server_self_signed(mock_logger, mock_mkdtemp, mock_exists):
     """Test webhook server configuration with self-signed certificates."""
-    from haproxy_template_ic.operator import configure_webhook_server
 
     settings = MagicMock()
     memo = MagicMock()
@@ -1817,8 +1816,6 @@ def test_run_operator_loop_normal_shutdown(
     mock_kopf_run,
 ):
     """Test run_operator_loop with normal shutdown."""
-    from haproxy_template_ic.operator import run_operator_loop
-    from haproxy_template_ic.__main__ import CliOptions
 
     # Mock dependencies
     mock_metrics = MagicMock()
@@ -1895,8 +1892,6 @@ def test_run_operator_loop_with_config_reload(
     mock_kopf_run,
 ):
     """Test run_operator_loop with config reload scenario."""
-    from haproxy_template_ic.operator import run_operator_loop
-    from haproxy_template_ic.__main__ import CliOptions
 
     # Mock dependencies
     mock_metrics = MagicMock()
@@ -1963,7 +1958,6 @@ def test_run_operator_loop_with_config_reload(
 
 def test_extract_nested_field_basic_access():
     """Test extract_nested_field with basic dot notation access."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     obj = {"metadata": {"name": "test-pod", "namespace": "default"}}
 
@@ -1978,7 +1972,6 @@ def test_extract_nested_field_basic_access():
 
 def test_extract_nested_field_bracket_notation():
     """Test extract_nested_field with bracket notation for keys with special chars."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     obj = {
         "metadata": {
@@ -2013,7 +2006,6 @@ def test_extract_nested_field_bracket_notation():
 
 def test_extract_nested_field_malformed_brackets():
     """Test extract_nested_field with malformed bracket notation."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     obj = {"metadata": {"labels": {"app": "test"}}}
 
@@ -2030,7 +2022,6 @@ def test_extract_nested_field_malformed_brackets():
 
 def test_extract_nested_field_non_dict_objects():
     """Test extract_nested_field with non-dict current values."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     obj = {
         "metadata": "not-a-dict",
@@ -2049,7 +2040,6 @@ def test_extract_nested_field_non_dict_objects():
 
 def test_extract_nested_field_none_values():
     """Test extract_nested_field with None values."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     obj = {"metadata": {"name": None, "labels": {"app": None}}}
 
@@ -2060,7 +2050,6 @@ def test_extract_nested_field_none_values():
 
 def test_extract_nested_field_never_returns_dict_as_string():
     """Test that extract_nested_field never returns dict/list as string."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     obj = {
         "metadata": {
@@ -2088,7 +2077,6 @@ def test_extract_nested_field_never_returns_dict_as_string():
 
 def test_extract_nested_field_edge_cases():
     """Test extract_nested_field with various edge cases."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     # Test with Unicode keys
     obj_unicode = {
@@ -2154,7 +2142,6 @@ def test_extract_nested_field_edge_cases():
 
 def test_extract_nested_field_array_indexing():
     """Test extract_nested_field with array indexing."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     obj = {
         "spec": {
@@ -2180,7 +2167,6 @@ def test_extract_nested_field_array_indexing():
 
 def test_extract_nested_field_input_validation():
     """Test extract_nested_field input validation."""
-    from haproxy_template_ic.operator import extract_nested_field
 
     obj = {"metadata": {"name": "test"}}
 
@@ -2202,8 +2188,6 @@ def test_extract_nested_field_input_validation():
 
 def test_extract_nested_field_performance():
     """Benchmark extract_nested_field performance with typical Kubernetes resources."""
-    import time
-    from haproxy_template_ic.operator import extract_nested_field
 
     # Create a realistic Kubernetes resource
     resource = {
@@ -2275,8 +2259,6 @@ def test_extract_nested_field_performance():
 @pytest.mark.asyncio
 async def test_update_resource_index_no_memo():
     """Test update_resource_index without memo object."""
-    import logging
-    from haproxy_template_ic.operator import update_resource_index
 
     body = {"metadata": {"namespace": "test-ns", "name": "test-resource"}}
 
@@ -2295,8 +2277,6 @@ async def test_update_resource_index_no_memo():
 @pytest.mark.asyncio
 async def test_update_resource_index_no_config():
     """Test update_resource_index with memo but no config."""
-    import logging
-    from haproxy_template_ic.operator import update_resource_index
 
     # Mock memo without config
     memo = MagicMock()
@@ -2320,8 +2300,6 @@ async def test_update_resource_index_no_config():
 @pytest.mark.asyncio
 async def test_update_resource_index_custom_indexing():
     """Test update_resource_index with custom index_by configuration."""
-    import logging
-    from haproxy_template_ic.operator import update_resource_index
 
     # Mock memo with watch config
     memo = MagicMock()
@@ -2353,8 +2331,6 @@ async def test_update_resource_index_custom_indexing():
 @pytest.mark.asyncio
 async def test_update_resource_index_missing_fields():
     """Test update_resource_index with missing index fields."""
-    import logging
-    from haproxy_template_ic.operator import update_resource_index
 
     # Mock memo with watch config
     memo = MagicMock()
@@ -2418,7 +2394,6 @@ async def test_render_haproxy_templates_empty_index():
 @patch("haproxy_template_ic.operator.ConfigSynchronizer")
 async def test_synchronize_mixed_results_logging(mock_sync_class, mock_get_urls):
     """Test synchronize_with_haproxy_instances with mixed success and failure results."""
-    from haproxy_template_ic.operator import synchronize_with_haproxy_instances
 
     with patch("haproxy_template_ic.operator.get_metrics_collector"):
         with patch("haproxy_template_ic.operator.logger"):
@@ -2426,7 +2401,6 @@ async def test_synchronize_mixed_results_logging(mock_sync_class, mock_get_urls)
             memo = MagicMock()
             memo.config.pod_selector = MagicMock()
             # Set up credentials in memo (no longer in config)
-            from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
             memo.credentials = Credentials(
                 dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -2464,7 +2438,6 @@ async def test_synchronize_mixed_results_logging(mock_sync_class, mock_get_urls)
 
 def test_configure_webhook_server_ca_file_copying():
     """Test configure_webhook_server CA file copying functionality."""
-    from haproxy_template_ic.operator import configure_webhook_server
 
     with patch("os.path.exists") as mock_exists:
         with patch("tempfile.mkdtemp", return_value="/tmp/webhook-ca-123"):
@@ -2504,7 +2477,6 @@ def test_configure_webhook_server_ca_file_copying():
 
 def test_configure_webhook_server_no_ca_file():
     """Test configure_webhook_server without existing CA file."""
-    from haproxy_template_ic.operator import configure_webhook_server
 
     with patch("os.path.exists") as mock_exists:
         with patch("tempfile.mkdtemp", return_value="/tmp/webhook-ca-456"):
@@ -2613,7 +2585,6 @@ async def test_haproxy_pods_index_no_metadata():
 @pytest.mark.asyncio
 async def test_handle_haproxy_pod_create():
     """Test haproxy pod create handler."""
-    from haproxy_template_ic.operator import handle_haproxy_pod_create
 
     body = {"metadata": {"name": "test-pod", "namespace": "test-namespace"}}
 
@@ -2625,7 +2596,6 @@ async def test_handle_haproxy_pod_create():
 
 def test_setup_haproxy_pod_indexing():
     """Test HAProxy pod indexing setup."""
-    from haproxy_template_ic.operator import setup_haproxy_pod_indexing
 
     memo = MagicMock()
     memo.config.pod_selector.match_labels = {
@@ -2647,7 +2617,6 @@ def test_setup_haproxy_pod_indexing():
 
 def test_setup_resource_watchers_additional():
     """Test resource watchers setup with additional scenarios."""
-    from haproxy_template_ic.operator import setup_resource_watchers
 
     memo = MagicMock()
     watch_config = MagicMock()
@@ -2668,7 +2637,6 @@ def test_setup_resource_watchers_additional():
 
 def test_setup_resource_watchers_no_group():
     """Test resource watchers setup without group/version."""
-    from haproxy_template_ic.operator import setup_resource_watchers
 
     memo = MagicMock()
     watch_config = MagicMock()
@@ -2690,7 +2658,6 @@ def test_setup_resource_watchers_no_group():
 @pytest.mark.asyncio
 async def test_fetch_secret():
     """Test secret fetching."""
-    from haproxy_template_ic.operator import fetch_secret
 
     mock_secret = MagicMock()
 
@@ -2707,7 +2674,6 @@ async def test_fetch_secret():
 @pytest.mark.asyncio
 async def test_fetch_secret_failure():
     """Test secret fetching failure."""
-    from haproxy_template_ic.operator import fetch_secret
 
     with patch("haproxy_template_ic.operator.Secret") as mock_secret_class:
         mock_secret_class.get = AsyncMock(side_effect=Exception("Secret not found"))
@@ -2719,7 +2685,6 @@ async def test_fetch_secret_failure():
 @pytest.mark.asyncio
 async def test_handle_secret_change():
     """Test secret change handling."""
-    from haproxy_template_ic.operator import handle_secret_change
 
     memo = MagicMock()
     memo.credentials = MagicMock()
@@ -2747,7 +2712,6 @@ async def test_handle_secret_change():
 
 def test_trigger_reload_additional():
     """Test trigger reload function with additional coverage."""
-    from haproxy_template_ic.operator import trigger_reload
 
     memo = MagicMock()
     memo.config_reload_flag = MagicMock()
@@ -2761,7 +2725,6 @@ def test_trigger_reload_additional():
 
 def test_is_valid_resource():
     """Test resource validation."""
-    from haproxy_template_ic.operator import _is_valid_resource
 
     # Valid dict resource
     valid_dict = {"metadata": {"name": "test", "namespace": "default"}}
@@ -2892,7 +2855,6 @@ class TestOperatorCriticalPaths:
     @pytest.mark.asyncio
     async def test_handle_secret_change_credential_loading_failures(self):
         """Test handle_secret_change credential loading failures (lines 263-265)."""
-        from haproxy_template_ic.operator import handle_secret_change
 
         memo = MagicMock()
         memo.credentials = None
@@ -2919,7 +2881,6 @@ class TestOperatorCriticalPaths:
 
     def test_extract_nested_field_malformed_bracket_notation(self):
         """Test extract_nested_field with malformed bracket notation."""
-        from haproxy_template_ic.operator import extract_nested_field
 
         obj = {"metadata": {"labels": {"app": "test"}}}
 
@@ -3058,7 +3019,6 @@ class TestOperatorCriticalPaths:
 
     def test_configure_webhook_server_cleanup_edge_cases(self):
         """Test webhook server cleanup edge cases (lines 850-857)."""
-        from haproxy_template_ic.operator import configure_webhook_server
 
         # Mock memo with webhook-enabled resources
         memo = MagicMock()
@@ -3334,8 +3294,6 @@ class TestOperatorErrorPaths:
 
     def test_get_haproxy_pod_collection_memo_no_indices(self):
         """Test _get_haproxy_pod_collection when memo has no indices attribute."""
-        from haproxy_template_ic.operator import _get_haproxy_pod_collection
-        from unittest.mock import patch
 
         # Create memo without indices attribute
         mock_memo = Mock()
@@ -3351,7 +3309,6 @@ class TestOperatorErrorPaths:
 
     def test_extract_nested_field_bracket_notation_exception(self):
         """Test extract_nested_field with malformed bracket notation causing exceptions."""
-        from haproxy_template_ic.operator import extract_nested_field
 
         test_resource = {"metadata": {"labels": {"app": "test"}}}
 
@@ -3368,9 +3325,6 @@ class TestOperatorErrorPaths:
 
     def test_collect_resource_indices_exception(self):
         """Test _collect_resource_indices when index retrieval raises exception."""
-        from haproxy_template_ic.operator import _collect_resource_indices
-        from haproxy_template_ic.config_models import IndexedResourceCollection
-        from unittest.mock import patch, MagicMock
 
         # Create mock memo with indices
         mock_memo = Mock()
@@ -3401,7 +3355,6 @@ class TestOperatorErrorPaths:
     @pytest.mark.asyncio
     async def test_handle_configmap_change_validation_errors_warning(self):
         """Test handle_configmap_change logs warning when validation errors exist."""
-        from unittest.mock import patch
 
         mock_memo = Mock()
         mock_memo.config = Mock()
@@ -3432,9 +3385,6 @@ class TestOperatorErrorPaths:
 
     def test_log_haproxy_error_hints_with_error_line(self):
         """Test _log_haproxy_error_hints with error_line set."""
-        from haproxy_template_ic.operator import _log_haproxy_error_hints
-        from haproxy_template_ic.dataplane import ValidationError
-        from unittest.mock import patch
 
         mock_memo = Mock()
         mock_memo.config = Mock()
@@ -3458,9 +3408,6 @@ class TestOperatorErrorPaths:
 
     def test_log_haproxy_error_hints_with_error_context(self):
         """Test _log_haproxy_error_hints with error_context set."""
-        from haproxy_template_ic.operator import _log_haproxy_error_hints
-        from haproxy_template_ic.dataplane import ValidationError
-        from unittest.mock import patch
 
         mock_memo = Mock()
         mock_memo.config = Mock()
@@ -3485,9 +3432,6 @@ class TestOperatorErrorPaths:
 
     def test_log_haproxy_error_hints_listen_defaults_expected(self):
         """Test _log_haproxy_error_hints with 'listen' or 'defaults' expected error."""
-        from haproxy_template_ic.operator import _log_haproxy_error_hints
-        from haproxy_template_ic.dataplane import ValidationError
-        from unittest.mock import patch
 
         mock_memo = Mock()
         validation_error = ValidationError(
@@ -3513,9 +3457,6 @@ class TestOperatorErrorPaths:
 
     def test_log_haproxy_error_hints_unknown_keyword(self):
         """Test _log_haproxy_error_hints with unknown keyword error."""
-        from haproxy_template_ic.operator import _log_haproxy_error_hints
-        from haproxy_template_ic.dataplane import ValidationError
-        from unittest.mock import patch
 
         mock_memo = Mock()
         validation_error = ValidationError(
@@ -3539,9 +3480,6 @@ class TestOperatorErrorPaths:
 
     def test_log_haproxy_error_hints_missing_argument(self):
         """Test _log_haproxy_error_hints with missing argument error."""
-        from haproxy_template_ic.operator import _log_haproxy_error_hints
-        from haproxy_template_ic.dataplane import ValidationError
-        from unittest.mock import patch
 
         mock_memo = Mock()
         validation_error = ValidationError(
@@ -3565,9 +3503,6 @@ class TestOperatorErrorPaths:
 
     def test_log_haproxy_error_hints_too_many_args(self):
         """Test _log_haproxy_error_hints with too many args error."""
-        from haproxy_template_ic.operator import _log_haproxy_error_hints
-        from haproxy_template_ic.dataplane import ValidationError
-        from unittest.mock import patch
 
         mock_memo = Mock()
         validation_error = ValidationError(
@@ -3591,7 +3526,6 @@ class TestOperatorErrorPaths:
 
     def test_validation_error_registration_pattern(self):
         """Test validation error registration pattern (lines 566-578)."""
-        from unittest.mock import patch
 
         # Test the pattern used for registering validation errors
         validation_errors = []
@@ -3630,10 +3564,6 @@ class TestOperatorErrorPaths:
 
     def test_configure_webhook_server_cleanup_temp_directory(self):
         """Test configure_webhook_server cleanup of temporary directory."""
-        from unittest.mock import patch
-        import tempfile
-        import os
-        import shutil
 
         # Create a real temporary directory that exists
         real_temp_dir = tempfile.mkdtemp(prefix="test-webhook-")

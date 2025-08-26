@@ -7,6 +7,7 @@ functionality including support for template snippets and custom filters.
 
 import base64
 import os
+import re
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
 
@@ -23,6 +24,7 @@ from jinja2 import (
 
 # Import Pydantic models and collection type aliases
 from .config_models import (
+    TemplateSnippet,
     TemplateSnippetCollection,
 )
 from .constants import (
@@ -77,8 +79,6 @@ def get_path_filter(
         raise ValueError(f"Invalid filename contains prohibited characters: {filename}")
 
     # Additional security checks for our specific use case (stricter than pathvalidate)
-    import re
-
     # Block directory names and path components
     if filename in (".", ".."):
         raise ValueError(f"Invalid filename contains prohibited characters: {filename}")
@@ -370,8 +370,6 @@ class TemplateRenderer:
 
 def _extract_snippet_templates(config_dict: dict) -> TemplateSnippetCollection:
     """Extract snippet templates from config dictionary."""
-    from .config_models import TemplateSnippet
-
     snippets = {}
     snippets_raw = config_dict.get("template_snippets", {})
 

@@ -9,6 +9,8 @@ These utilities should only be used within IndexedResourceCollection.from_kopf_i
 import logging
 from typing import Any, Dict, List, Optional
 
+from haproxy_template_ic.field_filter import remove_fields_from_resource
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,8 +76,6 @@ def normalize_kopf_resource(
 
     # Apply field filtering if specified
     if ignore_fields:
-        from haproxy_template_ic.field_filter import remove_fields_from_resource
-
         result = remove_fields_from_resource(result, ignore_fields)
 
     return result

@@ -7,6 +7,7 @@ of deployment scaling operations.
 """
 
 import asyncio
+import ast
 import re
 import time
 
@@ -67,8 +68,6 @@ def get_pod_ips_from_socket_response(response):
                     # Handle string representation of dictionaries
                     if isinstance(resource, str):
                         try:
-                            import ast
-
                             resource = ast.literal_eval(resource)
                         except (ValueError, SyntaxError):
                             continue

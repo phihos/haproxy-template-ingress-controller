@@ -6,14 +6,16 @@ resource watchers, configuration management, and the main operator loop.
 """
 
 import asyncio
+import atexit
 import logging
+import os
+import shutil
+import tempfile
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 if TYPE_CHECKING:
     from haproxy_template_ic.__main__ import CliOptions
-
-import os
 
 import jsonpath
 from jsonpath.exceptions import JSONPathError
@@ -31,6 +33,7 @@ from kubernetes import config
 from haproxy_template_ic.config_models import (
     Config,
     HAProxyConfigContext,
+    IndexedResourceCollection,
     PodSelector,
     RenderedContent,
     RenderedConfig,
@@ -49,6 +52,7 @@ from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.structured_logging import autolog, observe
 from haproxy_template_ic.templating import TemplateRenderer
+from haproxy_template_ic.webhook import register_validation_webhooks_from_config
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.constants import (
     CONTENT_TYPE_CERTIFICATE,
@@ -123,8 +127,6 @@ def _get_haproxy_pod_collection(memo: Any) -> Any:
 
     haproxy_pods_store = memo.indices[HAPROXY_PODS_INDEX]
     logger.info(f"🔍 HAProxy pods index contains {len(haproxy_pods_store)} entries")
-
-    from haproxy_template_ic.config_models import IndexedResourceCollection
 
     haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(
         haproxy_pods_store
@@ -305,8 +307,6 @@ async def load_config_from_configmap(configmap) -> Any:
     config = config_from_dict(yaml.safe_load(config_data))
 
     # Register validation webhooks based on configuration
-    from haproxy_template_ic.webhook import register_validation_webhooks_from_config
-
     register_validation_webhooks_from_config(config)
 
     return config
@@ -529,8 +529,6 @@ async def update_resource_index(
 
 def _collect_resource_indices(memo: Any, metrics: Any) -> Dict[str, Any]:
     """Collect all resource indices as IndexedResourceCollections."""
-    from haproxy_template_ic.config_models import IndexedResourceCollection
-
     indices: Dict[str, IndexedResourceCollection] = {}
 
     # Get the ignore_fields configuration
@@ -990,11 +988,6 @@ def configure_webhook_server(
     settings: kopf.OperatorSettings, memo: Any, **kwargs: Any
 ) -> None:
     """Configure webhook server for admission control."""
-    import atexit
-    import os
-    import shutil
-    import tempfile
-
     # Check if any resources have webhook validation enabled
     has_webhooks = any(
         getattr(watch_config, "enable_validation_webhook", False)

@@ -7,6 +7,7 @@ and apply new settings correctly.
 """
 
 import pytest
+import time
 import yaml
 
 from tests.e2e.utils import (
@@ -90,7 +91,6 @@ def test_no_reload_loop_on_repeated_events(
         )
 
         # Small delay to ensure the event is processed
-        import time
 
         time.sleep(2)
 

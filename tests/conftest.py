@@ -3,7 +3,9 @@
 # =============================================================================
 
 # Standard library imports
+import hashlib
 import logging
+import os
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -11,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 # Third-party imports
+import httpx
 import kr8s
 import pytest
 import yaml
@@ -19,14 +22,17 @@ from python_on_whales import DockerClient
 
 # Kubernetes objects
 from kr8s.objects import (
+    APIObject,
     ClusterRoleBinding,
     ConfigMap,
+    Deployment,
     Namespace,
     Pod,
     Secret,
     Service,
     ServiceAccount,
 )
+from kr8s._exceptions import ServerError
 
 # Pytest plugins
 from pytest_kind.cluster import KindCluster
@@ -34,6 +40,15 @@ from pytest_shared_session_scope import (
     CleanupToken,
     SetupToken,
     shared_session_scope_pickle,
+)
+
+# Local imports
+from .coverage_extraction import extract_coverage_from_pod
+from tests.e2e.utils.k8s_helpers import print_pod_logs_on_failure
+from tests.webhook_certs import (
+    create_cert_secret_manifest,
+    create_validating_webhook_config,
+    generate_webhook_certificates,
 )
 
 
@@ -175,10 +190,6 @@ def setup_webhook_volumes_and_mounts(k8s_client, k8s_namespace, needs_webhook):
 
     try:
         # Try to create webhook secret
-        from tests.webhook_certs import (
-            create_cert_secret_manifest,
-            generate_webhook_certificates,
-        )
 
         webhook_certificates = generate_webhook_certificates(
             "haproxy-template-ic-webhook", k8s_namespace
@@ -432,7 +443,6 @@ def k8s_namespace(request, k8s_client):
 
     Resource tracking ensures proper cleanup and provides debugging information.
     """
-    import hashlib
 
     # Use module-level logger
 
@@ -658,7 +668,6 @@ def configmap(config_dict, k8s_client, k8s_namespace):
 @pytest.fixture
 def webhook_certificates(k8s_namespace):
     """Generate webhook certificates for the test namespace."""
-    from tests.webhook_certs import generate_webhook_certificates
 
     return generate_webhook_certificates("haproxy-template-ic-webhook", k8s_namespace)
 
@@ -666,7 +675,6 @@ def webhook_certificates(k8s_namespace):
 @pytest.fixture
 def webhook_secret(webhook_certificates, k8s_client, k8s_namespace):
     """Create Kubernetes Secret with webhook certificates."""
-    from tests.webhook_certs import create_cert_secret_manifest
 
     manifest = create_cert_secret_manifest(
         webhook_certificates, "haproxy-template-ic-webhook-certs", k8s_namespace
@@ -702,9 +710,6 @@ def credentials_secret(k8s_client, k8s_namespace):
 @pytest.fixture
 def validating_webhook_config(webhook_certificates, k8s_namespace, k8s_client):
     """Create ValidatingAdmissionWebhook configuration."""
-    from kr8s.objects import APIObject
-
-    from tests.webhook_certs import create_validating_webhook_config
 
     manifest = create_validating_webhook_config(
         webhook_name=f"haproxy-template-ic-webhook-{k8s_namespace}",
@@ -767,7 +772,6 @@ def unified_haproxy_configmap(k8s_client, k8s_namespace):
 
     This provides the same unified approach used in production deployments.
     """
-    from kr8s.objects import ConfigMap
 
     configmap = ConfigMap(
         {
@@ -889,8 +893,6 @@ def haproxy_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap, req
     Use with parametrize: @pytest.mark.parametrize('haproxy_deployment', [3], indirect=True)
     """
     replicas = getattr(request, "param", 2) if hasattr(request, "param") else 2
-
-    from kr8s.objects import Deployment
 
     deployment = Deployment(
         {
@@ -1030,7 +1032,6 @@ def haproxy_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap, req
     deployment.create()
 
     # Wait for deployment to be ready
-    import time
 
     max_wait = 60
     start_time = time.time()
@@ -1231,14 +1232,12 @@ def haproxy_dataplane_clients(haproxy_production_pods, k8s_namespace):
     Provides HTTP clients configured to communicate with the Dataplane API
     containers in the production HAProxy pods.
     """
-    import httpx
 
     clients = []
     for pod in haproxy_production_pods:
         pod_ip = pod.status.podIP
         if not pod_ip:
             # Wait for pod IP assignment
-            import time
 
             for _ in range(30):
                 pod.refresh()
@@ -1308,7 +1307,6 @@ def controller_with_validation_sidecar(
         ).create()
     except Exception as e:
         # Handle specific k8s errors for idempotent resource creation
-        from kr8s._exceptions import ServerError
 
         if isinstance(e, ServerError) and "already exists" in str(e):
             # Resource already exists, which is expected in test environments
@@ -1547,7 +1545,6 @@ backend validation_backend
 
     except Exception as e:
         # Handle specific k8s errors for idempotent pod creation
-        from kr8s._exceptions import ServerError
 
         if isinstance(e, ServerError) and "already exists" in str(e):
             # Pod already exists, get the existing one
@@ -1645,7 +1642,6 @@ def simple_controller(
         ).create()
     except Exception as e:
         # Handle specific k8s errors for idempotent resource creation
-        from kr8s._exceptions import ServerError
 
         if isinstance(e, ServerError) and "already exists" in str(e):
             # Resource already exists, which is expected in test environments
@@ -1748,7 +1744,6 @@ def simple_controller(
         pod.create()
     except Exception as e:
         # Handle specific k8s errors for idempotent pod creation
-        from kr8s._exceptions import ServerError
 
         if isinstance(e, ServerError) and "already exists" in str(e):
             # Pod already exists, get the existing one
@@ -1794,8 +1789,6 @@ def validation_dataplane_client(controller_with_validation_sidecar):
     Provides HTTP client configured to communicate with the validation
     Dataplane API container in the controller pod.
     """
-    import httpx
-    import time
 
     # Get pod IP
     controller_pod = controller_with_validation_sidecar
@@ -1913,8 +1906,6 @@ def collect_coverage(request, controller_with_validation_sidecar):
     if not request.config.getoption("--coverage"):
         return
 
-    from .coverage_extraction import extract_coverage_from_pod
-
     coverage_file = extract_coverage_from_pod(
         controller_with_validation_sidecar, request.node.name, request.config.rootpath
     )
@@ -1934,7 +1925,6 @@ def pytest_runtest_teardown(item, nextitem):
         PYTEST_DISABLE_POD_LOG_PRINTING: Set to 'true' to disable automatic log printing
         PYTEST_POD_FIXTURE_NAMES: Comma-separated list of fixture names to search for pods
     """
-    import os
 
     # Use module-level logger
 
@@ -1985,8 +1975,6 @@ def pytest_runtest_teardown(item, nextitem):
 
             if pod is not None:
                 try:
-                    from tests.e2e.utils.k8s_helpers import print_pod_logs_on_failure
-
                     logger.info(
                         f"Printing pod logs for failed test {item.name} using fixture {found_fixture}"
                     )
