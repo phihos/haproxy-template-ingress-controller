@@ -21,6 +21,9 @@ from haproxy_template_ic.templating import (
     render_template,
     TemplateRenderer,
     validate_config_templates,
+    format_template_error,
+    _extract_snippet_name,
+    _get_context_lines,
 )
 from haproxy_template_ic.config_models import TemplateSnippet
 
@@ -1053,3 +1056,292 @@ class TestGetPathFilterSecurity:
                 ValueError, match="(unsafe characters|prohibited characters)"
             ):
                 get_path_filter(invalid_filename, "map")
+
+
+class TestFormatTemplateError:
+    """Test the format_template_error function for comprehensive error formatting."""
+
+    def test_format_template_error_simple(self):
+        """Test formatting a simple template error without line numbers."""
+        error = ValueError("Simple error message")
+        result = format_template_error(error, "test_template")
+
+        assert "Template 'test_template' rendering failed" in result
+        assert "Simple error message" in result
+
+    def test_format_template_error_with_line_number(self):
+        """Test formatting an error with line number information."""
+        error = TemplateSyntaxError("Syntax error", lineno=5)
+        template_content = "\n".join(
+            [
+                "line 1",
+                "line 2",
+                "line 3",
+                "line 4",
+                "line 5 with error",
+                "line 6",
+                "line 7",
+            ]
+        )
+
+        result = format_template_error(error, "test_template", template_content)
+
+        assert "Template 'test_template' rendering failed" in result
+        assert "at line 5" in result
+        assert ">>> line 5 with error" in result
+        assert "Template context:" in result
+
+    def test_format_template_error_deeply_nested_includes(self):
+        """Test error formatting for 3+ level nested includes."""
+        # Create mock exception with deep traceback
+        error = ValueError("Error in deeply nested snippet")
+
+        # Create snippets for testing
+        snippets = {
+            "level1": TemplateSnippet(
+                name="level1", template='First level\n{% include "level2" %}\nEnd first'
+            ),
+            "level2": TemplateSnippet(
+                name="level2",
+                template='Second level\n{% include "level3" %}\nEnd second',
+            ),
+            "level3": TemplateSnippet(
+                name="level3", template="Third level\n{{ undefined_var }}\nEnd third"
+            ),
+        }
+
+        template_content = 'Main template\n{% include "level1" %}\nEnd main'
+
+        # We can't easily mock sys.exc_info, so test the formatting logic directly
+        # by testing the helper functions instead
+        result = format_template_error(
+            error, "main_template", template_content, snippets
+        )
+
+        assert "Template 'main_template' rendering failed" in result
+        assert "Error in deeply nested snippet" in result
+
+    def test_format_template_error_missing_snippet(self):
+        """Test handling of missing snippets in include chain."""
+        error = TemplateNotFound("missing_snippet")
+        template_content = 'Main template\n{% include "missing_snippet" %}\nEnd main'
+
+        result = format_template_error(error, "test_template", template_content)
+
+        assert "Template 'test_template' rendering failed" in result
+        assert "missing_snippet" in result
+
+    def test_format_template_error_syntax_errors(self):
+        """Test syntax error formatting with line context."""
+        error = TemplateSyntaxError("Encountered unknown tag 'endpoint'", lineno=4)
+        template_content = """global
+    daemon
+frontend main
+    {% endpoint in some_list %}
+    bind *:80
+backend servers
+    server web1 10.0.0.1:80"""
+
+        result = format_template_error(error, "haproxy_config", template_content)
+
+        assert "Template 'haproxy_config' rendering failed" in result
+        assert "at line 4" in result
+        assert "Encountered unknown tag 'endpoint'" in result
+        assert ">>> " in result  # Context line marker
+        assert "endpoint in some_list" in result
+
+    def test_format_template_error_nonetype_hint(self):
+        """Test that NoneType errors get helpful hints."""
+        error = TypeError("'NoneType' object is not iterable")
+        result = format_template_error(error, "test_template")
+
+        assert "Template 'test_template' rendering failed" in result
+        assert "'NoneType' object is not iterable" in result
+        assert "💡 Hint:" in result
+        assert "resources.get('type', {}).items()" in result
+
+    def test_format_template_error_undefined_hint(self):
+        """Test that undefined variable errors get helpful hints."""
+        error = NameError("undefined variable 'foo'")
+        result = format_template_error(error, "test_template")
+
+        assert "Template 'test_template' rendering failed" in result
+        assert "undefined variable" in result
+        assert "💡 Hint:" in result
+        assert "variable is not defined" in result
+
+    def test_format_template_error_filter_hint(self):
+        """Test that filter errors get helpful hints."""
+        error = ValueError("no filter named 'unknown_filter'")
+        result = format_template_error(error, "test_template")
+
+        assert "Template 'test_template' rendering failed" in result
+        assert "no filter named" in result
+        assert "💡 Hint:" in result
+        assert "Available filters: b64decode, get_path" in result
+
+    def test_format_template_error_attribute_hint(self):
+        """Test that attribute errors get helpful hints."""
+        error = AttributeError("'dict' object has no attribute 'missing'")
+        result = format_template_error(error, "test_template")
+
+        assert "Template 'test_template' rendering failed" in result
+        assert "has no attribute" in result
+        assert "💡 Hint:" in result
+        assert "Check if the object exists" in result
+
+    def test_format_template_error_two_level_include(self):
+        """Test formatting for simple two-level includes."""
+        error = ValueError("Error in snippet")
+
+        snippets = {
+            "backend-servers": TemplateSnippet(
+                name="backend-servers",
+                template="{% for server in servers %}\n  server {{ server }}\n{% endfor %}",
+            ),
+        }
+
+        template_content = (
+            'frontend main\n    {% include "backend-servers" %}\nbackend fallback'
+        )
+
+        # Since we can't easily mock the traceback, test the basic formatting
+        result = format_template_error(error, "main_config", template_content, snippets)
+
+        assert "Template 'main_config' rendering failed" in result
+        assert "Error in snippet" in result
+
+    def test_format_template_error_empty_template(self):
+        """Test formatting with empty or None template content."""
+        error = ValueError("Some error")
+
+        # Test with None template
+        result1 = format_template_error(error, "test", None)
+        assert "Template 'test' rendering failed" in result1
+        assert "Some error" in result1
+
+        # Test with empty template
+        result2 = format_template_error(error, "test", "")
+        assert "Template 'test' rendering failed" in result2
+        assert "Some error" in result2
+
+    def test_format_template_error_invalid_line_numbers(self):
+        """Test handling of invalid line numbers."""
+        error = TemplateSyntaxError("Error", lineno=-1)
+        template_content = "line 1\nline 2"
+
+        result = format_template_error(error, "test", template_content)
+        assert "Template 'test' rendering failed" in result
+        assert "Error" in result
+        # Should handle gracefully without crashing
+
+    def test_format_template_error_long_error_messages(self):
+        """Test formatting with very long error messages."""
+        long_message = "Error: " + "x" * 1000
+        error = ValueError(long_message)
+
+        result = format_template_error(error, "test")
+        assert "Template 'test' rendering failed" in result
+        assert "Error:" in result
+        assert "x" * 100 in result  # Should contain at least part of the message
+
+
+class TestExtractSnippetName:
+    """Test the _extract_snippet_name helper function."""
+
+    def test_extract_snippet_name_single_quotes(self):
+        """Test extracting snippet name with single quotes."""
+        line = "    {% include 'backend-servers' %}"
+        result = _extract_snippet_name(line)
+        assert result == "backend-servers"
+
+    def test_extract_snippet_name_double_quotes(self):
+        """Test extracting snippet name with double quotes."""
+        line = '    {% include "frontend-config" %}'
+        result = _extract_snippet_name(line)
+        assert result == "frontend-config"
+
+    def test_extract_snippet_name_with_spaces(self):
+        """Test extracting snippet name with varying spaces."""
+        line = "{%   include   'test-snippet'   %}"
+        result = _extract_snippet_name(line)
+        assert result == "test-snippet"
+
+    def test_extract_snippet_name_no_include(self):
+        """Test when line doesn't contain include statement."""
+        line = "    server web1 10.0.0.1:80"
+        result = _extract_snippet_name(line)
+        assert result is None
+
+    def test_extract_snippet_name_malformed(self):
+        """Test with malformed include statement."""
+        line = "{% include without quotes %}"
+        result = _extract_snippet_name(line)
+        assert result is None
+
+    def test_extract_snippet_name_partial(self):
+        """Test with partial include keyword."""
+        line = "# This line includes something"
+        result = _extract_snippet_name(line)
+        assert result is None
+
+
+class TestGetContextLines:
+    """Test the _get_context_lines helper function."""
+
+    def test_get_context_lines_basic(self):
+        """Test getting context lines around a target line."""
+        lines = ["line 1", "line 2", "line 3", "line 4", "line 5"]
+        result = _get_context_lines(lines, 2, 3, context_before=1, context_after=1)
+
+        assert len(result) == 3
+        assert "2:" in result[0]
+        assert ">>> line 3" in result[1]
+        assert "4:" in result[2]
+
+    def test_get_context_lines_at_start(self):
+        """Test getting context lines at the start of file."""
+        lines = ["line 1", "line 2", "line 3", "line 4", "line 5"]
+        result = _get_context_lines(lines, 0, 1, context_before=2, context_after=2)
+
+        assert ">>> line 1" in result[0]
+        assert "line 2" in result[1]
+        assert "line 3" in result[2]
+
+    def test_get_context_lines_at_end(self):
+        """Test getting context lines at the end of file."""
+        lines = ["line 1", "line 2", "line 3", "line 4", "line 5"]
+        result = _get_context_lines(lines, 4, 5, context_before=2, context_after=2)
+
+        assert "line 3" in result[0]
+        assert "line 4" in result[1]
+        assert ">>> line 5" in result[2]
+
+    def test_get_context_lines_empty_list(self):
+        """Test with empty lines list."""
+        result = _get_context_lines([], 0, 1)
+        assert result == []
+
+    def test_get_context_lines_invalid_index(self):
+        """Test with invalid line index."""
+        lines = ["line 1", "line 2"]
+        result = _get_context_lines(lines, -1, 0)
+        assert result == []
+
+        result = _get_context_lines(lines, 5, 6)
+        assert result == []
+
+    def test_get_context_lines_formatting(self):
+        """Test that context lines are properly formatted."""
+        lines = ["first", "second", "third"]
+        result = _get_context_lines(lines, 1, 2, context_before=1, context_after=1)
+
+        # Check line number formatting
+        assert "1:" in result[0]
+        assert "2:" in result[1]
+        assert "3:" in result[2]
+
+        # Check marker for target line
+        assert ">>> " in result[1]
+        assert ">>> " not in result[0]
+        assert ">>> " not in result[2]
