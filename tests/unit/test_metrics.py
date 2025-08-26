@@ -4,6 +4,7 @@ Tests for haproxy_template_ic.metrics module.
 This module contains tests for Prometheus metrics collection functionality.
 """
 
+import threading
 import time
 from unittest.mock import patch
 
@@ -308,7 +309,6 @@ class TestMetricsIntegration:
 
     def test_concurrent_metrics_recording(self):
         """Test that metrics recording is thread-safe."""
-        import threading
 
         collector = get_metrics_collector()
 

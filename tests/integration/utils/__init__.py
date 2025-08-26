@@ -16,8 +16,13 @@ import filelock
 import httpx
 from python_on_whales import DockerClient
 
-from .progress import TestProgressReporter, ContainerWaitReporter, get_test_reporter
-from .progress import progress_context as progress_context
+from .progress import (
+    TestProgressReporter,
+    ContainerWaitReporter,
+    get_test_reporter,
+    progress_context as progress_context,
+    format_troubleshooting_info,
+)
 
 
 def find_free_port(used_ports: set, max_retries: int = 10) -> int:
@@ -509,7 +514,6 @@ class DockerComposeManager:
                     self.container_logs[container] = f"Failed to get logs: {e}"
 
             # Format troubleshooting information
-            from .progress import format_troubleshooting_info
 
             troubleshooting_info = format_troubleshooting_info(
                 self.compose_file, self.ports, failed_services, self.container_logs

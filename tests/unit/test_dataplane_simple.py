@@ -16,6 +16,7 @@ from haproxy_template_ic.dataplane import (
     get_production_urls_from_index,
     normalize_dataplane_url,
 )
+from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
 
 class TestNormalizeDataplaneUrlComplete:
@@ -184,7 +185,6 @@ class TestConfigSynchronizerSimple:
 
     def test_synchronizer_initialization(self):
         """Test synchronizer initialization."""
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -206,7 +206,6 @@ class TestConfigSynchronizerSimple:
     @pytest.mark.asyncio
     async def test_sync_configuration_no_rendered_config(self):
         """Test sync with no rendered config."""
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),

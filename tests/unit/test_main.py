@@ -5,11 +5,14 @@ This module contains tests for CLI functionality and main application entry poin
 with the simplified CLI structure (run command only).
 """
 
+import click
 import pytest
+from importlib.metadata import PackageNotFoundError
 from unittest.mock import patch
 from click.testing import CliRunner
 
 from haproxy_template_ic.__main__ import cli
+from haproxy_template_ic.credentials import validate_k8s_name
 
 
 # =============================================================================
@@ -261,8 +264,6 @@ def test_run_command_valid_configmap_names(mock_shutdown, mock_init, mock_run):
 
 def test_configmap_validation_edge_cases():
     """Test unified Kubernetes name validation edge cases."""
-    from haproxy_template_ic.credentials import validate_k8s_name
-    import click
 
     # Test maximum length (253 characters)
     valid_long_name = "a" * 253
@@ -307,7 +308,6 @@ def test_version_command():
 @patch("haproxy_template_ic.__main__.metadata.version")
 def test_version_command_development_fallback(mock_version):
     """Test version command fallback when package not found."""
-    from importlib.metadata import PackageNotFoundError
 
     mock_version.side_effect = PackageNotFoundError()
     runner = CliRunner()

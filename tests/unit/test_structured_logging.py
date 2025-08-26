@@ -5,17 +5,22 @@ This module contains tests for structured logging functionality including
 autolog and observe decorators, JSON formatting, and context injection.
 """
 
+import asyncio
 import json
 import logging
-import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
 from unittest.mock import patch
 
 import structlog
+import structlog.contextvars
 from haproxy_template_ic.structured_logging import (
-    setup_structured_logging,
+    _extract_context_from_parameters,
+    _get_function_signature,
     autolog,
     observe,
+    setup_structured_logging,
 )
 
 
@@ -141,7 +146,6 @@ class TestAutologDecorator:
 
     def test_autolog_context_cleanup(self):
         """Test that autolog properly cleans up context variables."""
-        import structlog.contextvars
 
         # Clear any existing context
         structlog.contextvars.clear_contextvars()
@@ -192,7 +196,6 @@ class TestSetupLogging:
         setup_structured_logging(verbose_level=1, use_json=False)
 
         # Verify structlog is configured
-        import structlog
 
         logger = structlog.get_logger("test")
         assert logger is not None
@@ -202,7 +205,6 @@ class TestSetupLogging:
         setup_structured_logging(verbose_level=2, use_json=True)
 
         # Verify structlog is configured
-        import structlog
 
         logger = structlog.get_logger("test")
         assert logger is not None
@@ -229,9 +231,6 @@ class TestErrorHandling:
 
     def test_signature_mismatch_handling(self):
         """Test that signature mismatch in parameter extraction is handled gracefully."""
-        from haproxy_template_ic.structured_logging import (
-            _extract_context_from_parameters,
-        )
 
         def function_with_required_params(required_param: str):
             return f"called with {required_param}"
@@ -276,7 +275,6 @@ class TestErrorHandling:
 
     def test_context_cleanup_on_exception(self):
         """Test that context is cleaned up even when exceptions occur."""
-        import structlog.contextvars
 
         # Clear any existing context
         structlog.contextvars.clear_contextvars()
@@ -317,8 +315,6 @@ class TestErrorHandling:
                 assert result["component"] == "test"
                 assert "operation_id" in result
 
-            import asyncio
-
             asyncio.run(run_test())
 
     def test_parameter_extraction_with_invalid_signatures(self):
@@ -351,14 +347,11 @@ class TestEdgeCases:
 
     def test_autolog_context_isolation(self):
         """Test that autolog contexts are properly isolated between function calls."""
-        import structlog.contextvars
-        from concurrent.futures import ThreadPoolExecutor
 
         @autolog(component="worker")
         def worker_function(worker_id: str) -> dict:
             """Worker function that sets and reads context in a thread."""
             # Simulate some work
-            import time
 
             time.sleep(0.01)
 
@@ -387,7 +380,6 @@ class TestEdgeCases:
 
     def test_signature_caching_performance(self):
         """Test that function signature caching improves performance."""
-        from haproxy_template_ic.structured_logging import _get_function_signature
 
         def test_function(param1, param2="default"):
             pass

@@ -5,17 +5,26 @@ Tests the HAProxy Dataplane API integration including pod discovery,
 client operations, and configuration synchronization.
 """
 
+import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from unittest import mock
 
+import httpx
+from pydantic import SecretStr
+from haproxy_dataplane_v3.errors import UnexpectedStatus
+from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 from haproxy_template_ic.dataplane import (
-    DataplaneAPIError,
-    ValidationError,
-    DataplaneClient,
     ConfigSynchronizer,
+    DataplaneAPIError,
+    DataplaneClient,
     DeploymentHistory,
+    ValidationError,
+    extract_config_context,
     get_production_urls_from_index,
+    normalize_dataplane_url,
+    parse_haproxy_error_line,
+    parse_validation_error_details,
 )
 from haproxy_template_ic.config_models import HAProxyConfigContext
 
@@ -221,7 +230,6 @@ class TestConfigSynchronizer:
     def test_init(self):
         """Test ConfigSynchronizer initialization."""
         production_urls = ["http://192.168.1.1:5555", "http://192.168.1.2:5555"]
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -238,7 +246,6 @@ class TestConfigSynchronizer:
     @pytest.mark.asyncio
     async def test_sync_configuration_no_rendered_config(self):
         """Test sync with no rendered config."""
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -277,7 +284,6 @@ class TestConfigSynchronizerMethods:
     @pytest.mark.asyncio
     async def test_sync_configuration_validation_failure(self):
         """Test sync with validation failure."""
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -314,7 +320,6 @@ class TestConfigSynchronizerMethods:
     async def test_sync_configuration_mixed_results(self):
         """Test sync with mixed success/failure results."""
         deployment_history = DeploymentHistory()
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -403,35 +408,30 @@ class TestNormalizeDataplaneUrl:
 
     def test_normalize_url_without_v3(self):
         """Test URL normalization adds /v3."""
-        from haproxy_template_ic.dataplane import normalize_dataplane_url
 
         result = normalize_dataplane_url("http://localhost:5555")
         assert result == "http://localhost:5555/v3"
 
     def test_normalize_url_with_trailing_slash(self):
         """Test URL normalization with trailing slash."""
-        from haproxy_template_ic.dataplane import normalize_dataplane_url
 
         result = normalize_dataplane_url("http://localhost:5555/")
         assert result == "http://localhost:5555/v3"
 
     def test_normalize_url_already_has_v3(self):
         """Test URL normalization when /v3 already exists."""
-        from haproxy_template_ic.dataplane import normalize_dataplane_url
 
         result = normalize_dataplane_url("http://localhost:5555/v3")
         assert result == "http://localhost:5555/v3"
 
     def test_normalize_url_with_query_params(self):
         """Test URL normalization preserves query parameters."""
-        from haproxy_template_ic.dataplane import normalize_dataplane_url
 
         result = normalize_dataplane_url("http://localhost:5555?timeout=30")
         assert result == "http://localhost:5555/v3?timeout=30"
 
     def test_normalize_url_with_path_and_query(self):
         """Test URL normalization with existing path and query parameters."""
-        from haproxy_template_ic.dataplane import normalize_dataplane_url
 
         result = normalize_dataplane_url("https://api.example.com/haproxy?auth=token")
         assert result == "https://api.example.com/haproxy/v3?auth=token"
@@ -442,7 +442,6 @@ class TestErrorParsingFunctions:
 
     def test_parse_haproxy_error_line_config_parsing_format(self):
         """Test parsing line number from config parsing error format."""
-        from haproxy_template_ic.dataplane import parse_haproxy_error_line
 
         error_msg = "config parsing [/tmp/onlyvalidate3935728576:54] 'listen' or 'defaults' expected."
         line_num = parse_haproxy_error_line(error_msg)
@@ -450,7 +449,6 @@ class TestErrorParsingFunctions:
 
     def test_parse_haproxy_error_line_simple_line_format(self):
         """Test parsing line number from simple line format."""
-        from haproxy_template_ic.dataplane import parse_haproxy_error_line
 
         error_msg = "line 42: unknown keyword 'foobar'"
         line_num = parse_haproxy_error_line(error_msg)
@@ -458,7 +456,6 @@ class TestErrorParsingFunctions:
 
     def test_parse_haproxy_error_line_at_line_format(self):
         """Test parsing line number from 'at line' format."""
-        from haproxy_template_ic.dataplane import parse_haproxy_error_line
 
         error_msg = "syntax error at line 123"
         line_num = parse_haproxy_error_line(error_msg)
@@ -466,7 +463,6 @@ class TestErrorParsingFunctions:
 
     def test_parse_haproxy_error_line_not_found(self):
         """Test when no line number is found in error message."""
-        from haproxy_template_ic.dataplane import parse_haproxy_error_line
 
         error_msg = "generic error without line number"
         line_num = parse_haproxy_error_line(error_msg)
@@ -474,7 +470,6 @@ class TestErrorParsingFunctions:
 
     def test_extract_config_context(self):
         """Test extracting configuration context around an error line."""
-        from haproxy_template_ic.dataplane import extract_config_context
 
         config = """global
     daemon
@@ -502,7 +497,6 @@ frontend main
 
     def test_extract_config_context_out_of_range(self):
         """Test extracting context when line number is out of range."""
-        from haproxy_template_ic.dataplane import extract_config_context
 
         config = "line1\nline2\nline3"
         context = extract_config_context(config, 10, context_lines=2)
@@ -511,7 +505,6 @@ frontend main
 
     def test_parse_validation_error_details(self):
         """Test parsing complete validation error details."""
-        from haproxy_template_ic.dataplane import parse_validation_error_details
 
         error_msg = "config parsing [/tmp/file:54] 'listen' or 'defaults' expected."
         config = """global
@@ -531,7 +524,6 @@ frontend main
 
     def test_extract_config_context_empty_config(self):
         """Test extracting context from empty configuration."""
-        from haproxy_template_ic.dataplane import extract_config_context
 
         context = extract_config_context("", 1)
         assert context == "No configuration content available"
@@ -541,7 +533,6 @@ frontend main
 
     def test_parse_validation_error_details_context_extraction_exception(self):
         """Test parsing validation error when context extraction fails."""
-        from haproxy_template_ic.dataplane import parse_validation_error_details
 
         error_msg = "config parsing [/tmp/file:2] syntax error"
         config = "global\n    daemon"
@@ -562,7 +553,6 @@ frontend main
 
     def test_parse_haproxy_error_line_invalid_number(self):
         """Test parsing when regex matches but number is invalid."""
-        from haproxy_template_ic.dataplane import parse_haproxy_error_line
 
         # Test with non-numeric match
         error_msg = "config parsing [/tmp/file:invalid]: error"
@@ -706,7 +696,6 @@ class TestConfigSynchronizerSuccessPath:
     async def test_sync_configuration_success(self):
         """Test successful configuration synchronization."""
         deployment_history = DeploymentHistory()
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -887,7 +876,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_maps_success(self):
         """Test successful map synchronization."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -932,7 +920,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_maps_with_obsolete_maps(self):
         """Test map sync deletes obsolete maps."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -973,7 +960,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_maps_error_handling(self):
         """Test map sync error handling."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -995,7 +981,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_certificates_success(self):
         """Test successful certificate synchronization."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -1037,7 +1022,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_certificates_error_handling(self):
         """Test certificate sync error handling."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -1061,7 +1045,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_files_success(self):
         """Test successful general file synchronization."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -1109,7 +1092,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_files_error_handling(self):
         """Test file sync error handling."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -1133,7 +1115,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_maps_with_none_response(self):
         """Test sync_maps handles None response from API."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -1160,7 +1141,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_certificates_with_none_response(self):
         """Test sync_certificates handles None response from API."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -1187,7 +1167,6 @@ class TestDataplaneClientSyncMethods:
     @pytest.mark.asyncio
     async def test_sync_files_with_none_response(self):
         """Test sync_files handles None response from API."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         mock_api_client = Mock()
@@ -1217,7 +1196,6 @@ class TestDataplaneCriticalPaths:
 
     def test_normalize_dataplane_url_malformed_urls(self):
         """Test URL normalization with malformed URLs."""
-        from haproxy_template_ic.dataplane import normalize_dataplane_url
 
         # Test malformed scheme
         malformed_scheme_url = "htp://localhost:5555"  # typo in http
@@ -1246,7 +1224,6 @@ class TestDataplaneCriticalPaths:
 
     def test_normalize_dataplane_url_parse_errors(self):
         """Test URL normalization with parsing errors triggering fallbacks."""
-        from haproxy_template_ic.dataplane import normalize_dataplane_url
 
         # Test with string that causes urlparse to raise ValueError
         with patch("haproxy_template_ic.dataplane.urlparse") as mock_urlparse:
@@ -1262,7 +1239,6 @@ class TestDataplaneCriticalPaths:
 
     def test_normalize_dataplane_url_reconstruction_errors(self):
         """Test URL normalization when urlunparse fails."""
-        from haproxy_template_ic.dataplane import normalize_dataplane_url
 
         with patch("haproxy_template_ic.dataplane.urlunparse") as mock_urlunparse:
             mock_urlunparse.side_effect = ValueError("URL reconstruction failed")
@@ -1274,7 +1250,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_dataplane_client_get_version_success(self):
         """Test DataplaneClient.get_version() successful retrieval."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1306,8 +1281,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_dataplane_client_get_version_api_exception(self):
         """Test DataplaneClient.get_version() API exception handling."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
-        from haproxy_dataplane_v3.errors import UnexpectedStatus
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1325,7 +1298,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_dataplane_client_get_version_network_errors(self):
         """Test DataplaneClient.get_version() network error handling."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1360,7 +1332,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_dataplane_client_get_version_unexpected_exception(self):
         """Test DataplaneClient.get_version() unexpected exception handling."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1376,7 +1347,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_validate_configuration_success(self):
         """Test successful configuration validation."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1397,7 +1367,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_validate_configuration_bad_request_exception(self):
         """Test configuration validation with bad request response."""
-        from haproxy_template_ic.dataplane import DataplaneClient, ValidationError
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1423,7 +1392,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_validate_configuration_network_errors(self):
         """Test configuration validation network error handling."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1433,7 +1401,6 @@ class TestDataplaneCriticalPaths:
             mock_httpx_client.return_value.__aenter__.return_value = (
                 mock_client_instance
             )
-            import httpx
 
             mock_client_instance.post.side_effect = httpx.RequestError("Network error")
 
@@ -1446,7 +1413,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_validate_configuration_unexpected_exception(self):
         """Test configuration validation unexpected exception handling."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1466,7 +1432,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_deploy_configuration_success(self):
         """Test successful configuration deployment."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1502,7 +1467,6 @@ class TestDataplaneCriticalPaths:
     @pytest.mark.asyncio
     async def test_deploy_configuration_error_with_context(self):
         """Test deployment error includes HAProxy config context."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1559,7 +1523,6 @@ class TestConfigSynchronizerSyncMethods:
     async def test_sync_configuration_with_maps_and_certificates(self):
         """Test sync with maps and certificates."""
         deployment_history = DeploymentHistory()
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -1645,7 +1608,6 @@ class TestConfigSynchronizerSyncMethods:
     async def test_sync_configuration_deployment_with_config_context_error(self):
         """Test deployment error with config context parsing."""
         deployment_history = DeploymentHistory()
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -1730,8 +1692,6 @@ defaults
     ):
         """Test deployment error with DataplaneAPIError that already contains context."""
         deployment_history = DeploymentHistory()
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
-        from haproxy_template_ic.dataplane import DataplaneAPIError
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -1808,7 +1768,6 @@ defaults
     async def test_sync_configuration_deployment_context_extraction_failure(self):
         """Test deployment error when context extraction fails."""
         deployment_history = DeploymentHistory()
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
         credentials = Credentials(
             dataplane=DataplaneAuth(username="admin", password="adminpass"),
@@ -1893,7 +1852,6 @@ class TestDataplaneClientDeploymentRetryLogic:
     @pytest.mark.asyncio
     async def test_deploy_configuration_version_get_failure(self):
         """Test deployment when getting current version fails."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1919,7 +1877,6 @@ class TestDataplaneClientDeploymentRetryLogic:
     @pytest.mark.asyncio
     async def test_deploy_configuration_new_version_get_failure(self):
         """Test deployment when getting new version after deployment fails."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1957,7 +1914,6 @@ class TestDataplaneClientDeploymentRetryLogic:
     @pytest.mark.asyncio
     async def test_deploy_configuration_successful(self):
         """Test successful configuration deployment."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -1992,8 +1948,6 @@ class TestDataplaneClientDeploymentRetryLogic:
     @pytest.mark.asyncio
     async def test_deploy_configuration_retry_exhausted(self):
         """Test deployment when all retry attempts are exhausted."""
-        from haproxy_template_ic.dataplane import DataplaneClient, DataplaneAPIError
-        import httpx
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -2025,7 +1979,6 @@ class TestConditionalDeployment:
     @pytest.mark.asyncio
     async def test_get_current_configuration_success(self):
         """Test successful retrieval of current configuration."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -2047,7 +2000,6 @@ class TestConditionalDeployment:
     @pytest.mark.asyncio
     async def test_get_current_configuration_error(self):
         """Test handling of errors when getting current configuration."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -2068,7 +2020,6 @@ class TestConditionalDeployment:
     @pytest.mark.asyncio
     async def test_deploy_configuration_conditionally_config_unchanged(self):
         """Test conditional deployment when configuration is unchanged."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         current_config = "global\n    daemon\n"
@@ -2097,7 +2048,6 @@ class TestConditionalDeployment:
     @pytest.mark.asyncio
     async def test_deploy_configuration_conditionally_config_changed(self):
         """Test conditional deployment when configuration has changed."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         current_config = "global\n    daemon\n"
@@ -2118,7 +2068,6 @@ class TestConditionalDeployment:
     @pytest.mark.asyncio
     async def test_deploy_configuration_conditionally_force_deployment(self):
         """Test conditional deployment with force=True."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         config = "global\n    daemon\n"
@@ -2135,7 +2084,6 @@ class TestConditionalDeployment:
     @pytest.mark.asyncio
     async def test_deploy_configuration_conditionally_no_current_config(self):
         """Test conditional deployment when current config is not available."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
         new_config = "global\n    daemon\n"
@@ -2154,7 +2102,6 @@ class TestConditionalDeployment:
 
     def test_config_normalization(self):
         """Test configuration normalization for comparison."""
-        from haproxy_template_ic.dataplane import DataplaneClient
 
         client = DataplaneClient("http://localhost:5555")
 
@@ -2167,8 +2114,6 @@ class TestConditionalDeployment:
                 # All should normalize to the same thing
                 mock_get_current.return_value = config1
                 mock_deploy.return_value = "9"
-
-                import asyncio
 
                 # The normalization logic is embedded in the method,
                 # so we test it indirectly by ensuring identical normalized configs are detected
@@ -2199,9 +2144,6 @@ class TestConfigSynchronizerEnhancements:
     @pytest.mark.asyncio
     async def test_sync_configuration_with_skipped_deployments(self):
         """Test sync_configuration with some deployments skipped due to unchanged config."""
-        from haproxy_template_ic.dataplane import ConfigSynchronizer
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
-        from pydantic import SecretStr
 
         # Setup test data
         production_urls = ["http://prod1:5555", "http://prod2:5555"]
@@ -2307,9 +2249,6 @@ class TestConfigSynchronizerEnhancements:
     @pytest.mark.asyncio
     async def test_sync_configuration_with_fallback_deployment(self):
         """Test sync_configuration with fallback to regular deployment when conditional fails."""
-        from haproxy_template_ic.dataplane import ConfigSynchronizer
-        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
-        from pydantic import SecretStr
 
         # Setup test data
         production_urls = ["http://prod1:5555"]

@@ -8,6 +8,7 @@ import copy
 from unittest.mock import patch, MagicMock
 
 from haproxy_template_ic.field_filter import (
+    _remove_field_at_path,
     remove_fields_from_resource,
     validate_ignore_fields,
 )
@@ -273,7 +274,6 @@ class TestFieldFilter:
 
     def test_match_without_parts(self):
         """Test _remove_field_at_path with match lacking parts attribute."""
-        from haproxy_template_ic.field_filter import _remove_field_at_path
 
         resource = {"metadata": {"name": "test"}}
 
@@ -286,7 +286,6 @@ class TestFieldFilter:
 
     def test_empty_parts_in_match(self):
         """Test _remove_field_at_path with empty parts list."""
-        from haproxy_template_ic.field_filter import _remove_field_at_path
 
         resource = {"metadata": {"name": "test"}}
 
@@ -304,7 +303,6 @@ class TestFieldFilter:
 
     def test_path_not_in_dict(self):
         """Test navigation when path doesn't exist in dict."""
-        from haproxy_template_ic.field_filter import _remove_field_at_path
 
         resource = {"metadata": {"name": "test"}}
 
@@ -317,7 +315,6 @@ class TestFieldFilter:
 
     def test_list_navigation_errors(self):
         """Test errors during list navigation."""
-        from haproxy_template_ic.field_filter import _remove_field_at_path
 
         resource = {"items": ["a", "b", "c"]}
 
@@ -347,7 +344,6 @@ class TestFieldFilter:
 
     def test_nested_list_navigation(self):
         """Test complex list navigation scenarios."""
-        from haproxy_template_ic.field_filter import _remove_field_at_path
 
         # Test navigating through nested structures with lists
         resource = {
@@ -378,7 +374,6 @@ class TestFieldFilter:
 
     def test_final_part_list_errors(self):
         """Test errors when removing final part from list."""
-        from haproxy_template_ic.field_filter import _remove_field_at_path
 
         resource = {"items": ["a", "b", "c"]}
 

@@ -1,19 +1,26 @@
+import base64
 import pytest
+import unicodedata
 from pydantic import ValidationError
+from unittest.mock import MagicMock, PropertyMock, patch
 
+from jinja2 import Template, TemplateNotFound
 from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.config_models import (
     Config,
-    WatchResourceConfig,
-    TemplateConfig,
+    ContentType,
+    HAProxyConfigContext,
+    IndexedResourceCollection,
     PodSelector,
-    config_from_dict,
     RenderedContent,
     RenderedConfig,
+    ResourceFilter,
+    TemplateConfig,
     TemplateContext,
-    HAProxyConfigContext,
+    TemplateSnippet,
+    WatchResourceConfig,
+    config_from_dict,
 )
-from jinja2 import Template
 
 
 # DELETED: ensure_auth_fields helper - credentials now come from Kubernetes Secrets
@@ -368,7 +375,6 @@ def test_rendered_map_is_frozen():
 # TemplateContext Tests
 def test_template_context_creation():
     """Test TemplateContext dataclass creation."""
-    from haproxy_template_ic.config_models import IndexedResourceCollection
 
     # Create an IndexedResourceCollection for test_resource
     test_collection = IndexedResourceCollection()
@@ -393,7 +399,6 @@ def test_template_context_default_resources():
 
 def test_template_context_is_frozen():
     """Test that TemplateContext is immutable."""
-    from haproxy_template_ic.config_models import IndexedResourceCollection
 
     # Create an IndexedResourceCollection for pods
     pods_collection = IndexedResourceCollection()
@@ -416,7 +421,6 @@ def test_template_context_is_frozen():
 def test_haproxy_config_context_creation():
     """Test HAProxyConfigContext dataclass creation."""
     # Create required config and template_context
-    from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
 
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
@@ -438,7 +442,6 @@ def test_haproxy_config_context_with_custom_data():
     rendered_maps = [rendered_map]
 
     # Create required config and template_context
-    from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
 
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
@@ -456,7 +459,6 @@ def test_haproxy_config_context_with_custom_data():
 
 def test_haproxy_config_context_mutable():
     """Test that HAProxyConfigContext is mutable (not frozen)."""
-    from haproxy_template_ic.config_models import Config, PodSelector, TemplateContext
 
     config = Config(
         pod_selector=PodSelector(match_labels={"app": "test"}),
@@ -594,7 +596,6 @@ def test_haproxy_config_context_default_rendered_certificates():
 
 def test_watch_resource_collection_by_id():
     """Test watch resource collection access by key."""
-    from haproxy_template_ic.config_models import WatchResourceConfig
 
     resources = {
         "pods": WatchResourceConfig(kind="Pod", api_version="v1"),
@@ -620,7 +621,6 @@ def test_watch_resource_collection_by_id():
 
 def test_map_collection_by_path():
     """Test map collection access by path key."""
-    from haproxy_template_ic.config_models import TemplateConfig
 
     maps = {
         "backend.map": TemplateConfig(template="backend map"),
@@ -644,7 +644,6 @@ def test_map_collection_by_path():
 
 def test_template_snippet_collection_by_name():
     """Test template snippet collection access by name (dict-based)."""
-    from haproxy_template_ic.config_models import TemplateSnippet
 
     snippets = {
         "backend-servers": TemplateSnippet(
@@ -693,14 +692,6 @@ def test_certificate_collection_by_name():
 
 def test_template_context_get_methods():
     """Test TemplateContext helper methods."""
-    from haproxy_template_ic.config_models import (
-        TemplateContext,
-        Config,
-        TemplateConfig,
-        TemplateSnippet,
-        PodSelector,
-        WatchResourceConfig,
-    )
 
     # Create config with collections for testing
     test_config = Config(
@@ -730,7 +721,6 @@ def test_template_context_get_methods():
     assert test_config.certificates.get("nonexistent.pem") is None
 
     # Test basic template context functionality
-    from haproxy_template_ic.config_models import IndexedResourceCollection
 
     test_collection = IndexedResourceCollection()
     context_basic = TemplateContext(resources={"test": test_collection})
@@ -762,7 +752,6 @@ def test_config_from_dict_error_conditions():
 
 def test_parse_pod_selector_errors():
     """Test pod_selector validation error conditions."""
-    from haproxy_template_ic.config_models import config_from_dict
 
     # Test invalid pod_selector type - Pydantic validation
     with pytest.raises(ValueError):
@@ -1220,7 +1209,6 @@ def test_template_snippet_not_found_error():
     map_config = config.maps.get("error.map")
 
     # Should raise TemplateNotFound when trying to render
-    from jinja2 import TemplateNotFound
 
     with pytest.raises(TemplateNotFound, match="non-existent-snippet"):
         TemplateRenderer.from_config(config).get_compiled(map_config.template).render()
@@ -1363,7 +1351,6 @@ def test_template_snippet_update_during_config_reload():
 
 def test_template_context_helper_methods():
     """Test the new helper methods for resource access."""
-    from haproxy_template_ic.config_models import IndexedResourceCollection
 
     # Create IndexedResourceCollections for each resource type
     ingresses_collection = IndexedResourceCollection()
@@ -1455,7 +1442,6 @@ def test_template_compilation():
 
 def test_b64decode_filter():
     """Test the custom base64 decode filter."""
-    import base64
 
     # Test valid base64 string using the new config system
     test_string = "Hello, World!"
@@ -1632,7 +1618,6 @@ def test_host_map_template_rendering():
     config = config_from_dict(config_dict.copy())
 
     # Create mock ingress resources using IndexedResourceCollection
-    from haproxy_template_ic.config_models import IndexedResourceCollection
 
     ingresses_collection = IndexedResourceCollection()
     ingresses_collection._internal_dict[("default", "test-ingress")] = [
@@ -1684,7 +1669,6 @@ def test_host_map_template_rendering():
 
 def test_complete_ingress_configuration_with_certificates():
     """Test a complete ingress controller configuration including certificates with b64decode."""
-    import base64
 
     # Create TLS certificate data
     cert_data = (
@@ -1717,7 +1701,6 @@ def test_complete_ingress_configuration_with_certificates():
     config = config_from_dict(config_dict.copy())
 
     # Create mock TLS secret using IndexedResourceCollection
-    from haproxy_template_ic.config_models import IndexedResourceCollection
 
     secrets_collection = IndexedResourceCollection()
     secrets_collection._internal_dict[("default", "example-tls")] = [
@@ -1858,7 +1841,6 @@ def test_watch_resource_config_version_property():
 
 def test_template_snippet_name_validation():
     """Test TemplateSnippet name validation in config."""
-    from haproxy_template_ic.config_models import TemplateSnippet
 
     # Test valid snippet creation
     snippet = TemplateSnippet(name="valid-name", template="test template")
@@ -1882,7 +1864,6 @@ def test_template_snippet_name_validation():
 
 def test_resource_filter_creation():
     """Test ResourceFilter model creation."""
-    from haproxy_template_ic.config_models import ResourceFilter
 
     # Test with all fields
     filter_obj = ResourceFilter(
@@ -1901,7 +1882,6 @@ def test_resource_filter_creation():
 
 def test_pod_selector_frozen():
     """Test that PodSelector is frozen."""
-    from haproxy_template_ic.config_models import PodSelector
 
     selector = PodSelector(match_labels={"app": "test"})
 
@@ -1915,7 +1895,6 @@ class TestFilenameSecurity:
 
     def test_filename_validation_valid_cases(self):
         """Test that valid filenames are accepted."""
-        from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         valid_filenames = [
             "host.map",
@@ -1941,7 +1920,6 @@ class TestFilenameSecurity:
 
     def test_filename_validation_invalid_characters_blocked(self):
         """Test that filenames with invalid characters are blocked (now includes spaces and Unicode)."""
-        from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         invalid_filenames = [
             "host file.map",  # Spaces no longer allowed for security
@@ -1966,7 +1944,6 @@ class TestFilenameSecurity:
 
     def test_filename_validation_path_traversal_blocked(self):
         """Test that path traversal attempts in filenames are blocked."""
-        from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         path_traversal_attempts = [
             "../../../etc/passwd",
@@ -1995,7 +1972,6 @@ class TestFilenameSecurity:
 
     def test_filename_validation_directory_names_blocked(self):
         """Test that directory names like '.' and '..' are blocked by pattern validation."""
-        from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         directory_names = [".", ".."]
 
@@ -2009,7 +1985,6 @@ class TestFilenameSecurity:
 
     def test_filename_validation_null_byte_blocked(self):
         """Test that null byte injection in filenames is blocked."""
-        from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         null_byte_attempts = [
             "host.map\x00",
@@ -2028,7 +2003,6 @@ class TestFilenameSecurity:
 
     def test_filename_validation_length_limits(self):
         """Test filename length validation."""
-        from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         # Test maximum length (255 characters)
         max_valid_filename = "a" * 255
@@ -2128,7 +2102,6 @@ class TestFilenameSecurity:
 
     def test_filename_validation_comprehensive_attacks(self):
         """Test comprehensive filename attack scenarios."""
-        from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         # These attacks should be blocked by the regex pattern
         path_attacks = [
@@ -2171,7 +2144,6 @@ class TestFilenameSecurity:
 
     def test_content_type_enum_security(self):
         """Test that ContentType enum prevents invalid content types."""
-        from haproxy_template_ic.config_models import RenderedContent, ContentType
 
         # Valid content types
         valid_types = [ContentType.MAP, ContentType.CERTIFICATE, ContentType.FILE]
@@ -2219,7 +2191,6 @@ class TestFieldValidators:
 
     def test_validate_ignore_fields_with_invalid_expressions(self):
         """Test that invalid JSONPath expressions trigger warning."""
-        from unittest.mock import patch, MagicMock
 
         with patch(
             "haproxy_template_ic.field_filter.validate_ignore_fields"
@@ -2258,8 +2229,6 @@ class TestIndexedResourceCollectionFromKopfIndex:
 
     def test_from_kopf_index_size_limit_reached(self):
         """Test warning when size limit is reached."""
-        from unittest.mock import MagicMock, patch
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         # Create a mock index with more items than max_size
         mock_index = MagicMock()
@@ -2293,8 +2262,6 @@ class TestIndexedResourceCollectionFromKopfIndex:
 
     def test_from_kopf_index_normalization_failure(self):
         """Test handling of resource normalization failures."""
-        from unittest.mock import MagicMock, patch
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         mock_index = MagicMock()
         mock_index.__iter__.return_value = iter([("key1",)])
@@ -2321,8 +2288,6 @@ class TestIndexedResourceCollectionFromKopfIndex:
 
     def test_from_kopf_index_invalid_resource(self):
         """Test warning for invalid resources."""
-        from unittest.mock import MagicMock, patch
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         mock_index = MagicMock()
         mock_index.__iter__.return_value = iter([("key1",)])
@@ -2349,8 +2314,6 @@ class TestIndexedResourceCollectionFromKopfIndex:
 
     def test_from_kopf_index_general_exception(self):
         """Test handling of general exceptions during indexing."""
-        from unittest.mock import MagicMock, patch
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         mock_index = MagicMock()
         mock_index.__iter__.return_value = iter([("key1",)])
@@ -2377,8 +2340,6 @@ class TestIndexedResourceCollectionHelperMethods:
 
     def test_normalize_key_with_tuple_input(self):
         """Test _normalize_key with tuple input."""
-        from haproxy_template_ic.config_models import IndexedResourceCollection
-        import unicodedata
 
         collection = IndexedResourceCollection()
 
@@ -2409,8 +2370,6 @@ class TestIndexedResourceCollectionHelperMethods:
 
     def test_validate_resource_with_object(self):
         """Test _validate_resource with object having metadata attribute."""
-        from unittest.mock import MagicMock
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2430,7 +2389,6 @@ class TestIndexedResourceCollectionHelperMethods:
 
     def test_validate_resource_edge_cases(self):
         """Test _validate_resource with edge cases."""
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2448,8 +2406,6 @@ class TestIndexedResourceCollectionHelperMethods:
 
     def test_extract_resource_id_with_object(self):
         """Test _extract_resource_id with object having metadata."""
-        from unittest.mock import MagicMock
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2469,7 +2425,6 @@ class TestIndexedResourceCollectionHelperMethods:
 
     def test_extract_resource_id_with_dict(self):
         """Test _extract_resource_id with dictionary."""
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2488,8 +2443,6 @@ class TestIndexedResourceCollectionHelperMethods:
 
     def test_extract_resource_id_exception(self):
         """Test _extract_resource_id exception handling."""
-        from unittest.mock import MagicMock, PropertyMock
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2515,7 +2468,6 @@ class TestIndexedResourceCollectionQueryMethods:
 
     def test_get_indexed_iter(self):
         """Test get_indexed_iter method."""
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2537,8 +2489,6 @@ class TestIndexedResourceCollectionQueryMethods:
 
     def test_get_indexed_single_multiple_resources(self):
         """Test get_indexed_single with multiple resources."""
-        from unittest.mock import patch, MagicMock
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2562,7 +2512,6 @@ class TestIndexedResourceCollectionQueryMethods:
 
     def test_items_iteration(self):
         """Test items method."""
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2579,7 +2528,6 @@ class TestIndexedResourceCollectionQueryMethods:
 
     def test_values_iteration(self):
         """Test values method."""
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2595,7 +2543,6 @@ class TestIndexedResourceCollectionQueryMethods:
 
     def test_contains_check(self):
         """Test __contains__ method."""
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2608,7 +2555,6 @@ class TestIndexedResourceCollectionQueryMethods:
 
     def test_keys_iteration(self):
         """Test keys method."""
-        from haproxy_template_ic.config_models import IndexedResourceCollection
 
         collection = IndexedResourceCollection()
 
@@ -2627,12 +2573,6 @@ class TestHAProxyConfigContextMethods:
 
     def test_get_content_by_filename_not_found(self):
         """Test get_content_by_filename when content not found."""
-        from haproxy_template_ic.config_models import (
-            Config,
-            HAProxyConfigContext,
-            TemplateContext,
-            RenderedContent,
-        )
 
         config = Config(
             pod_selector={"match_labels": {"app": "test"}},

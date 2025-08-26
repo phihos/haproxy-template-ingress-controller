@@ -1,5 +1,6 @@
 """Tests for credential management with Pydantic models."""
 
+import base64
 import pytest
 import click
 from pydantic import ValidationError
@@ -187,7 +188,6 @@ def test_decode_field_bytes_invalid_base64():
 def test_decode_field_bytes_invalid_unicode():
     """Test _decode_field with bytes that decode to invalid unicode."""
     # This creates bytes that are valid base64 but decode to invalid unicode
-    import base64
 
     invalid_unicode_bytes = base64.b64encode(b"\xff\xfe\xfd")
     result = _decode_field(invalid_unicode_bytes)
@@ -213,7 +213,6 @@ def test_decode_field_string_fallback():
 def test_decode_field_string_unicode_error_fallback():
     """Test _decode_field string unicode error fallback."""
     # Create a base64 string that decodes to invalid unicode
-    import base64
 
     invalid_unicode_b64 = base64.b64encode(b"\xff\xfe\xfd").decode("ascii")
     result = _decode_field(invalid_unicode_b64)

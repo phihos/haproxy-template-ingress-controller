@@ -11,6 +11,7 @@ Uses the complete generated HAProxy Dataplane API v3 client for all operations.
 """
 
 import asyncio
+import base64
 import io
 import logging
 import re
@@ -18,6 +19,8 @@ import time
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple
 from urllib.parse import urlparse, urlunparse
+
+import httpx
 
 if TYPE_CHECKING:
     from haproxy_template_ic.config_models import IndexedResourceCollection
@@ -470,9 +473,6 @@ class DataplaneClient:
     def _get_client(self) -> Any:
         """Lazy initialization of AuthenticatedClient object."""
         if self._client is None:
-            import base64
-            import httpx
-
             logger.debug(f"Creating dataplane client for {self.base_url}")
             # Create basic auth token from username and password
             auth_string = f"{self.auth[0]}:{self.auth[1]}"
@@ -534,8 +534,6 @@ class DataplaneClient:
             ValidationError: If configuration validation fails
             DataplaneAPIError: If API communication fails
         """
-        import httpx
-
         with trace_dataplane_operation("validate", self.base_url):
             add_span_attributes(
                 config_size=len(config_content), dataplane_url=self.base_url
@@ -619,8 +617,6 @@ class DataplaneClient:
         temporary dataplane unavailability), but excludes validation errors
         from retries since retrying won't fix config errors.
         """
-        import httpx
-
         with trace_dataplane_operation("deploy", self.base_url):
             add_span_attributes(
                 config_size=len(config_content), dataplane_url=self.base_url
