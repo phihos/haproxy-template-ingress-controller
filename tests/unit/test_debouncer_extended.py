@@ -61,7 +61,7 @@ class TestDebouncerMetricsImportError:
             min_interval=0.1, max_interval=0.2, render_func=render_func, memo=memo
         )
 
-        debouncer.start()
+        await debouncer.start()
 
         try:
             # Patch the metrics import to fail
@@ -84,7 +84,7 @@ class TestDebouncerMetricsImportError:
             min_interval=0.1, max_interval=0.2, render_func=render_func, memo=memo
         )
 
-        debouncer.start()
+        await debouncer.start()
 
         try:
             # Let it run for a periodic refresh with no metrics
@@ -153,7 +153,7 @@ class TestDebouncerEdgeCases:
 
         with patch("asyncio.wait_for", mock_wait_for):
             with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
-                debouncer.start()
+                await debouncer.start()
 
                 try:
                     # Give it time to hit the error and recover
@@ -201,7 +201,7 @@ class TestDebouncerEdgeCases:
                     raise
 
         debouncer._run = stubborn_run
-        debouncer.start()
+        await debouncer.start()
 
         # Give it a moment to start
         await asyncio.sleep(0.01)
@@ -229,7 +229,7 @@ class TestDebouncerEdgeCases:
         )
 
         # Start the debouncer normally to have a real task
-        debouncer.start()
+        await debouncer.start()
 
         # Wait a bit and then cancel the task to simulate a cancelled task
         await asyncio.sleep(0.05)

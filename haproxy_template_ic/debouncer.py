@@ -7,7 +7,6 @@ templates are refreshed periodically.
 """
 
 import asyncio
-import threading
 import time
 from typing import Any, Callable, Coroutine, Optional
 
@@ -58,7 +57,8 @@ class TemplateRenderDebouncer:
         self._stop: bool = False
         self._change_count = 0
         self._last_change_time: float = 0
-        self._start_lock = threading.Lock()
+        self._start_lock = asyncio.Lock()
+        self._metrics = self._get_metrics_collector()
 
         # Log warnings for unusual configurations
         if min_interval < 3:
@@ -76,6 +76,15 @@ class TemplateRenderDebouncer:
             max_interval=max_interval,
         )
 
+    def _get_metrics_collector(self):
+        """Get metrics collector instance if available."""
+        try:
+            from haproxy_template_ic.metrics import get_metrics_collector
+
+            return get_metrics_collector()
+        except ImportError:
+            return None
+
     async def trigger(self) -> None:
         """
         Signal that a resource changed and template rendering may be needed.
@@ -88,13 +97,8 @@ class TemplateRenderDebouncer:
         self._event.set()
 
         # Record metric
-        try:
-            from haproxy_template_ic.metrics import get_metrics_collector
-
-            metrics = get_metrics_collector()
-            metrics.record_debouncer_trigger()
-        except ImportError:
-            pass  # Metrics not available
+        if self._metrics:
+            self._metrics.record_debouncer_trigger()
 
     async def _run(self) -> None:
         """
@@ -113,13 +117,10 @@ class TemplateRenderDebouncer:
                 time_until_max = max(0, self.max_interval - time_since_last_render)
 
                 # Update metrics for time since last render
-                try:
-                    from haproxy_template_ic.metrics import get_metrics_collector
-
-                    metrics = get_metrics_collector()
-                    metrics.update_debouncer_last_render_time(time_since_last_render)
-                except ImportError:
-                    pass  # Metrics not available
+                if self._metrics:
+                    self._metrics.update_debouncer_last_render_time(
+                        time_since_last_render
+                    )
 
                 # Wait for event or timeout (guaranteed execution)
                 try:
@@ -134,7 +135,6 @@ class TemplateRenderDebouncer:
                     break  # type: ignore[unreachable]
 
                 # Enforce minimum interval (reuse current_time for consistency)
-                current_time = time.time()
                 time_since_last_render = current_time - self._last_render_time
                 if time_since_last_render < self.min_interval:
                     sleep_time = self.min_interval - time_since_last_render
@@ -163,13 +163,8 @@ class TemplateRenderDebouncer:
                     )
 
                 # Record metrics
-                try:
-                    from haproxy_template_ic.metrics import get_metrics_collector
-
-                    metrics = get_metrics_collector()
-                    metrics.record_debouncer_render(triggered_by, changes_batched)
-                except ImportError:
-                    pass  # Metrics not available
+                if self._metrics:
+                    self._metrics.record_debouncer_render(triggered_by, changes_batched)
 
                 # Render templates
                 self._last_render_time = time.time()
@@ -193,13 +188,13 @@ class TemplateRenderDebouncer:
 
         logger.info("Template debouncer background task stopped")
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """
-        Start the debouncer background task (thread-safe).
+        Start the debouncer background task.
 
         This should be called during operator startup.
         """
-        with self._start_lock:
+        async with self._start_lock:
             if self._task and not self._task.done():
                 logger.warning("Debouncer already running")
                 return
@@ -224,7 +219,8 @@ class TemplateRenderDebouncer:
                 await asyncio.wait_for(self._task, timeout=5)
             except asyncio.TimeoutError:
                 logger.warning("Debouncer task did not stop gracefully, cancelling")
-                self._task.cancel()
+                if not self._task.done():
+                    self._task.cancel()
                 try:
                     await self._task
                 except asyncio.CancelledError:

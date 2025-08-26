@@ -53,7 +53,7 @@ class TestTemplateRenderDebouncer:
             memo=memo,
         )
 
-        debouncer.start()
+        await debouncer.start()
 
         try:
             # Trigger once
@@ -80,7 +80,7 @@ class TestTemplateRenderDebouncer:
             memo=memo,
         )
 
-        debouncer.start()
+        await debouncer.start()
 
         try:
             # Don't trigger anything, just wait
@@ -104,7 +104,7 @@ class TestTemplateRenderDebouncer:
             memo=memo,
         )
 
-        debouncer.start()
+        await debouncer.start()
         await asyncio.sleep(MIN_INTERVAL_SHORT)  # Let it start
 
         try:
@@ -142,7 +142,7 @@ class TestTemplateRenderDebouncer:
             memo=memo,
         )
 
-        debouncer.start()
+        await debouncer.start()
         await asyncio.sleep(SLEEP_BUFFER)  # Let it start
 
         # Stop should complete without errors
@@ -165,7 +165,7 @@ class TestTemplateRenderDebouncer:
             memo=memo,
         )
 
-        debouncer.start()
+        await debouncer.start()
 
         try:
             # Trigger rendering
@@ -197,7 +197,7 @@ class TestTemplateRenderDebouncer:
         assert stats["is_running"] is False
         assert stats["pending_changes"] == 0
 
-        debouncer.start()
+        await debouncer.start()
         await asyncio.sleep(SLEEP_BUFFER / 5)
 
         stats = debouncer.get_stats()
@@ -222,12 +222,12 @@ class TestTemplateRenderDebouncer:
             memo=memo,
         )
 
-        debouncer.start()
+        await debouncer.start()
         first_task = debouncer._task
 
         # Starting again should not create a new task
         with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
-            debouncer.start()
+            await debouncer.start()
             mock_logger.warning.assert_called_with("Debouncer already running")
 
         assert debouncer._task is first_task

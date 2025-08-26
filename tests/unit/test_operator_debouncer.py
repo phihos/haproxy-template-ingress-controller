@@ -62,6 +62,7 @@ class TestOperatorDebouncerIntegration:
             "haproxy_template_ic.operator.TemplateRenderDebouncer"
         ) as MockDebouncer:
             mock_instance = MagicMock()
+            mock_instance.start = AsyncMock()  # Make start async
             MockDebouncer.return_value = mock_instance
 
             await init_template_debouncer(memo)
@@ -92,7 +93,13 @@ class TestOperatorDebouncerIntegration:
         old_debouncer.stop = AsyncMock()
         memo.debouncer = old_debouncer
 
-        with patch("haproxy_template_ic.operator.TemplateRenderDebouncer"):
+        with patch(
+            "haproxy_template_ic.operator.TemplateRenderDebouncer"
+        ) as MockDebouncer:
+            mock_instance = MagicMock()
+            mock_instance.start = AsyncMock()  # Make start async
+            MockDebouncer.return_value = mock_instance
+
             await init_template_debouncer(memo)
 
             # Should stop old debouncer

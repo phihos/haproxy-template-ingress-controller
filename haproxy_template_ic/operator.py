@@ -1013,7 +1013,7 @@ async def init_template_debouncer(memo: Any, **kwargs: Any) -> None:
         render_func=render_haproxy_templates,
         memo=memo,
     )
-    memo.debouncer.start()
+    await memo.debouncer.start()
 
     logger.info(
         f"Template debouncer started with intervals: min={min_interval}s, max={max_interval}s"
