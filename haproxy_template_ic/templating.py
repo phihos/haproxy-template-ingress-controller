@@ -10,7 +10,7 @@ import os
 import re
 import sys
 from functools import lru_cache
-from typing import Any, Callable, Dict, Optional, Union, Union
+from typing import Any, Callable, Dict, Optional
 
 from pathvalidate import ValidationError, is_valid_filename, sanitize_filename
 
@@ -273,12 +273,11 @@ def format_template_error(
 
     if template_frames:
         if is_include_error and len(template_frames) >= 2:
-            error_parts.append(f": {str(e)}")
-
             # Handle multiple levels of includes
             if len(template_frames) > 2:
                 # Deep nesting - show the full chain
                 error_parts.append("\n\n  Error occurred through nested includes:")
+                error_parts.append(f"\n  Error: {str(e)}\n")
 
                 # Build the include chain
                 include_chain: list[dict[str, Any]] = []
@@ -423,8 +422,9 @@ def format_template_error(
 
                         if context_lines:
                             error_parts.append(
-                                "\n\n  Error occurred in included snippet"
+                                "\n\n  Error occurred in included snippet:"
                             )
+                            error_parts.append(f"\n  Error: {str(e)}\n")
                             error_parts.append(
                                 "\n  Main template (include at line "
                                 + str(include_line)
