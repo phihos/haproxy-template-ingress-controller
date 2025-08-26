@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.user import User
 from ...types import UNSET, Response, Unset
 
@@ -31,7 +31,9 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[list["User"]]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Union[Error, list["User"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -41,13 +43,15 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
             response_200.append(componentsschemasusers_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[list["User"]]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Error, list["User"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -61,7 +65,7 @@ def sync_detailed(
     client: Union[AuthenticatedClient, Client],
     userlist: str,
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["User"]]:
+) -> Response[Union[Error, list["User"]]]:
     """Return an array of userlist users
 
     Args:
@@ -73,7 +77,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['User']]
+        Response[Union[Error, list['User']]]
     """
 
     kwargs = _get_kwargs(
@@ -93,7 +97,7 @@ def sync(
     client: Union[AuthenticatedClient, Client],
     userlist: str,
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["User"]]:
+) -> Optional[Union[Error, list["User"]]]:
     """Return an array of userlist users
 
     Args:
@@ -105,7 +109,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['User']
+        Union[Error, list['User']]
     """
 
     return sync_detailed(
@@ -120,7 +124,7 @@ async def asyncio_detailed(
     client: Union[AuthenticatedClient, Client],
     userlist: str,
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["User"]]:
+) -> Response[Union[Error, list["User"]]]:
     """Return an array of userlist users
 
     Args:
@@ -132,7 +136,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['User']]
+        Response[Union[Error, list['User']]]
     """
 
     kwargs = _get_kwargs(
@@ -150,7 +154,7 @@ async def asyncio(
     client: Union[AuthenticatedClient, Client],
     userlist: str,
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["User"]]:
+) -> Optional[Union[Error, list["User"]]]:
     """Return an array of userlist users
 
     Args:
@@ -162,7 +166,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['User']
+        Union[Error, list['User']]
     """
 
     return (

@@ -5,7 +5,8 @@ from typing import Any, TypeVar, Union
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-from ..types import UNSET, File, FileJsonType, Unset
+from .. import types
+from ..types import UNSET, File, FileTypes, Unset
 
 T = TypeVar("T", bound="CreateStorageGeneralFileBody")
 
@@ -21,7 +22,7 @@ class CreateStorageGeneralFileBody:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        file_upload: Union[Unset, FileJsonType] = UNSET
+        file_upload: Union[Unset, FileTypes] = UNSET
         if not isinstance(self.file_upload, Unset):
             file_upload = self.file_upload.to_tuple()
 
@@ -33,20 +34,16 @@ class CreateStorageGeneralFileBody:
 
         return field_dict
 
-    def to_multipart(self) -> dict[str, Any]:
-        file_upload: Union[Unset, FileJsonType] = UNSET
+    def to_multipart(self) -> types.RequestFiles:
+        files: types.RequestFiles = []
+
         if not isinstance(self.file_upload, Unset):
-            file_upload = self.file_upload.to_tuple()
+            files.append(("file_upload", self.file_upload.to_tuple()))
 
-        field_dict: dict[str, Any] = {}
         for prop_name, prop in self.additional_properties.items():
-            field_dict[prop_name] = (None, str(prop).encode(), "text/plain")
+            files.append((prop_name, (None, str(prop).encode(), "text/plain")))
 
-        field_dict.update({})
-        if file_upload is not UNSET:
-            field_dict["file_upload"] = file_upload
-
-        return field_dict
+        return files
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:

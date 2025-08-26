@@ -94,7 +94,7 @@ COMMANDS:
     down        Delete the kind cluster
     logs        Follow controller logs
     exec        Execute shell in controller pod
-    restart     Restart controller deployment
+    restart     Rebuild image and restart controller (use --skip-build to skip)
     status      Show deployment status
     clean       Clean up and reset environment
     test        Test ingress controller functionality
@@ -115,6 +115,8 @@ OPTIONS:
 EXAMPLES:
     $0                      # Start dev environment with defaults
     $0 up --skip-build      # Start without rebuilding image
+    $0 restart              # Rebuild image and restart controller
+    $0 restart --skip-build # Restart controller without rebuilding
     $0 test                 # Test ingress controller functionality
     $0 logs                 # Follow controller logs
     $0 port-forward         # Setup port forwarding for testing
@@ -448,6 +450,19 @@ dev_exec() {
 
 dev_restart() {
     print_section "🔄 Restarting Controller"
+    
+    # Build and load new image unless skipped
+    if [[ "$SKIP_BUILD" != "true" ]]; then
+        log INFO "Rebuilding and loading controller image..."
+        build_and_load_local_image || {
+            err "Failed to rebuild image"
+            return 1
+        }
+    else
+        log INFO "Skipping image rebuild (--skip-build flag set)"
+    fi
+    
+    # Restart the deployment with the new image
     kubectl -n "$CTRL_NAMESPACE" rollout restart deploy/haproxy-template-ic
     kubectl -n "$CTRL_NAMESPACE" rollout status deploy/haproxy-template-ic --timeout="${TIMEOUT}s"
     ok "Controller restarted successfully"

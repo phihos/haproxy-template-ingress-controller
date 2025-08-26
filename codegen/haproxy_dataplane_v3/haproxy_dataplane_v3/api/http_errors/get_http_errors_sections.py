@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.http_errors_section import HttpErrorsSection
 from ...types import UNSET, Response, Unset
 
@@ -30,7 +30,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[list["HttpErrorsSection"]]:
+) -> Union[Error, list["HttpErrorsSection"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -42,15 +42,15 @@ def _parse_response(
             response_200.append(componentsschemashttp_errors_sections_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[list["HttpErrorsSection"]]:
+) -> Response[Union[Error, list["HttpErrorsSection"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,7 +63,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["HttpErrorsSection"]]:
+) -> Response[Union[Error, list["HttpErrorsSection"]]]:
     """Return an array of http-error sections
 
      Returns an array of all configured http-error sections.
@@ -76,7 +76,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['HttpErrorsSection']]
+        Response[Union[Error, list['HttpErrorsSection']]]
     """
 
     kwargs = _get_kwargs(
@@ -94,7 +94,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["HttpErrorsSection"]]:
+) -> Optional[Union[Error, list["HttpErrorsSection"]]]:
     """Return an array of http-error sections
 
      Returns an array of all configured http-error sections.
@@ -107,7 +107,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['HttpErrorsSection']
+        Union[Error, list['HttpErrorsSection']]
     """
 
     return sync_detailed(
@@ -120,7 +120,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["HttpErrorsSection"]]:
+) -> Response[Union[Error, list["HttpErrorsSection"]]]:
     """Return an array of http-error sections
 
      Returns an array of all configured http-error sections.
@@ -133,7 +133,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['HttpErrorsSection']]
+        Response[Union[Error, list['HttpErrorsSection']]]
     """
 
     kwargs = _get_kwargs(
@@ -149,7 +149,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["HttpErrorsSection"]]:
+) -> Optional[Union[Error, list["HttpErrorsSection"]]]:
     """Return an array of http-error sections
 
      Returns an array of all configured http-error sections.
@@ -162,7 +162,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['HttpErrorsSection']
+        Union[Error, list['HttpErrorsSection']]
     """
 
     return (

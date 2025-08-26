@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.ssl_file import SSLFile
 from ...types import Response
 
@@ -20,18 +20,20 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[SSLFile]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Union[Error, SSLFile]:
     if response.status_code == 200:
         response_200 = SSLFile.from_dict(response.json())
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[SSLFile]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Error, SSLFile]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -44,7 +46,7 @@ def sync_detailed(
     name: str,
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[SSLFile]:
+) -> Response[Union[Error, SSLFile]]:
     """Return one structured certificate
 
      Returns one structured certificate using the runtime socket.
@@ -57,7 +59,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[SSLFile]
+        Response[Union[Error, SSLFile]]
     """
 
     kwargs = _get_kwargs(
@@ -75,7 +77,7 @@ def sync(
     name: str,
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[SSLFile]:
+) -> Optional[Union[Error, SSLFile]]:
     """Return one structured certificate
 
      Returns one structured certificate using the runtime socket.
@@ -88,7 +90,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        SSLFile
+        Union[Error, SSLFile]
     """
 
     return sync_detailed(
@@ -101,7 +103,7 @@ async def asyncio_detailed(
     name: str,
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[SSLFile]:
+) -> Response[Union[Error, SSLFile]]:
     """Return one structured certificate
 
      Returns one structured certificate using the runtime socket.
@@ -114,7 +116,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[SSLFile]
+        Response[Union[Error, SSLFile]]
     """
 
     kwargs = _get_kwargs(
@@ -130,7 +132,7 @@ async def asyncio(
     name: str,
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[SSLFile]:
+) -> Optional[Union[Error, SSLFile]]:
     """Return one structured certificate
 
      Returns one structured certificate using the runtime socket.
@@ -143,7 +145,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        SSLFile
+        Union[Error, SSLFile]
     """
 
     return (

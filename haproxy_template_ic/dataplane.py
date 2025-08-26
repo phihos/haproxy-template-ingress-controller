@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple
 from urllib.parse import urlparse, urlunparse
 
 import httpx
+import xxhash
 
 if TYPE_CHECKING:
     from haproxy_template_ic.config_models import IndexedResourceCollection
@@ -77,6 +78,11 @@ from haproxy_dataplane_v3.api.storage import (
     create_storage_general_file,
     delete_storage_general_file,
     replace_storage_general_file,
+    replace_storage_map_file,
+    replace_storage_ssl_certificate,
+    get_one_storage_map,
+    get_one_storage_ssl_certificate,
+    get_one_storage_general_file,
 )
 from haproxy_dataplane_v3.models.create_storage_map_file_body import (
     CreateStorageMapFileBody,
@@ -94,6 +100,41 @@ from haproxy_dataplane_v3.types import File
 from haproxy_dataplane_v3 import errors
 
 logger = logging.getLogger(__name__)
+
+
+def compute_content_hash(content: str) -> str:
+    """Compute xxHash64 of content for fast change detection.
+
+    Uses xxHash64 for its excellent performance (5GB/s+) and sufficient
+    collision resistance for non-cryptographic change detection.
+
+    Args:
+        content: The text content to hash
+
+    Returns:
+        Hash string in format "xxh64:<hex_hash>"
+    """
+    return f"xxh64:{xxhash.xxh64(content.encode('utf-8')).hexdigest()}"
+
+
+def extract_hash_from_description(description: Optional[str]) -> Optional[str]:
+    """Extract content hash from description field if present.
+
+    Args:
+        description: Description field that may contain a hash
+
+    Returns:
+        The hash string if found (e.g., "xxh64:abc123..."), None otherwise
+    """
+    if not description or not isinstance(description, str):
+        return None
+
+    # Check if description starts with a known hash format
+    if description.startswith(("xxh64:", "sha256:", "md5:")):
+        # Return just the hash part (before any additional description)
+        return description.split(" ", 1)[0]
+
+    return None
 
 
 def parse_haproxy_error_line(error_message: str) -> Optional[int]:
@@ -608,7 +649,7 @@ class DataplaneClient:
                     ) from e
 
     async def deploy_configuration(self, config_content: str) -> str:
-        """Deploy HAProxy configuration and reload.
+        """Deploy HAProxy configuration.
 
         Uses direct httpx calls since openapi-python-client doesn't support
         text/plain content type for configuration endpoints.
@@ -649,7 +690,6 @@ class DataplaneClient:
                             headers={"Content-Type": "text/plain"},
                             params={
                                 "version": str(current_version),
-                                "force_reload": "true",
                             },
                             auth=(self.auth[0], self.auth[1]),
                         )
@@ -719,202 +759,262 @@ class DataplaneClient:
                     original_error=e,
                 ) from e
 
-    async def sync_maps(self, maps: Dict[str, str]) -> None:
-        """Synchronize HAProxy map files to storage."""
+    def _extract_storage_content(self, storage_item: Optional[Any]) -> Optional[str]:
+        """Extract content from HAProxy storage API response.
 
+        Args:
+            storage_item: Response from get_one_storage_* API calls
+
+        Returns:
+            Decoded content string or None if extraction fails
+        """
+        if not storage_item or not hasattr(storage_item, "payload"):
+            return None
+        try:
+            content = storage_item.payload.read()
+            if hasattr(storage_item.payload, "seek"):
+                storage_item.payload.seek(0)
+            return content.decode("utf-8")
+        except Exception:
+            return None
+
+    async def _sync_storage_resources(
+        self,
+        resource_type: str,
+        new_resources: Dict[str, str],
+        get_all_func,
+        get_one_func,
+        create_func,
+        delete_func,
+        create_body_class,
+        mime_type: str = "text/plain",
+        replace_func=None,
+    ) -> None:
+        """Generic method to sync storage resources with content comparison.
+
+        Args:
+            resource_type: Type of resource ("map", "certificate", or "file")
+            new_resources: Dict of resource name to content
+            get_all_func: Async function to get all existing resources
+            get_one_func: Async function to get a single resource
+            create_func: Async function to create a resource
+            delete_func: Async function to delete a resource
+            create_body_class: Class to create request body
+            mime_type: MIME type for the resource
+            replace_func: Optional async function to replace resource content
+        """
         metrics = get_metrics_collector()
+        operation = f"sync_{resource_type}s"
 
-        with metrics.time_dataplane_api_operation("sync_maps"):
+        with metrics.time_dataplane_api_operation(operation):
             client = self._get_client()
 
             try:
-                # Get existing maps and create lookup dict
-                existing_maps = await get_all_storage_map_files.asyncio(client=client)
-                if existing_maps is None:
-                    existing_maps = []
+                # Get existing resources
+                existing = await get_all_func(client=client)
                 existing_dict = {
-                    f.storage_name: f for f in existing_maps if f.storage_name
+                    f.storage_name: f for f in (existing or []) if f.storage_name
                 }
 
-                target_names = set(maps.keys())
+                target_names = set(new_resources.keys())
                 existing_names = set(existing_dict.keys())
 
-                # Create new maps
+                created_count = 0
+                updated_count = 0
+                skipped_count = 0
+
+                # Create new resources
                 for name in target_names - existing_names:
-                    content = maps[name]
-                    body = CreateStorageMapFileBody(
+                    body = create_body_class(
                         file_upload=File(
-                            payload=io.BytesIO(content.encode("utf-8")),
+                            payload=io.BytesIO(new_resources[name].encode("utf-8")),
                             file_name=name,
-                            mime_type="text/plain",
+                            mime_type=mime_type,
                         )
                     )
-                    await create_storage_map_file.asyncio(client=client, body=body)
-                    logger.debug(f"🗺️ Created map {name}")
+                    body["description"] = compute_content_hash(new_resources[name])
+                    await create_func(client=client, body=body)
+                    created_count += 1
+                    logger.debug(f"Created {resource_type} {name}")
 
-                # Update changed maps (always update - no hash comparison available)
+                # Update or skip existing resources
                 for name in target_names & existing_names:
-                    content = maps[name]
-                    # For updates, we delete and recreate since replace isn't available
-                    await delete_storage_map.asyncio(client=client, name=name)
-                    body = CreateStorageMapFileBody(
-                        file_upload=File(
-                            payload=io.BytesIO(content.encode("utf-8")),
-                            file_name=name,
-                            mime_type="text/plain",
+                    new_content = new_resources[name]
+
+                    # Check if content changed
+                    try:
+                        existing_resource = await get_one_func(client=client, name=name)
+                        existing_content = self._extract_storage_content(
+                            existing_resource
                         )
-                    )
-                    await create_storage_map_file.asyncio(client=client, body=body)
-                    logger.debug(f"🔄 Updated map {name}")
 
-                # Delete obsolete maps
+                        if existing_content == new_content:
+                            skipped_count += 1
+                            logger.debug(f"Skipped {resource_type} {name} (unchanged)")
+                            continue
+                    except Exception as e:
+                        logger.debug(f"Could not fetch {resource_type} {name}: {e}")
+
+                    # Content changed - use replace if available, otherwise delete+create
+                    if replace_func:
+                        # Use generated replace function for maps/certificates
+                        # The generated functions expect: client, name, body (string content)
+                        await replace_func(client=client, name=name, body=new_content)
+                    else:
+                        # Fallback to delete+create (shouldn't happen with proper replace_func)
+                        await delete_func(client=client, name=name)
+                        body = create_body_class(
+                            file_upload=File(
+                                payload=io.BytesIO(new_content.encode("utf-8")),
+                                file_name=name,
+                                mime_type=mime_type,
+                            )
+                        )
+                        body["description"] = compute_content_hash(new_content)
+                        await create_func(client=client, body=body)
+
+                    updated_count += 1
+                    logger.debug(f"Updated {resource_type} {name}")
+
+                # Delete obsolete resources
                 for name in existing_names - target_names:
-                    await delete_storage_map.asyncio(client=client, name=name)
-                    logger.debug(f"🗑️ Deleted map {name}")
+                    await delete_func(client=client, name=name)
+                    logger.debug(f"Deleted {resource_type} {name}")
 
-                # Record successful sync
-                metrics.record_dataplane_api_request("sync_maps", "success")
+                # Log summary
+                if created_count or updated_count or skipped_count:
+                    logger.info(
+                        f"{resource_type.capitalize()}s: "
+                        f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
+                    )
+
+                metrics.record_dataplane_api_request(operation, "success")
 
             except Exception as e:
-                metrics.record_dataplane_api_request("sync_maps", "error")
+                metrics.record_dataplane_api_request(operation, "error")
                 raise DataplaneAPIError(
-                    f"Map sync failed: {e}", operation="sync_maps"
+                    f"{resource_type.capitalize()} sync failed: {e}",
+                    operation=operation,
                 ) from e
+
+    async def sync_maps(self, maps: Dict[str, str]) -> None:
+        """Synchronize HAProxy map files to storage."""
+        await self._sync_storage_resources(
+            resource_type="map",
+            new_resources=maps,
+            get_all_func=get_all_storage_map_files.asyncio,
+            get_one_func=get_one_storage_map.asyncio,
+            create_func=create_storage_map_file.asyncio,
+            delete_func=delete_storage_map.asyncio,
+            create_body_class=CreateStorageMapFileBody,
+            mime_type="text/plain",
+            replace_func=replace_storage_map_file.asyncio,
+        )
 
     async def sync_certificates(self, certificates: Dict[str, str]) -> None:
         """Synchronize SSL certificates to storage."""
-
-        metrics = get_metrics_collector()
-
-        with metrics.time_dataplane_api_operation("sync_certificates"):
-            client = self._get_client()
-
-            try:
-                # Get existing SSL certs and create lookup dict
-                existing_certs = await get_all_storage_ssl_certificates.asyncio(
-                    client=client
-                )
-                if existing_certs is None:
-                    existing_certs = []
-                existing_dict = {
-                    f.storage_name: f for f in existing_certs if f.storage_name
-                }
-
-                target_names = set(certificates.keys())
-                existing_names = set(existing_dict.keys())
-
-                # Create new certificates
-                for name in target_names - existing_names:
-                    content = certificates[name]
-                    body = CreateStorageSSLCertificateBody(
-                        file_upload=File(
-                            payload=io.BytesIO(content.encode("utf-8")),
-                            file_name=name,
-                            mime_type="application/x-pem-file",
-                        )
-                    )
-                    await create_storage_ssl_certificate.asyncio(
-                        client=client, body=body
-                    )
-                    logger.debug(f"🔐 Created certificate {name}")
-
-                # Update changed certificates (always update - no hash comparison available)
-                for name in target_names & existing_names:
-                    content = certificates[name]
-                    # For updates, we delete and recreate since replace isn't available
-                    await delete_storage_ssl_certificate.asyncio(
-                        client=client, name=name
-                    )
-                    body = CreateStorageSSLCertificateBody(
-                        file_upload=File(
-                            payload=io.BytesIO(content.encode("utf-8")),
-                            file_name=name,
-                            mime_type="application/x-pem-file",
-                        )
-                    )
-                    await create_storage_ssl_certificate.asyncio(
-                        client=client, body=body
-                    )
-                    logger.debug(f"🔄 Updated certificate {name}")
-
-                # Delete obsolete certificates
-                for name in existing_names - target_names:
-                    await delete_storage_ssl_certificate.asyncio(
-                        client=client, name=name
-                    )
-                    logger.debug(f"🗑️ Deleted certificate {name}")
-
-                # Record successful sync
-                metrics.record_dataplane_api_request("sync_certificates", "success")
-
-            except Exception as e:
-                metrics.record_dataplane_api_request("sync_certificates", "error")
-                raise DataplaneAPIError(
-                    f"Certificate sync failed: {e}", operation="sync_certificates"
-                ) from e
+        await self._sync_storage_resources(
+            resource_type="certificate",
+            new_resources=certificates,
+            get_all_func=get_all_storage_ssl_certificates.asyncio,
+            get_one_func=get_one_storage_ssl_certificate.asyncio,
+            create_func=create_storage_ssl_certificate.asyncio,
+            delete_func=delete_storage_ssl_certificate.asyncio,
+            create_body_class=CreateStorageSSLCertificateBody,
+            mime_type="application/x-pem-file",
+            replace_func=replace_storage_ssl_certificate.asyncio,
+        )
 
     async def sync_files(self, files: Dict[str, str]) -> None:
-        """Synchronize general-purpose files to HAProxy storage."""
+        """Synchronize general-purpose files to HAProxy storage.
 
+        Note: Files use replace instead of delete+create for updates.
+        """
         metrics = get_metrics_collector()
+        operation = "sync_files"
 
-        with metrics.time_dataplane_api_operation("sync_files"):
+        with metrics.time_dataplane_api_operation(operation):
             client = self._get_client()
 
             try:
-                # Get existing general files and create lookup dict
-                existing_files = await get_all_storage_general_files.asyncio(
-                    client=client
-                )
-                if existing_files is None:
-                    existing_files = []
+                # Get existing resources
+                existing = await get_all_storage_general_files.asyncio(client=client)
                 existing_dict = {
-                    f.storage_name: f for f in existing_files if f.storage_name
+                    f.storage_name: f for f in (existing or []) if f.storage_name
                 }
 
                 target_names = set(files.keys())
                 existing_names = set(existing_dict.keys())
 
+                created_count = 0
+                updated_count = 0
+                skipped_count = 0
+
                 # Create new files
                 for name in target_names - existing_names:
-                    content = files[name]
                     body = CreateStorageGeneralFileBody(
                         file_upload=File(
-                            payload=io.BytesIO(content.encode("utf-8")),
+                            payload=io.BytesIO(files[name].encode("utf-8")),
                             file_name=name,
                             mime_type="text/plain",
                         )
                     )
+                    body["description"] = compute_content_hash(files[name])
                     await create_storage_general_file.asyncio(client=client, body=body)
-                    logger.debug(f"📄 Created file {name}")
+                    created_count += 1
+                    logger.debug(f"Created file {name}")
 
-                # Update changed files (always update - no hash comparison available)
+                # Update or skip existing files
                 for name in target_names & existing_names:
-                    content = files[name]
+                    new_content = files[name]
+
+                    # Check if content changed
+                    try:
+                        existing_file = await get_one_storage_general_file.asyncio(
+                            client=client, name=name
+                        )
+                        existing_content = self._extract_storage_content(existing_file)
+
+                        if existing_content == new_content:
+                            skipped_count += 1
+                            logger.debug(f"Skipped file {name} (unchanged)")
+                            continue
+                    except Exception as e:
+                        logger.debug(f"Could not fetch file {name}: {e}")
+
+                    # Content changed - use replace for files
                     body = ReplaceStorageGeneralFileBody(
                         file_upload=File(
-                            payload=io.BytesIO(content.encode("utf-8")),
+                            payload=io.BytesIO(new_content.encode("utf-8")),
                             file_name=name,
                             mime_type="text/plain",
                         )
                     )
+                    body["description"] = compute_content_hash(new_content)
                     await replace_storage_general_file.asyncio(
                         client=client, name=name, body=body
                     )
-                    logger.debug(f"📝 Updated file {name}")
+                    updated_count += 1
+                    logger.debug(f"Updated file {name}")
 
                 # Delete obsolete files
                 for name in existing_names - target_names:
                     await delete_storage_general_file.asyncio(client=client, name=name)
-                    logger.debug(f"🗑️ Deleted file {name}")
+                    logger.debug(f"Deleted file {name}")
 
-                # Record successful sync
-                metrics.record_dataplane_api_request("sync_files", "success")
+                # Log summary
+                if created_count or updated_count or skipped_count:
+                    logger.info(
+                        f"Files: "
+                        f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
+                    )
+
+                metrics.record_dataplane_api_request(operation, "success")
 
             except Exception as e:
-                metrics.record_dataplane_api_request("sync_files", "error")
+                metrics.record_dataplane_api_request(operation, "error")
                 raise DataplaneAPIError(
-                    f"File sync failed: {e}", operation="sync_files"
+                    f"File sync failed: {e}", operation=operation
                 ) from e
 
     async def get_current_configuration(self) -> Optional[str]:

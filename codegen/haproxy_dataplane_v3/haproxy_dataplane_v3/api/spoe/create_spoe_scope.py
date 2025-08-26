@@ -3,7 +3,6 @@ from typing import Any, Optional, Union, cast
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error import Error
 from ...types import UNSET, Response, Unset
@@ -32,33 +31,32 @@ def _get_kwargs(
         "params": params,
     }
 
-    _body = body
+    _kwargs["json"] = body
 
-    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers
     return _kwargs
 
 
-def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[Error, str]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Union[Error, str]:
     if response.status_code == 201:
         response_201 = cast(str, response.json())
         return response_201
+
     if response.status_code == 400:
         response_400 = Error.from_dict(response.json())
 
         return response_400
+
     if response.status_code == 409:
         response_409 = Error.from_dict(response.json())
 
         return response_409
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(

@@ -8,8 +8,9 @@ functionality including support for template snippets and custom filters.
 import base64
 import os
 import re
+import sys
 from functools import lru_cache
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union, Union
 
 from pathvalidate import ValidationError, is_valid_filename, sanitize_filename
 
@@ -36,6 +37,17 @@ from .constants import (
     ERROR_TEMPLATE_SYNTAX,
     TEMPLATE_CACHE_SIZE,
 )
+
+# -----------------------------------------------------------------------------
+# Constants and patterns
+# -----------------------------------------------------------------------------
+
+# Regex pattern for extracting snippet names from include statements
+INCLUDE_PATTERN = re.compile(r'{%\s*include\s+["\']([^"\']+)["\']\s*%}')
+
+# Context lines to show around errors
+CONTEXT_LINES_BEFORE = 2
+CONTEXT_LINES_AFTER = 3
 
 # -----------------------------------------------------------------------------
 # Jinja2 setup and template functionality
@@ -158,6 +170,333 @@ class SnippetLoader(BaseLoader):
         # Get template content from snippet
         source = snippet.template if hasattr(snippet, "template") else str(snippet)
         return source, None, lambda: True
+
+
+def _extract_snippet_name(line_text: str) -> Optional[str]:
+    """Extract snippet name from an include statement.
+
+    Args:
+        line_text: Line of template text that may contain an include statement
+
+    Returns:
+        The snippet name if found, None otherwise
+    """
+    if "include" in line_text:
+        match = INCLUDE_PATTERN.search(line_text)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _get_context_lines(
+    lines: list[str],
+    line_idx: int,
+    error_line_no: int,
+    context_before: int = CONTEXT_LINES_BEFORE,
+    context_after: int = CONTEXT_LINES_AFTER,
+) -> list[str]:
+    """Get context lines around a specific line.
+
+    Args:
+        lines: List of lines from the template
+        line_idx: Zero-based index of the target line
+        error_line_no: One-based line number for display
+        context_before: Number of lines to show before
+        context_after: Number of lines to show after
+
+    Returns:
+        List of formatted context lines with line numbers and markers
+    """
+    if not lines or line_idx < 0 or line_idx >= len(lines):
+        return []
+
+    start = max(0, line_idx - context_before)
+    end = min(len(lines), line_idx + context_after + 1)
+
+    context_lines = []
+    for i in range(start, end):
+        prefix = ">>> " if i == line_idx else "    "
+        context_lines.append(f"  {i + 1:4d}: {prefix}{lines[i]}")
+
+    return context_lines
+
+
+def format_template_error(
+    e: Exception,
+    template_name: str = "template",
+    template_content: Optional[str] = None,
+    snippets: Optional[TemplateSnippetCollection] = None,
+) -> str:
+    """Format a template error with detailed context for debugging.
+
+    Args:
+        e: The exception that occurred
+        template_name: Name of the template that failed
+        template_content: Optional template content to show context
+        snippets: Optional collection of template snippets for resolving includes
+
+    Returns:
+        Formatted error message with context
+    """
+    error_parts = [f"Template '{template_name}' rendering failed"]
+
+    # Collect all template frames from traceback
+    template_frames: list[dict[str, Any]] = []
+    exc_type, exc_value, tb = sys.exc_info()
+
+    if tb:
+        # Traverse entire traceback to find all template frames
+        while tb:
+            frame = tb.tb_frame
+            # Jinja2 templates have special filenames
+            if frame.f_code.co_filename and (
+                "<template>" in frame.f_code.co_filename
+                or "memory:" in frame.f_code.co_filename
+            ):
+                # Store the frame's filename for snippet detection
+                template_frames.append(
+                    {
+                        "line": tb.tb_lineno,
+                        "frame": frame,
+                        "filename": frame.f_code.co_filename,
+                    }
+                )
+            tb = tb.tb_next
+
+    # For syntax errors, use the lineno attribute
+    if hasattr(e, "lineno") and e.lineno:
+        template_frames = [{"line": e.lineno, "frame": None, "filename": "<template>"}]
+
+    # Determine if this is an include error (multiple template frames)
+    # When there are multiple frames, it usually means we have an include
+    is_include_error = len(template_frames) > 1
+
+    if template_frames:
+        if is_include_error and len(template_frames) >= 2:
+            error_parts.append(f": {str(e)}")
+
+            # Handle multiple levels of includes
+            if len(template_frames) > 2:
+                # Deep nesting - show the full chain
+                error_parts.append("\n\n  Error occurred through nested includes:")
+
+                # Build the include chain
+                include_chain: list[dict[str, Any]] = []
+                current_content = template_content
+
+                for frame_idx in range(len(template_frames)):
+                    frame_dict = template_frames[frame_idx]
+                    frame_line_no: int = frame_dict["line"]
+                    is_last = frame_idx == len(template_frames) - 1
+
+                    # Get the content to analyze
+                    content_to_analyze = current_content
+
+                    # For intermediate frames, we need the content from the previous snippet
+                    if (
+                        frame_idx > 0
+                        and include_chain
+                        and include_chain[-1].get("next_snippet_name")
+                    ):
+                        prev_snippet_name = include_chain[-1]["next_snippet_name"]
+                        if snippets and prev_snippet_name in snippets:
+                            snippet = snippets[prev_snippet_name]
+                            content_to_analyze = (
+                                snippet.template
+                                if hasattr(snippet, "template")
+                                else str(snippet)
+                            )
+                        else:
+                            # Snippet not found - log this but continue
+                            content_to_analyze = None
+
+                    # Extract context and snippet name
+                    lines = content_to_analyze.split("\n") if content_to_analyze else []
+                    line_idx = frame_line_no - 1
+
+                    snippet_name_for_next = None
+                    if 0 <= line_idx < len(lines) and not is_last:
+                        # Try to extract the snippet name from include statement
+                        snippet_name_for_next = _extract_snippet_name(lines[line_idx])
+
+                    # Store frame info
+                    include_chain.append(
+                        {
+                            "line_no": frame_line_no,
+                            "content": content_to_analyze,
+                            "is_last": is_last,
+                            "next_snippet_name": snippet_name_for_next,
+                            "frame_idx": frame_idx,
+                        }
+                    )
+
+                    # Update current content for next iteration
+                    current_content = content_to_analyze
+
+                # Now display the chain
+                for idx, chain_item in enumerate(include_chain):
+                    if not chain_item["content"]:
+                        # No content available for this frame (e.g., missing snippet)
+                        if idx > 0 and include_chain[idx - 1].get("next_snippet_name"):
+                            snippet_name = include_chain[idx - 1]["next_snippet_name"]
+                            error_parts.append(
+                                f"\n  ↓ Snippet '{snippet_name}' (not found in snippets collection)"
+                            )
+                        continue
+
+                    lines = chain_item["content"].split("\n")
+                    line_idx = chain_item["line_no"] - 1
+
+                    if 0 <= line_idx < len(lines):
+                        # Show context
+                        line_number: int = chain_item["line_no"]
+                        context_lines = _get_context_lines(lines, line_idx, line_number)
+
+                        if context_lines:
+                            if idx == 0:
+                                # Main template
+                                error_parts.append(
+                                    f"\n  Main template (include at line {chain_item['line_no']}):\n"
+                                    + "\n".join(context_lines)
+                                )
+                            elif chain_item["is_last"]:
+                                # Error location - get the snippet name from previous item
+                                snippet_name = None
+                                if idx > 0 and include_chain[idx - 1].get(
+                                    "next_snippet_name"
+                                ):
+                                    snippet_name = include_chain[idx - 1][
+                                        "next_snippet_name"
+                                    ]
+
+                                if snippet_name:
+                                    error_parts.append(
+                                        f"\n  ↓ Snippet '{snippet_name}' (error at line {chain_item['line_no']}):\n"
+                                        + "\n".join(context_lines)
+                                    )
+                                else:
+                                    error_parts.append(
+                                        f"\n  ↓ Error location (line {chain_item['line_no']}):\n"
+                                        + "\n".join(context_lines)
+                                    )
+                            else:
+                                # Intermediate include - get snippet name from previous
+                                snippet_name = None
+                                if idx > 0 and include_chain[idx - 1].get(
+                                    "next_snippet_name"
+                                ):
+                                    snippet_name = include_chain[idx - 1][
+                                        "next_snippet_name"
+                                    ]
+
+                                if snippet_name:
+                                    error_parts.append(
+                                        f"\n  ↓ Snippet '{snippet_name}' (include at line {chain_item['line_no']}):\n"
+                                        + "\n".join(context_lines)
+                                    )
+                                else:
+                                    error_parts.append(
+                                        f"\n  ↓ Include at line {chain_item['line_no']}:\n"
+                                        + "\n".join(context_lines)
+                                    )
+            else:
+                # Simple two-level include (existing logic)
+                include_frame = template_frames[0]
+                error_frame = template_frames[-1]
+                include_line: int = include_frame["line"]
+                error_line: int = error_frame["line"]
+
+                # Show main template context (include statement)
+                snippet_name = None
+                if template_content:
+                    lines = template_content.split("\n")
+                    line_idx = include_line - 1
+
+                    if 0 <= line_idx < len(lines):
+                        # Try to extract snippet name from include statement first
+                        snippet_name = _extract_snippet_name(lines[line_idx])
+
+                        # Show main template context
+                        context_lines = _get_context_lines(
+                            lines, line_idx, include_line
+                        )
+
+                        if context_lines:
+                            error_parts.append(
+                                "\n\n  Error occurred in included snippet"
+                            )
+                            error_parts.append(
+                                "\n  Main template (include at line "
+                                + str(include_line)
+                                + "):\n"
+                                + "\n".join(context_lines)
+                            )
+
+                        # Show snippet context if we have the snippet
+                        if snippet_name and snippets and snippet_name in snippets:
+                            snippet = snippets[snippet_name]
+                            snippet_content = (
+                                snippet.template
+                                if hasattr(snippet, "template")
+                                else str(snippet)
+                            )
+                            snippet_lines = snippet_content.split("\n")
+
+                            # The error_line here is the line number within the snippet
+                            snippet_line_idx = error_line - 1
+
+                            if 0 <= snippet_line_idx < len(snippet_lines):
+                                snippet_context = _get_context_lines(
+                                    snippet_lines, snippet_line_idx, error_line
+                                )
+
+                                if snippet_context:
+                                    error_parts.append(
+                                        f"\n  Snippet '{snippet_name}' (error at line "
+                                        + str(error_line)
+                                        + "):\n"
+                                        + "\n".join(snippet_context)
+                                    )
+        else:
+            # Single frame - regular error
+            line_no: int = template_frames[0]["line"]
+            error_parts.append(f"at line {line_no}")
+            error_parts.append(f": {str(e)}")
+
+            # Show context
+            if template_content and line_no:
+                lines = template_content.split("\n")
+                line_idx = line_no - 1
+
+                context_lines = _get_context_lines(lines, line_idx, line_no)
+                if context_lines:
+                    error_parts.append(
+                        "\n\n  Template context:\n" + "\n".join(context_lines)
+                    )
+    else:
+        # No line number available
+        error_parts.append(f": {str(e)}")
+
+    # Add specific guidance for common errors
+    error_str = str(e).lower()
+    if "nonetype" in error_str and "is not iterable" in error_str:
+        error_parts.append(
+            "\n  💡 Hint: Check if the resource collection exists before iterating. Use: {% for _, item in resources.get('type', {}).items() %}"
+        )
+    elif "undefined" in error_str:
+        error_parts.append(
+            "\n  💡 Hint: A variable is not defined. Check your template variables and resource names."
+        )
+    elif "no filter named" in error_str:
+        error_parts.append(
+            "\n  💡 Hint: Unknown filter. Available filters: b64decode, get_path"
+        )
+    elif "has no attribute" in error_str:
+        error_parts.append(
+            "\n  💡 Hint: Check if the object exists and has the attribute you're trying to access. Consider using default values or conditional checks."
+        )
+
+    return " ".join(error_parts)
 
 
 def get_template_environment(
@@ -289,11 +628,14 @@ class TemplateRenderer:
         """
         return cls(template_snippets=config.template_snippets, config=config)
 
-    def render(self, template_str: str, **context: Any) -> str:
+    def render(
+        self, template_str: str, template_name: Optional[str] = None, **context: Any
+    ) -> str:
         """Compile (with caching) and render a template.
 
         Args:
             template_str: Template string to compile and render
+            template_name: Optional name of the template for error reporting
             **context: Template variables for rendering
 
         Returns:
@@ -302,11 +644,24 @@ class TemplateRenderer:
         Raises:
             ValueError: If template compilation or rendering fails
         """
+        template_name = template_name or "unnamed"
         try:
             template = self.get_compiled(template_str)
             return template.render(**context)
         except Exception as e:
-            raise ValueError(ERROR_TEMPLATE_RENDER.format(error=e)) from e
+            # Format detailed error with context, including snippets
+            snippets_to_use = None
+            if self._compiler.environment.loader and hasattr(
+                self._compiler.environment.loader, "snippets"
+            ):
+                snippets_to_use = self._compiler.environment.loader.snippets  # type: ignore[attr-defined]
+            detailed_error = format_template_error(
+                e,
+                template_name,
+                template_str,
+                snippets_to_use,
+            )
+            raise ValueError(detailed_error) from e
 
     def get_compiled(self, template_str: str) -> Template:
         """Get compiled template (for cases where render is called separately).

@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.site import Site
 from ...types import UNSET, Response, Unset
 
@@ -28,7 +28,9 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[list["Site"]]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Union[Error, list["Site"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -38,13 +40,15 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
             response_200.append(componentsschemassites_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[list["Site"]]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Error, list["Site"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -57,7 +61,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["Site"]]:
+) -> Response[Union[Error, list["Site"]]]:
     """Return an array of sites
 
      Returns an array of all configured sites.
@@ -70,7 +74,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['Site']]
+        Response[Union[Error, list['Site']]]
     """
 
     kwargs = _get_kwargs(
@@ -88,7 +92,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["Site"]]:
+) -> Optional[Union[Error, list["Site"]]]:
     """Return an array of sites
 
      Returns an array of all configured sites.
@@ -101,7 +105,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['Site']
+        Union[Error, list['Site']]
     """
 
     return sync_detailed(
@@ -114,7 +118,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["Site"]]:
+) -> Response[Union[Error, list["Site"]]]:
     """Return an array of sites
 
      Returns an array of all configured sites.
@@ -127,7 +131,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['Site']]
+        Response[Union[Error, list['Site']]]
     """
 
     kwargs = _get_kwargs(
@@ -143,7 +147,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["Site"]]:
+) -> Optional[Union[Error, list["Site"]]]:
     """Return an array of sites
 
      Returns an array of all configured sites.
@@ -156,7 +160,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['Site']
+        Union[Error, list['Site']]
     """
 
     return (

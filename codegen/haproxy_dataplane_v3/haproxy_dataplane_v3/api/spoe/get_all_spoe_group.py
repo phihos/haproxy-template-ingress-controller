@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.spoe_group import SPOEGroup
 from ...types import UNSET, Response, Unset
 
@@ -32,7 +32,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[list["SPOEGroup"]]:
+) -> Union[Error, list["SPOEGroup"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -42,15 +42,15 @@ def _parse_response(
             response_200.append(componentsschemasspoe_groups_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[list["SPOEGroup"]]:
+) -> Response[Union[Error, list["SPOEGroup"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -65,7 +65,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["SPOEGroup"]]:
+) -> Response[Union[Error, list["SPOEGroup"]]]:
     """Return an array of SPOE groups
 
      Returns an array of all configured SPOE groups in one SPOE scope.
@@ -80,7 +80,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['SPOEGroup']]
+        Response[Union[Error, list['SPOEGroup']]]
     """
 
     kwargs = _get_kwargs(
@@ -102,7 +102,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["SPOEGroup"]]:
+) -> Optional[Union[Error, list["SPOEGroup"]]]:
     """Return an array of SPOE groups
 
      Returns an array of all configured SPOE groups in one SPOE scope.
@@ -117,7 +117,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['SPOEGroup']
+        Union[Error, list['SPOEGroup']]
     """
 
     return sync_detailed(
@@ -134,7 +134,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["SPOEGroup"]]:
+) -> Response[Union[Error, list["SPOEGroup"]]]:
     """Return an array of SPOE groups
 
      Returns an array of all configured SPOE groups in one SPOE scope.
@@ -149,7 +149,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['SPOEGroup']]
+        Response[Union[Error, list['SPOEGroup']]]
     """
 
     kwargs = _get_kwargs(
@@ -169,7 +169,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["SPOEGroup"]]:
+) -> Optional[Union[Error, list["SPOEGroup"]]]:
     """Return an array of SPOE groups
 
      Returns an array of all configured SPOE groups in one SPOE scope.
@@ -184,7 +184,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['SPOEGroup']
+        Union[Error, list['SPOEGroup']]
     """
 
     return (

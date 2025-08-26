@@ -411,7 +411,7 @@ class TestTemplateRenderer:
         renderer = TemplateRenderer()
         template_str = "{{ undefined_var.missing_attr }}"
 
-        with pytest.raises(ValueError, match="Template rendering failed"):
+        with pytest.raises(ValueError, match="Template 'unnamed' rendering failed"):
             renderer.render(template_str)
 
     def test_get_compiled_success(self):

@@ -6,6 +6,7 @@ client operations, and configuration synchronization.
 """
 
 import asyncio
+import io
 import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from unittest import mock
@@ -82,6 +83,13 @@ class MockAttemptManager:
             # Don't suppress the exception - let it propagate for retry logic
             return False
         return True
+
+
+@pytest.fixture(autouse=True, scope="module")
+def mock_async_retrying():
+    """Apply MockAsyncRetrying to all tests in this module to eliminate retry delays."""
+    with patch("haproxy_template_ic.dataplane.AsyncRetrying", MockAsyncRetrying):
+        yield
 
 
 class TestDeploymentHistory:
@@ -891,31 +899,45 @@ class TestDataplaneClientSyncMethods:
                 "haproxy_template_ic.dataplane.get_all_storage_map_files"
             ) as mock_get_maps:
                 with patch(
-                    "haproxy_template_ic.dataplane.create_storage_map_file"
-                ) as mock_create:
+                    "haproxy_template_ic.dataplane.get_one_storage_map"
+                ) as mock_get_one:
                     with patch(
-                        "haproxy_template_ic.dataplane.delete_storage_map"
-                    ) as mock_delete:
-                        # Set up existing maps
-                        mock_get_maps.asyncio = AsyncMock(
-                            return_value=[mock_existing_map]
-                        )
-                        mock_create.asyncio = AsyncMock(return_value=None)
-                        mock_delete.asyncio = AsyncMock(return_value=None)
+                        "haproxy_template_ic.dataplane.create_storage_map_file"
+                    ) as mock_create:
+                        with patch(
+                            "haproxy_template_ic.dataplane.replace_storage_map_file"
+                        ) as mock_replace:
+                            # Set up existing maps
+                            mock_get_maps.asyncio = AsyncMock(
+                                return_value=[mock_existing_map]
+                            )
 
-                        maps_to_sync = {
-                            "new.map": "new map content",
-                            "existing.map": "updated content",
-                        }
+                            # Mock get_one to return different content (triggering update)
+                            mock_existing_content = Mock()
+                            mock_existing_content.payload = io.BytesIO(b"old content")
+                            mock_get_one.asyncio = AsyncMock(
+                                return_value=mock_existing_content
+                            )
 
-                        await client.sync_maps(maps_to_sync)
+                            mock_create.asyncio = AsyncMock(return_value=None)
+                            mock_replace.asyncio = AsyncMock(return_value=None)
 
-                        # Verify create was called for new map
-                        mock_create.asyncio.assert_called()
-                        # Verify delete+create was called for existing map update
-                        mock_delete.asyncio.assert_called_with(
-                            client=mock_api_client, name="existing.map"
-                        )
+                            maps_to_sync = {
+                                "new.map": "new map content",
+                                "existing.map": "updated content",
+                            }
+
+                            await client.sync_maps(maps_to_sync)
+
+                            # Verify create was called for new map
+                            mock_create.asyncio.assert_called()
+
+                            # Verify replace was called for existing map update
+                            mock_replace.asyncio.assert_called_with(
+                                client=mock_api_client,
+                                name="existing.map",
+                                body="updated content",
+                            )
 
     @pytest.mark.asyncio
     async def test_sync_maps_with_obsolete_maps(self):
@@ -935,27 +957,38 @@ class TestDataplaneClientSyncMethods:
                 "haproxy_template_ic.dataplane.get_all_storage_map_files"
             ) as mock_get_maps:
                 with patch(
-                    "haproxy_template_ic.dataplane.create_storage_map_file"
-                ) as mock_create:
+                    "haproxy_template_ic.dataplane.get_one_storage_map"
+                ) as mock_get_one:
                     with patch(
-                        "haproxy_template_ic.dataplane.delete_storage_map"
-                    ) as mock_delete:
-                        mock_get_maps.asyncio = AsyncMock(
-                            return_value=[mock_existing_map, mock_keep_map]
-                        )
-                        mock_create.asyncio = AsyncMock(return_value=None)
-                        mock_delete.asyncio = AsyncMock(return_value=None)
+                        "haproxy_template_ic.dataplane.replace_storage_map_file"
+                    ) as mock_replace:
+                        with patch(
+                            "haproxy_template_ic.dataplane.delete_storage_map"
+                        ) as mock_delete:
+                            mock_get_maps.asyncio = AsyncMock(
+                                return_value=[mock_existing_map, mock_keep_map]
+                            )
 
-                        maps_to_sync = {
-                            "keep.map": "updated content",
-                        }
+                            # Mock get_one to return different content for keep.map
+                            mock_existing_content = Mock()
+                            mock_existing_content.payload = io.BytesIO(b"old content")
+                            mock_get_one.asyncio = AsyncMock(
+                                return_value=mock_existing_content
+                            )
 
-                        await client.sync_maps(maps_to_sync)
+                            mock_replace.asyncio = AsyncMock(return_value=None)
+                            mock_delete.asyncio = AsyncMock(return_value=None)
 
-                        # Verify obsolete map was deleted
-                        mock_delete.asyncio.assert_any_call(
-                            client=mock_api_client, name="obsolete.map"
-                        )
+                            maps_to_sync = {
+                                "keep.map": "updated content",
+                            }
+
+                            await client.sync_maps(maps_to_sync)
+
+                            # Verify obsolete map was deleted
+                            mock_delete.asyncio.assert_any_call(
+                                client=mock_api_client, name="obsolete.map"
+                            )
 
     @pytest.mark.asyncio
     async def test_sync_maps_error_handling(self):
@@ -994,30 +1027,46 @@ class TestDataplaneClientSyncMethods:
                 "haproxy_template_ic.dataplane.get_all_storage_ssl_certificates"
             ) as mock_get_certs:
                 with patch(
-                    "haproxy_template_ic.dataplane.create_storage_ssl_certificate"
-                ) as mock_create:
+                    "haproxy_template_ic.dataplane.get_one_storage_ssl_certificate"
+                ) as mock_get_one:
                     with patch(
-                        "haproxy_template_ic.dataplane.delete_storage_ssl_certificate"
-                    ) as mock_delete:
-                        mock_get_certs.asyncio = AsyncMock(
-                            return_value=[mock_existing_cert]
-                        )
-                        mock_create.asyncio = AsyncMock(return_value=None)
-                        mock_delete.asyncio = AsyncMock(return_value=None)
+                        "haproxy_template_ic.dataplane.create_storage_ssl_certificate"
+                    ) as mock_create:
+                        with patch(
+                            "haproxy_template_ic.dataplane.replace_storage_ssl_certificate"
+                        ) as mock_replace:
+                            mock_get_certs.asyncio = AsyncMock(
+                                return_value=[mock_existing_cert]
+                            )
 
-                        certs_to_sync = {
-                            "new.pem": "-----BEGIN CERTIFICATE-----\nnew cert\n-----END CERTIFICATE-----",
-                            "existing.pem": "-----BEGIN CERTIFICATE-----\nupdated cert\n-----END CERTIFICATE-----",
-                        }
+                            # Mock get_one to return different content (triggering update)
+                            mock_existing_content = Mock()
+                            mock_existing_content.payload = io.BytesIO(
+                                b"-----BEGIN CERTIFICATE-----\nold cert\n-----END CERTIFICATE-----"
+                            )
+                            mock_get_one.asyncio = AsyncMock(
+                                return_value=mock_existing_content
+                            )
 
-                        await client.sync_certificates(certs_to_sync)
+                            mock_create.asyncio = AsyncMock(return_value=None)
+                            mock_replace.asyncio = AsyncMock(return_value=None)
 
-                        # Verify create was called for new cert
-                        mock_create.asyncio.assert_called()
-                        # Verify delete+create was called for existing cert update
-                        mock_delete.asyncio.assert_called_with(
-                            client=mock_api_client, name="existing.pem"
-                        )
+                            certs_to_sync = {
+                                "new.pem": "-----BEGIN CERTIFICATE-----\nnew cert\n-----END CERTIFICATE-----",
+                                "existing.pem": "-----BEGIN CERTIFICATE-----\nupdated cert\n-----END CERTIFICATE-----",
+                            }
+
+                            await client.sync_certificates(certs_to_sync)
+
+                            # Verify create was called for new cert
+                            mock_create.asyncio.assert_called()
+
+                            # Verify replace was called for existing cert update
+                            mock_replace.asyncio.assert_called_with(
+                                client=mock_api_client,
+                                name="existing.pem",
+                                body="-----BEGIN CERTIFICATE-----\nupdated cert\n-----END CERTIFICATE-----",
+                            )
 
     @pytest.mark.asyncio
     async def test_sync_certificates_error_handling(self):
@@ -1962,15 +2011,12 @@ class TestDataplaneClientDeploymentRetryLogic:
                 "Network always fails"
             )
 
-            # Mock the retry mechanism to avoid actual waits
-            with patch(
-                "haproxy_template_ic.dataplane.AsyncRetrying", MockAsyncRetrying
-            ):
-                with pytest.raises(DataplaneAPIError) as exc_info:
-                    await client.deploy_configuration("global\n    daemon\n")
+            # Retry mechanism is already mocked globally by the fixture
+            with pytest.raises(DataplaneAPIError) as exc_info:
+                await client.deploy_configuration("global\n    daemon\n")
 
-                assert "Configuration deployment failed" in str(exc_info.value)
-                assert exc_info.value.operation == "deploy"
+            assert "Configuration deployment failed" in str(exc_info.value)
+            assert exc_info.value.operation == "deploy"
 
 
 class TestConditionalDeployment:

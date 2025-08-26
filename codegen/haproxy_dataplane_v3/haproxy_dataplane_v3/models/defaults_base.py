@@ -788,6 +788,7 @@ class DefaultsBase:
         unique_id_header = self.unique_id_header
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update({})
         if abortonclose is not UNSET:
             field_dict["abortonclose"] = abortonclose

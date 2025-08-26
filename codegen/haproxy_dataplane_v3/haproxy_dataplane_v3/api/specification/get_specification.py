@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.get_specification_response_200 import GetSpecificationResponse200
 from ...types import Response
 
@@ -20,20 +20,20 @@ def _get_kwargs() -> dict[str, Any]:
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[GetSpecificationResponse200]:
+) -> Union[Error, GetSpecificationResponse200]:
     if response.status_code == 200:
         response_200 = GetSpecificationResponse200.from_dict(response.json())
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[GetSpecificationResponse200]:
+) -> Response[Union[Error, GetSpecificationResponse200]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -45,7 +45,7 @@ def _build_response(
 def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[GetSpecificationResponse200]:
+) -> Response[Union[Error, GetSpecificationResponse200]]:
     """Data Plane API Specification
 
      Return Data Plane API OpenAPI specification
@@ -55,7 +55,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[GetSpecificationResponse200]
+        Response[Union[Error, GetSpecificationResponse200]]
     """
 
     kwargs = _get_kwargs()
@@ -70,7 +70,7 @@ def sync_detailed(
 def sync(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[GetSpecificationResponse200]:
+) -> Optional[Union[Error, GetSpecificationResponse200]]:
     """Data Plane API Specification
 
      Return Data Plane API OpenAPI specification
@@ -80,7 +80,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        GetSpecificationResponse200
+        Union[Error, GetSpecificationResponse200]
     """
 
     return sync_detailed(
@@ -91,7 +91,7 @@ def sync(
 async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[GetSpecificationResponse200]:
+) -> Response[Union[Error, GetSpecificationResponse200]]:
     """Data Plane API Specification
 
      Return Data Plane API OpenAPI specification
@@ -101,7 +101,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[GetSpecificationResponse200]
+        Response[Union[Error, GetSpecificationResponse200]]
     """
 
     kwargs = _get_kwargs()
@@ -114,7 +114,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[GetSpecificationResponse200]:
+) -> Optional[Union[Error, GetSpecificationResponse200]]:
     """Data Plane API Specification
 
      Return Data Plane API OpenAPI specification
@@ -124,7 +124,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        GetSpecificationResponse200
+        Union[Error, GetSpecificationResponse200]
     """
 
     return (

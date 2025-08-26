@@ -482,6 +482,7 @@ class FrontendBase:
         unique_id_header = self.unique_id_header
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "name": name,

@@ -3,7 +3,6 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.add_ca_entry_body import AddCaEntryBody
 from ...models.error import Error
@@ -23,29 +22,26 @@ def _get_kwargs(
         "url": f"/services/haproxy/runtime/ssl_ca_files/{name}/entries",
     }
 
-    _body = body.to_multipart()
-
-    _kwargs["files"] = _body
+    _kwargs["files"] = body.to_multipart()
 
     _kwargs["headers"] = headers
     return _kwargs
 
 
-def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[Error, SSLFile]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Union[Error, SSLFile]:
     if response.status_code == 201:
         response_201 = SSLFile.from_dict(response.json())
 
         return response_201
+
     if response.status_code == 404:
         response_404 = Error.from_dict(response.json())
 
         return response_404
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(

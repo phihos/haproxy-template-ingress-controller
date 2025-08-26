@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.health import Health
 from ...types import Response
 
@@ -18,18 +18,20 @@ def _get_kwargs() -> dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Health]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Union[Error, Health]:
     if response.status_code == 200:
         response_200 = Health.from_dict(response.json())
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Health]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Error, Health]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -41,7 +43,7 @@ def _build_response(*, client: Union[AuthenticatedClient, Client], response: htt
 def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[Health]:
+) -> Response[Union[Error, Health]]:
     """Return managed services health
 
      Return managed services health
@@ -51,7 +53,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Health]
+        Response[Union[Error, Health]]
     """
 
     kwargs = _get_kwargs()
@@ -66,7 +68,7 @@ def sync_detailed(
 def sync(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[Health]:
+) -> Optional[Union[Error, Health]]:
     """Return managed services health
 
      Return managed services health
@@ -76,7 +78,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Health
+        Union[Error, Health]
     """
 
     return sync_detailed(
@@ -87,7 +89,7 @@ def sync(
 async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[Health]:
+) -> Response[Union[Error, Health]]:
     """Return managed services health
 
      Return managed services health
@@ -97,7 +99,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Health]
+        Response[Union[Error, Health]]
     """
 
     kwargs = _get_kwargs()
@@ -110,7 +112,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[Health]:
+) -> Optional[Union[Error, Health]]:
     """Return managed services health
 
      Return managed services health
@@ -120,7 +122,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Health
+        Union[Error, Health]
     """
 
     return (

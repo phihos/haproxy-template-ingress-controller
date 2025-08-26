@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.log_target import LogTarget
 from ...types import UNSET, Response, Unset
 
@@ -30,7 +30,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[list["LogTarget"]]:
+) -> Union[Error, list["LogTarget"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -40,15 +40,15 @@ def _parse_response(
             response_200.append(componentsschemaslog_targets_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[list["LogTarget"]]:
+) -> Response[Union[Error, list["LogTarget"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -61,7 +61,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["LogTarget"]]:
+) -> Response[Union[Error, list["LogTarget"]]]:
     """Return an array of all Log Targets
 
      Returns all Log Targets that are configured in specified parent.
@@ -74,7 +74,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['LogTarget']]
+        Response[Union[Error, list['LogTarget']]]
     """
 
     kwargs = _get_kwargs(
@@ -92,7 +92,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["LogTarget"]]:
+) -> Optional[Union[Error, list["LogTarget"]]]:
     """Return an array of all Log Targets
 
      Returns all Log Targets that are configured in specified parent.
@@ -105,7 +105,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['LogTarget']
+        Union[Error, list['LogTarget']]
     """
 
     return sync_detailed(
@@ -118,7 +118,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["LogTarget"]]:
+) -> Response[Union[Error, list["LogTarget"]]]:
     """Return an array of all Log Targets
 
      Returns all Log Targets that are configured in specified parent.
@@ -131,7 +131,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['LogTarget']]
+        Response[Union[Error, list['LogTarget']]]
     """
 
     kwargs = _get_kwargs(
@@ -147,7 +147,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["LogTarget"]]:
+) -> Optional[Union[Error, list["LogTarget"]]]:
     """Return an array of all Log Targets
 
      Returns all Log Targets that are configured in specified parent.
@@ -160,7 +160,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['LogTarget']
+        Union[Error, list['LogTarget']]
     """
 
     return (

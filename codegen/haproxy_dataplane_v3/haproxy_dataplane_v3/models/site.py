@@ -51,6 +51,7 @@ class Site:
             service = self.service.to_dict()
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "name": name,

@@ -703,6 +703,7 @@ class ServerTemplate:
             port = self.port
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "fqdn": fqdn,
