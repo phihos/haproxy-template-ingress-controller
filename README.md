@@ -1,386 +1,104 @@
 # HAProxy Template Ingress Controller
 
-[![build](https://img.shields.io/github/actions/workflow/status/phihos/haproxy-template-ingress-controller/test.yml?branch=main&logo=github)](https://github.com/phihos/haproxy-template-ingress-controller/actions/workflows/test.yml) [![codecov](https://codecov.io/gh/phihos/haproxy-template-ingress-controller/graph/badge.svg?token=YOUR_UPLOAD_TOKEN)](https://codecov.io/gh/phihos/haproxy-template-ingress-controller)
+[![build](https://img.shields.io/github/actions/workflow/status/phihos/haproxy-template-ingress-controller/test.yml?branch=main&logo=github)](https://github.com/phihos/haproxy-template-ingress-controller/actions/workflows/test.yml)
 
-Proof-of-concept ingress controller for users who need direct control over [HAProxy](http://www.haproxy.org/) configuration beyond what existing ingress controllers provide.
-
-## Overview
-
-This controller enables full Jinja2 templating of HAProxy configurations, map files, certificates, and any resource pushable via [HAProxy's Dataplane API](https://www.haproxy.com/documentation/haproxy-data-plane-api/). Instead of being limited by predefined annotations, you can implement custom logic for any Kubernetes resource.
-
-**Target users**: Those familiar with editing `haproxy.cfg` who feel constrained by existing ingress controllers.
-
-**Key capability**: Template any HAProxy resource using watched Kubernetes resources, environment variables, and CLI arguments.
-
-> [!WARNING]  
-> This is a proof-of-concept. Most functionality is incomplete or potentially buggy. Use at your own risk.
+Template-driven HAProxy ingress controller for Kubernetes. Full control over HAProxy configuration through Jinja2 templates instead of limited annotations.
 
 ## Features
 
-### Current Implementation
-- ✅ Watch arbitrary Kubernetes resources with custom O(1) indexing
-- ✅ Template HAProxy map files with DRY principle via snippets
-- ✅ Template `haproxy.cfg` configuration files with includes
-- ✅ Template certificate files from Kubernetes Secrets
-- ✅ Template snippet system with `{% include %}` support for reusable components
-- ✅ Access watched resources, environment variables, and CLI arguments from templates
-- ✅ Access target pod metadata (memory limits, labels, annotations, etc.) from templates
-- ✅ Management socket for runtime state inspection
-- ✅ Synchronize rendered templates with running HAProxy instances via unified Dataplane API
-- ✅ Comprehensive observability with Prometheus metrics and OpenTelemetry tracing
-- ✅ Resilient operations with retry logic, circuit breakers, and adaptive timeouts
-- ✅ Validating admission webhooks for ConfigMaps and watched resources
-- ✅ Clean CLI interface with proper subcommands and settings management
+- **Full HAProxy control** - Direct `haproxy.cfg` templating with Jinja2
+- **Watch any resource** - Ingress, Service, Secret, ConfigMap, custom CRDs
+- **O(1) lookups** - Custom indexing for efficient cross-resource matching
+- **Live reload** - HAProxy Dataplane API v3 integration
+- **Validation** - Test configs before production deployment
+- **Observable** - Prometheus metrics, OpenTelemetry tracing, structured logging
 
-## Architecture
-
-### Components
-
-**Production setup** requires two types of deployments:
-
-#### 1. Controller Pod (Single Pod, 3 Containers)
-- **Main Controller**: Watches resources, renders templates, orchestrates deployment
-- **Validation HAProxy**: Tests configurations before production (port 8081)  
-- **Validation Dataplane API**: Manages validation HAProxy (port 5555, auth: `admin`/`validationpass`)
-
-#### 2. Production HAProxy Pods (Multiple Pods, 2 Containers Each)
-- **HAProxy Container**: Serves production traffic (port 80), health endpoint (port 8404)
-- **Dataplane API Container**: Receives configs from controller (port 5555, auth: `admin`/`adminpass`)
-- **Labels**: Must match `pod_selector.match_labels` in ConfigMap
-- **Initial State**: Pods start NOT ready due to missing health endpoint
-
-#### 3. ConfigMap Configuration
-Defines:
-- Pod selector for target HAProxy pods
-- Kubernetes resources to watch with custom indexing
-- Jinja2 templates for configs, maps, and certificates  
-- Template snippets for reusable components
-- **Critical**: HAProxy template MUST include health endpoint on port 8404
-
-### Reconciliation Process
-
-1. **Trigger**: Watched Kubernetes resource changes
-2. **Render**: Templates processed with inputs:
-   - All watched resources
-   - Environment variables  
-   - CLI arguments
-   - Referenced Kubernetes/HTTP resources
-3. **Validate**: Push rendered configs to validation sidecar via Dataplane API
-4. **Deploy**: On validation success, push structured state to production HAProxy pods
-5. **Sync**: Full sync removes undeclared resources from target instances
-
-Timer-based reconciliation prevents config drift during resource stability.
-
-### Key Architectural Features
-
-- **Unified Dataplane Configuration**: All dataplane instances use port 5555 with environment-specific authentication
-- **O(1) Resource Lookups**: Custom indexing enables efficient cross-resource matching via `get_indexed()` methods
-- **Template Consolidation**: DRY principle applied with helper templates and reduced duplication
-- **Clean CLI Structure**: Proper subcommands with `run` for operation and `version` for info
-
-## Template Snippets
-
-The controller supports reusable template snippets that can be included in any template (maps, configs, or certificates). This enables modular, maintainable configurations.
-
-### Basic Usage
-
-Define snippets in the `template_snippets` section of your ConfigMap:
-
-```yaml
-template_snippets:
-  backend-name: |
-    backend_{{ service_name }}_{{ port }}
-  
-  server-entry: |
-    server {{ name }} {{ ip }}:{{ port }} check
-```
-
-Include snippets in templates using Jinja2's `{% include %}` syntax:
-
-```yaml
-maps:
-  /etc/haproxy/maps/backends.map:
-    template: |
-      {% for service in services %}
-      {% include "backend-name" %} {% include "server-entry" %}
-      {% endfor %}
-```
-
-### Advanced Features
-
-- **Nested includes**: Snippets can include other snippets
-- **Template variables**: Use `{% set %}` to pass context between snippets
-- **Error handling**: Missing snippets raise clear `TemplateNotFound` errors
-- **Validation**: All snippets are validated at configuration load time
-
-See [example-configmap.yaml](example-configmap.yaml) for a comprehensive example using template snippets to generate HAProxy configurations from Kubernetes Ingress resources.
-
-### Recent Improvements
-
-**Architecture Simplification:**
-- **Unified Dataplane Port**: All dataplane instances now use port 5555 (previously mixed 5555/5556)
-- **Environment-Specific Auth**: Production uses `admin`/`adminpass`, validation uses `admin`/`validationpass`
-- **Consolidated Templates**: Helm chart templates use helper functions to reduce duplication
-- **Clean CLI**: Restructured with proper `run` and `version` subcommands
-
-**Performance Critical:**
-- **HAProxy Version 3.1+**: Required for fast dataplaneapi startup (3-5s vs 30-60s in version 3.0)
-- **Alpine 3.1**: Lightweight distribution with proven container performance
-- **Optimized Probes**: Lower failureThreshold due to fast dataplaneapi 3.1 startup
-
-## Validating Admission Webhooks
-
-The controller includes validating admission webhooks that can prevent faulty resources from being applied to your cluster. This feature provides immediate feedback on configuration errors and helps maintain system stability.
-
-### Webhook Types
-
-**1. ConfigMap Validation (Always Enabled)**
-- Automatically validates HAProxy Template IC ConfigMaps
-- Checks YAML syntax, template structure, and resource references  
-- Validates Jinja2 template syntax including snippet includes
-- Provides warnings for potential issues
-
-**2. Watched Resource Validation (Configurable)**  
-- Optional validation for resources you're watching (Ingress, Service, etc.)
-- Prevents broken resources from disrupting your HAProxy configuration
-- Safe-by-default: disabled for critical resources like EndpointSlices
-- Per-resource configuration via `enable_validation_webhook` flag
-
-### Configuration
-
-Enable webhook validation for specific watched resources:
-
-```yaml
-watch_resources:
-  ingresses:
-    group: networking.k8s.io
-    version: v1
-    kind: Ingress
-    # Enable validation to prevent faulty Ingress configs
-    enable_validation_webhook: true
-    filter:
-      field_selector:
-        "spec.ingressClassName": "haproxy-template-ic"
-  
-  endpoints:
-    group: discovery.k8s.io  
-    version: v1
-    kind: EndpointSlice
-    # Keep disabled for critical resources
-    enable_validation_webhook: false
-    filter:
-      label_selector:
-        "kubernetes.io/service-name": "*"
-```
-
-### Benefits
-
-- **Early Error Detection**: Catch configuration errors before they affect your load balancer
-- **Template Validation**: Ensure Jinja2 templates are syntactically correct and all snippets exist
-- **Resource Safety**: Prevent critical resources from being accidentally blocked
-- **Immediate Feedback**: Get validation results instantly when applying resources with `kubectl`
-
-## Quickstart
-
-⚠️ **Kubernetes Required**: This application only runs in Kubernetes environments. Local development requires kind or minikube.
-
-### Setup
+## Quick Start
 
 ```bash
-# Clone repository
-git clone https://github.com/phihos/haproxy-template-ingress-controller.git
-cd haproxy-template-ingress-controller
+# Create cluster
+kind create cluster --name haproxy-ic
 
-# Install dependencies  
-uv sync
+# Deploy controller
+kubectl apply -k deploy/overlays/dev
 
-# Create development cluster
-kind create cluster --name haproxy-template-ic-dev
+# Apply configuration
+kubectl apply -f examples/basic/configmap.yaml
 
-# Build and deploy
-docker build --target production -t haproxy-template-ic:dev .
-kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev
+# Check status
+kubectl logs -l app=haproxy-template-ic
+```
 
-# Deploy with template snippet example
-cat <<EOF | kubectl apply -f -
+## Example Configuration
+
+```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: haproxy-template-ic-config
+  name: haproxy-config
 data:
   config: |
     pod_selector:
-      match_labels:
-        app: test
-    template_snippets:
-      backend-entry: |
-        server {{ name }} {{ ip }}:{{ port }} check
-    maps:
-      /etc/haproxy/maps/backends.map:
-        template: |
-          # Generated backend entries
-          {% for backend in resources.get('pods', {}).values() %}
-          {% include "backend-entry" %}
-          {% endfor %}
-EOF
-
-kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
-  --env="CONFIGMAP_NAME=haproxy-template-ic-config" \
-  --env="VERBOSE=1" \
-  -- run --configmap-name=haproxy-template-ic-config
-
-# Check status
-kubectl logs -f haproxy-template-ic
+      match_labels: {app: haproxy}
+    
+    watched_resources:
+      ingresses:
+        api_version: networking.k8s.io/v1
+        kind: Ingress
+    
+    haproxy_config:
+      template: |
+        global
+            daemon
+        defaults
+            mode http
+            timeout connect 5s
+        
+        frontend health
+            bind *:8404
+            http-request return status 200 if { path /healthz }
+        
+        frontend main
+            bind *:80
+            {% for _, ingress in resources.get('ingresses', {}).items() %}
+            {% for rule in ingress.spec.rules %}
+            use_backend {{ rule.backend.service.name }} if { hdr(host) {{ rule.host }} }
+            {% endfor %}
+            {% endfor %}
+        
+        {% for _, ingress in resources.get('ingresses', {}).items() %}
+        {% for rule in ingress.spec.rules %}
+        backend {{ rule.backend.service.name }}
+            {% set svc = resources.get('services').get_indexed_single(rule.backend.service.name) %}
+            {% if svc %}
+            server srv {{ svc.spec.clusterIP }}:{{ rule.backend.service.port.number }}
+            {% endif %}
+        {% endfor %}
+        {% endfor %}
 ```
 
-### Development
+## Documentation
 
-**Quick Start:**
-```bash
-# Start development environment  
-./scripts/start-dev-env.sh up
+- [Architecture](docs/ARCHITECTURE.md) - System design and components
+- [Quick Start](docs/QUICKSTART.md) - Installation and first deployment
+- [Configuration](docs/CONFIGURATION.md) - ConfigMap structure and options
+- [Templates](docs/TEMPLATES.md) - Jinja2 syntax and examples
+- [Operations](docs/OPERATIONS.md) - Monitoring and production deployment
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Diagnostic commands and recovery
+- [Security](docs/SECURITY.md) - RBAC, network policies, and hardening
+- [Development](docs/DEVELOPMENT.md) - Build, test, and contribute
+- [API Reference](docs/API.md) - CLI, environment variables, endpoints
 
-# Follow logs
-./scripts/start-dev-env.sh logs
+## Requirements
 
-# Restart after code changes
-./scripts/start-dev-env.sh restart
+- Kubernetes 1.28+
+- HAProxy 3.1+ (critical for performance)
+- Python 3.13+ (development only)
 
-# Clean up
-./scripts/start-dev-env.sh down
-```
+## Status
 
-**Manual Development:**
-```bash
-# Pre-commit setup
-pre-commit install
+⚠️ **Proof of concept** - Not production ready. Use at your own risk.
 
-# Test suite
-uv run pytest -m "not integration and not acceptance"  # Unit tests
-uv run pytest -m "integration"  # Integration tests (Docker containers)
-uv run pytest -m "acceptance"   # Acceptance tests (creates test cluster)
+## License
 
-# Code quality
-uv run ruff format
-uv run ruff check --fix  
-uv run mypy haproxy_template_ic/
-```
-
-See [CLAUDE.md](CLAUDE.md) for detailed development information.
-
-## Management Socket
-
-Runtime state inspection via Unix socket at `/run/haproxy-template-ic/management.sock`.
-
-### Commands
-
-Access from within the pod or via `kubectl exec`:
-
-```bash
-# Complete state
-kubectl exec -it haproxy-template-ic -- \
-  echo "dump all" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-
-# Resource indices only  
-kubectl exec -it haproxy-template-ic -- \
-  echo "dump indices" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-
-# Specific index
-kubectl exec -it haproxy-template-ic -- \
-  echo "dump index pods" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-
-# HAProxy config context
-kubectl exec -it haproxy-template-ic -- \
-  echo "dump config" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-```
-
-### Configuration
-
-### CLI Interface
-
-The controller provides a clean CLI with subcommands:
-
-**Running the Operator:**
-```bash
-# Start the operator
-haproxy-template-ic run --configmap-name=my-config
-
-# Show version 
-haproxy-template-ic version
-
-# Get help
-haproxy-template-ic --help
-haproxy-template-ic run --help
-```
-
-**Configuration Validation:**
-Configuration validation is handled automatically via admission webhooks when resources are applied to Kubernetes. The operator watches for ConfigMap changes and validates configurations at runtime.
-
-| Environment Variable | CLI Option             | Default                                    | Description                                        |
-|----------------------|------------------------|--------------------------------------------|----------------------------------------------------|
-| `CONFIGMAP_NAME`     | `run --configmap-name` | *Required*                                 | ConfigMap name containing controller configuration |
-| `VERBOSE`            | `--verbose`            | `0`                                        | Logging verbosity (0=WARNING, 1=INFO, 2=DEBUG)     |
-| `STRUCTURED_LOGGING` | `--structured-logging` | `false`                                    | Enable JSON structured logging output              |
-| `HEALTHZ_PORT`       | `--healthz-port`       | `8080`                                     | Controller health check endpoint port              |
-| `METRICS_PORT`       | `--metrics-port`       | `9090`                                     | Prometheus metrics endpoint port                   |
-| `SOCKET_PATH`        | `--socket-path`        | `/run/haproxy-template-ic/management.sock` | Management socket path                             |
-| `WEBHOOK_ENABLED`    | *(env only)*           | `false`                                    | Enable validating admission webhooks               |
-| `WEBHOOK_PORT`       | *(env only)*           | `9443`                                     | Webhook server port                                |
-| `TRACING_ENABLED`    | `--tracing-enabled`    | `false`                                    | Enable OpenTelemetry distributed tracing           |
-
-#### Logging Configuration
-
-The controller uses [structlog](https://www.structlog.org/) for high-performance structured logging with automatic context injection.
-
-**Plain Text Mode** (default): Context fields appended in logfmt format:
-```bash
-kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
-  --env="CONFIGMAP_NAME=haproxy-config" \
-  --env="VERBOSE=2" \
-  -- run --configmap-name=haproxy-config
-```
-
-**JSON Mode**: Structured JSON output for log aggregation systems:
-```bash
-kubectl run haproxy-template-ic --image=haproxy-template-ic:dev \
-  --env="CONFIGMAP_NAME=haproxy-config" \
-  --env="STRUCTURED_LOGGING=true" \
-  --env="VERBOSE=1" \
-  -- run --configmap-name=haproxy-config
-```
-
-### Response Structure
-
-**`dump all`** returns complete state with sections:
-- **config**: Operator configuration (pod selector, watched resources, templates)
-- **haproxy_config_context**: Rendered HAProxy config, map templates, and certificates
-- **metadata**: Runtime information (ConfigMap name, flags)
-- **indices**: Current Kubernetes resource state
-
-**`dump indices`** returns only resource indices.
-
-**`dump index <name>`** returns specific index (e.g., `pods_index`).
-
-**`dump config`** returns HAProxy configuration context only, including rendered maps, HAProxy config, and certificates.
-
-Example output:
-```json
-{
-  "config": {
-    "pod_selector": "app=haproxy",
-    "watch_resources": {
-      "pods": {"kind": "Pod", "group": "", "version": "v1"}
-    },
-    "maps": {
-      "/etc/haproxy/maps/backend.map": {
-        "template_source": "server {{ resources.name }} {{ resources.host }}:{{ resources.port }}"
-      }
-    }
-  },
-  "indices": {
-    "pods_index": {
-      "('default', 'web-pod')": {"name": "web-pod", "host": "10.0.1.5", "port": "80"}
-    }
-  }
-}
-```
+Apache 2.0

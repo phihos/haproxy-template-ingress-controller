@@ -1,85 +1,65 @@
-# Project Style Guide
+# Style Guide
 
-This repository uses modern Python tooling and enforces a consistent, readable codebase. Follow these rules when contributing.
+## Python
 
-## Language and versions
-- Python: target >= 3.13 (see `pyproject.toml`).
-- HAProxy: require version 3.1+ for performance (avoid 3.0 slow dataplaneapi startup).
-- Prefer standard library over third‑party when feasible.
+- **Version**: 3.13+
+- **Type hints**: Required for public APIs
+- **Imports**: Module-level preferred
 
-## Code formatting and linting
-- Formatter: Ruff formatter. Run `uv run ruff format`.
-- Linter: Ruff. Run `uv run ruff check`. Fix warnings unless explicitly justified.
-- Keep functions short and focused. Extract helpers when logic branches multiply.
+## Formatting
 
-## Typing
-- Type‑annotate all public functions, classes, and module interfaces.
-- Internal helpers should be typed when complexity is non‑trivial.
-- Avoid `Any` and unsafe casts. Prefer precise, explicit types. See `tool.mypy` in `pyproject.toml`.
+```bash
+uv run ruff format        # Auto-format
+uv run ruff check --fix   # Fix issues
+```
 
 ## Naming
-- Descriptive names over abbreviations: `get_current_namespace`, not `get_ns`.
-- Functions: verbs or verb phrases. Variables: nouns or noun phrases.
-- Constants: UPPER_SNAKE_CASE; module constants at top of file.
 
-## Control flow
-- Use guard clauses to avoid deep nesting.
-- Raise exceptions early with descriptive messages.
-- Do not swallow exceptions; handle or propagate.
+- Functions: `get_current_namespace()`
+- Variables: `resource_name`
+- Constants: `DEFAULT_TIMEOUT`
+- No abbreviations
 
-## Errors and exceptions
-- Raise specific exceptions. Include actionable context in messages.
-- Avoid returning `None` for error states; prefer `Result`-like patterns or exceptions.
+## Code Patterns
 
-## Logging
-- Use the `logging` module, not `print`.
-- Choose appropriate levels: `debug` for details, `info` for lifecycle, `warning` for recoverable, `error` for failures, `critical` for unrecoverable.
+```python
+# Guard clauses over nesting
+if not valid:
+    raise ValueError("Invalid input")
+return process(data)
 
-## Async
-- Prefer `asyncio` for concurrent IO. Keep event loops single‑responsibility.
-- Avoid mixing blocking IO in async code. If needed, run in executors.
+# Explicit types over primitives
+@dataclass
+class Config:
+    name: str
+    port: int
 
-## Configuration and templates
-- Keep config parsing strict (see `config_from_dict`). Validate user input.
-- Jinja templates should be small and pure; keep logic minimal.
-- Template snippets should be focused and reusable; avoid complex logic in snippets.
-- Use descriptive snippet names that clearly indicate their purpose (e.g., `backend-name`, `server-entry`).
-- Document snippet parameters and expected context in template comments.
-
-## Tests
-- Layout: `tests/` with `unit/`, `integration/`, `e2e/`.
-- Use `pytest` with markers:
-  - `-m "not integration and not acceptance"` for fast unit tests
-  - `-m integration` for integration tests with Docker containers
-  - `-m acceptance` for full end-to-end acceptance tests
-- Write deterministic tests; avoid real network or time dependencies unless in `e2e/`.
-- Use fixtures for shared setup and to keep tests isolated.
-
-## Security and dependencies
-- Keep dependencies minimal. Use `uv` for syncing.
-- Security scanning: `bandit`. Dependency hygiene: `deptry`.
-- Never hardcode secrets. Use GitHub secrets/CI env.
-
-## Docs and comments
-- Write docstrings for public APIs. Explain "why", not "what".
-- Keep comments concise; update them when code changes.
-
-## Git and PRs
-- Branch names: `feat/…`, `fix/…`, `chore/…`, `docs/…`, `refactor/…`.
-- Commits: imperative mood, concise subject; body explains rationale.
-- All PRs must be green on CI and pass required checks.
-- Prefer squash merges; keep history clean and meaningful.
-
-## Make it easy to review
-- Smaller PRs are better. Include context in the PR description and a test plan.
-- Link related issues and discuss trade‑offs briefly.
-
-## Commands cheat‑sheet
+# Not: config = ("name", 8080)
 ```
-uv sync --group dev
-uv run ruff format && uv run ruff check
-uv run mypy haproxy_template_ic/
-uv run pytest -q
-uv run bandit -c pyproject.toml -r haproxy_template_ic/
-uv run deptry .
+
+## Testing
+
+```python
+# Markers for test categories
+@pytest.mark.unit
+@pytest.mark.integration
+@pytest.mark.acceptance
+
+# Descriptive test names
+def test_template_renders_with_missing_resources():
+    ...
 ```
+
+## Git
+
+- Branches: `feat/`, `fix/`, `docs/`
+- Commits: `type: description`
+- PRs: Squash merge
+
+## Quality Gates
+
+All must pass:
+- `uv run pytest -n auto`
+- `uv run ruff check`
+- `uv run mypy haproxy_template_ic/`
+- `uv run bandit -r haproxy_template_ic/`
