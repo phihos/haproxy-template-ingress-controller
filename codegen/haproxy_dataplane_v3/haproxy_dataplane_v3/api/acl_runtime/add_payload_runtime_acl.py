@@ -3,7 +3,6 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error import Error
 from ...models.one_acl_file_entry import OneACLFileEntry
@@ -22,12 +21,11 @@ def _get_kwargs(
         "url": f"/services/haproxy/runtime/acls/{parent_name}/entries",
     }
 
-    _body = []
+    _kwargs["json"] = []
     for componentsschemasacl_files_entries_item_data in body:
         componentsschemasacl_files_entries_item = componentsschemasacl_files_entries_item_data.to_dict()
-        _body.append(componentsschemasacl_files_entries_item)
+        _kwargs["json"].append(componentsschemasacl_files_entries_item)
 
-    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers
@@ -36,7 +34,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[Error, list["OneACLFileEntry"]]]:
+) -> Union[Error, list["OneACLFileEntry"]]:
     if response.status_code == 201:
         response_201 = []
         _response_201 = response.json()
@@ -48,14 +46,15 @@ def _parse_response(
             response_201.append(componentsschemasacl_files_entries_item)
 
         return response_201
+
     if response.status_code == 400:
         response_400 = Error.from_dict(response.json())
 
         return response_400
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(

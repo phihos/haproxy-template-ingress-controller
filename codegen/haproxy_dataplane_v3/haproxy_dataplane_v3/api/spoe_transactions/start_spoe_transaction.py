@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.spoe_configuration_transaction import SPOEConfigurationTransaction
 from ...models.start_spoe_transaction_response_429 import StartSpoeTransactionResponse429
 from ...types import UNSET, Response
@@ -32,24 +32,25 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
+) -> Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]:
     if response.status_code == 201:
         response_201 = SPOEConfigurationTransaction.from_dict(response.json())
 
         return response_201
+
     if response.status_code == 429:
         response_429 = StartSpoeTransactionResponse429.from_dict(response.json())
 
         return response_429
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
+) -> Response[Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,7 +64,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     version: int,
-) -> Response[Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
+) -> Response[Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
     """Start a new transaction
 
      Starts a new transaction and returns it's id
@@ -77,7 +78,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]
+        Response[Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]
     """
 
     kwargs = _get_kwargs(
@@ -97,7 +98,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     version: int,
-) -> Optional[Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
+) -> Optional[Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
     """Start a new transaction
 
      Starts a new transaction and returns it's id
@@ -111,7 +112,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]
+        Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]
     """
 
     return sync_detailed(
@@ -126,7 +127,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     version: int,
-) -> Response[Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
+) -> Response[Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
     """Start a new transaction
 
      Starts a new transaction and returns it's id
@@ -140,7 +141,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]
+        Response[Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]
     """
 
     kwargs = _get_kwargs(
@@ -158,7 +159,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     version: int,
-) -> Optional[Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
+) -> Optional[Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]]:
     """Start a new transaction
 
      Starts a new transaction and returns it's id
@@ -172,7 +173,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[SPOEConfigurationTransaction, StartSpoeTransactionResponse429]
+        Union[Error, SPOEConfigurationTransaction, StartSpoeTransactionResponse429]
     """
 
     return (

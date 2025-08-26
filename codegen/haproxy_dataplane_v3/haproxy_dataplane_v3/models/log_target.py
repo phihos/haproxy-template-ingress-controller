@@ -78,6 +78,7 @@ class LogTarget:
         sample_size = self.sample_size
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update({})
         if address is not UNSET:
             field_dict["address"] = address

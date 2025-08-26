@@ -3,7 +3,6 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.acl_lines import ACLLines
 from ...models.error import Error
@@ -36,12 +35,11 @@ def _get_kwargs(
         "params": params,
     }
 
-    _body = []
+    _kwargs["json"] = []
     for componentsschemasacls_item_data in body:
         componentsschemasacls_item = componentsschemasacls_item_data.to_dict()
-        _body.append(componentsschemasacls_item)
+        _kwargs["json"].append(componentsschemasacls_item)
 
-    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers
@@ -50,7 +48,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[Error, list["ACLLines"]]]:
+) -> Union[Error, list["ACLLines"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -60,6 +58,7 @@ def _parse_response(
             response_200.append(componentsschemasacls_item)
 
         return response_200
+
     if response.status_code == 202:
         response_202 = []
         _response_202 = response.json()
@@ -69,14 +68,15 @@ def _parse_response(
             response_202.append(componentsschemasacls_item)
 
         return response_202
+
     if response.status_code == 400:
         response_400 = Error.from_dict(response.json())
 
         return response_400
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(

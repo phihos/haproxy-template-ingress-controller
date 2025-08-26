@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.ring import Ring
 from ...types import UNSET, Response, Unset
 
@@ -31,7 +31,9 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[list["Ring"]]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Union[Error, list["Ring"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -41,13 +43,15 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
             response_200.append(componentsschemasrings_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[list["Ring"]]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Error, list["Ring"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -61,7 +65,7 @@ def sync_detailed(
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
     full_section: Union[Unset, bool] = False,
-) -> Response[list["Ring"]]:
+) -> Response[Union[Error, list["Ring"]]]:
     """Return an array of rings
 
      Returns an array of all configured rings.
@@ -75,7 +79,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['Ring']]
+        Response[Union[Error, list['Ring']]]
     """
 
     kwargs = _get_kwargs(
@@ -95,7 +99,7 @@ def sync(
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
     full_section: Union[Unset, bool] = False,
-) -> Optional[list["Ring"]]:
+) -> Optional[Union[Error, list["Ring"]]]:
     """Return an array of rings
 
      Returns an array of all configured rings.
@@ -109,7 +113,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['Ring']
+        Union[Error, list['Ring']]
     """
 
     return sync_detailed(
@@ -124,7 +128,7 @@ async def asyncio_detailed(
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
     full_section: Union[Unset, bool] = False,
-) -> Response[list["Ring"]]:
+) -> Response[Union[Error, list["Ring"]]]:
     """Return an array of rings
 
      Returns an array of all configured rings.
@@ -138,7 +142,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['Ring']]
+        Response[Union[Error, list['Ring']]]
     """
 
     kwargs = _get_kwargs(
@@ -156,7 +160,7 @@ async def asyncio(
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
     full_section: Union[Unset, bool] = False,
-) -> Optional[list["Ring"]]:
+) -> Optional[Union[Error, list["Ring"]]]:
     """Return an array of rings
 
      Returns an array of all configured rings.
@@ -170,7 +174,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['Ring']
+        Union[Error, list['Ring']]
     """
 
     return (

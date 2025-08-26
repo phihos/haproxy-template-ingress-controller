@@ -615,7 +615,9 @@ def _render_haproxy_config(
         with trace_template_render(CONTENT_TYPE_HAPROXY_CONFIG):
             with metrics.time_template_render(CONTENT_TYPE_HAPROXY_CONFIG):
                 rendered_content = memo.template_renderer.render(
-                    memo.config.haproxy_config.template, **template_vars
+                    memo.config.haproxy_config.template,
+                    template_name="haproxy_config",
+                    **template_vars,
                 )
 
         rendered_config = RenderedConfig(content=rendered_content)
@@ -631,7 +633,8 @@ def _render_haproxy_config(
         metrics.record_template_render(CONTENT_TYPE_HAPROXY_CONFIG, "error")
         metrics.record_error("template_render_failed", "operator")
         record_span_event("haproxy_config_render_failed", {"error": str(e)})
-        logger.error(f"❌ Failed to render HAProxy configuration template: {e}")
+        # The error message already includes detailed context from format_template_error
+        logger.error(f"❌ {e}")
 
 
 def _render_content_templates(
@@ -652,7 +655,9 @@ def _render_content_templates(
                 with trace_template_render(content_type, filename):
                     with metrics.time_template_render(content_type):
                         rendered_content_text = memo.template_renderer.render(
-                            template_config.template, **template_vars
+                            template_config.template,
+                            template_name=f"{content_type}/{filename}",
+                            **template_vars,
                         )
 
                 rendered_content = RenderedContent(
@@ -686,9 +691,8 @@ def _render_content_templates(
                     f"{content_type}_render_failed",
                     {"filename": filename, "error": str(e)},
                 )
-                logger.error(
-                    f"❌ Failed to render {content_type} template for {filename}: {e}"
-                )
+                # The error message already includes detailed context from format_template_error
+                logger.error(f"❌ {e}")
 
     return template_errors
 

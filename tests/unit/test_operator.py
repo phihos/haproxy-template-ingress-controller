@@ -531,7 +531,10 @@ async def test_render_haproxy_templates_jinja_error(
 
     # Should log error but not crash
     mock_logger.error.assert_called()
-    assert "Failed to render" in mock_logger.error.call_args_list[0][0][0]
+    # Check for the new detailed error format
+    error_msg = mock_logger.error.call_args_list[0][0][0]
+    assert "Template 'map/backend.map' rendering failed" in error_msg
+    assert "'undefined_variable' is undefined" in error_msg
     # Sync should be called but will handle the error gracefully
     mock_sync.assert_called_once()
 
@@ -624,7 +627,8 @@ async def test_render_haproxy_config_jinja_error(
 
     # Should log error but not crash, and rendered_config should be None
     mock_logger.error.assert_called()
-    assert "Failed to render HAProxy configuration template" in str(
+    # Check for the new detailed error format
+    assert "Template 'haproxy_config' rendering failed" in str(
         mock_logger.error.call_args
     )
     assert memo.haproxy_config_context.rendered_config is None
@@ -738,7 +742,7 @@ async def test_render_certificates_jinja_error(
     # Check for certificate error in any of the error calls
     error_messages = [str(call) for call in mock_logger.error.call_args_list]
     assert any(
-        "Failed to render certificate template for bad-cert.pem" in msg
+        "Template 'certificate/bad-cert.pem' rendering failed" in msg
         for msg in error_messages
     )
 

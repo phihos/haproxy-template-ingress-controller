@@ -340,36 +340,41 @@ def kind_cluster(request):
             cluster_exists = name in out.splitlines()
 
             if cluster_exists:
-                # Check if kubeconfig exists but is empty or missing clusters
-                if cluster.kubeconfig_path.exists():
+                # Check if kubeconfig needs to be exported from existing cluster
+                need_export = False
+
+                if not cluster.kubeconfig_path.exists():
+                    # Kubeconfig doesn't exist at all
+                    need_export = True
+                else:
+                    # Check if kubeconfig exists but is empty or missing required fields
                     try:
                         with open(cluster.kubeconfig_path, "r") as f:
                             config_content = yaml.safe_load(f)
 
-                        # If kubeconfig is empty or missing clusters, export from kind
+                        # If kubeconfig is empty, missing clusters, or missing current-context, export from kind
                         if (
                             not config_content
                             or "clusters" not in config_content
                             or not config_content["clusters"]
+                            or "current-context" not in config_content
+                            or not config_content.get("current-context")
                         ):
-                            # Export kubeconfig from the existing cluster
-                            kubeconfig_output = subprocess.check_output(
-                                ["kind", "get", "kubeconfig", "--name", name],
-                                encoding="utf-8",
-                            )
-
-                            with open(cluster.kubeconfig_path, "w") as f:
-                                f.write(kubeconfig_output)
+                            need_export = True
 
                     except (yaml.YAMLError, FileNotFoundError):
                         # If kubeconfig is malformed, regenerate it
-                        kubeconfig_output = subprocess.check_output(
-                            ["kind", "get", "kubeconfig", "--name", name],
-                            encoding="utf-8",
-                        )
+                        need_export = True
 
-                        with open(cluster.kubeconfig_path, "w") as f:
-                            f.write(kubeconfig_output)
+                if need_export:
+                    # Export kubeconfig from the existing cluster
+                    kubeconfig_output = subprocess.check_output(
+                        ["kind", "get", "kubeconfig", "--name", name],
+                        encoding="utf-8",
+                    )
+
+                    with open(cluster.kubeconfig_path, "w") as f:
+                        f.write(kubeconfig_output)
 
         except subprocess.CalledProcessError:
             # kind command failed, let create() handle cluster creation

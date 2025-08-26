@@ -3,7 +3,6 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.create_storage_ssl_certificate_body import CreateStorageSSLCertificateBody
 from ...models.error import Error
@@ -33,37 +32,36 @@ def _get_kwargs(
         "params": params,
     }
 
-    _body = body.to_multipart()
-
-    _kwargs["files"] = _body
+    _kwargs["files"] = body.to_multipart()
 
     _kwargs["headers"] = headers
     return _kwargs
 
 
-def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[Error, SSLFile]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Union[Error, SSLFile]:
     if response.status_code == 201:
         response_201 = SSLFile.from_dict(response.json())
 
         return response_201
+
     if response.status_code == 202:
         response_202 = SSLFile.from_dict(response.json())
 
         return response_202
+
     if response.status_code == 400:
         response_400 = Error.from_dict(response.json())
 
         return response_400
+
     if response.status_code == 409:
         response_409 = Error.from_dict(response.json())
 
         return response_409
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(

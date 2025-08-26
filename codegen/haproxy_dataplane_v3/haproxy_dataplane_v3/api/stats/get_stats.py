@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.get_stats_type import GetStatsType
 from ...models.stats_array import StatsArray
 from ...types import UNSET, Response, Unset
@@ -39,22 +39,27 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[StatsArray]:
+def _parse_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Union[Error, StatsArray]:
     if response.status_code == 200:
         response_200 = StatsArray.from_dict(response.json())
 
         return response_200
+
     if response.status_code == 500:
         response_500 = StatsArray.from_dict(response.json())
 
         return response_500
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[StatsArray]:
+def _build_response(
+    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
+) -> Response[Union[Error, StatsArray]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -69,7 +74,7 @@ def sync_detailed(
     type_: Union[Unset, GetStatsType] = UNSET,
     name: Union[Unset, str] = UNSET,
     parent: Union[Unset, str] = UNSET,
-) -> Response[StatsArray]:
+) -> Response[Union[Error, StatsArray]]:
     """Gets stats
 
      Getting stats from the HAProxy.
@@ -84,7 +89,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[StatsArray]
+        Response[Union[Error, StatsArray]]
     """
 
     kwargs = _get_kwargs(
@@ -106,7 +111,7 @@ def sync(
     type_: Union[Unset, GetStatsType] = UNSET,
     name: Union[Unset, str] = UNSET,
     parent: Union[Unset, str] = UNSET,
-) -> Optional[StatsArray]:
+) -> Optional[Union[Error, StatsArray]]:
     """Gets stats
 
      Getting stats from the HAProxy.
@@ -121,7 +126,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        StatsArray
+        Union[Error, StatsArray]
     """
 
     return sync_detailed(
@@ -138,7 +143,7 @@ async def asyncio_detailed(
     type_: Union[Unset, GetStatsType] = UNSET,
     name: Union[Unset, str] = UNSET,
     parent: Union[Unset, str] = UNSET,
-) -> Response[StatsArray]:
+) -> Response[Union[Error, StatsArray]]:
     """Gets stats
 
      Getting stats from the HAProxy.
@@ -153,7 +158,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[StatsArray]
+        Response[Union[Error, StatsArray]]
     """
 
     kwargs = _get_kwargs(
@@ -173,7 +178,7 @@ async def asyncio(
     type_: Union[Unset, GetStatsType] = UNSET,
     name: Union[Unset, str] = UNSET,
     parent: Union[Unset, str] = UNSET,
-) -> Optional[StatsArray]:
+) -> Optional[Union[Error, StatsArray]]:
     """Gets stats
 
      Getting stats from the HAProxy.
@@ -188,7 +193,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        StatsArray
+        Union[Error, StatsArray]
     """
 
     return (

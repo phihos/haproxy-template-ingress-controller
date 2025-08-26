@@ -3,9 +3,9 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.dgram_bind import DgramBind
+from ...models.error import Error
 from ...types import UNSET, Response, Unset
 
 
@@ -31,7 +31,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[list["DgramBind"]]:
+) -> Union[Error, list["DgramBind"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -41,15 +41,15 @@ def _parse_response(
             response_200.append(componentsschemasdgram_binds_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[list["DgramBind"]]:
+) -> Response[Union[Error, list["DgramBind"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,7 +63,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["DgramBind"]]:
+) -> Response[Union[Error, list["DgramBind"]]]:
     """Return an array of dgram binds
 
      Returns an array of all dgram binds that are configured in specified log forward.
@@ -77,7 +77,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['DgramBind']]
+        Response[Union[Error, list['DgramBind']]]
     """
 
     kwargs = _get_kwargs(
@@ -97,7 +97,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["DgramBind"]]:
+) -> Optional[Union[Error, list["DgramBind"]]]:
     """Return an array of dgram binds
 
      Returns an array of all dgram binds that are configured in specified log forward.
@@ -111,7 +111,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['DgramBind']
+        Union[Error, list['DgramBind']]
     """
 
     return sync_detailed(
@@ -126,7 +126,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["DgramBind"]]:
+) -> Response[Union[Error, list["DgramBind"]]]:
     """Return an array of dgram binds
 
      Returns an array of all dgram binds that are configured in specified log forward.
@@ -140,7 +140,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['DgramBind']]
+        Response[Union[Error, list['DgramBind']]]
     """
 
     kwargs = _get_kwargs(
@@ -158,7 +158,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["DgramBind"]]:
+) -> Optional[Union[Error, list["DgramBind"]]]:
     """Return an array of dgram binds
 
      Returns an array of all dgram binds that are configured in specified log forward.
@@ -172,7 +172,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['DgramBind']
+        Union[Error, list['DgramBind']]
     """
 
     return (

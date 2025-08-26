@@ -58,6 +58,7 @@ class PeerSectionBase:
         shards = self.shards
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "name": name,

@@ -3,7 +3,6 @@ from typing import Any, Optional, Union, cast
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error import Error
 from ...models.replace_cert_body import ReplaceCertBody
@@ -22,28 +21,25 @@ def _get_kwargs(
         "url": f"/services/haproxy/runtime/ssl_certs/{name}",
     }
 
-    _body = body.to_multipart()
-
-    _kwargs["files"] = _body
+    _kwargs["files"] = body.to_multipart()
 
     _kwargs["headers"] = headers
     return _kwargs
 
 
-def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[Any, Error]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Union[Any, Error]:
     if response.status_code == 200:
         response_200 = cast(Any, None)
         return response_200
+
     if response.status_code == 400:
         response_400 = Error.from_dict(response.json())
 
         return response_400
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(

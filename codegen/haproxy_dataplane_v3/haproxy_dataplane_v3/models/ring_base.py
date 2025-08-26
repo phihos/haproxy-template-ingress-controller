@@ -69,6 +69,7 @@ class RingBase:
             timeout_server = self.timeout_server
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "name": name,

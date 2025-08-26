@@ -152,6 +152,7 @@ class HTTPAfterResponseRule:
         var_scope = self.var_scope
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "type": type_,

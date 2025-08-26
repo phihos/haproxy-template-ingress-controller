@@ -3,9 +3,9 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.backend_switching_rule import BackendSwitchingRule
+from ...models.error import Error
 from ...types import UNSET, Response, Unset
 
 
@@ -31,7 +31,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[list["BackendSwitchingRule"]]:
+) -> Union[Error, list["BackendSwitchingRule"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -43,15 +43,15 @@ def _parse_response(
             response_200.append(componentsschemasbackend_switching_rules_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[list["BackendSwitchingRule"]]:
+) -> Response[Union[Error, list["BackendSwitchingRule"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -65,7 +65,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["BackendSwitchingRule"]]:
+) -> Response[Union[Error, list["BackendSwitchingRule"]]]:
     """Return an array of all Backend Switching Rules
 
      Returns all Backend Switching Rules that are configured in specified frontend.
@@ -79,7 +79,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['BackendSwitchingRule']]
+        Response[Union[Error, list['BackendSwitchingRule']]]
     """
 
     kwargs = _get_kwargs(
@@ -99,7 +99,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["BackendSwitchingRule"]]:
+) -> Optional[Union[Error, list["BackendSwitchingRule"]]]:
     """Return an array of all Backend Switching Rules
 
      Returns all Backend Switching Rules that are configured in specified frontend.
@@ -113,7 +113,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['BackendSwitchingRule']
+        Union[Error, list['BackendSwitchingRule']]
     """
 
     return sync_detailed(
@@ -128,7 +128,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["BackendSwitchingRule"]]:
+) -> Response[Union[Error, list["BackendSwitchingRule"]]]:
     """Return an array of all Backend Switching Rules
 
      Returns all Backend Switching Rules that are configured in specified frontend.
@@ -142,7 +142,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['BackendSwitchingRule']]
+        Response[Union[Error, list['BackendSwitchingRule']]]
     """
 
     kwargs = _get_kwargs(
@@ -160,7 +160,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["BackendSwitchingRule"]]:
+) -> Optional[Union[Error, list["BackendSwitchingRule"]]]:
     """Return an array of all Backend Switching Rules
 
      Returns all Backend Switching Rules that are configured in specified frontend.
@@ -174,7 +174,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['BackendSwitchingRule']
+        Union[Error, list['BackendSwitchingRule']]
     """
 
     return (

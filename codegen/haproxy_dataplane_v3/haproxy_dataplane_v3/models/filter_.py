@@ -105,6 +105,7 @@ class Filter:
         trace_rnd_parsing = self.trace_rnd_parsing
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "type": type_,

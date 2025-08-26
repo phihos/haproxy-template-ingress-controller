@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.ssl_crt_list import SSLCrtList
 from ...types import Response
 
@@ -20,7 +20,7 @@ def _get_kwargs() -> dict[str, Any]:
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[list["SSLCrtList"]]:
+) -> Union[Error, list["SSLCrtList"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -30,15 +30,15 @@ def _parse_response(
             response_200.append(componentsschemasssl_crt_lists_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[list["SSLCrtList"]]:
+) -> Response[Union[Error, list["SSLCrtList"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -50,7 +50,7 @@ def _build_response(
 def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[list["SSLCrtList"]]:
+) -> Response[Union[Error, list["SSLCrtList"]]]:
     """Get the list of all crt-list files
 
      Returns an array of crt-list file descriptions from runtime.
@@ -60,7 +60,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['SSLCrtList']]
+        Response[Union[Error, list['SSLCrtList']]]
     """
 
     kwargs = _get_kwargs()
@@ -75,7 +75,7 @@ def sync_detailed(
 def sync(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[list["SSLCrtList"]]:
+) -> Optional[Union[Error, list["SSLCrtList"]]]:
     """Get the list of all crt-list files
 
      Returns an array of crt-list file descriptions from runtime.
@@ -85,7 +85,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['SSLCrtList']
+        Union[Error, list['SSLCrtList']]
     """
 
     return sync_detailed(
@@ -96,7 +96,7 @@ def sync(
 async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Response[list["SSLCrtList"]]:
+) -> Response[Union[Error, list["SSLCrtList"]]]:
     """Get the list of all crt-list files
 
      Returns an array of crt-list file descriptions from runtime.
@@ -106,7 +106,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['SSLCrtList']]
+        Response[Union[Error, list['SSLCrtList']]]
     """
 
     kwargs = _get_kwargs()
@@ -119,7 +119,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
-) -> Optional[list["SSLCrtList"]]:
+) -> Optional[Union[Error, list["SSLCrtList"]]]:
     """Get the list of all crt-list files
 
      Returns an array of crt-list file descriptions from runtime.
@@ -129,7 +129,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['SSLCrtList']
+        Union[Error, list['SSLCrtList']]
     """
 
     return (

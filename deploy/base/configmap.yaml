@@ -92,7 +92,7 @@ data:
           {# Generate backend server entries from EndpointSlice using indexed lookup #}
           {# This demonstrates O(1) lookup using custom indexing by service name #}
           {% for endpoint_slice in resources.get('endpoints', {}).get_indexed(service_name) %}
-            {% for endpoint in endpoint_slice.endpoints %}
+            {% for endpoint in endpoint_slice.get('endpoints') | default([], true) %}
               {% for address in endpoint.addresses %}
           server {{ endpoint.targetRef.name }} {{ address }}:{{ port }}
               {% endfor %}

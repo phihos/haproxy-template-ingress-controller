@@ -699,6 +699,7 @@ class Server:
             port = self.port
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "address": address,

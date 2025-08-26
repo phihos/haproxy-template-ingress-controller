@@ -58,6 +58,7 @@ class LogForward1:
             timeout_client = self.timeout_client
 
         field_dict: dict[str, Any] = {}
+
         field_dict.update(
             {
                 "name": name,

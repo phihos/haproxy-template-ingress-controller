@@ -3,8 +3,8 @@ from typing import Any, Optional, Union
 
 import httpx
 
-from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.error import Error
 from ...models.tcp_request_rule import TCPRequestRule
 from ...types import UNSET, Response, Unset
 
@@ -31,7 +31,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[list["TCPRequestRule"]]:
+) -> Union[Error, list["TCPRequestRule"]]:
     if response.status_code == 200:
         response_200 = []
         _response_200 = response.json()
@@ -43,15 +43,15 @@ def _parse_response(
             response_200.append(componentsschemastcp_request_rules_item)
 
         return response_200
-    if client.raise_on_unexpected_status:
-        raise errors.UnexpectedStatus(response.status_code, response.content)
-    else:
-        return None
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
 
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[list["TCPRequestRule"]]:
+) -> Response[Union[Error, list["TCPRequestRule"]]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -65,7 +65,7 @@ def sync_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["TCPRequestRule"]]:
+) -> Response[Union[Error, list["TCPRequestRule"]]]:
     """Return an array of all TCP Request Rules
 
      Returns all TCP Request Rules that are configured in specified parent and parent type.
@@ -79,7 +79,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['TCPRequestRule']]
+        Response[Union[Error, list['TCPRequestRule']]]
     """
 
     kwargs = _get_kwargs(
@@ -99,7 +99,7 @@ def sync(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["TCPRequestRule"]]:
+) -> Optional[Union[Error, list["TCPRequestRule"]]]:
     """Return an array of all TCP Request Rules
 
      Returns all TCP Request Rules that are configured in specified parent and parent type.
@@ -113,7 +113,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['TCPRequestRule']
+        Union[Error, list['TCPRequestRule']]
     """
 
     return sync_detailed(
@@ -128,7 +128,7 @@ async def asyncio_detailed(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Response[list["TCPRequestRule"]]:
+) -> Response[Union[Error, list["TCPRequestRule"]]]:
     """Return an array of all TCP Request Rules
 
      Returns all TCP Request Rules that are configured in specified parent and parent type.
@@ -142,7 +142,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[list['TCPRequestRule']]
+        Response[Union[Error, list['TCPRequestRule']]]
     """
 
     kwargs = _get_kwargs(
@@ -160,7 +160,7 @@ async def asyncio(
     *,
     client: Union[AuthenticatedClient, Client],
     transaction_id: Union[Unset, str] = UNSET,
-) -> Optional[list["TCPRequestRule"]]:
+) -> Optional[Union[Error, list["TCPRequestRule"]]]:
     """Return an array of all TCP Request Rules
 
      Returns all TCP Request Rules that are configured in specified parent and parent type.
@@ -174,7 +174,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        list['TCPRequestRule']
+        Union[Error, list['TCPRequestRule']]
     """
 
     return (
