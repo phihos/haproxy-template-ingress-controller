@@ -57,6 +57,7 @@ def get_pod_ips_from_socket_response(response):
         if "indices" in response and "haproxy_pods" in response["indices"]:
             ips = []
             haproxy_pods_index = response["indices"]["haproxy_pods"]
+
             for key, resources in haproxy_pods_index.items():
                 # Resources might be a list or a single resource
                 if isinstance(resources, list):
@@ -65,31 +66,74 @@ def get_pod_ips_from_socket_response(response):
                     resource_list = [resources]
 
                 for resource in resource_list:
+                    pod_ip = None
+
                     # Handle string representation of dictionaries
                     if isinstance(resource, str):
                         try:
                             resource = ast.literal_eval(resource)
                         except (ValueError, SyntaxError):
+                            # Try extracting IP from string directly
+                            ip_matches = re.findall(
+                                r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", str(resource)
+                            )
+                            if ip_matches:
+                                ips.extend(ip_matches)
                             continue
 
                     if isinstance(resource, dict):
-                        # Extract pod IP from resource status
+                        # Try multiple ways to extract IP
+                        # 1. Try status.podIP (standard k8s pod structure)
                         if "status" in resource and isinstance(
                             resource["status"], dict
                         ):
                             pod_ip = resource["status"].get("podIP")
-                            if pod_ip:
-                                ips.append(pod_ip)
-            return ips
+                        # 2. Try spec.podIP
+                        elif "spec" in resource and isinstance(resource["spec"], dict):
+                            pod_ip = resource["spec"].get("podIP")
+                        # 3. Try direct podIP field
+                        elif "podIP" in resource:
+                            pod_ip = resource["podIP"]
+                        # 4. Look for nested pod object
+                        elif "pod" in resource and isinstance(resource["pod"], dict):
+                            if "status" in resource["pod"] and isinstance(
+                                resource["pod"]["status"], dict
+                            ):
+                                pod_ip = resource["pod"]["status"].get("podIP")
+
+                        # 5. If still no IP, extract from string representation
+                        if not pod_ip:
+                            resource_str = str(resource)
+                            ip_matches = re.findall(
+                                r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", resource_str
+                            )
+                            if ip_matches:
+                                ips.extend(ip_matches)
+                                continue
+
+                    if pod_ip:
+                        ips.append(pod_ip)
+
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_ips = []
+            for ip in ips:
+                if ip not in seen:
+                    seen.add(ip)
+                    unique_ips.append(ip)
+            return unique_ips
 
         # Fall back to string representation
         response_str = str(response)
     else:
         response_str = str(response)
 
-    # Fall back to regex extraction of IP addresses
+    # Fall back to regex extraction of IP addresses from entire response
     ip_pattern = r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"
-    return re.findall(ip_pattern, response_str)
+    all_ips = re.findall(ip_pattern, response_str)
+    # Filter out common non-pod IPs (localhost, DNS, etc)
+    filtered_ips = [ip for ip in all_ips if not ip.startswith(("127.", "0.0.0.0"))]
+    return filtered_ips
 
 
 def wait_for_deployment_replicas(deployment, expected_replicas, timeout=60):
@@ -127,7 +171,26 @@ async def test_pod_discovery_with_scaling(
     # Step 1: Wait for controller to discover initial HAProxy pods (2 instances)
     async def check_initial_discovery():
         response = send_socket_command(ingress_controller, "dump all")
+        # Debug logging to understand response structure
+        print(f"DEBUG: Response type: {type(response)}")
+        if isinstance(response, dict):
+            print(f"DEBUG: Response keys: {response.keys()}")
+            if "indices" in response:
+                print(f"DEBUG: Indices keys: {response.get('indices', {}).keys()}")
+                if "haproxy_pods" in response.get("indices", {}):
+                    haproxy_pods = response["indices"]["haproxy_pods"]
+                    print(f"DEBUG: haproxy_pods type: {type(haproxy_pods)}")
+                    if isinstance(haproxy_pods, dict) and haproxy_pods:
+                        first_key = list(haproxy_pods.keys())[0]
+                        print(f"DEBUG: First key in haproxy_pods: {first_key}")
+                        print(
+                            f"DEBUG: First value type: {type(haproxy_pods[first_key])}"
+                        )
+                        print(
+                            f"DEBUG: First value sample: {str(haproxy_pods[first_key])[:500]}"
+                        )
         discovered_ips = get_pod_ips_from_socket_response(response)
+        print(f"DEBUG: Discovered IPs: {discovered_ips}")
 
         # Get actual HAProxy pod IPs for validation
         haproxy_pods = k8s_client.get(
@@ -136,6 +199,7 @@ async def test_pod_discovery_with_scaling(
             namespace=k8s_namespace,
         )
         actual_ips = [pod.status.podIP for pod in haproxy_pods if pod.status.podIP]
+        print(f"DEBUG: Actual pod IPs: {actual_ips}")
 
         # Check if we have at least 2 discovered instances and they match actual IPs
         if len(discovered_ips) >= 2:
