@@ -1,0 +1,345 @@
+# Development
+
+## Setup
+
+### Prerequisites
+
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) package manager
+- Docker
+- kind
+
+### Environment Setup
+
+```bash
+# Clone repository
+git clone https://github.com/phihos/haproxy-template-ingress-controller.git
+cd haproxy-template-ingress-controller
+
+# Install dependencies
+uv sync
+
+# Install pre-commit hooks
+pre-commit install
+
+# Create kind cluster
+kind create cluster --name haproxy-ic-dev
+```
+
+### Quick Development
+
+```bash
+# Start dev environment
+./scripts/start-dev-env.sh up
+
+# Watch logs
+./scripts/start-dev-env.sh logs
+
+# Restart after changes
+./scripts/start-dev-env.sh restart
+
+# Clean up
+./scripts/start-dev-env.sh down
+```
+
+## Testing
+
+### Test Structure
+
+```
+tests/
+├── unit/          # Fast, no external dependencies
+├── integration/   # Docker-based HAProxy testing
+├── e2e/          # Full Kubernetes cluster tests
+└── fixtures/     # Test data
+```
+
+### Running Tests
+
+```bash
+# Unit tests only (fast)
+uv run pytest -m "not integration and not acceptance"
+
+# Integration tests (Docker)
+uv run pytest -m integration
+
+# E2E tests (Kubernetes)
+uv run pytest -m acceptance
+
+# All tests (parallel, <8 minutes)
+timeout 480 uv run pytest -n auto
+
+# Coverage report
+uv run pytest --cov=haproxy_template_ic --cov-report=html
+```
+
+### Test Options
+
+```bash
+# Debug integration tests
+uv run pytest -m integration \
+  --keep-containers=on-failure \
+  --show-container-logs \
+  --verbose-docker
+
+# Debug E2E tests
+uv run pytest -m acceptance \
+  --keep-namespaces \
+  --keep-namespace-on-failure
+
+# Serial execution with output
+uv run pytest -n 0 -s -v
+```
+
+## Code Quality
+
+### Formatting and Linting
+
+```bash
+# Format code
+uv run ruff format
+
+# Fix linting issues
+uv run ruff check --fix
+
+# Type checking
+uv run mypy haproxy_template_ic/
+
+# Security scan
+uv run bandit -c pyproject.toml -r haproxy_template_ic/
+
+# Dependency check
+uv run deptry .
+```
+
+### Pre-commit Hooks
+
+Automatically runs on commit:
+- ruff format
+- ruff check
+- mypy
+- bandit
+
+Skip hooks if needed:
+```bash
+git commit --no-verify
+```
+
+## Building
+
+### Docker Images
+
+```bash
+# Production image
+docker build --target production -t haproxy-template-ic:dev .
+
+# Coverage image
+docker build --target coverage -t haproxy-template-ic:coverage .
+
+# Load to kind
+kind load docker-image haproxy-template-ic:dev --name haproxy-ic-dev
+```
+
+### Multi-stage Build
+
+```dockerfile
+# Base stage - dependencies
+FROM python:3.13-alpine AS base
+
+# Development stage - with dev tools
+FROM base AS development
+
+# Production stage - minimal
+FROM base AS production
+
+# Coverage stage - with test tools
+FROM production AS coverage
+```
+
+## Project Structure
+
+```
+haproxy_template_ic/
+├── __main__.py              # CLI entry point
+├── operator.py              # Kubernetes operator
+├── config_models.py         # Configuration models
+├── dataplane.py            # HAProxy API client
+├── templating.py           # Template engine
+├── webhook.py              # Admission webhooks
+├── management_socket.py    # Debug socket
+├── metrics.py              # Prometheus metrics
+├── tracing.py              # OpenTelemetry
+├── resilience.py           # Retry/circuit breaker
+├── structured_logging.py   # Logging setup
+└── utils.py               # Utilities
+```
+
+## Development Workflow
+
+### Feature Development
+
+1. Create feature branch:
+```bash
+git checkout -b feat/my-feature
+```
+
+2. Make changes and test:
+```bash
+# Run affected tests
+uv run pytest tests/unit/test_affected.py
+
+# Run all tests
+uv run pytest -n auto
+```
+
+3. Check code quality:
+```bash
+uv run ruff format
+uv run ruff check --fix
+uv run mypy haproxy_template_ic/
+```
+
+4. Commit with conventional format:
+```bash
+git commit -m "feat: add new feature"
+```
+
+5. Push and create PR:
+```bash
+git push origin feat/my-feature
+gh pr create
+```
+
+### Debugging
+
+#### Local Debugging
+
+```python
+# Add breakpoint
+import pdb; pdb.set_trace()
+
+# Or use IDE debugger with:
+if __name__ == "__main__":
+    import debugpy
+    debugpy.listen(5678)
+    debugpy.wait_for_client()
+```
+
+#### Remote Debugging
+
+```bash
+# Port forward management socket
+kubectl port-forward deployment/haproxy-template-ic 5000:5000
+
+# Connect debugger to localhost:5000
+```
+
+#### Template Debugging
+
+```yaml
+# Add debug output in templates
+haproxy_config:
+  template: |
+    # DEBUG: Processing {{ resources.get('services', {}) | length }} services
+    {% if env.get('DEBUG') == 'true' %}
+    # Resource dump:
+    # {{ resources | tojson }}
+    {% endif %}
+```
+
+### Performance Profiling
+
+```python
+# Add profiling
+import cProfile
+import pstats
+
+profiler = cProfile.Profile()
+profiler.enable()
+# ... code to profile ...
+profiler.disable()
+stats = pstats.Stats(profiler)
+stats.sort_stats('cumulative')
+stats.print_stats(20)
+```
+
+## Generated Code
+
+### Dataplane API Client
+
+```bash
+# Regenerate client
+bash ./scripts/regenerate_client.sh
+
+# With custom JAR
+bash ./scripts/regenerate_client.sh --jar openapi-generator.jar
+
+# Files are generated in:
+codegen/haproxy_dataplane_v3/
+```
+
+Never edit generated code directly.
+
+## Release Process
+
+1. Update version:
+```toml
+# pyproject.toml
+version = "x.y.z"
+```
+
+2. Run tests:
+```bash
+timeout 480 uv run pytest -n auto
+```
+
+3. Build images:
+```bash
+docker build --target production -t haproxy-template-ic:x.y.z .
+docker push haproxy-template-ic:x.y.z
+```
+
+4. Tag release:
+```bash
+git tag v.x.y.z
+git push origin v.x.y.z
+```
+
+## Troubleshooting Development
+
+### Import Errors
+
+```bash
+# Reinstall dependencies
+uv sync --force-reinstall
+```
+
+### Docker Issues
+
+```bash
+# Clean Docker
+docker system prune -a
+
+# Rebuild without cache
+docker build --no-cache -t haproxy-template-ic:dev .
+```
+
+### Kind Issues
+
+```bash
+# Delete and recreate cluster
+kind delete cluster --name haproxy-ic-dev
+kind create cluster --name haproxy-ic-dev
+```
+
+### Test Failures
+
+```bash
+# Run single test with output
+uv run pytest tests/unit/test_specific.py::test_name -xvs
+
+# Keep containers for inspection
+uv run pytest -m integration --keep-containers=always
+docker ps
+docker logs <container-id>
+```
