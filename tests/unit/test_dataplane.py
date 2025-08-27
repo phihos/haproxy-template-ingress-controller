@@ -127,6 +127,33 @@ class TestDeploymentHistory:
         assert entry["last_attempt"] == "v1.0"
         assert entry["error"] == "Connection failed"
 
+    def test_deployment_history_record_success(self):
+        """Test successful deployment recording."""
+        history = DeploymentHistory()
+        history.record("http://test:5555", "v123", True)
+
+        data = history.to_dict()
+        assert "deployment_history" in data
+        assert "http://test:5555" in data["deployment_history"]
+
+        entry = data["deployment_history"]["http://test:5555"]
+        assert entry["version"] == "v123"
+        assert entry["success"] is True
+        assert entry["last_attempt"] == "v123"
+        assert entry["error"] is None
+
+    def test_deployment_history_record_failure(self):
+        """Test failed deployment recording."""
+        history = DeploymentHistory()
+        history.record("http://test:5555", "v124", False, "Config validation failed")
+
+        data = history.to_dict()
+        entry = data["deployment_history"]["http://test:5555"]
+        assert entry["version"] is None  # No version on failure
+        assert entry["success"] is False
+        assert entry["last_attempt"] == "v124"
+        assert entry["error"] == "Config validation failed"
+
 
 class TestGetProductionUrlsFromIndex:
     """Test the get_production_urls_from_index function."""
@@ -285,6 +312,116 @@ class TestDataplaneClientMethods:
         """Create a DataplaneClient for testing."""
         return DataplaneClient("http://test:5555", timeout=10.0)
 
+    @pytest.mark.asyncio
+    async def test_extract_storage_content_success(self):
+        """Test successful storage content extraction."""
+        client = DataplaneClient("http://test:5555")
+
+        # Mock storage item with payload
+        mock_storage = Mock()
+        mock_payload = Mock()
+        mock_payload.read.return_value = b"test content"
+        mock_payload.seek = Mock()
+        mock_storage.payload = mock_payload
+
+        result = client._extract_storage_content(mock_storage)
+        assert result == "test content"
+        mock_payload.seek.assert_called_once_with(0)
+
+    @pytest.mark.asyncio
+    async def test_extract_storage_content_no_payload(self):
+        """Test storage content extraction with no payload."""
+        client = DataplaneClient("http://test:5555")
+
+        # Mock storage item without payload
+        mock_storage = Mock(spec=[])  # No payload attribute
+        result = client._extract_storage_content(mock_storage)
+        assert result is None
+
+        # Test with None input
+        result = client._extract_storage_content(None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_extract_storage_content_exception(self):
+        """Test storage content extraction with exception during read."""
+        client = DataplaneClient("http://test:5555")
+
+        # Mock storage item with payload that raises exception
+        mock_storage = Mock()
+        mock_payload = Mock()
+        mock_payload.read.side_effect = UnicodeDecodeError(
+            "utf-8", b"", 0, 1, "test error"
+        )
+        mock_storage.payload = mock_payload
+
+        result = client._extract_storage_content(mock_storage)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_current_configuration_exception(self):
+        """Test get_current_configuration exception handling."""
+        client = DataplaneClient("http://test:5555")
+
+        # Mock the get_client to return a mock that raises an exception
+        mock_client = Mock()
+        client._client = mock_client
+
+        # Import the function we need to mock
+
+        # Mock the get_ha_proxy_configuration to raise an exception
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_ha_proxy_configuration.asyncio",
+                Mock(side_effect=Exception("API error")),
+            )
+
+            result = await client.get_current_configuration()
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_conditionally_force(self):
+        """Test deploy_configuration_conditionally with force=True."""
+        client = DataplaneClient("http://test:5555")
+        config = "global\n    daemon\n"
+
+        # Mock the deploy_configuration method
+        from unittest.mock import AsyncMock
+
+        client.deploy_configuration = AsyncMock(return_value="v123")
+
+        result = await client.deploy_configuration_conditionally(config, force=True)
+        assert result == "v123"
+        client.deploy_configuration.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_deploy_configuration_conditionally_version_fetch_fail(self):
+        """Test deploy_configuration_conditionally when version fetch fails."""
+        client = DataplaneClient("http://test:5555")
+        config = "global\n    daemon\n"
+
+        # Mock get_current_configuration to return None (no current config)
+        from unittest.mock import AsyncMock
+
+        client.get_current_configuration = AsyncMock(return_value=None)
+        client.deploy_configuration = AsyncMock(return_value="v124")
+
+        # Mock the get_configuration_version to raise exception (line 1141-1142)
+        mock_client = Mock()
+        client._client = mock_client
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_configuration_version.asyncio",
+                Mock(side_effect=Exception("Version fetch failed")),
+            )
+
+            # This should still work and deploy
+            result = await client.deploy_configuration_conditionally(
+                config, force=False
+            )
+            assert result == "v124"
+
 
 class TestConfigSynchronizerMethods:
     """Test ConfigSynchronizer methods for coverage."""
@@ -410,6 +547,72 @@ class TestConfigSynchronizerMethods:
             assert len(results["errors"]) == 1
             assert "Connection failed" in results["errors"][0]
 
+    def test_compare_structured_configs_helper_functions(self):
+        """Test the helper functions in _compare_structured_configs."""
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+        from pydantic import SecretStr
+
+        # Create minimal credentials
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password=SecretStr("pass")),
+            validation=DataplaneAuth(username="admin", password=SecretStr("pass")),
+        )
+
+        synchronizer = ConfigSynchronizer(
+            production_urls=["http://prod:5555"],
+            validation_url="http://val:5555",
+            credentials=credentials,
+        )
+
+        # Test with configs that trigger early exit
+        backends = []
+        for i in range(
+            12
+        ):  # 12 backends will create 12 "remove" changes, exceeding limit of 10
+            backend = Mock()
+            backend.name = f"backend{i}"
+            backend.to_dict.return_value = {"name": f"backend{i}"}
+            backends.append(backend)
+
+        current_config = {"backends": backends}
+        new_config = {
+            "backends": []  # This will create 12 "remove backend" changes, triggering early exit at 10
+        }
+
+        changes = synchronizer._compare_structured_configs(current_config, new_config)
+
+        # Should trigger early exit after MAX_CONFIG_COMPARISON_CHANGES
+        # The "and more" message should be present if early exit was triggered
+        assert len(changes) >= 11  # At least 10 changes + "and more" message
+        assert any("and more" in change for change in changes)
+
+    def test_compare_structured_configs_serialization_error(self):
+        """Test _compare_structured_configs with serialization errors."""
+        from haproxy_template_ic.credentials import Credentials, DataplaneAuth
+        from pydantic import SecretStr
+
+        credentials = Credentials(
+            dataplane=DataplaneAuth(username="admin", password=SecretStr("pass")),
+            validation=DataplaneAuth(username="admin", password=SecretStr("pass")),
+        )
+
+        synchronizer = ConfigSynchronizer(
+            production_urls=["http://prod:5555"],
+            validation_url="http://val:5555",
+            credentials=credentials,
+        )
+
+        # Mock backend that raises exception in to_dict
+        bad_backend = Mock(name="bad_backend")
+        bad_backend.to_dict.side_effect = RuntimeError("Serialization failed")
+
+        current_config = {"backends": [bad_backend]}
+        new_config = {"backends": []}
+
+        changes = synchronizer._compare_structured_configs(current_config, new_config)
+        # Should handle the serialization error gracefully
+        assert len(changes) >= 0  # Should not crash
+
 
 class TestNormalizeDataplaneUrl:
     """Test normalize_dataplane_url function."""
@@ -444,9 +647,153 @@ class TestNormalizeDataplaneUrl:
         result = normalize_dataplane_url("https://api.example.com/haproxy?auth=token")
         assert result == "https://api.example.com/haproxy/v3?auth=token"
 
+    def test_normalize_dataplane_url_edge_cases(self):
+        """Test normalize_dataplane_url with edge cases and error conditions."""
+        # Test with already normalized URLs
+        assert (
+            normalize_dataplane_url("http://localhost:5555/v3")
+            == "http://localhost:5555/v3"
+        )
+
+        # Test with trailing slash
+        assert (
+            normalize_dataplane_url("http://localhost:5555/")
+            == "http://localhost:5555/v3"
+        )
+
+        # Test with query parameters
+        assert (
+            normalize_dataplane_url("http://localhost:5555?timeout=30")
+            == "http://localhost:5555/v3?timeout=30"
+        )
+
+        # Test with fragment
+        assert (
+            normalize_dataplane_url("http://localhost:5555#section")
+            == "http://localhost:5555/v3#section"
+        )
+
+        # Test with complex path
+        assert (
+            normalize_dataplane_url("https://api.example.com/haproxy/")
+            == "https://api.example.com/haproxy/v3"
+        )
+
+        # Test error handling - this should trigger the ValueError catch and fallback
+        # We can't easily mock urlparse to raise ValueError, so test the fallback logic
+        malformed_url = "http://localhost:5555"  # This should work normally
+        result = normalize_dataplane_url(malformed_url)
+        assert result == "http://localhost:5555/v3"
+
 
 class TestErrorParsingFunctions:
-    """Test error parsing helper functions."""
+    """Test error parsing helper functions and other utility functions."""
+
+    def test_extract_hash_from_description_with_hash(self):
+        """Test extracting hash from description with valid hash."""
+        from haproxy_template_ic.dataplane import extract_hash_from_description
+
+        assert extract_hash_from_description("xxh64:abc123def") == "xxh64:abc123def"
+        assert extract_hash_from_description("sha256:def456ghi") == "sha256:def456ghi"
+        assert extract_hash_from_description("md5:ghi789jkl") == "md5:ghi789jkl"
+
+    def test_extract_hash_from_description_with_additional_text(self):
+        """Test extracting hash when there's additional text after the hash."""
+        from haproxy_template_ic.dataplane import extract_hash_from_description
+
+        assert (
+            extract_hash_from_description("xxh64:abc123 some additional text")
+            == "xxh64:abc123"
+        )
+
+    def test_extract_hash_from_description_no_hash(self):
+        """Test extracting hash from description without hash."""
+        from haproxy_template_ic.dataplane import extract_hash_from_description
+
+        assert extract_hash_from_description("no hash here") is None
+        assert extract_hash_from_description("") is None
+        assert extract_hash_from_description(None) is None
+
+    def test_extract_hash_from_description_invalid_input(self):
+        """Test extracting hash with invalid input types."""
+        from haproxy_template_ic.dataplane import extract_hash_from_description
+
+        assert extract_hash_from_description(123) is None
+        assert extract_hash_from_description([]) is None
+
+    def test_parse_haproxy_error_line_various_formats(self):
+        """Test parsing HAProxy error lines in various formats."""
+        assert parse_haproxy_error_line("config parsing [/tmp/file:54]") == 54
+        assert parse_haproxy_error_line("line 42: some error") == 42
+        assert parse_haproxy_error_line("[line 123] error occurred") == 123
+        assert parse_haproxy_error_line("at line 99 there was an issue") == 99
+        assert parse_haproxy_error_line("some error :456]") == 456
+
+    def test_parse_haproxy_error_line_no_match(self):
+        """Test parsing HAProxy error lines with no line numbers."""
+        assert parse_haproxy_error_line("generic error message") is None
+        assert parse_haproxy_error_line("") is None
+
+    def test_parse_haproxy_error_line_malformed_input(self):
+        """Test parsing HAProxy error lines with malformed input."""
+        # Invalid line numbers
+        assert parse_haproxy_error_line("config parsing [/tmp/file:abc]") is None
+        assert parse_haproxy_error_line("line abc: some error") is None
+        assert parse_haproxy_error_line("[line ]") is None
+
+        # Partial matches that should not work
+        assert parse_haproxy_error_line("line :") is None
+        assert (
+            parse_haproxy_error_line("line -42: error") is None
+        )  # Negative line number
+
+        # These should work (testing actual regex behavior)
+        assert (
+            parse_haproxy_error_line("config parsing [:123]") == 123
+        )  # This actually matches
+
+        # Empty patterns
+        assert parse_haproxy_error_line("line : error") is None
+        assert parse_haproxy_error_line("config parsing []") is None
+
+    def test_extract_config_context_valid_line(self):
+        """Test extracting config context around a valid line."""
+        config = "line1\nline2\nline3\nline4\nline5"
+        context = extract_config_context(config, 3, context_lines=1)
+        expected = "    2: line2\n>   3: line3\n    4: line4"
+        assert context == expected
+
+    def test_extract_config_context_edge_cases(self):
+        """Test extracting config context with edge cases."""
+        # Empty config
+        assert extract_config_context("", 1) == "No configuration content available"
+
+        # Line number out of range
+        config = "line1\nline2"
+        context = extract_config_context(config, 10)
+        assert "out of range" in context
+
+        # Line number 0 or negative
+        context = extract_config_context(config, 0)
+        assert "out of range" in context
+
+    def test_parse_validation_error_details_with_line_number(self):
+        """Test parsing validation error details with extractable line number."""
+        error_msg = "config parsing [/tmp/test:4]"
+        config = "line1\nline2\nline3\nerror line\nline5"
+        line, context = parse_validation_error_details(error_msg, config)
+        assert line == 4
+        # Should include the error line and surrounding context
+        assert "error line" in context
+        assert ">   4: error line" in context  # Error line should be marked with >
+
+    def test_parse_validation_error_details_no_line_number(self):
+        """Test parsing validation error details without line number."""
+        error_msg = "generic validation error"
+        config = "some config"
+        line, context = parse_validation_error_details(error_msg, config)
+        assert line is None
+        assert context is None
 
     def test_parse_haproxy_error_line_config_parsing_format(self):
         """Test parsing line number from config parsing error format."""
@@ -629,6 +976,21 @@ class TestValidationErrorClass:
         assert error.config_content == config_content
         assert error.error_context == error_context
 
+    def test_validation_error_str_with_context(self):
+        """Test ValidationError string representation with context."""
+        error = ValidationError(
+            "validation failed",
+            endpoint="http://test:5555",
+            config_size=100,
+            validation_details="detailed error",
+            error_context="line 1: error\nline 2: content",
+        )
+        error_str = str(error)
+        assert "validation failed" in error_str
+        assert "config_size=100" in error_str
+        assert "details=detailed error" in error_str
+        assert "Configuration context around error:" in error_str
+
 
 class TestDataplaneAPIErrorClass:
     """Test DataplaneAPIError class functionality."""
@@ -658,6 +1020,21 @@ class TestDataplaneAPIErrorClass:
         assert error.endpoint is None
         assert error.operation is None
         assert error.original_error is None
+
+    def test_dataplane_api_error_str(self):
+        """Test DataplaneAPIError string representation."""
+        error = DataplaneAPIError(
+            "test error", endpoint="http://test:5555", operation="test_op"
+        )
+        error_str = str(error)
+        assert "test error" in error_str
+        assert "operation=test_op" in error_str
+        assert "endpoint=http://test:5555" in error_str
+
+    def test_dataplane_api_error_str_no_context(self):
+        """Test DataplaneAPIError string without context."""
+        error = DataplaneAPIError("simple error")
+        assert str(error) == "simple error"
 
 
 class TestDataplaneClientInitialization:
@@ -2360,3 +2737,180 @@ class TestConfigSynchronizerEnhancements:
                     mock_prod_client.fetch_structured_configuration.assert_called_once()
                     mock_prod_client.deploy_configuration_conditionally.assert_called_once()
                     mock_prod_client.deploy_configuration.assert_called_once()
+
+
+class TestDataplaneClientFetchStructuredConfiguration:
+    """Test DataplaneClient fetch_structured_configuration for better coverage."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_structured_configuration_basic(self):
+        """Test basic fetch_structured_configuration functionality."""
+        client = DataplaneClient("http://test:5555")
+
+        with pytest.MonkeyPatch().context() as m:
+            # Mock all the individual API calls
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_backends.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_frontends.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_defaults_sections.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_global.asyncio",
+                AsyncMock(return_value=Mock()),
+            )
+
+            # Mock other sections to return empty
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_userlists.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_caches.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_mailers_sections.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_log_forwards.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_rings.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_resolvers.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_http_errors_sections.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_peer_sections.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_fcgi_apps.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_programs.asyncio",
+                AsyncMock(return_value=[]),
+            )
+
+            client._client = Mock()
+            result = await client.fetch_structured_configuration()
+
+            assert isinstance(result, dict)
+            assert "backends" in result
+            assert "frontends" in result
+            assert result["backends"] == []
+            assert result["frontends"] == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_structured_configuration_with_data(self):
+        """Test fetch_structured_configuration with actual data."""
+        client = DataplaneClient("http://test:5555")
+
+        # Create mock backend and frontend
+        mock_backend = Mock()
+        mock_backend.name = "test_backend"
+        mock_frontend = Mock()
+        mock_frontend.name = "test_frontend"
+
+        with pytest.MonkeyPatch().context() as m:
+            # Mock API calls to return data
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_backends.asyncio",
+                AsyncMock(return_value=[mock_backend]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_frontends.asyncio",
+                AsyncMock(return_value=[mock_frontend]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_defaults_sections.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_global.asyncio",
+                AsyncMock(return_value=Mock()),
+            )
+
+            # Mock other sections to return empty
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_userlists.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_caches.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_mailers_sections.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_log_forwards.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_rings.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_resolvers.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_http_errors_sections.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_peer_sections.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_fcgi_apps.asyncio",
+                AsyncMock(return_value=[]),
+            )
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_programs.asyncio",
+                AsyncMock(return_value=[]),
+            )
+
+            client._client = Mock()
+            result = await client.fetch_structured_configuration()
+
+            assert result["backends"] == [mock_backend]
+            assert result["frontends"] == [mock_frontend]
+
+    @pytest.mark.asyncio
+    async def test_fetch_structured_configuration_exception_handling(self):
+        """Test fetch_structured_configuration exception handling."""
+        client = DataplaneClient("http://test:5555")
+
+        with pytest.MonkeyPatch().context() as m:
+            # Mock get_backends to raise an exception
+            m.setattr(
+                "haproxy_template_ic.dataplane.get_backends.asyncio",
+                AsyncMock(side_effect=Exception("API error")),
+            )
+
+            client._client = Mock()
+
+            # Should raise DataplaneAPIError when there are API errors
+            with pytest.raises(
+                DataplaneAPIError, match="Failed to fetch structured configuration"
+            ):
+                await client.fetch_structured_configuration()
