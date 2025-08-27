@@ -539,6 +539,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<ty
 - Prefer module-level imports over local imports in Python
 - Use `progress_context` (not `test_progress`) to avoid pytest discovery issues
 - **No production code solely for tests**: Production code must serve a real feature or operational need. Never add code just to make tests pass. If tests expect something not tied to a feature, fix the tests, not the production code.
+- **Zero tolerance for flaky tests**: All tests must be deterministic and reliable. Flaky tests must be either fixed to be deterministic or removed entirely. Using `pytest.mark.skip` for flaky tests is not acceptable. Timing-sensitive tests should use mocking, controlled async primitives, or be redesigned to avoid race conditions.
 
 ## No Backward Compatibility Policy
 

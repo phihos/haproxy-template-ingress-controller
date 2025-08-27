@@ -19,6 +19,7 @@ data:
     template_snippets: {}
     maps: {}
     certificates: {}
+    template_rendering: {}
 ```
 
 ## Pod Selector
@@ -161,6 +162,64 @@ certificates:
       {% endif %}
       {% endfor %}
 ```
+
+## Template Rendering Configuration
+
+Control template rendering behavior for optimal performance:
+
+```yaml
+template_rendering:
+  min_render_interval: 5   # Minimum seconds between renders (rate limiting)
+  max_render_interval: 60  # Maximum seconds without render (guaranteed refresh)
+```
+
+### Performance Guidelines
+
+**Recommended Settings by Environment:**
+
+1. **Development/Testing:**
+   ```yaml
+   template_rendering:
+     min_render_interval: 1   # Fast feedback
+     max_render_interval: 30  # Frequent updates
+   ```
+
+2. **Production (High Change Rate):**
+   ```yaml
+   template_rendering:
+     min_render_interval: 5   # Protect against rapid changes
+     max_render_interval: 60  # Balance freshness with stability
+   ```
+
+3. **Production (Low Change Rate):**
+   ```yaml
+   template_rendering:
+     min_render_interval: 10  # Conservative rate limiting
+     max_render_interval: 300 # 5 minutes for stable environments
+   ```
+
+### Impact on Performance
+
+- **min_render_interval < 3s**: May cause high CPU usage during rapid resource changes
+- **max_render_interval > 3600s**: Templates may become stale in quiet periods
+- **Batching Effect**: Multiple resource changes within min_render_interval are batched into a single render
+
+### Monitoring
+
+View debouncer statistics:
+```bash
+# Via management socket
+echo "dump debouncer" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
+
+# Prometheus metrics
+curl localhost:9090/metrics | grep debouncer
+```
+
+Metrics available:
+- `haproxy_template_ic_debouncer_triggers_total`: Total trigger events
+- `haproxy_template_ic_debouncer_renders_total`: Renders by type (resource_changes/periodic_refresh)
+- `haproxy_template_ic_debouncer_batched_changes`: Histogram of changes batched per render
+- `haproxy_template_ic_debouncer_time_since_last_render_seconds`: Time since last render
 
 ## HAProxy Configuration
 

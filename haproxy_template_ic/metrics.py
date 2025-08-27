@@ -132,6 +132,29 @@ management_socket_commands_total = Counter(
     ["command", "status"],
 )
 
+# Template debouncer metrics
+debouncer_triggers_total = Counter(
+    "haproxy_template_ic_debouncer_triggers_total",
+    "Total number of debouncer trigger events",
+)
+
+debouncer_renders_total = Counter(
+    "haproxy_template_ic_debouncer_renders_total",
+    "Total number of template renders triggered by debouncer",
+    ["trigger_type"],  # "resource_changes" or "periodic_refresh"
+)
+
+debouncer_batched_changes = Histogram(
+    "haproxy_template_ic_debouncer_batched_changes",
+    "Number of changes batched per render",
+    buckets=[1, 2, 5, 10, 20, 50, 100, 200, 500, 1000],
+)
+
+debouncer_time_since_last_render = Gauge(
+    "haproxy_template_ic_debouncer_time_since_last_render_seconds",
+    "Time since last template render in seconds",
+)
+
 
 # =============================================================================
 # Metric Collection Helpers
@@ -269,6 +292,29 @@ class MetricsCollector:
             fallback_type: Type of fallback (e.g., 'structured_to_conditional', 'conditional_to_regular')
         """
         dataplane_fallback_deployments_total.labels(fallback_type=fallback_type).inc()
+
+    def record_debouncer_trigger(self) -> None:
+        """Record a debouncer trigger event."""
+        debouncer_triggers_total.inc()
+
+    def record_debouncer_render(self, trigger_type: str, changes_batched: int) -> None:
+        """Record a template render triggered by the debouncer.
+
+        Args:
+            trigger_type: "resource_changes" or "periodic_refresh"
+            changes_batched: Number of changes batched in this render
+        """
+        debouncer_renders_total.labels(trigger_type=trigger_type).inc()
+        if changes_batched > 0:
+            debouncer_batched_changes.observe(changes_batched)
+
+    def update_debouncer_last_render_time(self, time_since_last_render: float) -> None:
+        """Update the time since last render gauge.
+
+        Args:
+            time_since_last_render: Seconds since last render
+        """
+        debouncer_time_since_last_render.set(time_since_last_render)
 
     @contextmanager
     def time_webhook_request(self) -> Iterator[None]:

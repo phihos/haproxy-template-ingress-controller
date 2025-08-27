@@ -9,6 +9,15 @@ data:
       match_labels:
         app: haproxy-template-ic
         release: haproxy-template-ic
+    
+    # Template rendering configuration (optional)
+    # Controls how often templates are re-rendered
+    template_rendering:
+      # Minimum seconds between renders (rate limiting)
+      min_render_interval: 5
+      # Maximum seconds without render (guaranteed refresh)
+      max_render_interval: 60
+    
     watched_resources:
       ingresses:
         api_version: networking.k8s.io/v1

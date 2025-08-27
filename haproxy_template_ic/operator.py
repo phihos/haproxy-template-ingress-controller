@@ -41,6 +41,7 @@ from haproxy_template_ic.config_models import (
     TemplateContext,
     config_from_dict,
 )
+from haproxy_template_ic.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
     DataplaneAPIError,
@@ -713,6 +714,22 @@ def _validate_template_errors(template_errors: list) -> None:
         raise RuntimeError(error_msg)
 
 
+async def trigger_template_rendering(memo: Any, **kwargs: Any) -> None:
+    """
+    Trigger template rendering through the debouncer.
+
+    This function is called by kopf event handlers when resources change.
+    It signals the debouncer which will handle rate limiting and batching.
+    """
+    if hasattr(memo, "debouncer") and memo.debouncer:
+        await memo.debouncer.trigger()
+    else:
+        # Fallback to direct rendering if debouncer not initialized
+        # This can happen during initial startup
+        logger.warning("Debouncer not initialized, rendering directly")
+        await render_haproxy_templates(memo, **kwargs)
+
+
 @observe(
     component="operator",
     span_name="render_haproxy_templates",
@@ -903,7 +920,7 @@ def setup_resource_watchers(memo: Any) -> None:
             )
 
         kopf.index(resource_type, **kwargs)(update_resource_index)  # type: ignore[arg-type]
-        kopf.on.event(resource_type, **event_kwargs)(render_haproxy_templates)  # type: ignore[arg-type]
+        kopf.on.event(resource_type, **event_kwargs)(trigger_template_rendering)  # type: ignore[arg-type]
 
     # Set up HAProxy pod indexing
     setup_haproxy_pod_indexing(memo)
@@ -976,6 +993,39 @@ async def init_management_socket(memo: Any, **kwargs: Any) -> None:
     memo.socket_server_task = asyncio.create_task(
         run_management_socket_server(memo, socket_path)
     )
+
+
+async def init_template_debouncer(memo: Any, **kwargs: Any) -> None:
+    """Initialize and start the template rendering debouncer."""
+    if hasattr(memo, "debouncer") and memo.debouncer:
+        # Stop existing debouncer if one exists
+        await memo.debouncer.stop()
+
+    # Get configuration values
+    config = memo.config
+    min_interval = config.template_rendering.min_render_interval
+    max_interval = config.template_rendering.max_render_interval
+
+    # Create and start debouncer
+    memo.debouncer = TemplateRenderDebouncer(
+        min_interval=min_interval,
+        max_interval=max_interval,
+        render_func=render_haproxy_templates,
+        memo=memo,
+    )
+    await memo.debouncer.start()
+
+    logger.info(
+        f"Template debouncer started with intervals: min={min_interval}s, max={max_interval}s"
+    )
+
+
+async def cleanup_template_debouncer(memo: Any, **kwargs: Any) -> None:
+    """Stop the template rendering debouncer on shutdown."""
+    if hasattr(memo, "debouncer") and memo.debouncer:
+        logger.info("Stopping template debouncer...")
+        await memo.debouncer.stop()
+        memo.debouncer = None
 
 
 async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
@@ -1158,10 +1208,15 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         kopf.on.startup()(init_watch_configmap)
         # Start the management socket server to retrieve internal information and trigger actions
         kopf.on.startup()(init_management_socket)
+        # Initialize and start the template rendering debouncer
+        kopf.on.startup()(init_template_debouncer)
         # Start the metrics server for Prometheus monitoring
         kopf.on.startup()(init_metrics_server)
         # Configure webhook server for admission control
         kopf.on.startup()(configure_webhook_server)
+
+        # Register cleanup handler for debouncer
+        kopf.on.cleanup()(cleanup_template_debouncer)
 
         # Run operator
         kopf.run(
