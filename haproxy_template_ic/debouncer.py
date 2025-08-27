@@ -70,12 +70,6 @@ class TemplateRenderDebouncer:
                 f"Long max_interval ({max_interval}s) - templates may become stale during quiet periods"
             )
 
-        logger.info(
-            "Template debouncer initialized",
-            min_interval=min_interval,
-            max_interval=max_interval,
-        )
-
     def _get_metrics_collector(self):
         """Get metrics collector instance if available."""
         try:
@@ -201,7 +195,9 @@ class TemplateRenderDebouncer:
 
             self._stop = False
             self._task = asyncio.create_task(self._run())
-            logger.info("Template debouncer started")
+            logger.info(
+                f"Template debouncer started (min={self.min_interval}s, max={self.max_interval}s)"
+            )
 
     async def stop(self) -> None:
         """

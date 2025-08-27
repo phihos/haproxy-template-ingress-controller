@@ -120,19 +120,19 @@ def _get_haproxy_pod_collection(memo: Any) -> Any:
         return None
 
     available_indices = list(memo.indices.keys())
-    logger.info(f"🔍 Available indices: {available_indices}")
+    logger.debug(f"🔍 Available indices: {available_indices}")
 
     if HAPROXY_PODS_INDEX not in memo.indices:
         logger.warning("🔍 HAProxy pods index not found - skipping synchronization")
         return None
 
     haproxy_pods_store = memo.indices[HAPROXY_PODS_INDEX]
-    logger.info(f"🔍 HAProxy pods index contains {len(haproxy_pods_store)} entries")
+    logger.debug(f"🔍 HAProxy pods index contains {len(haproxy_pods_store)} entries")
 
     haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(
         haproxy_pods_store
     )
-    logger.info(
+    logger.debug(
         f"🔍 Created IndexedResourceCollection with {len(haproxy_pods_collection)} pods"
     )
 
@@ -762,7 +762,7 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
 
 async def synchronize_with_haproxy_instances(memo: Any) -> None:
     """Synchronize rendered configuration with HAProxy instances via Dataplane API."""
-    logger.info("🚀 SYNC FUNCTION CALLED - Starting synchronization...")
+    logger.debug("🚀 SYNC FUNCTION CALLED - Starting synchronization...")
     metrics = get_metrics_collector()
 
     if not _validate_sync_prerequisites(memo):
@@ -1014,10 +1014,6 @@ async def init_template_debouncer(memo: Any, **kwargs: Any) -> None:
         memo=memo,
     )
     await memo.debouncer.start()
-
-    logger.info(
-        f"Template debouncer started with intervals: min={min_interval}s, max={max_interval}s"
-    )
 
 
 async def cleanup_template_debouncer(memo: Any, **kwargs: Any) -> None:
