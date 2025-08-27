@@ -1499,8 +1499,8 @@ class ConfigSynchronizer:
                 )
                 return check_early_exit()
             except Exception as e:
-                logger.debug(f"Error comparing {section_name}: {e}")
-                changes.append(f"error comparing {section_name}")
+                logger.debug(f"Error comparing {section_name}: {type(e).__name__}: {e}")
+                changes.append(f"error comparing {section_name}: {type(e).__name__}")
                 return check_early_exit()
 
         # Helper function to compare list sections (similar to defaults)
@@ -1526,8 +1526,8 @@ class ConfigSynchronizer:
                     )
                     return check_early_exit()
             except Exception as e:
-                logger.debug(f"Error comparing {section_name}: {e}")
-                changes.append(f"error comparing {section_name}")
+                logger.debug(f"Error comparing {section_name}: {type(e).__name__}: {e}")
+                changes.append(f"error comparing {section_name}: {type(e).__name__}")
                 return check_early_exit()
 
         # Compare all named sections
@@ -1683,10 +1683,14 @@ class ConfigSynchronizer:
                         f"\n\nConfiguration context around error:\n{error_context}"
                     )
             except Exception as parse_error:
-                # Broad exception catch is necessary here since parse_validation_error_details
-                # may raise various unexpected exceptions during error parsing, and we must
-                # not let error handling itself fail and mask the original deployment error
-                logger.debug(f"Could not parse validation error details: {parse_error}")
+                # Broad exception catch is necessary here because parse_validation_error_details
+                # calls extract_config_context which performs string operations on user-provided
+                # configuration content that may contain unexpected characters or formats that
+                # could raise various exceptions (UnicodeError, IndexError, etc.). We must ensure
+                # that error parsing failure doesn't mask the original deployment error.
+                logger.debug(
+                    f"Could not parse validation error details: {type(parse_error).__name__}: {parse_error}"
+                )
             logger.error(error_msg)
 
     async def sync_configuration(

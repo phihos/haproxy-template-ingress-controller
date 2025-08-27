@@ -58,6 +58,28 @@ class TestUtilityFunctions:
         assert parse_haproxy_error_line("generic error message") is None
         assert parse_haproxy_error_line("") is None
 
+    def test_parse_haproxy_error_line_malformed_input(self):
+        """Test parsing HAProxy error lines with malformed input."""
+        # Invalid line numbers
+        assert parse_haproxy_error_line("config parsing [/tmp/file:abc]") is None
+        assert parse_haproxy_error_line("line abc: some error") is None
+        assert parse_haproxy_error_line("[line ]") is None
+
+        # Partial matches that should not work
+        assert parse_haproxy_error_line("line :") is None
+        assert (
+            parse_haproxy_error_line("line -42: error") is None
+        )  # Negative line number
+
+        # These should work (testing actual regex behavior)
+        assert (
+            parse_haproxy_error_line("config parsing [:123]") == 123
+        )  # This actually matches
+
+        # Empty patterns
+        assert parse_haproxy_error_line("line : error") is None
+        assert parse_haproxy_error_line("config parsing []") is None
+
     def test_extract_config_context_valid_line(self):
         """Test extracting config context around a valid line."""
         config = "line1\nline2\nline3\nline4\nline5"
@@ -81,11 +103,13 @@ class TestUtilityFunctions:
 
     def test_parse_validation_error_details_with_line_number(self):
         """Test parsing validation error details with extractable line number."""
-        error_msg = "config parsing [/tmp/test:42]"
+        error_msg = "config parsing [/tmp/test:4]"
         config = "line1\nline2\nline3\nerror line\nline5"
         line, context = parse_validation_error_details(error_msg, config)
-        assert line == 42
-        assert context is not None  # Should have some context
+        assert line == 4
+        # Should include the error line and surrounding context
+        assert "error line" in context
+        assert ">   4: error line" in context  # Error line should be marked with >
 
     def test_parse_validation_error_details_no_line_number(self):
         """Test parsing validation error details without line number."""
