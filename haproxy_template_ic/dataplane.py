@@ -67,6 +67,36 @@ from haproxy_dataplane_v3.api.global_ import get_global
 from haproxy_dataplane_v3.api.defaults import (
     get_defaults_sections,
 )
+from haproxy_dataplane_v3.api.userlist import (
+    get_userlists,
+)
+from haproxy_dataplane_v3.api.cache import (
+    get_caches,
+)
+from haproxy_dataplane_v3.api.mailers import (
+    get_mailers_sections,
+)
+from haproxy_dataplane_v3.api.resolver import (
+    get_resolvers,
+)
+from haproxy_dataplane_v3.api.peer import (
+    get_peer_sections,
+)
+from haproxy_dataplane_v3.api.fcgi_app import (
+    get_fcgi_apps,
+)
+from haproxy_dataplane_v3.api.http_errors import (
+    get_http_errors_sections,
+)
+from haproxy_dataplane_v3.api.ring import (
+    get_rings,
+)
+from haproxy_dataplane_v3.api.log_forward import (
+    get_log_forwards,
+)
+from haproxy_dataplane_v3.api.process_manager import (
+    get_programs,
+)
 from haproxy_dataplane_v3.api.storage import (
     get_all_storage_map_files,
     get_all_storage_ssl_certificates,
@@ -100,6 +130,9 @@ from haproxy_dataplane_v3.types import File
 from haproxy_dataplane_v3 import errors
 
 logger = logging.getLogger(__name__)
+
+# Constants for configuration comparison performance
+MAX_CONFIG_COMPARISON_CHANGES = 10  # Stop comparison after finding this many changes
 
 
 def compute_content_hash(content: str) -> str:
@@ -1126,6 +1159,16 @@ class DataplaneClient:
             - frontends: List of frontend configurations
             - defaults: List of defaults sections
             - global: Global configuration section
+            - userlists: List of userlist sections
+            - caches: List of cache sections
+            - mailers: List of mailers sections
+            - resolvers: List of resolvers sections
+            - peers: List of peer sections
+            - fcgi_apps: List of fcgi-app sections
+            - http_errors: List of http-errors sections
+            - rings: List of ring sections
+            - log_forwards: List of log-forward sections
+            - programs: List of program sections
 
         Raises:
             DataplaneAPIError: If fetching configuration fails
@@ -1149,6 +1192,38 @@ class DataplaneClient:
                 with metrics.time_dataplane_api_operation("fetch_global"):
                     global_config = await get_global.asyncio(client=client)
 
+                with metrics.time_dataplane_api_operation("fetch_userlists"):
+                    userlists = await get_userlists.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_caches"):
+                    caches = await get_caches.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_mailers"):
+                    mailers = await get_mailers_sections.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_resolvers"):
+                    resolvers = await get_resolvers.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_peers"):
+                    peers = await get_peer_sections.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_fcgi_apps"):
+                    fcgi_apps = await get_fcgi_apps.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_http_errors"):
+                    http_errors = (
+                        await get_http_errors_sections.asyncio(client=client) or []
+                    )
+
+                with metrics.time_dataplane_api_operation("fetch_rings"):
+                    rings = await get_rings.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_log_forwards"):
+                    log_forwards = await get_log_forwards.asyncio(client=client) or []
+
+                with metrics.time_dataplane_api_operation("fetch_programs"):
+                    programs = await get_programs.asyncio(client=client) or []
+
                 # Record successful fetch
                 metrics.record_dataplane_api_request("fetch_structured", "success")
 
@@ -1158,6 +1233,16 @@ class DataplaneClient:
                     frontends_count=len(frontends),
                     defaults_count=len(defaults),
                     has_global=global_config is not None,
+                    userlists_count=len(userlists),
+                    caches_count=len(caches),
+                    mailers_count=len(mailers),
+                    resolvers_count=len(resolvers),
+                    peers_count=len(peers),
+                    fcgi_apps_count=len(fcgi_apps),
+                    http_errors_count=len(http_errors),
+                    rings_count=len(rings),
+                    log_forwards_count=len(log_forwards),
+                    programs_count=len(programs),
                 )
 
                 return {
@@ -1165,6 +1250,16 @@ class DataplaneClient:
                     "frontends": frontends,
                     "defaults": defaults,
                     "global": global_config,
+                    "userlists": userlists,
+                    "caches": caches,
+                    "mailers": mailers,
+                    "resolvers": resolvers,
+                    "peers": peers,
+                    "fcgi_apps": fcgi_apps,
+                    "http_errors": http_errors,
+                    "rings": rings,
+                    "log_forwards": log_forwards,
+                    "programs": programs,
                 }
             except Exception as e:
                 metrics.record_dataplane_api_request("fetch_structured", "error")
@@ -1244,6 +1339,16 @@ class ConfigSynchronizer:
     ) -> List[str]:
         """Compare two structured configurations and return list of changes.
 
+        This method performs an optimized comparison of HAProxy configuration sections
+        including backends, frontends, defaults, global, and all other sections.
+
+        Performance considerations:
+        - For large configurations (>100 backends/frontends), this method may consume
+          significant memory as it loads all configuration sections into memory
+        - Early exit after MAX_CONFIG_COMPARISON_CHANGES changes to avoid expensive
+          deep comparisons when many changes are detected
+        - Uses xxHash-based serialization with defensive error handling
+
         Args:
             current: Current structured configuration
             new: New structured configuration
@@ -1253,11 +1358,28 @@ class ConfigSynchronizer:
         """
         start_time = time.time()
         changes: List[str] = []
-        max_changes_before_exit = 10  # Early exit after finding this many changes
+        max_changes_before_exit = MAX_CONFIG_COMPARISON_CHANGES
 
-        # Helper function to convert to dict if has to_dict method
-        def to_dict_safe(obj):
-            return obj.to_dict() if hasattr(obj, "to_dict") else obj
+        # Helper function to convert to dict if has to_dict method with defensive handling
+        def to_dict_safe(obj: Any) -> Any:
+            try:
+                return obj.to_dict() if hasattr(obj, "to_dict") else obj
+            except Exception as e:
+                logger.debug(f"Failed to serialize configuration object: {e}")
+                # Return a minimal representation to allow comparison to continue
+                return {
+                    "__serialization_error__": str(e),
+                    "__type__": type(obj).__name__,
+                }
+
+        # Helper function to check for early exit condition
+        def check_early_exit() -> bool:
+            if len(changes) >= max_changes_before_exit:
+                changes.append(
+                    f"... and more (stopped after {max_changes_before_exit} changes)"
+                )
+                return True
+            return False
 
         # Compare backends - optimized with dict comprehensions
         current_backends = {
@@ -1276,17 +1398,11 @@ class ConfigSynchronizer:
         new_names = set(new_backends.keys())
 
         changes.extend(f"remove backend {name}" for name in current_names - new_names)
-        if len(changes) >= max_changes_before_exit:
-            changes.append(
-                f"... and more (stopped after {max_changes_before_exit} changes)"
-            )
+        if check_early_exit():
             return changes
 
         changes.extend(f"add backend {name}" for name in new_names - current_names)
-        if len(changes) >= max_changes_before_exit:
-            changes.append(
-                f"... and more (stopped after {max_changes_before_exit} changes)"
-            )
+        if check_early_exit():
             return changes
 
         changes.extend(
@@ -1294,10 +1410,7 @@ class ConfigSynchronizer:
             for name in current_names & new_names
             if current_backends[name] != new_backends[name]
         )
-        if len(changes) >= max_changes_before_exit:
-            changes.append(
-                f"... and more (stopped after {max_changes_before_exit} changes)"
-            )
+        if check_early_exit():
             return changes
 
         # Compare frontends - same optimization
@@ -1316,17 +1429,11 @@ class ConfigSynchronizer:
         new_names = set(new_frontends.keys())
 
         changes.extend(f"remove frontend {name}" for name in current_names - new_names)
-        if len(changes) >= max_changes_before_exit:
-            changes.append(
-                f"... and more (stopped after {max_changes_before_exit} changes)"
-            )
+        if check_early_exit():
             return changes
 
         changes.extend(f"add frontend {name}" for name in new_names - current_names)
-        if len(changes) >= max_changes_before_exit:
-            changes.append(
-                f"... and more (stopped after {max_changes_before_exit} changes)"
-            )
+        if check_early_exit():
             return changes
 
         changes.extend(
@@ -1334,10 +1441,7 @@ class ConfigSynchronizer:
             for name in current_names & new_names
             if current_frontends[name] != new_frontends[name]
         )
-        if len(changes) >= max_changes_before_exit:
-            changes.append(
-                f"... and more (stopped after {max_changes_before_exit} changes)"
-            )
+        if check_early_exit():
             return changes
 
         # Compare defaults sections
@@ -1354,6 +1458,108 @@ class ConfigSynchronizer:
                 for i, (curr, new_def) in enumerate(zip(current_defaults, new_defaults))
                 if curr != new_def
             )
+
+        # Helper function to compare named sections (similar to backends/frontends)
+        def compare_named_sections(section_name: str) -> bool:
+            """Compare named configuration sections and return True if early exit needed."""
+            nonlocal changes
+            try:
+                current_sections = {
+                    s.name: to_dict_safe(s)
+                    for s in current.get(section_name, [])
+                    if hasattr(s, "name") and s.name
+                }
+                new_sections = {
+                    s.name: to_dict_safe(s)
+                    for s in new.get(section_name, [])
+                    if hasattr(s, "name") and s.name
+                }
+
+                current_names = set(current_sections.keys())
+                new_names = set(new_sections.keys())
+
+                changes.extend(
+                    f"remove {section_name[:-1]} {name}"
+                    for name in current_names - new_names
+                )
+                if check_early_exit():
+                    return True
+
+                changes.extend(
+                    f"add {section_name[:-1]} {name}"
+                    for name in new_names - current_names
+                )
+                if check_early_exit():
+                    return True
+
+                changes.extend(
+                    f"modify {section_name[:-1]} {name}"
+                    for name in current_names & new_names
+                    if current_sections[name] != new_sections[name]
+                )
+                return check_early_exit()
+            except Exception as e:
+                logger.debug(f"Error comparing {section_name}: {e}")
+                changes.append(f"error comparing {section_name}")
+                return check_early_exit()
+
+        # Helper function to compare list sections (similar to defaults)
+        def compare_list_sections(section_name: str) -> bool:
+            """Compare list configuration sections and return True if early exit needed."""
+            nonlocal changes
+            try:
+                current_list = [to_dict_safe(s) for s in current.get(section_name, [])]
+                new_list = [to_dict_safe(s) for s in new.get(section_name, [])]
+
+                if len(current_list) != len(new_list):
+                    changes.append(
+                        f"{section_name} count changed from {len(current_list)} to {len(new_list)}"
+                    )
+                    return check_early_exit()
+                else:
+                    changes.extend(
+                        f"modify {section_name} section {i}"
+                        for i, (curr, new_item) in enumerate(
+                            zip(current_list, new_list)
+                        )
+                        if curr != new_item
+                    )
+                    return check_early_exit()
+            except Exception as e:
+                logger.debug(f"Error comparing {section_name}: {e}")
+                changes.append(f"error comparing {section_name}")
+                return check_early_exit()
+
+        # Compare all named sections
+        if compare_named_sections("userlists"):
+            return changes
+
+        if compare_named_sections("caches"):
+            return changes
+
+        if compare_named_sections("mailers"):
+            return changes
+
+        if compare_named_sections("resolvers"):
+            return changes
+
+        if compare_named_sections("peers"):
+            return changes
+
+        if compare_named_sections("fcgi_apps"):
+            return changes
+
+        if compare_named_sections("http_errors"):
+            return changes
+
+        if compare_named_sections("rings"):
+            return changes
+
+        if compare_named_sections("log_forwards"):
+            return changes
+
+        if compare_named_sections("programs"):
+            return changes
 
         # Compare global section
         current_global = to_dict_safe(current.get("global"))
@@ -1476,8 +1682,10 @@ class ConfigSynchronizer:
                     error_msg += (
                         f"\n\nConfiguration context around error:\n{error_context}"
                     )
-            except Exception as parse_error:  # Be defensive in error handling
-                # Log parse error but continue with original error message
+            except Exception as parse_error:
+                # Broad exception catch is necessary here since parse_validation_error_details
+                # may raise various unexpected exceptions during error parsing, and we must
+                # not let error handling itself fail and mask the original deployment error
                 logger.debug(f"Could not parse validation error details: {parse_error}")
             logger.error(error_msg)
 
