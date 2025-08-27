@@ -456,7 +456,7 @@ def get_production_urls_from_index(
             urls.append(url)
             logger.debug(f"🔍 Added production URL: {url}")
 
-    logger.info(f"🔍 Found {len(urls)} production URLs: {urls}")
+    logger.debug(f"🔍 Found {len(urls)} production URLs: {urls}")
     return urls
 
 
@@ -881,9 +881,14 @@ class DataplaneClient:
                     await delete_func(client=client, name=name)
                     logger.debug(f"Deleted {resource_type} {name}")
 
-                # Log summary
-                if created_count or updated_count or skipped_count:
+                # Log summary - only use INFO if something changed
+                if created_count or updated_count:
                     logger.info(
+                        f"{resource_type.capitalize()}s: "
+                        f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
+                    )
+                elif skipped_count:
+                    logger.debug(
                         f"{resource_type.capitalize()}s: "
                         f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
                     )
@@ -1002,9 +1007,14 @@ class DataplaneClient:
                     await delete_storage_general_file.asyncio(client=client, name=name)
                     logger.debug(f"Deleted file {name}")
 
-                # Log summary
-                if created_count or updated_count or skipped_count:
+                # Log summary - only use INFO if something changed
+                if created_count or updated_count:
                     logger.info(
+                        f"Files: "
+                        f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
+                    )
+                elif skipped_count:
+                    logger.debug(
                         f"Files: "
                         f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
                     )
@@ -1202,15 +1212,15 @@ class ConfigSynchronizer:
     ) -> None:
         """Sync all content types to a single client."""
         if maps:
-            logger.info(f"Syncing {len(maps)} maps to {url}")
+            logger.debug(f"Syncing {len(maps)} maps to {url}")
             await client.sync_maps(maps)
 
         if certificates:
-            logger.info(f"Syncing {len(certificates)} certificates to {url}")
+            logger.debug(f"Syncing {len(certificates)} certificates to {url}")
             await client.sync_certificates(certificates)
 
         if files:
-            logger.info(f"Syncing {len(files)} files to {url}")
+            logger.debug(f"Syncing {len(files)} files to {url}")
             await client.sync_files(files)
 
     async def _validate_configuration(self, config: str) -> None:
@@ -1223,7 +1233,7 @@ class ConfigSynchronizer:
             ),
         )
 
-        logger.info(f"Validating configuration at {self.validation_url}")
+        logger.debug(f"Validating configuration at {self.validation_url}")
         try:
             await validation_client.validate_configuration(config)
         except Exception as e:
@@ -1409,7 +1419,7 @@ class ConfigSynchronizer:
 
             if not changes_needed:
                 # No changes needed - skip deployment
-                logger.info(f"⏭️  No structural changes for {url}, skipping deployment")
+                logger.debug(f"⏭️  No structural changes for {url}, skipping deployment")
                 return {"method": "skipped", "version": "unchanged"}
             else:
                 # Changes detected - deploy
@@ -1501,7 +1511,7 @@ class ConfigSynchronizer:
             ),
         )
 
-        logger.info("🔍 Validating configuration and syncing auxiliary content")
+        logger.debug("🔍 Validating configuration and syncing auxiliary content")
         await self._sync_content_to_client(
             validation_client,
             maps_to_sync,
@@ -1512,13 +1522,13 @@ class ConfigSynchronizer:
         await self._validate_configuration(config)
 
         # Step 2: Deploy config to validation instance and fetch structured components
-        logger.info(
+        logger.debug(
             "📤 Deploying config to validation instance for structured comparison"
         )
         await validation_client.deploy_configuration(config)
 
         # Fetch structured config from validation instance
-        logger.info("🔍 Fetching structured configuration from validation instance")
+        logger.debug("🔍 Fetching structured configuration from validation instance")
         validation_structured = await validation_client.fetch_structured_configuration()
 
         # Step 3: Deploy to production instances using structured comparison
@@ -1529,7 +1539,9 @@ class ConfigSynchronizer:
             "errors": [],
         }
 
-        logger.info(f"🚀 Deploying to {len(self.production_urls)} production instances")
+        logger.debug(
+            f"🚀 Deploying to {len(self.production_urls)} production instances"
+        )
 
         # Create deployment tasks for parallel execution
         deployment_tasks = []
@@ -1581,15 +1593,24 @@ class ConfigSynchronizer:
 
         # Enhanced logging with skip information
         total_instances = len(self.production_urls)
-        if results["skipped"] > 0:
+        if results["successful"] > 0:
+            # Log at INFO when we actually deployed something
             logger.info(
                 f"🎯 Sync complete: {results['successful']} deployed, "
                 f"{results['skipped']} skipped (unchanged), "
                 f"{results['failed']} failed out of {total_instances} instances"
             )
-        else:
+        elif results["failed"] > 0:
+            # Log at INFO when there were failures (important to know)
             logger.info(
                 f"Sync complete: {results['successful']} successful, {results['failed']} failed"
+            )
+        else:
+            # Log at DEBUG when nothing changed (all skipped)
+            logger.debug(
+                f"🎯 Sync complete: {results['successful']} deployed, "
+                f"{results['skipped']} skipped (unchanged), "
+                f"{results['failed']} failed out of {total_instances} instances"
             )
 
         return results

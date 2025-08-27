@@ -171,6 +171,130 @@ def observe(**decorator_kwargs: Any) -> Callable[[AsyncF], AsyncF]:
     return decorator
 
 
+def add_emoji_prefix(
+    logger: Any, method_name: str, event_dict: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Add emoji prefix to log messages based on level and content.
+
+    This processor ensures all log messages have a consistent emoji prefix,
+    making logs easier to scan visually. It checks if a message already has
+    an emoji and adds an appropriate one if not.
+    """
+    # Check if we're in JSON mode (no emojis needed for JSON output)
+    if event_dict.get("_json_mode", False):
+        return event_dict
+
+    # Get the log message
+    msg = event_dict.get("event", "")
+    if not msg:
+        return event_dict
+
+    # Check if message already starts with an emoji (Unicode range for emojis)
+    # Common emoji ranges:
+    # - Emoticons: U+1F600 to U+1F64F
+    # - Symbols: U+1F300 to U+1F5FF, U+1F680 to U+1F6FF, U+1F900 to U+1F9FF
+    # - Other: U+2600 to U+26FF, U+2700 to U+27BF
+    if msg and len(msg) > 0:
+        first_char = msg[0]
+        if (
+            "\U0001f300" <= first_char <= "\U0001f9ff"
+            or "\U00002600" <= first_char <= "\U000027bf"
+            or first_char in "✅❌⚠️ℹ️⏰🔧📋☸️⚙️✓"
+        ):
+            return event_dict
+
+    # Get log level
+    # For structlog messages, level is in 'log_level'
+    # For stdlib messages, level is in '_record.levelname' (uppercase)
+    level = event_dict.get("log_level")
+    if not level:
+        # Try to get from LogRecord for stdlib logging
+        record = event_dict.get("_record")
+        if record and hasattr(record, "levelname"):
+            level = record.levelname.lower()
+        else:
+            level = "info"  # Default if we can't determine
+
+    # Get logger name to identify external libraries
+    # Handle both dict (structlog) and LogRecord (stdlib) formats
+    record = event_dict.get("_record")
+    if record and hasattr(record, "name"):
+        # Standard library LogRecord
+        logger_name = record.name
+    elif isinstance(record, dict):
+        # Structlog dict format
+        logger_name = record.get("name", "")
+    else:
+        logger_name = ""
+
+    # Determine appropriate emoji based on level and logger
+    emoji = ""
+
+    # Special handling for known libraries (override level-based emoji)
+    if any(lib in logger_name for lib in ["httpx", "httpcore"]):
+        emoji = "🌐"  # Network/HTTP requests
+    elif "kopf" in logger_name:
+        emoji = "☸️"  # Kubernetes operator
+    elif "kr8s" in logger_name:
+        emoji = "☸️"  # Kubernetes client
+    elif "asyncio" in logger_name or "uvloop" in logger_name:
+        emoji = "⚡"  # Async operations
+
+    # If no library-specific emoji, use level-based
+    if not emoji:
+        # Default emojis by log level
+        if level == "critical":
+            emoji = "💥"
+        elif level == "error":
+            emoji = "❌"
+        elif level == "warning":
+            emoji = "⚠️"
+        elif level == "info":
+            # Try to be smart about info messages
+            if any(word in msg.lower() for word in ["start", "begin", "init"]):
+                emoji = "🚀"
+            elif any(
+                word in msg.lower()
+                for word in ["success", "complete", "done", "finish"]
+            ):
+                emoji = "✅"
+            elif any(word in msg.lower() for word in ["sync", "update", "refresh"]):
+                emoji = "🔄"
+            elif any(word in msg.lower() for word in ["config", "setting"]):
+                emoji = "⚙️"
+            elif any(word in msg.lower() for word in ["metric", "measure", "count"]):
+                emoji = "📊"
+            elif any(word in msg.lower() for word in ["render", "template"]):
+                emoji = "📄"
+            elif any(word in msg.lower() for word in ["valid"]):
+                emoji = "✓"
+            else:
+                emoji = "ℹ️"
+        elif level == "debug":
+            # Smart debug emojis
+            msg_lower = msg.lower()
+            if any(word in msg_lower for word in ["creat", "add", "new"]):
+                emoji = "➕"
+            elif any(word in msg_lower for word in ["delet", "remov"]):
+                emoji = "➖"
+            elif any(word in msg_lower for word in ["skip", "unchang", "same"]):
+                emoji = "⏭️"
+            elif any(word in msg_lower for word in ["updat", "modif", "chang"]):
+                emoji = "📝"
+            elif any(word in msg_lower for word in ["fetch", "get", "retriev"]):
+                emoji = "📥"
+            elif any(word in msg_lower for word in ["send", "post", "deploy"]):
+                emoji = "📤"
+            else:
+                emoji = "🔧"
+
+    # Add emoji to the message
+    if emoji:
+        event_dict["event"] = f"{emoji} {msg}"
+
+    return event_dict
+
+
 def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None:
     """Configure structured logging with optional JSON or colored console output."""
     level = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}.get(
@@ -178,6 +302,7 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
     )
 
     # Build shared processors for both structlog and stdlib
+    # Note: Order matters! add_log_level must run before add_emoji_prefix
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
@@ -187,8 +312,15 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
     # Choose renderer based on output format
     renderer: Union[structlog.processors.JSONRenderer, structlog.dev.ConsoleRenderer]
     if use_json:
+        # For JSON mode, mark it so emoji processor knows not to add emojis
+        shared_processors.append(
+            lambda _, __, event_dict: {**event_dict, "_json_mode": True}
+        )
         renderer = structlog.processors.JSONRenderer(ensure_ascii=False)
     else:
+        # Add emoji processor AFTER add_log_level so it can see the level
+        shared_processors.append(add_emoji_prefix)
+
         # Get default styles and customize debug to gray
         level_styles = structlog.dev.ConsoleRenderer.get_default_level_styles()
         level_styles["debug"] = "\x1b[90m"  # Bright black (gray)
@@ -224,12 +356,11 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
     root_logger.addHandler(handler)
     root_logger.setLevel(level)
 
-    # Suppress noisy libraries in debug mode
-    if level == logging.DEBUG:
-        for logger_name in [
-            "httpx",
-            "httpcore",
-            "httpcore.connection",
-            "httpcore.http11",
-        ]:
-            logging.getLogger(logger_name).setLevel(logging.INFO)
+    # Suppress noisy HTTP libraries
+    for logger_name in [
+        "httpx",
+        "httpcore",
+        "httpcore.connection",
+        "httpcore.http11",
+    ]:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
