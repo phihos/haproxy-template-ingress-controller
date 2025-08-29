@@ -34,13 +34,16 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
 
 # Build stage - installs the actual project
 FROM dependencies AS build
-# Only copy source files needed for installation
-RUN --mount=type=bind,source=haproxy_template_ic,target=/src/haproxy_template_ic \
-    --mount=type=bind,source=pyproject.toml,target=/src/pyproject.toml \
-    --mount=type=bind,source=uv.lock,target=/src/uv.lock \
-    --mount=type=bind,source=README.md,target=/src/README.md,required=false \
-    --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
-    cd /src && \
+WORKDIR /src
+
+# Copy source files needed for installation
+COPY haproxy_template_ic/ haproxy_template_ic/
+COPY pyproject.toml .
+COPY uv.lock .
+COPY README.md . 
+
+# Install the project
+RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
     uv sync \
         --locked \
         --no-dev \

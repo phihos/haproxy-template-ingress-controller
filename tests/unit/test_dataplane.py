@@ -1294,7 +1294,7 @@ class TestDataplaneClientSyncMethods:
         """Test map sync deletes obsolete maps."""
 
         client = DataplaneClient("http://localhost:5555")
-        mock_api_client = Mock()
+        mock_api_client = AsyncMock()
 
         # Mock existing maps - one will become obsolete
         mock_existing_map = Mock()
@@ -1318,6 +1318,9 @@ class TestDataplaneClientSyncMethods:
                             mock_get_maps.asyncio = AsyncMock(
                                 return_value=[mock_existing_map, mock_keep_map]
                             )
+
+                            # Configure the mock client properly
+                            mock_api_client.get_async_httpx_client.return_value.request = AsyncMock()
 
                             # Mock get_one to return different content for keep.map
                             mock_existing_content = Mock()
@@ -1345,13 +1348,18 @@ class TestDataplaneClientSyncMethods:
         """Test map sync error handling."""
 
         client = DataplaneClient("http://localhost:5555")
-        mock_api_client = Mock()
+        mock_api_client = AsyncMock()
 
         with patch.object(client, "_get_client", return_value=mock_api_client):
             with patch(
                 "haproxy_template_ic.dataplane.get_all_storage_map_files"
             ) as mock_get_maps:
                 mock_get_maps.asyncio = AsyncMock(side_effect=Exception("API Error"))
+
+                # Configure the mock client properly
+                mock_api_client.get_async_httpx_client.return_value.request = (
+                    AsyncMock()
+                )
 
                 maps_to_sync = {"test.map": "content"}
 
@@ -1390,7 +1398,7 @@ class TestDataplaneClientSyncMethods:
         """Test certificate sync error handling."""
 
         client = DataplaneClient("http://localhost:5555")
-        mock_api_client = Mock()
+        mock_api_client = AsyncMock()
 
         with patch.object(client, "_get_client", return_value=mock_api_client):
             with patch(
@@ -1398,6 +1406,11 @@ class TestDataplaneClientSyncMethods:
             ) as mock_get_certs:
                 mock_get_certs.asyncio = AsyncMock(
                     side_effect=Exception("Certificate API Error")
+                )
+
+                # Configure the mock client properly
+                mock_api_client.get_async_httpx_client.return_value.request = (
+                    AsyncMock()
                 )
 
                 certs_to_sync = {"test.pem": "cert content"}
@@ -1483,7 +1496,7 @@ class TestDataplaneClientSyncMethods:
         """Test sync_maps handles None response from API."""
 
         client = DataplaneClient("http://localhost:5555")
-        mock_api_client = Mock()
+        mock_api_client = AsyncMock()
 
         with patch.object(client, "_get_client", return_value=mock_api_client):
             with patch(
@@ -1495,6 +1508,18 @@ class TestDataplaneClientSyncMethods:
                     # API returns None instead of empty list
                     mock_get_maps.asyncio = AsyncMock(return_value=None)
                     mock_create.asyncio = AsyncMock(return_value=None)
+
+                    # Configure the mock client properly - need proper HTTP response mock
+                    mock_response = MagicMock()
+                    mock_response.status_code = 200
+                    mock_response.content = b"[]"  # Empty JSON array
+                    mock_response.json.return_value = []
+
+                    mock_httpx_client = AsyncMock()
+                    mock_api_client.get_async_httpx_client = MagicMock(
+                        return_value=mock_httpx_client
+                    )
+                    mock_httpx_client.request = AsyncMock(return_value=mock_response)
 
                     maps_to_sync = {"test.map": "content"}
 
@@ -1509,7 +1534,7 @@ class TestDataplaneClientSyncMethods:
         """Test sync_certificates handles None response from API."""
 
         client = DataplaneClient("http://localhost:5555")
-        mock_api_client = Mock()
+        mock_api_client = AsyncMock()
 
         with patch.object(client, "_get_client", return_value=mock_api_client):
             with patch(
@@ -1521,6 +1546,18 @@ class TestDataplaneClientSyncMethods:
                     # API returns None instead of empty list
                     mock_get_certs.asyncio = AsyncMock(return_value=None)
                     mock_create.asyncio = AsyncMock(return_value=None)
+
+                    # Configure the mock client properly - need proper HTTP response mock
+                    mock_response = MagicMock()
+                    mock_response.status_code = 200
+                    mock_response.content = b"[]"  # Empty JSON array
+                    mock_response.json.return_value = []
+
+                    mock_httpx_client = AsyncMock()
+                    mock_api_client.get_async_httpx_client = MagicMock(
+                        return_value=mock_httpx_client
+                    )
+                    mock_httpx_client.request = AsyncMock(return_value=mock_response)
 
                     certs_to_sync = {"test.pem": "cert content"}
 
