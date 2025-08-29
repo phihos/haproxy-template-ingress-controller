@@ -491,7 +491,7 @@ build_and_load_local_image() {
     # Enable BuildKit for optimized builds
     export DOCKER_BUILDKIT=1
     
-    local build_args=("--target" "${build_target}" "-t" "${LOCAL_IMAGE}")
+    local build_args=("--target" "${build_target}" "-t" "${LOCAL_IMAGE}" "--load")
     
     # Add cache optimization for faster rebuilds
     if [[ "$FORCE_REBUILD" == "true" ]]; then
