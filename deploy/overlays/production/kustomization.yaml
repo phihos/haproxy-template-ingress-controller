@@ -6,18 +6,18 @@ namespace: haproxy-template-ic-prod
 namePrefix: prod-
 
 resources:
-  - ../../base
+- ../../base
 
 patches:
-  - path: deployment.yaml
-    target:
-      kind: Deployment
-      name: haproxy-template-ic
+- path: deployment.yaml
+  target:
+    kind: Deployment
+    name: haproxy-template-ic
 
 images:
-  - name: ghcr.io/phihos/haproxy-template-ingress-controller
-    newTag: stable
+- name: ghcr.io/phihos/haproxy-template-ingress-controller
+  newTag: stable
 
 replicas:
-  - name: haproxy-template-ic
-    count: 3
+- count: 3
+  name: haproxy-template-ic

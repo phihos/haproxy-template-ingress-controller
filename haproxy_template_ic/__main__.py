@@ -11,19 +11,10 @@ from importlib.metadata import PackageNotFoundError
 
 import click
 
-from haproxy_template_ic.constants import (
-    DEFAULT_HEALTHZ_PORT,
-    DEFAULT_METRICS_PORT,
-    DEFAULT_SOCKET_PATH,
-)
+# Constants are now defined in the ConfigMap via the Config model
 from haproxy_template_ic.credentials import validate_k8s_name
 from haproxy_template_ic.operator import run_operator_loop
 from haproxy_template_ic.structured_logging import setup_structured_logging
-from haproxy_template_ic.tracing import (
-    initialize_tracing,
-    create_tracing_config_from_env,
-    shutdown_tracing,
-)
 import haproxy_template_ic.webhook  # Import webhook handlers to register them with kopf  # noqa: F401
 
 
@@ -34,16 +25,10 @@ import haproxy_template_ic.webhook  # Import webhook handlers to register them w
 
 @dataclass(frozen=True)
 class CliOptions:
-    """Container for all CLI options."""
+    """Container for bootstrap CLI options (configmap and secret location)."""
 
     configmap_name: str
     secret_name: str
-    healthz_port: int
-    verbose: int
-    socket_path: str
-    metrics_port: int
-    structured_logging: bool
-    tracing_enabled: bool
 
 
 # =============================================================================
@@ -52,38 +37,20 @@ class CliOptions:
 
 
 @click.group()
-@click.option(
-    "-v",
-    "--verbose",
-    envvar="VERBOSE",
-    count=True,
-    help="Set log level to INFO via -v and DEBUG via -vv. "
-    "Use numbers when using the env var.",
-)
-@click.option(
-    "--structured-logging",
-    envvar="STRUCTURED_LOGGING",
-    type=click.BOOL,
-    default=False,
-    help="Enable structured JSON logging output.",
-)
 @click.pass_context
-def cli(
-    ctx: click.Context,
-    verbose: int,
-    structured_logging: bool,
-) -> None:
+def cli(ctx: click.Context) -> None:
     """HAProxy Template IC - Kubernetes operator for HAProxy configuration management.
 
     Use 'run' subcommand to start the operator.
-    """
-    # Store common options in context for subcommands
-    ctx.ensure_object(dict)
-    ctx.obj["verbose"] = verbose
-    ctx.obj["structured_logging"] = structured_logging
 
-    # Setup logging with common options
-    setup_structured_logging(verbose, use_json=structured_logging)
+    NOTE: Logging, tracing, and other runtime settings are now configured
+    via ConfigMap rather than CLI options or environment variables.
+    """
+    # Initialize context for subcommands
+    ctx.ensure_object(dict)
+
+    # Basic logging setup (will be reconfigured from ConfigMap during operator startup)
+    setup_structured_logging(verbose_level=0, use_json=False)
 
 
 @cli.command()
@@ -103,73 +70,27 @@ def cli(
     callback=validate_k8s_name,
     help="Name of the Kubernetes Secret containing HAProxy credentials.",
 )
-@click.option(
-    "--healthz-port",
-    envvar="HEALTHZ_PORT",
-    default=DEFAULT_HEALTHZ_PORT,
-    help="Port for health check endpoint.",
-)
-@click.option(
-    "--socket-path",
-    envvar="SOCKET_PATH",
-    default=DEFAULT_SOCKET_PATH,
-    help="Path for management socket to expose internal state.",
-)
-@click.option(
-    "-m",
-    "--metrics-port",
-    envvar="METRICS_PORT",
-    default=DEFAULT_METRICS_PORT,
-    help="Port for Prometheus metrics endpoint.",
-)
-@click.option(
-    "--tracing-enabled",
-    envvar="TRACING_ENABLED",
-    type=click.BOOL,
-    default=False,
-    help="Enable distributed tracing with OpenTelemetry.",
-)
 @click.pass_context
 def run(
     ctx: click.Context,
     configmap_name: str,
     secret_name: str,
-    healthz_port: int,
-    socket_path: str,
-    metrics_port: int,
-    tracing_enabled: bool,
 ) -> None:
     """Run the HAProxy Template IC operator.
 
     This starts the Kubernetes operator that watches resources and manages
     HAProxy configurations via the Dataplane API.
+
+    All runtime settings (logging, tracing, ports, etc.) are now configured
+    via the ConfigMap specified by --configmap-name.
     """
-    # Get common options from parent context
-    verbose = ctx.obj["verbose"]
-    structured_logging = ctx.obj["structured_logging"]
+    # Create CLI options object (bootstrap parameters only)
+    cli_options = CliOptions(
+        configmap_name=configmap_name,
+        secret_name=secret_name,
+    )
 
-    # Initialize distributed tracing
-    tracing_config = create_tracing_config_from_env()
-    tracing_config.enabled = tracing_enabled or tracing_config.enabled
-    initialize_tracing(tracing_config)
-
-    try:
-        # Create CLI options object
-        cli_options = CliOptions(
-            configmap_name=configmap_name,
-            secret_name=secret_name,
-            healthz_port=healthz_port,
-            verbose=verbose,
-            socket_path=socket_path,
-            metrics_port=metrics_port,
-            structured_logging=structured_logging,
-            tracing_enabled=tracing_enabled,
-        )
-
-        run_operator_loop(cli_options)
-    finally:
-        # Ensure tracing is properly shutdown
-        shutdown_tracing()
+    run_operator_loop(cli_options)
 
 
 @cli.command()

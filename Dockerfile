@@ -1,11 +1,20 @@
 ARG PYTHON_VERSION=3.13
 
-FROM python:${PYTHON_VERSION}-slim-bookworm AS base
-# Install dumb-init for proper signal handling, OpenSSL libraries for webhook certificate generation,
-# git for oscrypto dependency, and socat for management socket communication
-RUN apt-get update && apt-get install -y dumb-init libssl3 libssl-dev ca-certificates git socat && rm -rf /var/lib/apt/lists/*
+# Base system dependencies stage - rarely changes, good for caching
+FROM python:${PYTHON_VERSION}-slim-bookworm AS system-deps
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        dumb-init \
+        libssl3 \
+        libssl-dev \
+        ca-certificates \
+        git \
+        socat && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
 
-FROM base AS build
+# UV setup stage - cache UV installation separately
+FROM system-deps AS uv-base
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /bin/uv
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -13,7 +22,9 @@ ENV UV_LINK_MODE=copy \
     UV_PYTHON=python${PYTHON_VERSION} \
     UV_PROJECT_ENVIRONMENT=/app
 
-RUN --mount=type=cache,target=/root/.cache \
+# Dependencies-only stage - maximizes cache reuse when only code changes
+FROM uv-base AS dependencies
+RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync \
@@ -21,53 +32,56 @@ RUN --mount=type=cache,target=/root/.cache \
         --no-dev \
         --no-install-project
 
-COPY . /src
-WORKDIR /src
-RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=cache,target=/root/.uv \
+# Build stage - installs the actual project
+FROM dependencies AS build
+# Only copy source files needed for installation
+RUN --mount=type=bind,source=haproxy_template_ic,target=/src/haproxy_template_ic \
+    --mount=type=bind,source=pyproject.toml,target=/src/pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=/src/uv.lock \
+    --mount=type=bind,source=README.md,target=/src/README.md,required=false \
+    --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
+    cd /src && \
     uv sync \
         --locked \
         --no-dev \
         --no-editable
 
-FROM base AS runtime-base
+FROM system-deps AS runtime-base
 
 # Optional: add the application virtualenv to search path.
 ENV PATH=/app/bin:$PATH
 
 # Don't run your app as root.
-RUN <<EOT
-groupadd -r app
-useradd -r -d /app -g app -N app
-EOT
-
-# Create dedicated directory for haproxy-template-ic runtime files
-RUN mkdir -p /run/haproxy-template-ic && chown app:app /run/haproxy-template-ic
+RUN groupadd -r app && \
+    useradd -r -d /app -g app -N app && \
+    mkdir -p /run/haproxy-template-ic && \
+    chown app:app /run/haproxy-template-ic
 
 COPY --from=build --chown=app:app /app /app
 
 USER app
 WORKDIR /app
 
-RUN <<EOT
-python -V
-python -Im site
-python -c 'import haproxy_template_ic'
-EOT
+# Verify installation in a single layer
+RUN python -V && \
+    python -Im site && \
+    python -c 'import haproxy_template_ic'
 
 FROM runtime-base AS production
 ENTRYPOINT ["dumb-init", "/app/bin/haproxy-template-ic"]
 
 FROM runtime-base AS coverage
-# Install coverage for the container (with cache)
-RUN --mount=type=cache,target=/root/.cache \
-    pip install coverage
+# Switch to root temporarily to install coverage
+USER root
+RUN --mount=type=cache,target=/root/.cache/pip,id=pip-cache \
+    pip install --no-cache-dir coverage
 
-# Copy the coverage wrapper script
-COPY coverage_wrapper.py /app/coverage_wrapper.py
+# Copy the coverage wrapper script and create wrapper script in single layer
+RUN --mount=type=bind,source=coverage_wrapper.py,target=/tmp/coverage_wrapper.py \
+    cp /tmp/coverage_wrapper.py /app/coverage_wrapper.py && \
+    echo '#!/bin/bash\ncd /app\nPYTHONPATH=/app/lib/python3.13/site-packages:/app/.local/lib/python3.13/site-packages python /app/coverage_wrapper.py "$@"' > /app/run-with-coverage.sh && \
+    chmod +x /app/run-with-coverage.sh && \
+    chown app:app /app/coverage_wrapper.py /app/run-with-coverage.sh
 
-# Create a wrapper script 
-RUN echo '#!/bin/bash\ncd /app\nPYTHONPATH=/app/lib/python3.13/site-packages:/app/.local/lib/python3.13/site-packages python /app/coverage_wrapper.py "$@"' > /app/run-with-coverage.sh && \
-    chmod +x /app/run-with-coverage.sh
-
+USER app
 ENTRYPOINT ["dumb-init", "/app/run-with-coverage.sh"]

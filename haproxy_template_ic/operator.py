@@ -12,18 +12,18 @@ import os
 import shutil
 import tempfile
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Tuple, Optional
 
 if TYPE_CHECKING:
     from haproxy_template_ic.__main__ import CliOptions
 
 import jsonpath
-from jsonpath.exceptions import JSONPathError
 import kopf
 import structlog
 import uvloop
 import yaml
 from deepdiff import DeepDiff
+from jsonpath.exceptions import JSONPathError
 from kopf import set_default_registry
 from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
@@ -35,13 +35,24 @@ from haproxy_template_ic.config_models import (
     HAProxyConfigContext,
     IndexedResourceCollection,
     PodSelector,
-    RenderedContent,
     RenderedConfig,
+    RenderedContent,
     TemplateConfig,
     TemplateContext,
+    TriggerContext,
     config_from_dict,
 )
-from haproxy_template_ic.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.constants import (
+    CONTENT_TYPE_CERTIFICATE,
+    CONTENT_TYPE_FILE,
+    CONTENT_TYPE_HAPROXY_CONFIG,
+    CONTENT_TYPE_MAP,
+    DEFAULT_DATAPLANE_PORT,
+    DEFAULT_WEBHOOK_PORT,
+    HAPROXY_PODS_INDEX,
+    NAMESPACE_FILE_PATH,
+)
+from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
     DataplaneAPIError,
@@ -49,28 +60,18 @@ from haproxy_template_ic.dataplane import (
     ValidationError,
     get_production_urls_from_index,
 )
+from haproxy_template_ic.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.structured_logging import autolog, observe
 from haproxy_template_ic.templating import TemplateRenderer
-from haproxy_template_ic.webhook import register_validation_webhooks_from_config
-from haproxy_template_ic.credentials import Credentials
-from haproxy_template_ic.constants import (
-    CONTENT_TYPE_CERTIFICATE,
-    CONTENT_TYPE_FILE,
-    CONTENT_TYPE_HAPROXY_CONFIG,
-    CONTENT_TYPE_MAP,
-    DEFAULT_METRICS_PORT,
-    DEFAULT_WEBHOOK_PORT,
-    HAPROXY_PODS_INDEX,
-    NAMESPACE_FILE_PATH,
-)
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
     trace_async_function,
     trace_template_render,
 )
+from haproxy_template_ic.webhook import register_validation_webhooks_from_config
 
 logger = structlog.get_logger(__name__)
 
@@ -714,15 +715,22 @@ def _validate_template_errors(template_errors: list) -> None:
         raise RuntimeError(error_msg)
 
 
-async def trigger_template_rendering(memo: Any, **kwargs: Any) -> None:
+async def trigger_template_rendering(
+    memo: Any, source: str = "resource_changes", **kwargs: Any
+) -> None:
     """
     Trigger template rendering through the debouncer.
 
     This function is called by kopf event handlers when resources change.
     It signals the debouncer which will handle rate limiting and batching.
+
+    Args:
+        memo: Operator memo object
+        source: Source of the trigger - "resource_changes", "pod_changes", or "periodic_refresh"
+        **kwargs: Additional keyword arguments
     """
     if hasattr(memo, "debouncer") and memo.debouncer:
-        await memo.debouncer.trigger()
+        await memo.debouncer.trigger(source=source)
     else:
         # Fallback to direct rendering if debouncer not initialized
         # This can happen during initial startup
@@ -735,10 +743,16 @@ async def trigger_template_rendering(memo: Any, **kwargs: Any) -> None:
     span_name="render_haproxy_templates",
     trace_attributes={"operation.category": "template_rendering"},
 )
-async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
+async def render_haproxy_templates(
+    memo: Any, trigger_context: Optional[TriggerContext] = None, **kwargs: Any
+) -> None:
     """Render all HAProxy templates with current context data."""
     logger.debug("Rendering HAProxy templates")
     metrics = get_metrics_collector()
+
+    # Create default trigger context if not provided (for backward compatibility)
+    if trigger_context is None:
+        trigger_context = TriggerContext(trigger_type="resource_changes")
 
     indices = _collect_resource_indices(memo, metrics)
     template_context, template_vars, validation_errors = _prepare_template_context(
@@ -757,11 +771,42 @@ async def render_haproxy_templates(memo: Any, **kwargs: Any) -> None:
             errors=validation_errors,
         )
 
-    await synchronize_with_haproxy_instances(memo)
+    # Check if content or pods changed to decide whether to sync
+    haproxy_pods_collection = _get_haproxy_pod_collection(memo)
+    content_changed = await memo.haproxy_config_context.has_content_changed()
+    pods_changed = await memo.haproxy_config_context.have_pods_changed(
+        haproxy_pods_collection
+    )
+    force_sync = trigger_context.force_sync
+
+    # Determine if we should sync
+    should_sync = content_changed or pods_changed or force_sync
+
+    if should_sync:
+        # Log the reason for syncing
+        sync_reasons = []
+        if content_changed:
+            sync_reasons.append("content changed")
+        if pods_changed:
+            sync_reasons.append("pods changed")
+        if force_sync:
+            sync_reasons.append(f"forced ({trigger_context.trigger_type})")
+
+        logger.info(
+            f"🚀 Synchronizing rendered configuration: {', '.join(sync_reasons)}"
+        )
+        await synchronize_with_haproxy_instances(memo, force=force_sync)
+    else:
+        logger.info("⏭️ Skipping synchronization: rendered content and pods unchanged")
 
 
-async def synchronize_with_haproxy_instances(memo: Any) -> None:
-    """Synchronize rendered configuration with HAProxy instances via Dataplane API."""
+async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> None:
+    """Synchronize rendered configuration with HAProxy instances via Dataplane API.
+
+    Args:
+        memo: Operator memo object
+        force: Whether to force synchronization regardless of content changes
+    """
     logger.debug("🚀 SYNC FUNCTION CALLED - Starting synchronization...")
     metrics = get_metrics_collector()
 
@@ -783,12 +828,23 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
         if not hasattr(memo, "deployment_history"):
             memo.deployment_history = DeploymentHistory()
 
-        synchronizer = ConfigSynchronizer(
-            production_urls=production_urls,
-            validation_url=memo.config.validation_dataplane_url,
-            credentials=memo.credentials,
-            deployment_history=memo.deployment_history,
-        )
+        # Cache ConfigSynchronizer in memo to reuse HTTP connections across sync operations
+        if not hasattr(memo, "config_synchronizer"):
+            # Construct validation dataplane URL from CLI options
+            validation_url = f"http://{memo.config.validation.dataplane_host}:{memo.config.validation.dataplane_port}"
+            memo.config_synchronizer = ConfigSynchronizer(
+                production_urls=production_urls,
+                validation_url=validation_url,
+                credentials=memo.credentials,
+                deployment_history=memo.deployment_history,
+            )
+            logger.debug("🔄 Created new ConfigSynchronizer instance")
+        else:
+            # Update production URLs in case there were missed pod events
+            memo.config_synchronizer._update_production_clients(production_urls)
+            logger.debug("♻️  Reusing cached ConfigSynchronizer instance")
+
+        synchronizer = memo.config_synchronizer
 
         results = await synchronizer.sync_configuration(memo.haproxy_config_context)
 
@@ -811,6 +867,9 @@ async def synchronize_with_haproxy_instances(memo: Any) -> None:
     except DataplaneAPIError as e:
         metrics.record_error("dataplane_api_failed", "dataplane")
         logger.error(f"❌ Dataplane API error: {e}")
+        import traceback
+
+        logger.error(traceback.format_exc())
 
     except Exception as e:
         metrics.record_error("sync_unexpected_error", "dataplane")
@@ -853,6 +912,7 @@ async def haproxy_pods_index(
 async def handle_haproxy_pod_create(**kwargs: Any) -> None:
     """Handle HAProxy pod creation events."""
     body = kwargs.get("body", {})
+    memo = kwargs.get("memo")
     namespace = kwargs.get("namespace") or body.get("metadata", {}).get(
         "namespace", "default"
     )
@@ -860,9 +920,104 @@ async def handle_haproxy_pod_create(**kwargs: Any) -> None:
 
     # No manual filtering needed - Kopf already filtered by labels
     logger.info(f"🆕 New HAProxy pod created: {namespace}/{name}")
-    # Trigger template re-rendering for the new pod
-    # Note: This will be handled by the template rendering system
-    # The new pod will be available in the index for the next sync
+
+    # Extract pod information to add to ConfigSynchronizer if pod is running
+    if memo and hasattr(memo, "config_synchronizer"):
+        status = body.get("status", {})
+        phase = status.get("phase") if isinstance(status, dict) else None
+        pod_ip = status.get("podIP") if isinstance(status, dict) else None
+
+        if phase == "Running" and pod_ip:
+            # Extract dataplane port from annotations
+            metadata = body.get("metadata", {})
+            annotations = (
+                metadata.get("annotations", {}) if isinstance(metadata, dict) else {}
+            )
+            port = (
+                annotations.get(
+                    "haproxy-template-ic/dataplane-port", str(DEFAULT_DATAPLANE_PORT)
+                )
+                if isinstance(annotations, dict)
+                else str(DEFAULT_DATAPLANE_PORT)
+            )
+
+            url = f"http://{pod_ip}:{port}"
+            memo.config_synchronizer.add_production_url(url)
+            logger.debug(f"🔗 Added {url} to ConfigSynchronizer")
+
+    # Trigger template re-rendering for the new pod with pod_changes source
+    if memo:
+        await trigger_template_rendering(memo, source="pod_changes")
+
+
+async def handle_haproxy_pod_delete(**kwargs: Any) -> None:
+    """Handle HAProxy pod deletion events."""
+    body = kwargs.get("body", {})
+    memo = kwargs.get("memo")
+    namespace = kwargs.get("namespace") or body.get("metadata", {}).get(
+        "namespace", "default"
+    )
+    name = kwargs.get("name") or body.get("metadata", {}).get("name", "unknown")
+
+    logger.info(f"🗑️ HAProxy pod deleted: {namespace}/{name}")
+
+    # Remove pod from ConfigSynchronizer if it existed
+    if memo and hasattr(memo, "config_synchronizer"):
+        # Extract pod information to determine what URL to remove
+        status = body.get("status", {})
+        pod_ip = status.get("podIP") if isinstance(status, dict) else None
+
+        if pod_ip:
+            # Extract dataplane port from annotations
+            metadata = body.get("metadata", {})
+            annotations = (
+                metadata.get("annotations", {}) if isinstance(metadata, dict) else {}
+            )
+            port = (
+                annotations.get(
+                    "haproxy-template-ic/dataplane-port", str(DEFAULT_DATAPLANE_PORT)
+                )
+                if isinstance(annotations, dict)
+                else str(DEFAULT_DATAPLANE_PORT)
+            )
+
+            url = f"http://{pod_ip}:{port}"
+            memo.config_synchronizer.remove_production_url(url)
+            logger.debug(f"🔗 Removed {url} from ConfigSynchronizer")
+
+    # Trigger template re-rendering for the deleted pod with pod_changes source
+    if memo:
+        await trigger_template_rendering(memo, source="pod_changes")
+
+
+async def handle_haproxy_pod_update(**kwargs: Any) -> None:
+    """Handle HAProxy pod update events (phase changes, IP assignments, etc.)."""
+    body = kwargs.get("body", {})
+    old = kwargs.get("old", {})
+    memo = kwargs.get("memo")
+    namespace = kwargs.get("namespace") or body.get("metadata", {}).get(
+        "namespace", "default"
+    )
+    name = kwargs.get("name") or body.get("metadata", {}).get("name", "unknown")
+
+    # Check if pod status changed (phase, podIP)
+    old_status = old.get("status", {}) if old else {}
+    new_status = body.get("status", {})
+
+    old_phase = old_status.get("phase")
+    new_phase = new_status.get("phase")
+    old_ip = old_status.get("podIP")
+    new_ip = new_status.get("podIP")
+
+    # Only trigger if important pod state changed
+    if old_phase != new_phase or old_ip != new_ip:
+        logger.info(
+            f"🔄 HAProxy pod updated: {namespace}/{name} (phase: {old_phase} -> {new_phase}, IP: {old_ip} -> {new_ip})"
+        )
+
+        # Trigger template re-rendering for the updated pod with pod_changes source
+        if memo:
+            await trigger_template_rendering(memo, source="pod_changes")
 
 
 def setup_haproxy_pod_indexing(memo: Any) -> None:
@@ -880,9 +1035,15 @@ def setup_haproxy_pod_indexing(memo: Any) -> None:
         haproxy_pods_index
     )  # type: ignore
 
-    # Register pod creation handler with label filtering (only trigger on create events)
+    # Register pod event handlers with label filtering
     kopf.on.create("pods", id="haproxy_pod_create", labels=pod_labels)(
         handle_haproxy_pod_create
+    )
+    kopf.on.delete("pods", id="haproxy_pod_delete", labels=pod_labels)(
+        handle_haproxy_pod_delete
+    )
+    kopf.on.update("pods", id="haproxy_pod_update", labels=pod_labels)(
+        handle_haproxy_pod_update
     )
 
     logger.info(
@@ -956,6 +1117,40 @@ async def initialize_configuration(memo: Any) -> None:
             secret_data = secret.data if hasattr(secret, "data") else secret["data"]
             memo.credentials = Credentials.from_secret(secret_data)
 
+            # Reconfigure logging based on config
+            from haproxy_template_ic.structured_logging import setup_structured_logging
+
+            setup_structured_logging(
+                verbose_level=memo.config.logging.verbose,
+                use_json=memo.config.logging.structured,
+            )
+
+            # Initialize distributed tracing if enabled
+            if memo.config.tracing.enabled:
+                from haproxy_template_ic.tracing import (
+                    initialize_tracing,
+                    create_tracing_config_from_env,
+                )
+
+                tracing_config = create_tracing_config_from_env()
+                tracing_config.enabled = memo.config.tracing.enabled
+                tracing_config.service_name = (
+                    memo.config.tracing.service_name or tracing_config.service_name
+                )
+                tracing_config.service_version = (
+                    memo.config.tracing.service_version
+                    or tracing_config.service_version
+                )
+                tracing_config.jaeger_endpoint = (
+                    memo.config.tracing.jaeger_endpoint
+                    or tracing_config.jaeger_endpoint
+                )
+                tracing_config.sample_rate = memo.config.tracing.sample_rate
+                tracing_config.console_export = (
+                    memo.config.tracing.console_export or tracing_config.console_export
+                )
+                initialize_tracing(tracing_config)
+
         metrics.record_config_reload(success=True)
         logger.info("✅ Configuration and credentials loaded successfully.")
     except Exception as e:
@@ -989,7 +1184,7 @@ async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
 
 async def init_management_socket(memo: Any, **kwargs: Any) -> None:
     # Start management socket server for state inspection
-    socket_path = memo.cli_options.socket_path
+    socket_path = memo.config.operator.socket_path
     memo.socket_server_task = asyncio.create_task(
         run_management_socket_server(memo, socket_path)
     )
@@ -1024,10 +1219,22 @@ async def cleanup_template_debouncer(memo: Any, **kwargs: Any) -> None:
         memo.debouncer = None
 
 
+async def cleanup_tracing(memo: Any, **kwargs: Any) -> None:
+    """Clean up distributed tracing."""
+    try:
+        if hasattr(memo, "config") and memo.config.tracing.enabled:
+            from haproxy_template_ic.tracing import shutdown_tracing
+
+            shutdown_tracing()
+            logger.debug("🔍 Tracing shutdown complete")
+    except Exception as e:
+        logger.error(f"❌ Error shutting down tracing: {e}")
+
+
 async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
     """Initialize and start the Prometheus metrics server."""
     metrics = get_metrics_collector()
-    metrics_port = getattr(memo.cli_options, "metrics_port", DEFAULT_METRICS_PORT)
+    metrics_port = memo.config.operator.metrics_port
     # Start metrics server as a background task
     memo.metrics_server_task = asyncio.create_task(
         metrics.start_metrics_server(metrics_port)
@@ -1115,45 +1322,28 @@ def configure_webhook_server(
 
 
 # =============================================================================
-# Operator State Management
-# =============================================================================
-
-
-def create_operator_memo(cli_options: Any) -> Any:
-    """Create memo object for operator state."""
-    loop = uvloop.EventLoopPolicy().new_event_loop()
-    stop_flag: asyncio.Future[None] = asyncio.Future(loop=loop)
-    config_reload_flag: asyncio.Future[None] = asyncio.Future(loop=loop)
-
-    return (
-        kopf.Memo(
-            stop_flag=stop_flag,
-            cli_options=cli_options,
-            config_reload_flag=config_reload_flag,
-            haproxy_config_context=HAProxyConfigContext(
-                config=Config(
-                    pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-                    haproxy_config=TemplateConfig(template="# Initial config"),
-                ),
-                template_context=TemplateContext(namespace="default"),
-                rendered_config=None,
-            ),
-        ),
-        loop,
-        stop_flag,
-    )
-
-
-# =============================================================================
 # Main Operator Loop
 # =============================================================================
 
 
+def create_event_loop() -> asyncio.AbstractEventLoop:
+    """Create the event loop with uvloop for optimal performance."""
+    logger = structlog.get_logger("operator")
+    logger.info("🚀 Using uvloop for optimal performance")
+    return uvloop.EventLoopPolicy().new_event_loop()
+
+
 def run_operator_loop(cli_options: "CliOptions") -> None:
-    """Run the main operator loop with config reload capability."""
+    """Run the main operator loop with config reload capability.
+
+    Args:
+        cli_options: CLI options container
+    """
     # Initialize metrics on first run
     metrics = get_metrics_collector()
     metrics.set_app_info()
+
+    logger = structlog.get_logger("operator")
 
     while True:
         # Set up operator
@@ -1165,7 +1355,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         indexers = OperatorIndexers()
 
         # Explicitly create the asyncio event loop to be able to run some tasks manually before passing it to kopf.run
-        loop = uvloop.EventLoopPolicy().new_event_loop()
+        loop = create_event_loop()
 
         # Explicitly create the stop_flag to be able to stop the operator from within
         stop_flag: asyncio.Future[None] = asyncio.Future(loop=loop)
@@ -1211,14 +1401,15 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         # Configure webhook server for admission control
         kopf.on.startup()(configure_webhook_server)
 
-        # Register cleanup handler for debouncer
+        # Register cleanup handlers
         kopf.on.cleanup()(cleanup_template_debouncer)
+        kopf.on.cleanup()(cleanup_tracing)
 
         # Run operator
         kopf.run(
             clusterwide=True,
             loop=loop,
-            liveness_endpoint=f"http://0.0.0.0:{cli_options.healthz_port}/healthz",
+            liveness_endpoint=f"http://0.0.0.0:{memo.config.operator.healthz_port}/healthz",
             stop_flag=stop_flag,
             memo=memo,
             registry=registry,

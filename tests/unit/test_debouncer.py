@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from haproxy_template_ic.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.config_models import TriggerContext
 
 # Test constants to avoid magic numbers
 MIN_INTERVAL_SHORT = 0.1  # 100ms for fast test execution
@@ -62,8 +63,13 @@ class TestTemplateRenderDebouncer:
             # Wait for min_interval + buffer
             await asyncio.sleep(SLEEP_SHORT)
 
-            # Should have rendered once
-            render_func.assert_called_once_with(memo)
+            # Should have rendered once with trigger context
+            render_func.assert_called_once_with(
+                memo,
+                trigger_context=TriggerContext(
+                    trigger_type="periodic_refresh", pod_changed=False
+                ),
+            )
         finally:
             await debouncer.stop()
 
@@ -233,3 +239,123 @@ class TestTemplateRenderDebouncer:
         assert debouncer._task is first_task
 
         await debouncer.stop()
+
+    @pytest.mark.asyncio
+    async def test_periodic_refresh_timing(self):
+        """Test that periodic refresh doesn't add unnecessary min_interval wait."""
+        import time
+
+        render_func = AsyncMock()
+        memo = MagicMock()
+
+        debouncer = TemplateRenderDebouncer(
+            min_interval=MIN_INTERVAL_SHORT,  # 0.1s min interval
+            max_interval=MAX_INTERVAL_SHORT,  # 0.3s max interval (short for test)
+            render_func=render_func,
+            memo=memo,
+        )
+
+        await debouncer.start()
+
+        try:
+            start_time = time.time()
+
+            # Wait for periodic refresh (should happen after max_interval)
+            await asyncio.sleep(SLEEP_MEDIUM)  # 0.35s > 0.3s max_interval
+
+            # Should have rendered due to periodic refresh
+            assert render_func.call_count >= 1
+
+            # Check that total time is approximately max_interval, not max_interval + min_interval
+            total_time = time.time() - start_time
+            # Allow some buffer for timing precision, but should be much closer to max_interval (0.3s)
+            # than max_interval + min_interval (0.3s + 0.1s = 0.4s)
+            assert (
+                total_time < 0.4
+            )  # Should be much less than 0.4s if working correctly
+
+        finally:
+            await debouncer.stop()
+
+    @pytest.mark.asyncio
+    async def test_accurate_time_calculation_after_wait(self):
+        """Test that resource changes don't wait unnecessarily when enough time has passed."""
+        import time
+
+        render_func = AsyncMock()
+        memo = MagicMock()
+
+        debouncer = TemplateRenderDebouncer(
+            min_interval=MIN_INTERVAL_LONG,  # 0.5s min interval
+            max_interval=MAX_INTERVAL_LONG,  # 10s max interval
+            render_func=render_func,
+            memo=memo,
+        )
+
+        await debouncer.start()
+
+        try:
+            # First render
+            await debouncer.trigger()
+            await asyncio.sleep(SLEEP_LONG)  # 0.6s wait for first render
+            first_count = render_func.call_count
+            assert first_count >= 1
+
+            # Wait longer than min_interval
+            await asyncio.sleep(
+                SLEEP_LONG
+            )  # Another 0.6s, total 1.2s > 0.5s min_interval
+
+            start_time = time.time()
+            # Second trigger should not need additional min_interval wait
+            await debouncer.trigger()
+            await asyncio.sleep(SLEEP_SHORT)  # Just enough for processing
+
+            # Should have rendered without additional delay
+            assert render_func.call_count > first_count
+            processing_time = time.time() - start_time
+            # Should be much less than min_interval (0.5s) since enough time already passed
+            assert processing_time < 0.3
+
+        finally:
+            await debouncer.stop()
+
+    @pytest.mark.asyncio
+    async def test_min_interval_still_enforced_when_needed(self):
+        """Test that min_interval is still enforced for rapid successive triggers."""
+        import time
+
+        render_func = AsyncMock()
+        memo = MagicMock()
+
+        debouncer = TemplateRenderDebouncer(
+            min_interval=MIN_INTERVAL_LONG,  # 0.5s min interval
+            max_interval=MAX_INTERVAL_LONG,  # 10s max interval
+            render_func=render_func,
+            memo=memo,
+        )
+
+        await debouncer.start()
+
+        try:
+            # First render
+            await debouncer.trigger()
+            await asyncio.sleep(SLEEP_LONG)  # 0.6s wait for first render
+            first_count = render_func.call_count
+            assert first_count >= 1
+
+            # Trigger again immediately (within min_interval)
+            start_time = time.time()
+            await debouncer.trigger()
+            await asyncio.sleep(
+                SLEEP_LONG + SLEEP_SHORT
+            )  # Wait for rate limiting + processing
+
+            # Should have rendered but with rate limiting delay
+            assert render_func.call_count > first_count
+            total_time = time.time() - start_time
+            # Should be approximately min_interval (0.5s) plus some processing time
+            assert total_time >= MIN_INTERVAL_LONG * 0.8  # Allow 20% timing tolerance
+
+        finally:
+            await debouncer.stop()

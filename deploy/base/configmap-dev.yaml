@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: haproxy-template-ic-config
+  name: haproxy-template-ic-config-dev
   namespace: haproxy-template-ic
 data:
   config: |
@@ -14,7 +14,7 @@ data:
     operator:
       healthz_port: 8080
       metrics_port: 9090
-      socket_path: /run/haproxy-template-ic/management.sock
+      socket_path: mgmt.sock  # Local socket for development
     
     logging:
       verbose: 2  # 0=WARNING, 1=INFO, 2=DEBUG
@@ -29,7 +29,7 @@ data:
       console_export: false
     
     validation:
-      dataplane_host: localhost
+      dataplane_host: haproxy-template-ic  # Use K8s service name via Telepresence
       dataplane_port: 5555
     
     # Fields to omit from indexed resources (reduces memory usage)

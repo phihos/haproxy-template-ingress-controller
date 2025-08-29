@@ -12,6 +12,8 @@ from typing import Any, Callable, Coroutine, Optional
 
 import structlog
 
+from haproxy_template_ic.config_models import TriggerContext
+
 logger = structlog.get_logger(__name__)
 
 
@@ -60,6 +62,10 @@ class TemplateRenderDebouncer:
         self._start_lock = asyncio.Lock()
         self._metrics = self._get_metrics_collector()
 
+        # Trigger tracking for context
+        self._pod_changed: bool = False
+        self._trigger_source: str = "resource_changes"
+
         # Log warnings for unusual configurations
         if min_interval < 3:
             logger.warning(
@@ -79,15 +85,28 @@ class TemplateRenderDebouncer:
         except ImportError:
             return None
 
-    async def trigger(self) -> None:
+    async def trigger(self, source: str = "resource_changes") -> None:
         """
         Signal that a resource changed and template rendering may be needed.
 
         This method is called by kopf event handlers when resources change.
         It doesn't immediately trigger rendering but signals the debouncer.
+
+        Args:
+            source: Source of the trigger - "resource_changes", "pod_changes", or "periodic_refresh"
         """
         self._change_count += 1
         self._last_change_time = time.time()
+
+        # Track trigger source and pod changes
+        if source == "pod_changes":
+            self._pod_changed = True
+            self._trigger_source = "pod_changes"
+        elif (
+            self._trigger_source != "pod_changes"
+        ):  # Don't override pod changes with resource changes
+            self._trigger_source = source
+
         self._event.set()
 
         # Record metric
@@ -119,7 +138,8 @@ class TemplateRenderDebouncer:
                 # Wait for event or timeout (guaranteed execution)
                 try:
                     await asyncio.wait_for(self._event.wait(), timeout=time_until_max)
-                    triggered_by = "resource_changes"
+                    # Use tracked trigger source when event was triggered
+                    triggered_by = self._trigger_source
                 except asyncio.TimeoutError:
                     # Max interval reached - force render
                     triggered_by = "periodic_refresh"
@@ -128,19 +148,35 @@ class TemplateRenderDebouncer:
                 if self._stop:
                     break  # type: ignore[unreachable]
 
-                # Enforce minimum interval (reuse current_time for consistency)
+                # Recalculate current time after waiting for accurate timing
+                current_time = time.time()
                 time_since_last_render = current_time - self._last_render_time
-                if time_since_last_render < self.min_interval:
+
+                # Skip min_interval wait for periodic refresh or if enough time has already passed
+                if (
+                    triggered_by != "periodic_refresh"
+                    and time_since_last_render < self.min_interval
+                ):
                     sleep_time = self.min_interval - time_since_last_render
                     logger.debug(
                         f"Rate limiting: waiting {sleep_time:.1f}s before rendering"
                     )
                     await asyncio.sleep(sleep_time)
+                elif triggered_by == "periodic_refresh":
+                    logger.debug(
+                        f"Skipping min_interval wait for periodic refresh (already waited {self.max_interval}s)"
+                    )
 
                 # Clear event and count changes
                 self._event.clear()
                 changes_batched = self._change_count
                 self._change_count = 0
+
+                # Create trigger context
+                pod_changed = self._pod_changed
+                trigger_context = TriggerContext(
+                    trigger_type=triggered_by, pod_changed=pod_changed
+                )
 
                 # Log rendering trigger
                 if triggered_by == "resource_changes":
@@ -148,22 +184,35 @@ class TemplateRenderDebouncer:
                         f"🔄 Rendering templates: {changes_batched} changes batched",
                         changes_batched=changes_batched,
                         trigger=triggered_by,
+                        pod_changed=pod_changed,
                     )
-                else:
+                elif triggered_by == "pod_changes":
+                    logger.info(
+                        "🔄 Rendering templates: HAProxy pods changed",
+                        changes_batched=changes_batched,
+                        trigger=triggered_by,
+                        pod_changed=pod_changed,
+                    )
+                else:  # periodic_refresh
                     logger.info(
                         f"⏰ Rendering templates: periodic refresh after {self.max_interval}s",
                         interval=self.max_interval,
                         trigger=triggered_by,
+                        pod_changed=pod_changed,
                     )
 
                 # Record metrics
                 if self._metrics:
                     self._metrics.record_debouncer_render(triggered_by, changes_batched)
 
-                # Render templates
+                # Reset trigger state after processing
+                self._pod_changed = False
+                self._trigger_source = "resource_changes"
+
+                # Render templates with trigger context
                 self._last_render_time = time.time()
                 try:
-                    await self.render_func(self.memo)
+                    await self.render_func(self.memo, trigger_context=trigger_context)
                 except Exception as e:
                     logger.error(
                         f"Error during template rendering: {e}",

@@ -5,7 +5,6 @@ This module contains tests for Kubernetes operator functionality focusing on
 critical paths and edge cases that are likely to detect bugs.
 """
 
-import asyncio
 import logging
 import os
 import shutil
@@ -41,7 +40,6 @@ from haproxy_template_ic.operator import (
     _is_valid_object_resource,
     _log_haproxy_error_hints,
     configure_webhook_server,
-    create_operator_memo,
     extract_nested_field,
     fetch_configmap,
     fetch_secret,
@@ -912,38 +910,6 @@ async def test_synchronize_with_haproxy_instances_with_failures(
 
 
 # =============================================================================
-# Operator State Management Tests
-# =============================================================================
-
-
-def test_create_operator_memo():
-    """Test operator memo creation."""
-
-    cli_options = CliOptions(
-        configmap_name="test-config",
-        secret_name="test-credentials",
-        healthz_port=8080,
-        verbose=1,
-        socket_path="/run/haproxy-template-ic/management.sock",
-        metrics_port=9090,
-        structured_logging=False,
-        tracing_enabled=False,
-    )
-
-    memo, loop, stop_flag = create_operator_memo(cli_options)
-
-    assert memo.cli_options == cli_options
-    assert memo.cli_options.configmap_name == "test-config"
-    assert memo.cli_options.socket_path == "/run/haproxy-template-ic/management.sock"
-    assert hasattr(memo, "config_reload_flag")
-    assert hasattr(memo, "stop_flag")
-    assert hasattr(memo, "haproxy_config_context")
-    assert isinstance(memo.haproxy_config_context, HAProxyConfigContext)
-    assert isinstance(loop, asyncio.AbstractEventLoop)
-    assert isinstance(stop_flag, asyncio.Future)
-
-
-# =============================================================================
 # Additional Coverage Tests for Missing Lines
 # =============================================================================
 
@@ -1052,12 +1018,6 @@ async def test_initialize_configuration(
     cli_options = CliOptions(
         configmap_name="test-config",
         secret_name="test-credentials",
-        healthz_port=8080,
-        verbose=1,
-        socket_path="/test/socket",
-        metrics_port=9090,
-        structured_logging=False,
-        tracing_enabled=False,
     )
     memo.cli_options = cli_options
 
@@ -1589,12 +1549,6 @@ async def test_initialize_configuration_failure(
     cli_options = CliOptions(
         configmap_name="test-config",
         secret_name="test-credentials",
-        healthz_port=8080,
-        verbose=1,
-        socket_path="/test/socket",
-        metrics_port=9090,
-        structured_logging=False,
-        tracing_enabled=False,
     )
     memo.cli_options = cli_options
 
@@ -1617,12 +1571,6 @@ async def test_init_watch_configmap(mock_get_namespace, mock_event):
     cli_options = CliOptions(
         configmap_name="test-config",
         secret_name="test-credentials",
-        healthz_port=8080,
-        verbose=1,
-        socket_path="/test/socket",
-        metrics_port=9090,
-        structured_logging=False,
-        tracing_enabled=False,
     )
     memo.cli_options = cli_options
 
@@ -1655,12 +1603,6 @@ async def test_init_management_socket(mock_run_socket, mock_create_task):
     cli_options = CliOptions(
         configmap_name="test-config",
         secret_name="test-credentials",
-        healthz_port=8080,
-        verbose=1,
-        socket_path="/test/socket",
-        metrics_port=9090,
-        structured_logging=False,
-        tracing_enabled=False,
     )
     memo.cli_options = cli_options
 
@@ -1684,14 +1626,12 @@ async def test_init_metrics_server(mock_get_metrics, mock_create_task):
     cli_options = CliOptions(
         configmap_name="test-config",
         secret_name="test-credentials",
-        healthz_port=8080,
-        verbose=1,
-        socket_path="/test/socket",
-        metrics_port=9090,
-        structured_logging=False,
-        tracing_enabled=False,
     )
     memo.cli_options = cli_options
+    # Add mock config with metrics port
+    mock_config = MagicMock()
+    mock_config.operator.metrics_port = 9090
+    memo.config = mock_config
 
     mock_metrics = MagicMock()
 
@@ -1833,6 +1773,14 @@ def test_run_operator_loop_normal_shutdown(
     # Mock startup decorator
     mock_startup.return_value = lambda func: func
 
+    # Mock initialize_configuration to set up config
+    async def mock_init_config_side_effect(memo):
+        mock_config = MagicMock()
+        mock_config.operator.healthz_port = 8080
+        memo.config = mock_config
+
+    mock_init_config.side_effect = mock_init_config_side_effect
+
     # Mock asyncio future for stop conditions
     mock_future = MagicMock()
     mock_future.done.return_value = False  # Normal shutdown (no reload)
@@ -1854,12 +1802,6 @@ def test_run_operator_loop_normal_shutdown(
                     cli_options = CliOptions(
                         configmap_name="test-config",
                         secret_name="test-credentials",
-                        healthz_port=8080,
-                        verbose=1,
-                        socket_path="/test/socket",
-                        metrics_port=9090,
-                        structured_logging=False,
-                        tracing_enabled=False,
                     )
 
                     run_operator_loop(cli_options)
@@ -1909,6 +1851,14 @@ def test_run_operator_loop_with_config_reload(
     # Mock startup decorator
     mock_startup.return_value = lambda func: func
 
+    # Mock initialize_configuration to set up config
+    async def mock_init_config_side_effect(memo):
+        mock_config = MagicMock()
+        mock_config.operator.healthz_port = 8080
+        memo.config = mock_config
+
+    mock_init_config.side_effect = mock_init_config_side_effect
+
     # Mock reload scenario - first iteration has reload flag set, second doesn't
     mock_reload_future = MagicMock()
     mock_reload_future.done.side_effect = [
@@ -1932,12 +1882,6 @@ def test_run_operator_loop_with_config_reload(
                     cli_options = CliOptions(
                         configmap_name="test-config",
                         secret_name="test-credentials",
-                        healthz_port=8080,
-                        verbose=1,
-                        socket_path="/test/socket",
-                        metrics_port=9090,
-                        structured_logging=False,
-                        tracing_enabled=False,
                     )
 
                     run_operator_loop(cli_options)
@@ -2385,6 +2329,12 @@ async def test_render_haproxy_templates_empty_index():
                 memo.haproxy_config_context = MagicMock()
                 memo.haproxy_config_context.rendered_maps = []
                 memo.haproxy_config_context.rendered_certificates = []
+                memo.haproxy_config_context.has_content_changed = AsyncMock(
+                    return_value=True
+                )
+                memo.haproxy_config_context.have_pods_changed = AsyncMock(
+                    return_value=False
+                )
                 memo.indices = {"services": None}  # Empty index
 
                 await render_haproxy_templates(memo)
@@ -2906,6 +2856,8 @@ class TestOperatorCriticalPaths:
         memo.indices = {}  # Missing expected index
         memo.haproxy_config_context.rendered_maps.clear = MagicMock()
         memo.haproxy_config_context.rendered_certificates.clear = MagicMock()
+        memo.haproxy_config_context.has_content_changed = AsyncMock(return_value=True)
+        memo.haproxy_config_context.have_pods_changed = AsyncMock(return_value=False)
         memo.template_renderer = MagicMock()
 
         # Mock config objects

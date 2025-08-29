@@ -24,18 +24,6 @@ spec:
               value: haproxy-template-ic-config
             - name: SECRET_NAME
               value: haproxy-template-ic-credentials
-            - name: VERBOSE
-              value: "2"
-            - name: HEALTHZ_PORT
-              value: "8080"
-            - name: SOCKET_PATH
-              value: /run/haproxy-template-ic/management.sock
-            - name: METRICS_PORT
-              value: "9090"
-            - name: STRUCTURED_LOGGING
-              value: "false"
-            - name: TRACING_ENABLED
-              value: "false"
           ports:
             - name: healthz
               containerPort: 8080

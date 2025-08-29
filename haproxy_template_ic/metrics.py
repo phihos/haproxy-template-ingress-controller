@@ -82,6 +82,18 @@ dataplane_fallback_deployments_total = Counter(
     ["fallback_type"],
 )
 
+dataplane_granular_deployments_total = Counter(
+    "haproxy_template_ic_dataplane_granular_deployments_total",
+    "Total number of successful granular deployments using specific API endpoints",
+    ["deployment_method"],
+)
+
+dataplane_deployment_methods_total = Counter(
+    "haproxy_template_ic_dataplane_deployment_methods_total",
+    "Total deployments by method (granular, raw, conditional, fallback)",
+    ["method", "success"],
+)
+
 # HAProxy instances
 haproxy_instances_total = Gauge(
     "haproxy_template_ic_haproxy_instances_total",
@@ -292,6 +304,35 @@ class MetricsCollector:
             fallback_type: Type of fallback (e.g., 'structured_to_conditional', 'conditional_to_regular')
         """
         dataplane_fallback_deployments_total.labels(fallback_type=fallback_type).inc()
+
+    def increment_dataplane_granular_success(self, method: str = "granular") -> None:
+        """Increment the counter for successful granular deployments.
+
+        Args:
+            method: The granular deployment method used (default: 'granular')
+        """
+        dataplane_granular_deployments_total.labels(deployment_method=method).inc()
+        dataplane_deployment_methods_total.labels(method=method, success="true").inc()
+
+    def increment_dataplane_granular_fallback(self) -> None:
+        """Increment the counter when granular deployments fall back to raw."""
+        dataplane_deployment_methods_total.labels(
+            method="granular", success="false"
+        ).inc()
+
+    def record_dataplane_deployment_method(
+        self, method: str, success: bool = True
+    ) -> None:
+        """Record a dataplane deployment by method.
+
+        Args:
+            method: Deployment method ('granular', 'raw', 'conditional', 'fallback', 'skipped')
+            success: Whether the deployment was successful
+        """
+        success_str = "true" if success else "false"
+        dataplane_deployment_methods_total.labels(
+            method=method, success=success_str
+        ).inc()
 
     def record_debouncer_trigger(self) -> None:
         """Record a debouncer trigger event."""

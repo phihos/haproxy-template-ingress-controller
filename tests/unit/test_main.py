@@ -44,24 +44,13 @@ def test_cli_no_command():
     assert "Usage:" in result.output
 
 
-def test_cli_verbose_flag():
-    """Test verbose flag functionality."""
+def test_cli_help_mentions_configmap_only():
+    """Test that CLI help mentions ConfigMap-based configuration."""
     runner = CliRunner()
-
-    # Test -v flag
-    result = runner.invoke(cli, ["-v", "--help"])
+    result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
-
-    # Test -vv flag
-    result = runner.invoke(cli, ["-vv", "--help"])
-    assert result.exit_code == 0
-
-
-def test_cli_structured_logging_flag():
-    """Test structured logging flag functionality."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["--structured-logging", "true", "--help"])
-    assert result.exit_code == 0
+    # Should mention that settings are now in ConfigMap
+    assert "ConfigMap" in result.output or "configmap" in result.output
 
 
 # =============================================================================
@@ -70,9 +59,7 @@ def test_cli_structured_logging_flag():
 
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
-@patch("haproxy_template_ic.__main__.initialize_tracing")
-@patch("haproxy_template_ic.__main__.shutdown_tracing")
-def test_run_command_with_defaults(mock_shutdown, mock_init, mock_run):
+def test_run_command_with_defaults(mock_run):
     """Test run command with default parameters."""
     runner = CliRunner()
     result = runner.invoke(
@@ -82,24 +69,17 @@ def test_run_command_with_defaults(mock_shutdown, mock_init, mock_run):
 
     assert result.exit_code == 0
     mock_run.assert_called_once()
-    mock_init.assert_called_once()
-    mock_shutdown.assert_called_once()
 
-    # Check that the CLI options were passed correctly
+    # Check that the CLI options were passed correctly (only bootstrap parameters)
     cli_options = mock_run.call_args[0][0]
     assert cli_options.configmap_name == "test-config"
     assert cli_options.secret_name == "test-credentials"
-    assert cli_options.healthz_port == 8080
-    assert cli_options.socket_path == "/run/haproxy-template-ic/management.sock"
-    assert cli_options.metrics_port == 9090
-    assert cli_options.tracing_enabled is False
+    # Runtime settings are no longer in CLI options - they're in the ConfigMap
 
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
-@patch("haproxy_template_ic.__main__.initialize_tracing")
-@patch("haproxy_template_ic.__main__.shutdown_tracing")
-def test_run_command_with_custom_args(mock_shutdown, mock_init, mock_run):
-    """Test run command with custom arguments."""
+def test_run_command_bootstrap_params_only(mock_run):
+    """Test run command only accepts bootstrap parameters (configmap and secret names)."""
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -109,14 +89,6 @@ def test_run_command_with_custom_args(mock_shutdown, mock_init, mock_run):
             "my-config",
             "--secret-name",
             "my-credentials",
-            "--healthz-port",
-            "9000",
-            "--socket-path",
-            "/tmp/socket",
-            "--metrics-port",
-            "8080",
-            "--tracing-enabled",
-            "true",
         ],
     )
 
@@ -124,25 +96,16 @@ def test_run_command_with_custom_args(mock_shutdown, mock_init, mock_run):
     cli_options = mock_run.call_args[0][0]
     assert cli_options.configmap_name == "my-config"
     assert cli_options.secret_name == "my-credentials"
-    assert cli_options.healthz_port == 9000
-    assert cli_options.socket_path == "/tmp/socket"
-    assert cli_options.metrics_port == 8080
-    assert cli_options.tracing_enabled is True
+    # Runtime settings are configured via ConfigMap, not CLI
 
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
-@patch("haproxy_template_ic.__main__.initialize_tracing")
-@patch("haproxy_template_ic.__main__.shutdown_tracing")
-def test_run_command_with_env_vars(mock_shutdown, mock_init, mock_run):
-    """Test run command with environment variables."""
+def test_run_command_with_env_vars(mock_run):
+    """Test run command with environment variables for bootstrap parameters only."""
     runner = CliRunner(
         env={
             "CONFIGMAP_NAME": "env-config",
             "SECRET_NAME": "env-credentials",
-            "HEALTHZ_PORT": "7000",
-            "SOCKET_PATH": "/var/run/socket",
-            "METRICS_PORT": "7090",
-            "TRACING_ENABLED": "true",
         }
     )
     result = runner.invoke(cli, ["run"])
@@ -151,10 +114,7 @@ def test_run_command_with_env_vars(mock_shutdown, mock_init, mock_run):
     cli_options = mock_run.call_args[0][0]
     assert cli_options.configmap_name == "env-config"
     assert cli_options.secret_name == "env-credentials"
-    assert cli_options.healthz_port == 7000
-    assert cli_options.socket_path == "/var/run/socket"
-    assert cli_options.metrics_port == 7090
-    assert cli_options.tracing_enabled is True
+    # Runtime settings are configured via ConfigMap, not environment variables
 
 
 def test_run_command_missing_configmap_name():
@@ -167,34 +127,21 @@ def test_run_command_missing_configmap_name():
     assert "configmap-name" in result.output
 
 
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-@patch("haproxy_template_ic.__main__.initialize_tracing")
-@patch("haproxy_template_ic.__main__.shutdown_tracing")
-def test_run_command_with_tracing_enabled(mock_shutdown, mock_init, mock_run):
-    """Test run command with tracing enabled."""
+def test_run_command_help_mentions_configmap():
+    """Test run command help mentions ConfigMap configuration."""
     runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "run",
-            "--configmap-name",
-            "test-config",
-            "--secret-name",
-            "test-credentials",
-            "--tracing-enabled",
-            "true",
-        ],
+    result = runner.invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    # Should mention that runtime settings come from ConfigMap
+    assert (
+        "ConfigMap" in result.output
+        or "configmap" in result.output
+        or "runtime settings" in result.output
     )
 
-    assert result.exit_code == 0
-    cli_options = mock_run.call_args[0][0]
-    assert cli_options.tracing_enabled is True
-
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
-@patch("haproxy_template_ic.__main__.initialize_tracing")
-@patch("haproxy_template_ic.__main__.shutdown_tracing")
-def test_run_command_basic_functionality(mock_shutdown, mock_init, mock_run):
+def test_run_command_basic_functionality(mock_run):
     """Test that run command executes successfully."""
     runner = CliRunner()
     result = runner.invoke(
@@ -204,8 +151,7 @@ def test_run_command_basic_functionality(mock_shutdown, mock_init, mock_run):
 
     assert result.exit_code == 0
     mock_run.assert_called_once()
-    mock_init.assert_called_once()
-    mock_shutdown.assert_called_once()
+    # Tracing is now configured from ConfigMap, not CLI
 
 
 # =============================================================================
@@ -239,9 +185,7 @@ def test_run_command_invalid_configmap_name():
 
 
 @patch("haproxy_template_ic.__main__.run_operator_loop")
-@patch("haproxy_template_ic.__main__.initialize_tracing")
-@patch("haproxy_template_ic.__main__.shutdown_tracing")
-def test_run_command_valid_configmap_names(mock_shutdown, mock_init, mock_run):
+def test_run_command_valid_configmap_names(mock_run):
     """Test run command with valid ConfigMap names."""
     runner = CliRunner()
 

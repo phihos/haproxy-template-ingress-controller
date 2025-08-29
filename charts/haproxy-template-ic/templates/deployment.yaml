@@ -59,44 +59,6 @@ spec:
               value: {{ .Values.controller.configmapName | quote }}
             - name: SECRET_NAME
               value: {{ include "haproxy-template-ic.fullname" . }}-credentials
-            - name: HEALTHZ_PORT
-              value: {{ .Values.controller.healthzPort | quote }}
-            - name: VERBOSE
-              value: {{ .Values.controller.verbose | quote }}
-            - name: SOCKET_PATH
-              value: {{ .Values.controller.socketPath | quote }}
-            {{- if .Values.controller.metricsPort }}
-            - name: METRICS_PORT
-              value: {{ .Values.controller.metricsPort | quote }}
-            {{- end }}
-            {{- if .Values.controller.structuredLogging }}
-            - name: STRUCTURED_LOGGING
-              value: {{ .Values.controller.structuredLogging | quote }}
-            {{- end }}
-            {{- if .Values.controller.tracing.enabled }}
-            - name: TRACING_ENABLED
-              value: {{ .Values.controller.tracing.enabled | quote }}
-            {{- end }}
-            {{- if .Values.controller.tracing.serviceName }}
-            - name: TRACING_SERVICE_NAME
-              value: {{ .Values.controller.tracing.serviceName | quote }}
-            {{- end }}
-            {{- if .Values.controller.tracing.serviceVersion }}
-            - name: TRACING_SERVICE_VERSION
-              value: {{ .Values.controller.tracing.serviceVersion | quote }}
-            {{- end }}
-            {{- if .Values.controller.tracing.jaegerEndpoint }}
-            - name: JAEGER_ENDPOINT
-              value: {{ .Values.controller.tracing.jaegerEndpoint | quote }}
-            {{- end }}
-            {{- if .Values.controller.tracing.sampleRate }}
-            - name: TRACING_SAMPLE_RATE
-              value: {{ .Values.controller.tracing.sampleRate | quote }}
-            {{- end }}
-            {{- if .Values.controller.tracing.consoleExport }}
-            - name: TRACING_CONSOLE_EXPORT
-              value: {{ .Values.controller.tracing.consoleExport | quote }}
-            {{- end }}
           {{- with .Values.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
