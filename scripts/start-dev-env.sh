@@ -64,6 +64,53 @@ detect_kind_host_ip() {
     echo "172.20.0.1"
 }
 
+ensure_buildx_builder() {
+    local builder_name="haproxy-ic-builder"
+    
+    debug "Checking for docker-container builder..."
+    
+    # Check if our builder already exists
+    if docker buildx ls 2>/dev/null | grep -q "^${builder_name}"; then
+        debug "Builder '${builder_name}' already exists"
+        docker buildx use "${builder_name}" >/dev/null 2>&1
+        return 0
+    fi
+    
+    # Create and bootstrap the builder
+    debug "Creating docker-container builder '${builder_name}'..."
+    if [[ "$VERBOSE" == "true" ]]; then
+        log INFO "Setting up docker-container builder for optimized caching..."
+        docker buildx create --driver docker-container --name "${builder_name}" --bootstrap
+    else
+        docker buildx create --driver docker-container --name "${builder_name}" --bootstrap >/dev/null 2>&1
+    fi
+    
+    if [[ $? -eq 0 ]]; then
+        docker buildx use "${builder_name}" >/dev/null 2>&1
+        debug "Builder '${builder_name}' created and activated"
+        return 0
+    else
+        warn "Failed to create docker-container builder, falling back to default driver"
+        return 1
+    fi
+}
+
+cleanup_buildx_builder() {
+    local builder_name="haproxy-ic-builder"
+    
+    debug "Cleaning up docker-container builder..."
+    
+    # Switch back to default builder first
+    docker buildx use default >/dev/null 2>&1
+    
+    # Remove our builder if it exists
+    if docker buildx ls 2>/dev/null | grep -q "^${builder_name}"; then
+        log INFO "Removing docker-container builder '${builder_name}'..."
+        docker buildx rm "${builder_name}" >/dev/null 2>&1 || true
+        ok "Builder removed"
+    fi
+}
+
 
 print_section() {
     echo
@@ -488,27 +535,57 @@ build_and_load_local_image() {
         build_target="debug"
     fi
     
-    # Enable BuildKit for optimized builds
-    export DOCKER_BUILDKIT=1
+    # Set up docker-container builder for cache optimization
+    local use_cache=false
+    if ensure_buildx_builder; then
+        use_cache=true
+        debug "Using docker-container builder with cache optimization"
+    else
+        debug "Using default docker driver without cache"
+        export DOCKER_BUILDKIT=1
+    fi
     
     local build_args=("--target" "${build_target}" "-t" "${LOCAL_IMAGE}" "--load")
+    local docker_path
+    docker_path="$(command -v docker)"
+    local build_cmd="${docker_path}"
     
-    # Add cache optimization for faster rebuilds
-    if [[ "$FORCE_REBUILD" == "true" ]]; then
-        build_args+=("--no-cache")
+    if [[ "$use_cache" == "true" ]]; then
+        build_cmd="${docker_path} buildx"
+        
+        # Add cache optimization for faster rebuilds
+        if [[ "$FORCE_REBUILD" == "true" ]]; then
+            build_args+=("--no-cache")
+        else
+            # Use local cache for faster iteration
+            local cache_dir="/tmp/haproxy-template-ic-buildcache"
+            build_args+=(
+                "--cache-from" "type=local,src=${cache_dir}"
+                "--cache-to" "type=local,dest=${cache_dir}"
+            )
+        fi
     else
-        # Use local cache for faster iteration
-        local cache_dir="/tmp/haproxy-template-ic-buildcache"
-        build_args+=(
-            "--cache-from" "type=local,src=${cache_dir}"
-            "--cache-to" "type=local,dest=${cache_dir}"
-        )
+        # Fallback to standard docker build without cache
+        if [[ "$FORCE_REBUILD" == "true" ]]; then
+            build_args+=("--no-cache")
+        fi
     fi
     
     build_args+=(".")
     
-    run_with_spinner "Building optimized controller image '${LOCAL_IMAGE}' (target: ${build_target})" \
-        docker build "${build_args[@]}"
+    local build_message="Building controller image '${LOCAL_IMAGE}' (target: ${build_target}"
+    if [[ "$use_cache" == "true" ]]; then
+        build_message+=", with cache optimization"
+    fi
+    build_message+=")"
+    
+    if [[ "$use_cache" == "true" ]]; then
+        run_with_spinner "$build_message" \
+            "${docker_path}" buildx build "${build_args[@]}"
+    else
+        run_with_spinner "$build_message" \
+            "${build_cmd}" build "${build_args[@]}"
+    fi
     
     run_with_spinner "Loading image into kind cluster '${CLUSTER_NAME}'" \
         kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
@@ -701,6 +778,9 @@ dev_clean() {
     else
         warn "Cluster '$CLUSTER_NAME' not found"
     fi
+    
+    # Clean up docker-container builder
+    cleanup_buildx_builder
     
     # Clean up local images if requested
     if [[ "${1:-}" == "--images" ]]; then
