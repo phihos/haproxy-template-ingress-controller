@@ -280,6 +280,12 @@ jobs:
           sudo mv kind /usr/local/bin/kind
           kind version
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          install: true
+
       - name: Run dev environment script
         run: |
           bash ./scripts/start-dev-env.sh
