@@ -38,6 +38,7 @@ WORKDIR /src
 
 # Copy source files needed for installation
 COPY haproxy_template_ic/ haproxy_template_ic/
+COPY codegen/ codegen/
 COPY pyproject.toml .
 COPY uv.lock . 
 
