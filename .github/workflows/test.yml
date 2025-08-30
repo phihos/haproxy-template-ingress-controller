@@ -167,22 +167,6 @@ jobs:
           sudo mv /tmp/telepresence /usr/local/bin/telepresence
           telepresence version
 
-      - name: Restore test containers from cache
-        run: |
-          # Restore HAProxy test container from cache
-          docker buildx build \
-            --cache-from type=gha,scope=haproxy-test \
-            --tag test-haproxy:integration \
-            --load \
-            tests/integration/fixtures/dataplane/haproxy
-          
-          # Restore Dataplane test container from cache
-          docker buildx build \
-            --cache-from type=gha,scope=dataplane-test \
-            --tag test-dataplane:integration \
-            --load \
-            tests/integration/fixtures/dataplane/dataplane
-
       - name: Run acceptance tests
         env:
           DOCKER_BUILDKIT: "1"
