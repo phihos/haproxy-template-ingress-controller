@@ -167,22 +167,6 @@ jobs:
           sudo mv /tmp/telepresence /usr/local/bin/telepresence
           telepresence version
 
-      - name: Restore test containers from cache
-        run: |
-          # Restore HAProxy test container from cache
-          docker buildx build \
-            --cache-from type=gha,scope=haproxy-test \
-            --tag test-haproxy:integration \
-            --load \
-            tests/integration/fixtures/dataplane/haproxy
-          
-          # Restore Dataplane test container from cache
-          docker buildx build \
-            --cache-from type=gha,scope=dataplane-test \
-            --tag test-dataplane:integration \
-            --load \
-            tests/integration/fixtures/dataplane/dataplane
-
       - name: Run acceptance tests
         env:
           DOCKER_BUILDKIT: "1"
@@ -211,81 +195,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-acceptance
-          path: .coverage*
-          include-hidden-files: true
-          retention-days: 7
-          if-no-files-found: error
-
-  acceptance-tests-telepresence:
-    name: Acceptance Tests (Telepresence)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20  # Faster with Telepresence
-    continue-on-error: true  # Optional test mode for now
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Required for coverage reporting
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.8.x"
-          activate-environment: true
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Install Telepresence
-        run: |
-          # Install Telepresence 2.24.0
-          curl -fL https://app.getambassador.io/download/tel2oss/releases/download/v2.24.0/telepresence-linux-amd64 -o /tmp/telepresence
-          chmod +x /tmp/telepresence
-          sudo mv /tmp/telepresence /usr/local/bin/telepresence
-          telepresence version
-          
-          # Configure passwordless sudo for Telepresence daemon
-          echo "runner ALL=(ALL) NOPASSWD: /usr/local/bin/telepresence" | sudo tee /etc/sudoers.d/telepresence
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Restore test containers from cache
-        run: |
-          # Only need HAProxy and Dataplane containers (no controller build)
-          docker buildx build \
-            --cache-from type=gha,scope=haproxy-test \
-            --tag test-haproxy:integration \
-            --load \
-            tests/integration/fixtures/dataplane/haproxy
-          
-          docker buildx build \
-            --cache-from type=gha,scope=dataplane-test \
-            --tag test-dataplane:integration \
-            --load \
-            tests/integration/fixtures/dataplane/dataplane
-
-      - name: Run acceptance tests with Telepresence
-        env:
-          DOCKER_BUILDKIT: "1"
-          CI: "true"
-        run: |
-          echo "Running acceptance tests with Telepresence for local operator..."
-          
-          uv run --frozen pytest tests -s -m "acceptance" \
-            --cluster-name haproxy-template-ic-test \
-            --use-telepresence \
-            --coverage \
-            --cov=haproxy_template_ic \
-            --cov-report=term-missing \
-            --tb=short \
-            -n 0  # Serial execution for Telepresence
-
-      - name: Upload Telepresence test coverage
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-acceptance-telepresence
           path: .coverage*
           include-hidden-files: true
           retention-days: 7
