@@ -139,22 +139,45 @@ def _log_search_failure(
 
 def wait_for_operator_ready(pod):
     """Wait for the operator to be fully initialized and ready."""
-    from tests.e2e.utils.k8s_helpers import send_socket_command
+    from tests.e2e.utils.k8s_helpers import send_socket_command, get_pod_diagnostics
 
     # Instead of relying on log messages that may not be captured due to timing,
     # test socket availability which indicates the operator is ready
-    max_attempts = 30  # 30 seconds timeout
+    max_attempts = 60  # Increase to 60 seconds timeout for CI environments
+    last_error = None
+
     for attempt in range(max_attempts):
         try:
             response = send_socket_command(pod, "dump all", retries=1)
             if response and "config" in response:
-                print(f"✅ Operator ready after {attempt + 1} attempts")
+                print(
+                    f"✅ Operator ready after {attempt + 1} attempts ({attempt + 1}s)"
+                )
                 return
         except Exception as e:
+            last_error = e
             if attempt == max_attempts - 1:  # Last attempt
-                raise AssertionError(
-                    f"❌ Operator not ready after {max_attempts} attempts. Last error: {e}"
-                )
+                # Get comprehensive pod diagnostics on failure
+                diagnostics = get_pod_diagnostics(pod, include_events=True)
+
+                # Construct detailed error message
+                error_message = [
+                    f"❌ Operator not ready after {max_attempts} attempts ({max_attempts}s)",
+                    f"Last socket error: {last_error}",
+                    "",
+                    diagnostics,
+                    "",
+                    "Troubleshooting Tips:",
+                    "  - Check if the controller image was built and loaded correctly",
+                    "  - Verify the health endpoint is responding on port 8080",
+                    "  - Check for resource constraints or memory limits",
+                    "  - Review container logs for startup errors",
+                ]
+
+                raise AssertionError("\n".join(error_message))
+
+        # Add a small delay between attempts to avoid overwhelming the pod
+        time.sleep(1)
 
 
 def wait_for_watch_streams_ready(pod):

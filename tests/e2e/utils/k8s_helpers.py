@@ -539,3 +539,200 @@ def _redact_sensitive_info(log_content: Any) -> str:
         redacted_content = pattern.sub(replacement, redacted_content)
 
     return redacted_content
+
+
+def get_pod_diagnostics(pod, include_events=True) -> str:
+    """
+    Get comprehensive diagnostics for a pod including status, conditions, and events.
+
+    This function collects detailed information about a pod's state to help diagnose
+    why it might not be ready or running properly. Particularly useful in CI/CD
+    environments where pod startup issues are common.
+
+    Args:
+        pod: The Kubernetes pod object to diagnose
+        include_events: Whether to fetch and include pod events (default: True)
+
+    Returns:
+        A formatted string containing pod diagnostics information
+
+    Example Output:
+        Pod Diagnostics for haproxy-template-ic-xxx:
+        ============================================
+        Phase: Running
+        Pod IP: 10.244.0.5
+        Node: kind-worker
+
+        Conditions:
+          - PodScheduled: True
+          - Initialized: True
+          - ContainersReady: False (containers not ready: [haproxy-template-ic])
+          - Ready: False
+
+        Container Statuses:
+          haproxy-template-ic:
+            State: Running (started 25s ago)
+            Ready: False
+            Restart Count: 0
+
+          validation-haproxy:
+            State: Running (started 20s ago)
+            Ready: True
+
+        Recent Events (last 10):
+          [25s ago] Normal - Scheduled: Successfully assigned to node
+          [10s ago] Warning - Unhealthy: Readiness probe failed
+    """
+    import datetime
+    from kr8s.objects import Event
+
+    diagnostics = []
+    pod_name = pod.metadata.name
+    pod_namespace = pod.metadata.namespace
+
+    # Header
+    diagnostics.append(f"\nPod Diagnostics for {pod_name}:")
+    diagnostics.append("=" * 60)
+
+    # Refresh pod status to get latest state
+    try:
+        pod.refresh()
+    except Exception as e:
+        diagnostics.append(f"⚠️  Failed to refresh pod status: {e}")
+
+    # Basic pod information
+    status = pod.status or {}
+    diagnostics.append(f"Phase: {status.get('phase', 'Unknown')}")
+    diagnostics.append(f"Pod IP: {status.get('podIP', 'Not assigned')}")
+    diagnostics.append(f"Host IP: {status.get('hostIP', 'Not assigned')}")
+    diagnostics.append(f"Node: {pod.spec.get('nodeName', 'Not scheduled')}")
+
+    # Start time
+    if status.get("startTime"):
+        start_time = status["startTime"]
+        diagnostics.append(f"Started: {start_time}")
+
+    # Pod conditions
+    diagnostics.append("\nConditions:")
+    conditions = status.get("conditions", [])
+    if conditions:
+        for condition in conditions:
+            cond_type = condition.get("type", "Unknown")
+            cond_status = condition.get("status", "Unknown")
+            reason = condition.get("reason", "")
+            message = condition.get("message", "")
+
+            if cond_status == "False" and message:
+                diagnostics.append(f"  ❌ {cond_type}: {cond_status} - {message}")
+            elif reason:
+                diagnostics.append(f"  - {cond_type}: {cond_status} ({reason})")
+            else:
+                diagnostics.append(f"  - {cond_type}: {cond_status}")
+    else:
+        diagnostics.append("  No conditions available")
+
+    # Container statuses
+    diagnostics.append("\nContainer Statuses:")
+    container_statuses = status.get("containerStatuses", [])
+    if container_statuses:
+        for container in container_statuses:
+            name = container.get("name", "Unknown")
+            ready = container.get("ready", False)
+            restart_count = container.get("restartCount", 0)
+
+            diagnostics.append(f"\n  {name}:")
+            diagnostics.append(f"    Ready: {'✅ Yes' if ready else '❌ No'}")
+            diagnostics.append(f"    Restart Count: {restart_count}")
+
+            # Container state details
+            state = container.get("state", {})
+            if "running" in state:
+                started_at = state["running"].get("startedAt", "Unknown")
+                diagnostics.append(f"    State: Running (started at {started_at})")
+            elif "waiting" in state:
+                reason = state["waiting"].get("reason", "Unknown")
+                message = state["waiting"].get("message", "")
+                diagnostics.append(f"    State: Waiting - {reason}")
+                if message:
+                    diagnostics.append(f"    Message: {message}")
+            elif "terminated" in state:
+                reason = state["terminated"].get("reason", "Unknown")
+                exit_code = state["terminated"].get("exitCode", "Unknown")
+                diagnostics.append(
+                    f"    State: Terminated - {reason} (exit code: {exit_code})"
+                )
+
+            # Last state if container was restarted
+            if restart_count > 0 and "lastState" in container:
+                last_state = container["lastState"]
+                if "terminated" in last_state:
+                    reason = last_state["terminated"].get("reason", "Unknown")
+                    exit_code = last_state["terminated"].get("exitCode", "Unknown")
+                    diagnostics.append(
+                        f"    Last Termination: {reason} (exit code: {exit_code})"
+                    )
+    else:
+        diagnostics.append("  No container statuses available")
+
+    # Fetch and display events
+    if include_events:
+        diagnostics.append("\nRecent Pod Events:")
+        try:
+            # Get events for this pod
+            events = Event.list(namespace=pod_namespace)
+            pod_events = []
+
+            # Filter events for this specific pod
+            for event in events:
+                involved_object = event.raw.get("involvedObject", {})
+                if (
+                    involved_object.get("name") == pod_name
+                    and involved_object.get("namespace") == pod_namespace
+                ):
+                    pod_events.append(event)
+
+            if pod_events:
+                # Sort events by timestamp (most recent first)
+                pod_events.sort(
+                    key=lambda e: e.raw.get(
+                        "lastTimestamp", e.raw.get("firstTimestamp", "")
+                    ),
+                    reverse=True,
+                )
+
+                # Display last 10 events
+                for event in pod_events[:10]:
+                    event_type = event.raw.get("type", "Unknown")
+                    reason = event.raw.get("reason", "Unknown")
+                    message = event.raw.get("message", "No message")
+
+                    # Calculate time ago
+                    timestamp_str = event.raw.get(
+                        "lastTimestamp", event.raw.get("firstTimestamp", "")
+                    )
+                    if timestamp_str:
+                        try:
+                            # Parse ISO format timestamp
+                            timestamp = datetime.datetime.fromisoformat(
+                                timestamp_str.replace("Z", "+00:00")
+                            )
+                            now = datetime.datetime.now(datetime.timezone.utc)
+                            time_ago = now - timestamp
+                            time_ago_str = f"{int(time_ago.total_seconds())}s ago"
+                        except Exception:
+                            time_ago_str = "Unknown time"
+                    else:
+                        time_ago_str = "Unknown time"
+
+                    # Format event with appropriate emoji
+                    emoji = "⚠️ " if event_type == "Warning" else "ℹ️ "
+                    diagnostics.append(
+                        f"  {emoji}[{time_ago_str}] {event_type} - {reason}: {message[:100]}"
+                    )
+            else:
+                diagnostics.append("  No events found for this pod")
+
+        except Exception as e:
+            diagnostics.append(f"  ⚠️  Failed to fetch events: {e}")
+
+    return "\n".join(diagnostics)
