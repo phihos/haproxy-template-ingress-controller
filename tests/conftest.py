@@ -324,6 +324,9 @@ def kind_cluster(request):
 
     cluster = yield
     if cluster is SetupToken.FIRST:
+        start_time = time.time()
+        logger.info(f"Setting up kind cluster '{name}'...")
+
         cluster = KindCluster(
             name,
             Path(kubeconfig) if kubeconfig else None,
@@ -384,10 +387,16 @@ def kind_cluster(request):
         config_path = request.config.rootpath / "kind-config-test.yaml"
         cluster.create(config_file=config_path)
 
+        setup_duration = time.time() - start_time
+        logger.info(f"Kind cluster setup completed in {setup_duration:.1f}s")
+
     token: CleanupToken = yield cluster
 
     if token is CleanupToken.LAST and not keep:
+        cleanup_start = time.time()
         cluster.delete()
+        cleanup_duration = time.time() - cleanup_start
+        logger.info(f"Kind cluster cleanup completed in {cleanup_duration:.1f}s")
 
 
 @pytest.fixture(scope="session")
@@ -409,6 +418,7 @@ def container_image(docker_client, project_root_path, kind_cluster, request):
 
     Builds either production or coverage image based on --coverage flag,
     loads it into the Kind cluster, and shares across test sessions.
+    Uses Buildx with caching when available for improved performance.
     """
     use_coverage = request.config.getoption("--coverage")
     image_name = CONTAINER_IMAGE_NAME_COVERAGE if use_coverage else CONTAINER_IMAGE_NAME
@@ -416,13 +426,79 @@ def container_image(docker_client, project_root_path, kind_cluster, request):
 
     image = yield
     if image is SetupToken.FIRST:
-        image = docker_client.build(
-            context_path=str(project_root_path),
-            tags=[image_name],
-            target=target,
-            output={"type": "docker"},
+        start_time = time.time()
+
+        # Check if we're running in CI with buildx available
+        use_buildx = (
+            os.environ.get("DOCKER_BUILDKIT") == "1" or os.environ.get("CI") == "true"
         )
+
+        if use_buildx:
+            logger.info(f"Building image with Buildx (target: {target})")
+            try:
+                # Try to use buildx with caching
+                cache_args = []
+
+                # In GitHub Actions, use type=gha cache
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    cache_args.extend(
+                        [
+                            "--cache-from",
+                            f"type=gha,scope={target}",
+                            "--cache-to",
+                            f"type=gha,mode=max,scope={target}",
+                        ]
+                    )
+                else:
+                    # For local development, use local cache
+                    cache_dir = "/tmp/haproxy-template-ic-test-cache"
+                    cache_args.extend(
+                        [
+                            "--cache-from",
+                            f"type=local,src={cache_dir}",
+                            "--cache-to",
+                            f"type=local,dest={cache_dir}",
+                        ]
+                    )
+
+                # Build with buildx
+                image = docker_client.buildx.build(
+                    context_path=str(project_root_path),
+                    tags=[image_name],
+                    target=target,
+                    cache_from=cache_args[1] if cache_args else None,
+                    cache_to=cache_args[3] if len(cache_args) > 2 else None,
+                    load=True,  # Load into docker daemon for kind
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Buildx build failed, falling back to regular build: {e}"
+                )
+                # Fall back to regular build
+                image = docker_client.build(
+                    context_path=str(project_root_path),
+                    tags=[image_name],
+                    target=target,
+                    output={"type": "docker"},
+                )
+        else:
+            logger.info(f"Building image with standard Docker (target: {target})")
+            image = docker_client.build(
+                context_path=str(project_root_path),
+                tags=[image_name],
+                target=target,
+                output={"type": "docker"},
+            )
+
+        build_duration = time.time() - start_time
+        logger.info(f"Docker build completed in {build_duration:.1f}s")
+
+        # Load image into kind cluster
+        load_start = time.time()
         kind_cluster.load_docker_image(image_name)
+        load_duration = time.time() - load_start
+        logger.info(f"Image loaded into kind cluster in {load_duration:.1f}s")
+
     yield image
 
 

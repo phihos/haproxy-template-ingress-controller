@@ -280,18 +280,75 @@ def shared_docker_images(request, docker_client, docker_cleanup_session):
         # Get paths to Dockerfiles
         fixtures_dir = Path(__file__).parent / "fixtures" / "dataplane"
 
-        # Build Docker images
-        print("📦 Building HAProxy image...")
-        docker_client.build(
-            context_path=str(fixtures_dir / "haproxy"),
-            tags=["test-haproxy:integration"],
+        # Build Docker images with buildx if available
+        use_buildx = (
+            os.environ.get("DOCKER_BUILDKIT") == "1" or os.environ.get("CI") == "true"
         )
 
-        print("📦 Building Dataplane API image...")
-        docker_client.build(
-            context_path=str(fixtures_dir / "dataplane"),
-            tags=["test-dataplane:integration"],
-        )
+        if use_buildx:
+            print("📦 Building HAProxy image with Buildx...")
+            try:
+                # Configure cache based on environment
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    docker_client.buildx.build(
+                        context_path=str(fixtures_dir / "haproxy"),
+                        tags=["test-haproxy:integration"],
+                        cache_from="type=gha,scope=haproxy-test",
+                        cache_to="type=gha,mode=max,scope=haproxy-test",
+                        load=True,
+                    )
+                else:
+                    docker_client.buildx.build(
+                        context_path=str(fixtures_dir / "haproxy"),
+                        tags=["test-haproxy:integration"],
+                        cache_from="type=local,src=/tmp/haproxy-test-cache",
+                        cache_to="type=local,dest=/tmp/haproxy-test-cache",
+                        load=True,
+                    )
+            except Exception as e:
+                print(f"⚠️  Buildx failed, using standard build: {e}")
+                docker_client.build(
+                    context_path=str(fixtures_dir / "haproxy"),
+                    tags=["test-haproxy:integration"],
+                )
+
+            print("📦 Building Dataplane API image with Buildx...")
+            try:
+                # Configure cache based on environment
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    docker_client.buildx.build(
+                        context_path=str(fixtures_dir / "dataplane"),
+                        tags=["test-dataplane:integration"],
+                        cache_from="type=gha,scope=dataplane-test",
+                        cache_to="type=gha,mode=max,scope=dataplane-test",
+                        load=True,
+                    )
+                else:
+                    docker_client.buildx.build(
+                        context_path=str(fixtures_dir / "dataplane"),
+                        tags=["test-dataplane:integration"],
+                        cache_from="type=local,src=/tmp/dataplane-test-cache",
+                        cache_to="type=local,dest=/tmp/dataplane-test-cache",
+                        load=True,
+                    )
+            except Exception as e:
+                print(f"⚠️  Buildx failed, using standard build: {e}")
+                docker_client.build(
+                    context_path=str(fixtures_dir / "dataplane"),
+                    tags=["test-dataplane:integration"],
+                )
+        else:
+            print("📦 Building HAProxy image...")
+            docker_client.build(
+                context_path=str(fixtures_dir / "haproxy"),
+                tags=["test-haproxy:integration"],
+            )
+
+            print("📦 Building Dataplane API image...")
+            docker_client.build(
+                context_path=str(fixtures_dir / "dataplane"),
+                tags=["test-dataplane:integration"],
+            )
 
         images = {
             "haproxy": "test-haproxy:integration",

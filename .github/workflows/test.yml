@@ -182,7 +182,21 @@ jobs:
             tests/integration/fixtures/dataplane/dataplane
 
       - name: Run acceptance tests
+        env:
+          DOCKER_BUILDKIT: "1"
+          CI: "true"
         run: |
+          # Show Docker info for debugging
+          echo "Docker version:"
+          docker version
+          echo ""
+          echo "Buildx version:"
+          docker buildx version
+          echo ""
+          echo "Active builder:"
+          docker buildx ls
+          echo ""
+          
           uv run --frozen pytest tests -s -m "acceptance" \
             --cluster-name haproxy-template-ic-test \
             --coverage \
