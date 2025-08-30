@@ -26,16 +26,19 @@ custom validators, providing better maintainability and standardized error messa
 """
 
 from typing import Annotated, Any, Dict, Iterator, List, Optional, Tuple, TYPE_CHECKING
+import asyncio
 import logging
 import os
 import unicodedata
 from collections import defaultdict
 from enum import Enum
 
+import xxhash
+
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic.types import StringConstraints
 
-from haproxy_template_ic.constants import DEFAULT_DATAPLANE_PORT, DEFAULT_HEALTH_PORT
+from haproxy_template_ic.constants import DEFAULT_HEALTH_PORT
 from haproxy_template_ic.field_filter import validate_ignore_fields
 from haproxy_template_ic.kopf_utils import normalize_kopf_resource
 
@@ -215,6 +218,79 @@ class TemplateRenderingConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class OperatorConfig(BaseModel):
+    """Operator runtime configuration."""
+
+    healthz_port: int = Field(
+        default=8080, ge=1, le=65535, description="Port for health check endpoint"
+    )
+    metrics_port: int = Field(
+        default=9090, ge=1, le=65535, description="Port for Prometheus metrics endpoint"
+    )
+    socket_path: str = Field(
+        default="/run/haproxy-template-ic/management.sock",
+        description="Path for management socket to expose internal state",
+    )
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class LoggingConfig(BaseModel):
+    """Logging configuration."""
+
+    verbose: int = Field(
+        default=0, ge=0, le=2, description="Log level: 0=WARNING, 1=INFO, 2=DEBUG"
+    )
+    structured: bool = Field(
+        default=False, description="Enable structured JSON logging output"
+    )
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class TracingConfig(BaseModel):
+    """Distributed tracing configuration."""
+
+    enabled: bool = Field(
+        default=False, description="Enable distributed tracing with OpenTelemetry"
+    )
+    service_name: str = Field(
+        default="haproxy-template-ic", description="Service name for tracing"
+    )
+    service_version: str = Field(
+        default="",
+        description="Service version for tracing (empty uses application version)",
+    )
+    jaeger_endpoint: str = Field(
+        default="",
+        description="Jaeger collector endpoint (e.g., 'jaeger-collector:14268')",
+    )
+    sample_rate: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Tracing sample rate (0.0 to 1.0)"
+    )
+    console_export: bool = Field(
+        default=False, description="Export traces to console for debugging"
+    )
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class ValidationConfig(BaseModel):
+    """Validation sidecar configuration."""
+
+    dataplane_host: str = Field(
+        default="localhost", description="Host for validation dataplane API endpoint"
+    )
+    dataplane_port: int = Field(
+        default=5555,
+        ge=1,
+        le=65535,
+        description="Port for validation dataplane API endpoint",
+    )
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 class Config(BaseModel):
     """Root configuration for HAProxy Template IC."""
 
@@ -260,15 +336,29 @@ class Config(BaseModel):
         default="/etc/haproxy/general",
         description="Directory for general files in Dataplane API",
     )
-    validation_dataplane_url: str = Field(
-        default=f"http://localhost:{DEFAULT_DATAPLANE_PORT}",
-        description="URL for validation sidecar Dataplane API",
-    )
 
     # Template rendering configuration
     template_rendering: TemplateRenderingConfig = Field(
         default_factory=TemplateRenderingConfig,
         description="Template rendering timing configuration",
+    )
+
+    # Grouped operator configuration
+    operator: OperatorConfig = Field(
+        default_factory=OperatorConfig,
+        description="Operator runtime configuration",
+    )
+    logging: LoggingConfig = Field(
+        default_factory=LoggingConfig,
+        description="Logging configuration",
+    )
+    tracing: TracingConfig = Field(
+        default_factory=TracingConfig,
+        description="Distributed tracing configuration",
+    )
+    validation: ValidationConfig = Field(
+        default_factory=ValidationConfig,
+        description="Validation sidecar configuration",
     )
 
     @field_validator("template_snippets")
@@ -377,6 +467,28 @@ class RenderedContent(BaseModel):
         if v in (".", ".."):
             raise ValueError(f"Filename cannot be a directory name: {v}")
         return v
+
+    class Config:
+        frozen = True
+
+
+class TriggerContext(BaseModel):
+    """Context information for template rendering triggers."""
+
+    trigger_type: str = Field(
+        ...,
+        description="Type of trigger: 'resource_changes', 'pod_changes', or 'periodic_refresh'",
+    )
+    pod_changed: bool = Field(
+        default=False, description="Whether HAProxy pod changes triggered this render"
+    )
+
+    @property
+    def force_sync(self) -> bool:
+        """Whether this trigger should force synchronization regardless of content changes."""
+        return (
+            self.trigger_type in ("pod_changes", "periodic_refresh") or self.pod_changed
+        )
 
     class Config:
         frozen = True
@@ -589,6 +701,11 @@ class HAProxyConfigContext(BaseModel):
     _cached_files: Optional[List[RenderedContent]] = PrivateAttr(default=None)
     _cache_version: int = PrivateAttr(default=0)
 
+    # Private attributes for change detection
+    _last_content_hash: Optional[str] = PrivateAttr(default=None)
+    _last_haproxy_pods_hash: Optional[str] = PrivateAttr(default=None)
+    _hash_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+
     def get_content_by_filename(self, filename: str) -> Optional[RenderedContent]:
         """Get any rendered content by its filename (maps, certificates, files)."""
         return next(
@@ -635,6 +752,99 @@ class HAProxyConfigContext(BaseModel):
             ]
         return self._cached_files
 
+    def compute_all_content_hash(self) -> str:
+        """Compute xxHash64 of all rendered content for change detection.
+
+        Combines hashes of rendered config and all rendered content (maps, certificates, files).
+
+        Returns:
+            Hash string in format "xxh64:<hex_hash>"
+        """
+        # Collect all content to hash
+        content_parts = []
+
+        # Add rendered config content
+        if self.rendered_config:
+            content_parts.append(self.rendered_config.content)
+
+        # Add all rendered content sorted by filename for deterministic hashing
+        for content in sorted(
+            self.rendered_content, key=lambda x: (x.content_type, x.filename)
+        ):
+            content_parts.append(
+                f"{content.content_type}:{content.filename}:{content.content}"
+            )
+
+        # Combine all content with separator
+        combined_content = "\n---\n".join(content_parts)
+
+        # Compute hash
+        hash_value = xxhash.xxh64(combined_content.encode("utf-8")).hexdigest()
+        return f"xxh64:{hash_value}"
+
+    def compute_haproxy_pods_hash(self, haproxy_pods_collection) -> str:
+        """Compute xxHash64 of HAProxy pod state for change detection.
+
+        Args:
+            haproxy_pods_collection: IndexedResourceCollection of HAProxy pods
+
+        Returns:
+            Hash string in format "xxh64:<hex_hash>"
+        """
+        if not haproxy_pods_collection:
+            return "xxh64:empty"
+
+        # Collect pod identifiers (namespace, name, pod_ip)
+        pod_identifiers = []
+        for key, pod in haproxy_pods_collection.items():
+            namespace = pod.get("metadata", {}).get("namespace", "")
+            name = pod.get("metadata", {}).get("name", "")
+            pod_ip = pod.get("status", {}).get("podIP", "")
+            pod_identifiers.append(f"{namespace}:{name}:{pod_ip}")
+
+        # Sort for deterministic hashing
+        pod_identifiers.sort()
+
+        # Combine and hash
+        combined_pods = "\n".join(pod_identifiers)
+        hash_value = xxhash.xxh64(combined_pods.encode("utf-8")).hexdigest()
+        return f"xxh64:{hash_value}"
+
+    async def has_content_changed(self) -> bool:
+        """Check if rendered content has changed since last check (thread-safe).
+
+        Returns:
+            True if content changed or this is the first check
+        """
+        async with self._hash_lock:
+            current_hash = self.compute_all_content_hash()
+            if (
+                self._last_content_hash is None
+                or self._last_content_hash != current_hash
+            ):
+                self._last_content_hash = current_hash
+                return True
+            return False
+
+    async def have_pods_changed(self, haproxy_pods_collection) -> bool:
+        """Check if HAProxy pods have changed since last check (thread-safe).
+
+        Args:
+            haproxy_pods_collection: IndexedResourceCollection of HAProxy pods
+
+        Returns:
+            True if pods changed or this is the first check
+        """
+        async with self._hash_lock:
+            current_hash = self.compute_haproxy_pods_hash(haproxy_pods_collection)
+            if (
+                self._last_haproxy_pods_hash is None
+                or self._last_haproxy_pods_hash != current_hash
+            ):
+                self._last_haproxy_pods_hash = current_hash
+                return True
+            return False
+
     class Config:
         # This is mutable during rendering process
         validate_assignment = True
@@ -645,6 +855,14 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
     """
     Create Config object from dictionary with automatic validation.
     """
+    import os
+
+    # Apply environment variable overrides for testing
+    if socket_path := os.environ.get("SOCKET_PATH"):
+        if "operator" not in data:
+            data["operator"] = {}
+        data["operator"]["socket_path"] = socket_path
+
     try:
         # Use Pydantic parsing for validation
         config = Config.model_validate(data)

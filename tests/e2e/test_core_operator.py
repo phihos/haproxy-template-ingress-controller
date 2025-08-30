@@ -18,7 +18,7 @@ from tests.e2e.utils import (
 
 
 @pytest.mark.acceptance
-def test_basic_init(simple_controller, collect_coverage):
+def test_basic_init(operator, collect_coverage):
     """Test that the operator initializes successfully.
 
     This test verifies:
@@ -26,10 +26,10 @@ def test_basic_init(simple_controller, collect_coverage):
     2. The management socket becomes available
     3. Basic state can be queried via the socket
     """
-    wait_for_operator_ready(simple_controller)
+    wait_for_operator_ready(operator)
 
     # Verify we can query the operator state and config is loaded correctly
-    response = send_socket_command(simple_controller, "dump all")
+    response = send_socket_command(operator, "dump all")
     verify_response_has_structure(response, ["config", "metadata"])
 
     expected_metadata = {"configmap_name": "haproxy-template-ic-config"}

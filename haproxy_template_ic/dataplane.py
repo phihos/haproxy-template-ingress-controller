@@ -16,8 +16,10 @@ import io
 import logging
 import re
 import time
-from datetime import datetime, UTC
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -26,6 +28,224 @@ import xxhash
 if TYPE_CHECKING:
     from haproxy_template_ic.config_models import IndexedResourceCollection
     from haproxy_template_ic.credentials import Credentials
+
+# HAProxy Dataplane API v3 client
+from haproxy_dataplane_v3 import AuthenticatedClient, errors
+
+# Main configuration APIs
+from haproxy_dataplane_v3.api.acl import (
+    create_acl_backend,
+    create_acl_frontend,
+    delete_acl_backend,
+    delete_acl_frontend,
+    get_all_acl_backend,
+    get_all_acl_frontend,
+    replace_acl_backend,
+    replace_acl_frontend,
+)
+from haproxy_dataplane_v3.api.backend import (
+    create_backend,
+    delete_backend,
+    get_backends,
+    replace_backend,
+)
+from haproxy_dataplane_v3.api.backend_switching_rule import (
+    create_backend_switching_rule,
+    delete_backend_switching_rule,
+    get_backend_switching_rules,
+    replace_backend_switching_rule,
+)
+
+# Core section APIs
+from haproxy_dataplane_v3.api.bind import (
+    create_bind_frontend,
+    delete_bind_frontend,
+    get_all_bind_frontend,
+    replace_bind_frontend,
+)
+from haproxy_dataplane_v3.api.cache import (
+    get_caches,
+)
+from haproxy_dataplane_v3.api.configuration import (
+    get_configuration_version,
+    get_ha_proxy_configuration,
+)
+from haproxy_dataplane_v3.api.defaults import (
+    get_defaults_sections,
+    replace_defaults_section,
+)
+from haproxy_dataplane_v3.api.fcgi_app import (
+    get_fcgi_apps,
+)
+from haproxy_dataplane_v3.api.filter_ import (
+    create_filter_backend,
+    create_filter_frontend,
+    delete_filter_backend,
+    delete_filter_frontend,
+    get_all_filter_backend,
+    get_all_filter_frontend,
+    replace_filter_backend,
+    replace_filter_frontend,
+)
+from haproxy_dataplane_v3.api.frontend import (
+    create_frontend,
+    delete_frontend,
+    get_frontends,
+    replace_frontend,
+)
+from haproxy_dataplane_v3.api.global_ import get_global, replace_global
+from haproxy_dataplane_v3.api.http_after_response_rule import (
+    get_all_http_after_response_rule_backend,
+    get_all_http_after_response_rule_frontend,
+)
+from haproxy_dataplane_v3.api.http_check import (
+    get_all_http_check_backend,
+)
+from haproxy_dataplane_v3.api.http_error_rule import (
+    get_all_http_error_rule_backend,
+    get_all_http_error_rule_frontend,
+)
+from haproxy_dataplane_v3.api.http_errors import (
+    get_http_errors_sections,
+)
+from haproxy_dataplane_v3.api.http_request_rule import (
+    create_http_request_rule_backend,
+    create_http_request_rule_frontend,
+    delete_http_request_rule_backend,
+    delete_http_request_rule_frontend,
+    get_all_http_request_rule_backend,
+    get_all_http_request_rule_frontend,
+    replace_http_request_rule_backend,
+    replace_http_request_rule_frontend,
+)
+from haproxy_dataplane_v3.api.http_response_rule import (
+    create_http_response_rule_backend,
+    create_http_response_rule_frontend,
+    delete_http_response_rule_backend,
+    delete_http_response_rule_frontend,
+    get_all_http_response_rule_backend,
+    get_all_http_response_rule_frontend,
+    replace_http_response_rule_backend,
+    replace_http_response_rule_frontend,
+)
+from haproxy_dataplane_v3.api.information import get_info
+
+# Advanced section APIs
+from haproxy_dataplane_v3.api.log_forward import (
+    get_log_forwards,
+)
+from haproxy_dataplane_v3.api.log_target import (
+    create_log_target_backend,
+    create_log_target_frontend,
+    delete_log_target_backend,
+    delete_log_target_frontend,
+    get_all_log_target_backend,
+    get_all_log_target_frontend,
+    get_all_log_target_global,
+    replace_log_target_backend,
+    replace_log_target_frontend,
+)
+from haproxy_dataplane_v3.api.mailers import (
+    get_mailers_sections,
+)
+from haproxy_dataplane_v3.api.peer import (
+    get_peer_sections,
+)
+from haproxy_dataplane_v3.api.process_manager import (
+    get_programs,
+)
+from haproxy_dataplane_v3.api.quic_initial_rule import (
+    get_all_quic_initial_rule_frontend,
+)
+from haproxy_dataplane_v3.api.resolver import (
+    get_resolvers,
+)
+from haproxy_dataplane_v3.api.ring import (
+    get_rings,
+)
+from haproxy_dataplane_v3.api.server import (
+    create_server_backend,
+    delete_server_backend,
+    get_all_server_backend,
+    replace_server_backend,
+)
+from haproxy_dataplane_v3.api.server_switching_rule import (
+    create_server_switching_rule,
+    delete_server_switching_rule,
+    get_server_switching_rules,
+    replace_server_switching_rule,
+)
+from haproxy_dataplane_v3.api.stick_rule import (
+    create_stick_rule,
+    delete_stick_rule,
+    get_stick_rules,
+    replace_stick_rule,
+)
+from haproxy_dataplane_v3.api.storage import (
+    create_storage_general_file,
+    create_storage_map_file,
+    create_storage_ssl_certificate,
+    delete_storage_general_file,
+    delete_storage_map,
+    delete_storage_ssl_certificate,
+    get_all_storage_general_files,
+    get_all_storage_map_files,
+    get_all_storage_ssl_certificates,
+    get_one_storage_general_file,
+    get_one_storage_map,
+    get_one_storage_ssl_certificate,
+    replace_storage_general_file,
+    replace_storage_map_file,
+    replace_storage_ssl_certificate,
+)
+from haproxy_dataplane_v3.api.tcp_check import (
+    get_all_tcp_check_backend,
+)
+from haproxy_dataplane_v3.api.tcp_request_rule import (
+    create_tcp_request_rule_backend,
+    create_tcp_request_rule_frontend,
+    delete_tcp_request_rule_backend,
+    delete_tcp_request_rule_frontend,
+    get_all_tcp_request_rule_backend,
+    get_all_tcp_request_rule_frontend,
+    replace_tcp_request_rule_backend,
+    replace_tcp_request_rule_frontend,
+)
+from haproxy_dataplane_v3.api.tcp_response_rule import (
+    create_tcp_response_rule_backend,
+    delete_tcp_response_rule_backend,
+    get_all_tcp_response_rule_backend,
+    replace_tcp_response_rule_backend,
+)
+from haproxy_dataplane_v3.api.transactions import (
+    commit_transaction,
+    delete_transaction,
+    start_transaction,
+)
+from haproxy_dataplane_v3.api.userlist import (
+    create_userlist,
+    delete_userlist,
+    get_userlists,
+)
+from haproxy_dataplane_v3.models.create_storage_general_file_body import (
+    CreateStorageGeneralFileBody,
+)
+from haproxy_dataplane_v3.models.create_storage_map_file_body import (
+    CreateStorageMapFileBody,
+)
+from haproxy_dataplane_v3.models.create_storage_ssl_certificate_body import (
+    CreateStorageSSLCertificateBody,
+)
+from haproxy_dataplane_v3.models.replace_storage_general_file_body import (
+    ReplaceStorageGeneralFileBody,
+)
+from haproxy_dataplane_v3.types import File
+from tenacity import (
+    AsyncRetrying,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 
 from haproxy_template_ic.config_models import HAProxyConfigContext
 from haproxy_template_ic.constants import (
@@ -37,102 +257,354 @@ from haproxy_template_ic.constants import (
     MAX_RETRY_WAIT_SECONDS,
 )
 from haproxy_template_ic.metrics import get_metrics_collector
-from tenacity import (
-    AsyncRetrying,
-    stop_after_attempt,
-    wait_exponential_jitter,
-    retry_if_exception,
-)
 from haproxy_template_ic.tracing import (
-    trace_dataplane_operation,
     add_span_attributes,
     record_span_event,
     set_span_error,
+    trace_dataplane_operation,
 )
-
-# Import HAProxy Dataplane API v3 client generated with openapi-python-client
-from haproxy_dataplane_v3 import AuthenticatedClient
-from haproxy_dataplane_v3.api.information import get_info
-from haproxy_dataplane_v3.api.configuration import (
-    get_configuration_version,
-    get_ha_proxy_configuration,
-)
-from haproxy_dataplane_v3.api.backend import (
-    get_backends,
-)
-from haproxy_dataplane_v3.api.frontend import (
-    get_frontends,
-)
-from haproxy_dataplane_v3.api.global_ import get_global
-from haproxy_dataplane_v3.api.defaults import (
-    get_defaults_sections,
-)
-from haproxy_dataplane_v3.api.userlist import (
-    get_userlists,
-)
-from haproxy_dataplane_v3.api.cache import (
-    get_caches,
-)
-from haproxy_dataplane_v3.api.mailers import (
-    get_mailers_sections,
-)
-from haproxy_dataplane_v3.api.resolver import (
-    get_resolvers,
-)
-from haproxy_dataplane_v3.api.peer import (
-    get_peer_sections,
-)
-from haproxy_dataplane_v3.api.fcgi_app import (
-    get_fcgi_apps,
-)
-from haproxy_dataplane_v3.api.http_errors import (
-    get_http_errors_sections,
-)
-from haproxy_dataplane_v3.api.ring import (
-    get_rings,
-)
-from haproxy_dataplane_v3.api.log_forward import (
-    get_log_forwards,
-)
-from haproxy_dataplane_v3.api.process_manager import (
-    get_programs,
-)
-from haproxy_dataplane_v3.api.storage import (
-    get_all_storage_map_files,
-    get_all_storage_ssl_certificates,
-    create_storage_map_file,
-    delete_storage_map,
-    create_storage_ssl_certificate,
-    delete_storage_ssl_certificate,
-    get_all_storage_general_files,
-    create_storage_general_file,
-    delete_storage_general_file,
-    replace_storage_general_file,
-    replace_storage_map_file,
-    replace_storage_ssl_certificate,
-    get_one_storage_map,
-    get_one_storage_ssl_certificate,
-    get_one_storage_general_file,
-)
-from haproxy_dataplane_v3.models.create_storage_map_file_body import (
-    CreateStorageMapFileBody,
-)
-from haproxy_dataplane_v3.models.create_storage_ssl_certificate_body import (
-    CreateStorageSSLCertificateBody,
-)
-from haproxy_dataplane_v3.models.create_storage_general_file_body import (
-    CreateStorageGeneralFileBody,
-)
-from haproxy_dataplane_v3.models.replace_storage_general_file_body import (
-    ReplaceStorageGeneralFileBody,
-)
-from haproxy_dataplane_v3.types import File
-from haproxy_dataplane_v3 import errors
 
 logger = logging.getLogger(__name__)
 
+
+def _to_dict_safe(obj: Any) -> Any:
+    """Safely convert an object to dictionary, handling serialization errors gracefully."""
+    try:
+        return obj.to_dict() if hasattr(obj, "to_dict") else obj
+    except Exception as e:
+        logger.debug(f"Failed to serialize object: {e}")
+        return {
+            "__serialization_error__": str(e),
+            "__type__": type(obj).__name__,
+        }
+
+
+def _check_early_exit_condition(changes: List[str], max_changes: int) -> bool:
+    """Check if early exit condition is met for comparison operations.
+
+    Args:
+        changes: List of changes detected so far
+        max_changes: Maximum number of changes before early exit
+
+    Returns:
+        True if early exit should be triggered
+    """
+    if len(changes) >= max_changes:
+        changes.append(f"... and more (stopped after {max_changes} changes)")
+        return True
+    return False
+
+
+def _log_fetch_error(resource_type: str, identifier: str, error: Exception) -> None:
+    """Log a debug message for resource fetch failures.
+
+    Args:
+        resource_type: Type of resource being fetched (e.g., "map", "certificate")
+        identifier: Resource identifier (name, ID, etc.)
+        error: The exception that occurred
+    """
+    logger.debug(f"Could not fetch {resource_type} {identifier}: {error}")
+
+
+async def _get_configuration_version(client: Any) -> Optional[int]:
+    """Get the current HAProxy configuration version.
+
+    Args:
+        client: The dataplane API client
+
+    Returns:
+        Configuration version number or None if failed to fetch
+    """
+    try:
+        return await get_configuration_version.asyncio(client=client)
+    except Exception:
+        # Silently return None for version fetch failures
+        return None
+
+
+async def _fetch_with_metrics(
+    operation_name: str,
+    fetch_func,
+    client: Any,
+    metrics,
+    default_value: Optional[Any] = None,
+) -> Any:
+    """Fetch configuration data with metrics timing.
+
+    Args:
+        operation_name: Name for metrics tracking
+        fetch_func: Async function to call for fetching data
+        client: Dataplane API client
+        metrics: Metrics collector instance
+        default_value: Value to return if fetch_func returns None/empty
+
+    Returns:
+        Result from fetch_func or default_value if result is falsy
+    """
+    with metrics.time_dataplane_api_operation(operation_name):
+        return await fetch_func(client=client) or default_value
+
+
+def handle_dataplane_errors(operation_name: Optional[str] = None):
+    """Decorator to standardize error handling for dataplane operations.
+
+    Automatically wraps exceptions in DataplaneAPIError with consistent context,
+    records metrics and tracing events, and preserves error chaining.
+
+    Args:
+        operation_name: Name of the operation for error context. If None, uses function name.
+    """
+
+    def decorator(func):
+        import functools
+
+        @functools.wraps(func)
+        async def async_wrapper(self, *args, **kwargs):
+            op_name = operation_name or func.__name__
+            metrics = get_metrics_collector()
+
+            try:
+                return await func(self, *args, **kwargs)
+            except ValidationError:
+                # Re-raise ValidationError without wrapping
+                raise
+            except DataplaneAPIError:
+                # Re-raise DataplaneAPIError without wrapping
+                raise
+            except errors.UnexpectedStatus as e:
+                metrics.record_dataplane_api_request(op_name, "error")
+                record_span_event(f"{op_name}_failed", {"error": str(e)})
+                set_span_error(e, f"Dataplane API error in {op_name}")
+                raise DataplaneAPIError(
+                    f"API error in {op_name}: {e}",
+                    endpoint=getattr(self, "base_url", "unknown"),
+                    operation=op_name,
+                    original_error=e,
+                ) from e
+            except (ConnectionError, TimeoutError, OSError, httpx.RequestError) as e:
+                metrics.record_dataplane_api_request(op_name, "error")
+                record_span_event(f"{op_name}_failed", {"error": str(e)})
+                set_span_error(e, f"Network error in {op_name}")
+                raise DataplaneAPIError(
+                    f"Network error in {op_name}: {e}",
+                    endpoint=getattr(self, "base_url", "unknown"),
+                    operation=op_name,
+                    original_error=e,
+                ) from e
+            except Exception as e:
+                metrics.record_dataplane_api_request(op_name, "error")
+                record_span_event(f"{op_name}_failed", {"error": str(e)})
+                set_span_error(e, f"Unexpected error in {op_name}")
+                raise DataplaneAPIError(
+                    f"Unexpected error in {op_name}: {e}",
+                    endpoint=getattr(self, "base_url", "unknown"),
+                    operation=op_name,
+                    original_error=e,
+                ) from e
+
+        @functools.wraps(func)
+        def sync_wrapper(self, *args, **kwargs):
+            op_name = operation_name or func.__name__
+            metrics = get_metrics_collector()
+
+            try:
+                return func(self, *args, **kwargs)
+            except ValidationError:
+                # Re-raise ValidationError without wrapping
+                raise
+            except DataplaneAPIError:
+                # Re-raise DataplaneAPIError without wrapping
+                raise
+            except errors.UnexpectedStatus as e:
+                metrics.record_dataplane_api_request(op_name, "error")
+                record_span_event(f"{op_name}_failed", {"error": str(e)})
+                set_span_error(e, f"Dataplane API error in {op_name}")
+                raise DataplaneAPIError(
+                    f"API error in {op_name}: {e}",
+                    endpoint=getattr(self, "base_url", "unknown"),
+                    operation=op_name,
+                    original_error=e,
+                ) from e
+            except (ConnectionError, TimeoutError, OSError, httpx.RequestError) as e:
+                metrics.record_dataplane_api_request(op_name, "error")
+                record_span_event(f"{op_name}_failed", {"error": str(e)})
+                set_span_error(e, f"Network error in {op_name}")
+                raise DataplaneAPIError(
+                    f"Network error in {op_name}: {e}",
+                    endpoint=getattr(self, "base_url", "unknown"),
+                    operation=op_name,
+                    original_error=e,
+                ) from e
+            except Exception as e:
+                metrics.record_dataplane_api_request(op_name, "error")
+                record_span_event(f"{op_name}_failed", {"error": str(e)})
+                set_span_error(e, f"Unexpected error in {op_name}")
+                raise DataplaneAPIError(
+                    f"Unexpected error in {op_name}: {e}",
+                    endpoint=getattr(self, "base_url", "unknown"),
+                    operation=op_name,
+                    original_error=e,
+                ) from e
+
+        # Return the appropriate wrapper based on whether the function is async
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        else:
+            return sync_wrapper
+
+    return decorator
+
+
 # Constants for configuration comparison performance
 MAX_CONFIG_COMPARISON_CHANGES = 10  # Stop comparison after finding this many changes
+
+
+class ConfigChangeType(Enum):
+    """Types of configuration changes that can be applied."""
+
+    CREATE = "create"
+    UPDATE = "update"
+    DELETE = "delete"
+
+
+class ConfigSectionType(Enum):
+    """Types of configuration sections supported for structured updates."""
+
+    BACKEND = "backend"
+    FRONTEND = "frontend"
+    DEFAULTS = "defaults"
+    GLOBAL = "global"
+    USERLIST = "userlist"
+    CACHE = "cache"
+    MAILERS = "mailers"
+    RESOLVER = "resolver"
+    PEER = "peer"
+    FCGI_APP = "fcgi_app"
+    HTTP_ERRORS = "http_errors"
+    RING = "ring"
+    LOG_FORWARD = "log_forward"
+    PROGRAM = "program"
+
+
+class ConfigElementType(Enum):
+    """Types of nested configuration elements within sections."""
+
+    # Backend-specific elements
+    SERVER = "server"
+    SERVER_SWITCHING_RULE = "server_switching_rule"
+    STICK_RULE = "stick_rule"
+
+    # Frontend-specific elements
+    BIND = "bind"
+    BACKEND_SWITCHING_RULE = "backend_switching_rule"
+
+    # Common elements for frontends, backends, defaults
+    ACL = "acl"
+    HTTP_REQUEST_RULE = "http_request_rule"
+    HTTP_RESPONSE_RULE = "http_response_rule"
+    TCP_REQUEST_RULE = "tcp_request_rule"
+    TCP_RESPONSE_RULE = "tcp_response_rule"
+    FILTER = "filter"
+    LOG_TARGET = "log_target"
+
+    # Defaults-specific elements
+    ERROR_FILE = "error_file"
+
+
+@dataclass
+class ConfigChange:
+    """Represents a specific configuration change to be applied via dataplane API.
+
+    This class encapsulates all information needed to apply a granular configuration
+    change using the HAProxy Dataplane API's structured endpoints instead of the
+    raw configuration endpoint.
+
+    Attributes:
+        change_type: The type of change (CREATE, UPDATE, DELETE)
+        section_type: The type of configuration section being changed
+        section_name: The name/identifier of the specific section
+        new_config: The new configuration object (None for DELETE operations)
+        old_config: The old configuration object (None for CREATE operations)
+        section_index: For indexed sections like defaults, the section index (optional)
+        element_type: For nested elements within sections (optional)
+        element_index: For ordered elements like rules, the element index (optional)
+        element_id: For named elements within sections (optional)
+    """
+
+    change_type: ConfigChangeType
+    section_type: ConfigSectionType
+    section_name: str
+    new_config: Optional[Any] = None
+    old_config: Optional[Any] = None
+    section_index: Optional[int] = None
+    element_type: Optional[ConfigElementType] = None
+    element_index: Optional[int] = None
+    element_id: Optional[str] = None
+
+    def __str__(self) -> str:
+        """Return a human-readable description of the change."""
+        base_description = f"{self.section_type.value} {self.section_name}"
+
+        if self.element_type:
+            # This is a nested element change
+            element_id = (
+                self.element_id or f"[{self.element_index}]"
+                if self.element_index is not None
+                else ""
+            )
+            element_description = f"{self.element_type.value} {element_id}".strip()
+            base_description = f"{base_description}/{element_description}"
+
+        if self.change_type == ConfigChangeType.CREATE:
+            return f"create {base_description}"
+        elif self.change_type == ConfigChangeType.DELETE:
+            return f"remove {base_description}"
+        else:  # UPDATE
+            return f"modify {base_description}"
+
+    @classmethod
+    def create_section_change(
+        cls,
+        change_type: ConfigChangeType,
+        section_type: ConfigSectionType,
+        section_name: str,
+        new_config: Optional[Any] = None,
+        old_config: Optional[Any] = None,
+        section_index: Optional[int] = None,
+    ) -> "ConfigChange":
+        """Factory method for creating section-level configuration changes."""
+        return cls(
+            change_type=change_type,
+            section_type=section_type,
+            section_name=section_name,
+            new_config=new_config,
+            old_config=old_config,
+            section_index=section_index,
+        )
+
+    @classmethod
+    def create_element_change(
+        cls,
+        change_type: ConfigChangeType,
+        section_type: ConfigSectionType,
+        section_name: str,
+        element_type: ConfigElementType,
+        new_config: Optional[Any] = None,
+        old_config: Optional[Any] = None,
+        element_id: Optional[str] = None,
+        element_index: Optional[int] = None,
+    ) -> "ConfigChange":
+        """Factory method for creating element-level configuration changes."""
+        return cls(
+            change_type=change_type,
+            section_type=section_type,
+            section_name=section_name,
+            element_type=element_type,
+            new_config=new_config,
+            old_config=old_config,
+            element_id=element_id,
+            element_index=element_index,
+        )
 
 
 def compute_content_hash(content: str) -> str:
@@ -487,10 +959,296 @@ def get_production_urls_from_index(
             )
             url = f"http://{pod_ip}:{port}"
             urls.append(url)
-            logger.debug(f"🔍 Added production URL: {url}")
+            logger.debug(f"🔍 Found production URL: {url}")
 
     logger.debug(f"🔍 Found {len(urls)} production URLs: {urls}")
     return urls
+
+
+# Element handler registry for structured nested element deployment
+_ELEMENT_HANDLERS = {
+    ConfigElementType.SERVER: {
+        "sections": {ConfigSectionType.BACKEND},
+        "api": (create_server_backend, replace_server_backend, delete_server_backend),
+        "id_type": "name",
+    },
+    ConfigElementType.BIND: {
+        "sections": {ConfigSectionType.FRONTEND},
+        "api": (create_bind_frontend, replace_bind_frontend, delete_bind_frontend),
+        "id_type": "name",
+    },
+    ConfigElementType.HTTP_REQUEST_RULE: {
+        "api_map": {
+            ConfigSectionType.BACKEND: (
+                create_http_request_rule_backend,
+                replace_http_request_rule_backend,
+                delete_http_request_rule_backend,
+            ),
+            ConfigSectionType.FRONTEND: (
+                create_http_request_rule_frontend,
+                replace_http_request_rule_frontend,
+                delete_http_request_rule_frontend,
+            ),
+        },
+        "id_type": "index",
+    },
+    ConfigElementType.ACL: {
+        "api_map": {
+            ConfigSectionType.BACKEND: (
+                create_acl_backend,
+                replace_acl_backend,
+                delete_acl_backend,
+            ),
+            ConfigSectionType.FRONTEND: (
+                create_acl_frontend,
+                replace_acl_frontend,
+                delete_acl_frontend,
+            ),
+        },
+        "id_type": "index",
+    },
+    ConfigElementType.BACKEND_SWITCHING_RULE: {
+        "sections": {ConfigSectionType.FRONTEND},
+        "api": (
+            create_backend_switching_rule,
+            replace_backend_switching_rule,
+            delete_backend_switching_rule,
+        ),
+        "id_type": "index",
+    },
+    ConfigElementType.HTTP_RESPONSE_RULE: {
+        "api_map": {
+            ConfigSectionType.BACKEND: (
+                create_http_response_rule_backend,
+                replace_http_response_rule_backend,
+                delete_http_response_rule_backend,
+            ),
+            ConfigSectionType.FRONTEND: (
+                create_http_response_rule_frontend,
+                replace_http_response_rule_frontend,
+                delete_http_response_rule_frontend,
+            ),
+        },
+        "id_type": "index",
+    },
+    ConfigElementType.FILTER: {
+        "api_map": {
+            ConfigSectionType.BACKEND: (
+                create_filter_backend,
+                replace_filter_backend,
+                delete_filter_backend,
+            ),
+            ConfigSectionType.FRONTEND: (
+                create_filter_frontend,
+                replace_filter_frontend,
+                delete_filter_frontend,
+            ),
+        },
+        "id_type": "index",
+    },
+    ConfigElementType.TCP_REQUEST_RULE: {
+        "api_map": {
+            ConfigSectionType.BACKEND: (
+                create_tcp_request_rule_backend,
+                replace_tcp_request_rule_backend,
+                delete_tcp_request_rule_backend,
+            ),
+            ConfigSectionType.FRONTEND: (
+                create_tcp_request_rule_frontend,
+                replace_tcp_request_rule_frontend,
+                delete_tcp_request_rule_frontend,
+            ),
+        },
+        "id_type": "index",
+    },
+    ConfigElementType.STICK_RULE: {
+        "sections": {ConfigSectionType.BACKEND},
+        "api": (create_stick_rule, replace_stick_rule, delete_stick_rule),
+        "id_type": "index",
+    },
+    ConfigElementType.SERVER_SWITCHING_RULE: {
+        "sections": {ConfigSectionType.BACKEND},
+        "api": (
+            create_server_switching_rule,
+            replace_server_switching_rule,
+            delete_server_switching_rule,
+        ),
+        "id_type": "index",
+    },
+    ConfigElementType.TCP_RESPONSE_RULE: {
+        "api_map": {
+            ConfigSectionType.BACKEND: (
+                create_tcp_response_rule_backend,
+                replace_tcp_response_rule_backend,
+                delete_tcp_response_rule_backend,
+            ),
+        },
+        "id_type": "index",
+    },
+    ConfigElementType.LOG_TARGET: {
+        "api_map": {
+            ConfigSectionType.BACKEND: (
+                create_log_target_backend,
+                replace_log_target_backend,
+                delete_log_target_backend,
+            ),
+            ConfigSectionType.FRONTEND: (
+                create_log_target_frontend,
+                replace_log_target_frontend,
+                delete_log_target_frontend,
+            ),
+        },
+        "id_type": "index",
+    },
+}
+
+
+# Section handler registry for structured top-level section deployment
+_SECTION_HANDLERS = {
+    ConfigSectionType.BACKEND: {
+        "create": create_backend.asyncio,
+        "update": replace_backend.asyncio,
+        "delete": delete_backend.asyncio,
+        "id_field": "name",
+        "supports_create": True,
+        "supports_update": True,
+        "supports_delete": True,
+    },
+    ConfigSectionType.FRONTEND: {
+        "create": create_frontend.asyncio,
+        "update": replace_frontend.asyncio,
+        "delete": delete_frontend.asyncio,
+        "id_field": "name",
+        "supports_create": True,
+        "supports_update": True,
+        "supports_delete": True,
+    },
+    ConfigSectionType.DEFAULTS: {
+        "update": replace_defaults_section.asyncio,
+        "id_field": "name",
+        "supports_create": False,
+        "supports_update": True,
+        "supports_delete": False,
+        "full_section": True,  # Use full_section=True for defaults
+    },
+    ConfigSectionType.GLOBAL: {
+        "update": replace_global.asyncio,
+        "id_field": None,  # Global section doesn't have a name
+        "supports_create": True,  # CREATE is treated as UPDATE
+        "supports_update": True,
+        "supports_delete": False,
+    },
+    ConfigSectionType.USERLIST: {
+        "create": create_userlist.asyncio,
+        "delete": delete_userlist.asyncio,
+        "id_field": "name",
+        "supports_create": True,
+        "supports_update": True,  # UPDATE handled as DELETE+CREATE
+        "supports_delete": True,
+        "update_strategy": "delete_create",  # No replace endpoint
+    },
+}
+
+
+# Section elements registry - defines which nested elements each section type supports
+_SECTION_ELEMENTS = {
+    ConfigSectionType.BACKEND: [
+        ("servers", ConfigElementType.SERVER, True),  # Named elements
+        (
+            "server_switching_rules",
+            ConfigElementType.SERVER_SWITCHING_RULE,
+            False,
+        ),  # Ordered
+        ("stick_rules", ConfigElementType.STICK_RULE, False),  # Ordered
+        ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
+        ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
+        ("tcp_request_rules", ConfigElementType.TCP_REQUEST_RULE, False),  # Ordered
+        ("tcp_response_rules", ConfigElementType.TCP_RESPONSE_RULE, False),  # Ordered
+        ("acls", ConfigElementType.ACL, True),  # Named
+        ("filters", ConfigElementType.FILTER, False),  # Ordered
+        ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
+    ],
+    ConfigSectionType.FRONTEND: [
+        ("binds", ConfigElementType.BIND, True),  # Named elements
+        (
+            "backend_switching_rules",
+            ConfigElementType.BACKEND_SWITCHING_RULE,
+            False,
+        ),  # Ordered
+        ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
+        ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
+        ("tcp_request_rules", ConfigElementType.TCP_REQUEST_RULE, False),  # Ordered
+        # NOTE: TCP response rules are not supported for frontends
+        ("acls", ConfigElementType.ACL, True),  # Named
+        ("filters", ConfigElementType.FILTER, False),  # Ordered
+        ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
+    ],
+    # Note: ConfigSectionType.DEFAULTS is not included here because the HAProxy
+    # Dataplane API v3 doesn't support nested element endpoints for defaults
+    # sections (returns HTTP 501 Not Implemented). Defaults are handled as
+    # atomic units using full_section=true.
+}
+
+
+# Element fetch API registry - maps element attribute names to their fetch functions
+_ELEMENT_FETCH_APIS = {
+    ConfigSectionType.BACKEND: {
+        "servers": get_all_server_backend.asyncio,
+        "server_switching_rules": get_server_switching_rules.asyncio,
+        "http_request_rules": get_all_http_request_rule_backend.asyncio,
+        "http_response_rules": get_all_http_response_rule_backend.asyncio,
+        "http_after_response_rules": get_all_http_after_response_rule_backend.asyncio,
+        "http_error_rules": get_all_http_error_rule_backend.asyncio,
+        "http_checks": get_all_http_check_backend.asyncio,
+        "tcp_checks": get_all_tcp_check_backend.asyncio,
+        "acls": get_all_acl_backend.asyncio,
+        "filters": get_all_filter_backend.asyncio,
+        "tcp_request_rules": get_all_tcp_request_rule_backend.asyncio,
+        "tcp_response_rules": get_all_tcp_response_rule_backend.asyncio,
+        "log_targets": get_all_log_target_backend.asyncio,
+        "stick_rules": get_stick_rules.asyncio,
+    },
+    ConfigSectionType.FRONTEND: {
+        "binds": get_all_bind_frontend.asyncio,
+        "backend_switching_rules": get_backend_switching_rules.asyncio,
+        "http_request_rules": get_all_http_request_rule_frontend.asyncio,
+        "http_response_rules": get_all_http_response_rule_frontend.asyncio,
+        "http_after_response_rules": get_all_http_after_response_rule_frontend.asyncio,
+        "http_error_rules": get_all_http_error_rule_frontend.asyncio,
+        "acls": get_all_acl_frontend.asyncio,
+        "filters": get_all_filter_frontend.asyncio,
+        "tcp_request_rules": get_all_tcp_request_rule_frontend.asyncio,
+        "tcp_response_rules": None,  # Not supported for frontends
+        "log_targets": get_all_log_target_frontend.asyncio,
+        "quic_initial_rules": get_all_quic_initial_rule_frontend.asyncio,
+    },
+    ConfigSectionType.GLOBAL: {
+        "log_targets": get_all_log_target_global.asyncio,
+    },
+}
+
+
+# Storage resource sync registry for unified resource management
+_STORAGE_SYNC_CONFIGS = {
+    "maps": {
+        "get_all_func": get_all_storage_map_files.asyncio,
+        "get_one_func": get_one_storage_map.asyncio,
+        "create_func": create_storage_map_file.asyncio,
+        "delete_func": delete_storage_map.asyncio,
+        "replace_func": replace_storage_map_file.asyncio,
+        "create_body_class": CreateStorageMapFileBody,
+        "mime_type": "text/plain",
+    },
+    "certificates": {
+        "get_all_func": get_all_storage_ssl_certificates.asyncio,
+        "get_one_func": get_one_storage_ssl_certificate.asyncio,
+        "create_func": create_storage_ssl_certificate.asyncio,
+        "delete_func": delete_storage_ssl_certificate.asyncio,
+        "replace_func": replace_storage_ssl_certificate.asyncio,
+        "create_body_class": CreateStorageSSLCertificateBody,
+        "mime_type": "application/x-pem-file",
+    },
+}
 
 
 class DataplaneClient:
@@ -559,44 +1317,22 @@ class DataplaneClient:
             )
         return self._client
 
+    @handle_dataplane_errors()
     async def get_version(self) -> Dict[str, Any]:
         """Get HAProxy version information using the generated client."""
-        try:
-            client = self._get_client()
-            info_response = await get_info.asyncio(client=client)
+        client = self._get_client()
+        info_response = await get_info.asyncio(client=client)
 
-            # Convert the generated model to dict format expected by existing code
-            result = {}
-            if hasattr(info_response, "haproxy") and info_response.haproxy:
-                result.update(info_response.haproxy.to_dict())
-            if hasattr(info_response, "api") and info_response.api:
-                result.update(info_response.api.to_dict())
-            if hasattr(info_response, "system") and info_response.system:
-                result.update(info_response.system.to_dict())
+        # Convert the generated model to dict format expected by existing code
+        result = {}
+        if hasattr(info_response, "haproxy") and info_response.haproxy:
+            result.update(info_response.haproxy.to_dict())
+        if hasattr(info_response, "api") and info_response.api:
+            result.update(info_response.api.to_dict())
+        if hasattr(info_response, "system") and info_response.system:
+            result.update(info_response.system.to_dict())
 
-            return result
-
-        except errors.UnexpectedStatus as e:
-            raise DataplaneAPIError(
-                f"Failed to get version: {e}",
-                endpoint=self.base_url,
-                operation="get_version",
-                original_error=e,
-            ) from e
-        except (ConnectionError, TimeoutError, OSError) as e:
-            raise DataplaneAPIError(
-                f"Network error: {e}",
-                endpoint=self.base_url,
-                operation="get_version",
-                original_error=e,
-            ) from e
-        except Exception as e:
-            raise DataplaneAPIError(
-                f"Unexpected error: {e}",
-                endpoint=self.base_url,
-                operation="get_version",
-                original_error=e,
-            ) from e
+        return result
 
     async def validate_configuration(self, config_content: str) -> None:
         """Validate HAProxy configuration without applying it.
@@ -811,6 +1547,7 @@ class DataplaneClient:
         except Exception:
             return None
 
+    @handle_dataplane_errors()
     async def _sync_storage_resources(
         self,
         resource_type: str,
@@ -842,127 +1579,104 @@ class DataplaneClient:
         with metrics.time_dataplane_api_operation(operation):
             client = self._get_client()
 
-            try:
-                # Get existing resources
-                existing = await get_all_func(client=client)
-                existing_dict = {
-                    f.storage_name: f for f in (existing or []) if f.storage_name
-                }
+            # Get existing resources
+            existing = await get_all_func(client=client)
+            existing_dict = {
+                f.storage_name: f for f in (existing or []) if f.storage_name
+            }
 
-                target_names = set(new_resources.keys())
-                existing_names = set(existing_dict.keys())
+            target_names = set(new_resources.keys())
+            existing_names = set(existing_dict.keys())
 
-                created_count = 0
-                updated_count = 0
-                skipped_count = 0
+            created_count = 0
+            updated_count = 0
+            skipped_count = 0
 
-                # Create new resources
-                for name in target_names - existing_names:
+            # Create new resources
+            for name in target_names - existing_names:
+                body = create_body_class(
+                    file_upload=File(
+                        payload=io.BytesIO(new_resources[name].encode("utf-8")),
+                        file_name=name,
+                        mime_type=mime_type,
+                    )
+                )
+                body["description"] = compute_content_hash(new_resources[name])
+                await create_func(client=client, body=body)
+                created_count += 1
+                logger.debug(f"Created {resource_type} {name}")
+
+            # Update or skip existing resources
+            for name in target_names & existing_names:
+                new_content = new_resources[name]
+
+                # Check if content changed
+                try:
+                    existing_resource = await get_one_func(client=client, name=name)
+                    existing_content = self._extract_storage_content(existing_resource)
+
+                    if existing_content == new_content:
+                        skipped_count += 1
+                        logger.debug(f"Skipped {resource_type} {name} (unchanged)")
+                        continue
+                except Exception as e:
+                    _log_fetch_error(resource_type, name, e)
+
+                # Content changed - use replace if available, otherwise delete+create
+                if replace_func:
+                    # Use generated replace function for maps/certificates
+                    # The generated functions expect: client, name, body (string content)
+                    await replace_func(client=client, name=name, body=new_content)
+                else:
+                    # Fallback to delete+create (shouldn't happen with proper replace_func)
+                    await delete_func(client=client, name=name)
                     body = create_body_class(
                         file_upload=File(
-                            payload=io.BytesIO(new_resources[name].encode("utf-8")),
+                            payload=io.BytesIO(new_content.encode("utf-8")),
                             file_name=name,
                             mime_type=mime_type,
                         )
                     )
-                    body["description"] = compute_content_hash(new_resources[name])
+                    body["description"] = compute_content_hash(new_content)
                     await create_func(client=client, body=body)
-                    created_count += 1
-                    logger.debug(f"Created {resource_type} {name}")
 
-                # Update or skip existing resources
-                for name in target_names & existing_names:
-                    new_content = new_resources[name]
+                updated_count += 1
+                logger.debug(f"Updated {resource_type} {name}")
 
-                    # Check if content changed
-                    try:
-                        existing_resource = await get_one_func(client=client, name=name)
-                        existing_content = self._extract_storage_content(
-                            existing_resource
-                        )
+            # Delete obsolete resources
+            for name in existing_names - target_names:
+                await delete_func(client=client, name=name)
+                logger.debug(f"Deleted {resource_type} {name}")
 
-                        if existing_content == new_content:
-                            skipped_count += 1
-                            logger.debug(f"Skipped {resource_type} {name} (unchanged)")
-                            continue
-                    except Exception as e:
-                        logger.debug(f"Could not fetch {resource_type} {name}: {e}")
+            # Log summary - only use INFO if something changed
+            if created_count or updated_count:
+                logger.info(
+                    f"{resource_type.capitalize()}s: "
+                    f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
+                )
+            elif skipped_count:
+                logger.debug(
+                    f"{resource_type.capitalize()}s: "
+                    f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
+                )
 
-                    # Content changed - use replace if available, otherwise delete+create
-                    if replace_func:
-                        # Use generated replace function for maps/certificates
-                        # The generated functions expect: client, name, body (string content)
-                        await replace_func(client=client, name=name, body=new_content)
-                    else:
-                        # Fallback to delete+create (shouldn't happen with proper replace_func)
-                        await delete_func(client=client, name=name)
-                        body = create_body_class(
-                            file_upload=File(
-                                payload=io.BytesIO(new_content.encode("utf-8")),
-                                file_name=name,
-                                mime_type=mime_type,
-                            )
-                        )
-                        body["description"] = compute_content_hash(new_content)
-                        await create_func(client=client, body=body)
-
-                    updated_count += 1
-                    logger.debug(f"Updated {resource_type} {name}")
-
-                # Delete obsolete resources
-                for name in existing_names - target_names:
-                    await delete_func(client=client, name=name)
-                    logger.debug(f"Deleted {resource_type} {name}")
-
-                # Log summary - only use INFO if something changed
-                if created_count or updated_count:
-                    logger.info(
-                        f"{resource_type.capitalize()}s: "
-                        f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
-                    )
-                elif skipped_count:
-                    logger.debug(
-                        f"{resource_type.capitalize()}s: "
-                        f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
-                    )
-
-                metrics.record_dataplane_api_request(operation, "success")
-
-            except Exception as e:
-                metrics.record_dataplane_api_request(operation, "error")
-                raise DataplaneAPIError(
-                    f"{resource_type.capitalize()} sync failed: {e}",
-                    operation=operation,
-                ) from e
+            metrics.record_dataplane_api_request(operation, "success")
 
     async def sync_maps(self, maps: Dict[str, str]) -> None:
         """Synchronize HAProxy map files to storage."""
+        config = _STORAGE_SYNC_CONFIGS["maps"]
         await self._sync_storage_resources(
-            resource_type="map",
-            new_resources=maps,
-            get_all_func=get_all_storage_map_files.asyncio,
-            get_one_func=get_one_storage_map.asyncio,
-            create_func=create_storage_map_file.asyncio,
-            delete_func=delete_storage_map.asyncio,
-            create_body_class=CreateStorageMapFileBody,
-            mime_type="text/plain",
-            replace_func=replace_storage_map_file.asyncio,
+            resource_type="map", new_resources=maps, **config
         )
 
     async def sync_certificates(self, certificates: Dict[str, str]) -> None:
         """Synchronize SSL certificates to storage."""
+        config = _STORAGE_SYNC_CONFIGS["certificates"]
         await self._sync_storage_resources(
-            resource_type="certificate",
-            new_resources=certificates,
-            get_all_func=get_all_storage_ssl_certificates.asyncio,
-            get_one_func=get_one_storage_ssl_certificate.asyncio,
-            create_func=create_storage_ssl_certificate.asyncio,
-            delete_func=delete_storage_ssl_certificate.asyncio,
-            create_body_class=CreateStorageSSLCertificateBody,
-            mime_type="application/x-pem-file",
-            replace_func=replace_storage_ssl_certificate.asyncio,
+            resource_type="certificate", new_resources=certificates, **config
         )
 
+    @handle_dataplane_errors()
     async def sync_files(self, files: Dict[str, str]) -> None:
         """Synchronize general-purpose files to HAProxy storage.
 
@@ -974,91 +1688,84 @@ class DataplaneClient:
         with metrics.time_dataplane_api_operation(operation):
             client = self._get_client()
 
-            try:
-                # Get existing resources
-                existing = await get_all_storage_general_files.asyncio(client=client)
-                existing_dict = {
-                    f.storage_name: f for f in (existing or []) if f.storage_name
-                }
+            # Get existing resources
+            existing = await get_all_storage_general_files.asyncio(client=client)
+            existing_dict = {
+                f.storage_name: f for f in (existing or []) if f.storage_name
+            }
 
-                target_names = set(files.keys())
-                existing_names = set(existing_dict.keys())
+            target_names = set(files.keys())
+            existing_names = set(existing_dict.keys())
 
-                created_count = 0
-                updated_count = 0
-                skipped_count = 0
+            created_count = 0
+            updated_count = 0
+            skipped_count = 0
 
-                # Create new files
-                for name in target_names - existing_names:
-                    body = CreateStorageGeneralFileBody(
-                        file_upload=File(
-                            payload=io.BytesIO(files[name].encode("utf-8")),
-                            file_name=name,
-                            mime_type="text/plain",
-                        )
+            # Create new files
+            for name in target_names - existing_names:
+                body = CreateStorageGeneralFileBody(
+                    file_upload=File(
+                        payload=io.BytesIO(files[name].encode("utf-8")),
+                        file_name=name,
+                        mime_type="text/plain",
                     )
-                    body["description"] = compute_content_hash(files[name])
-                    await create_storage_general_file.asyncio(client=client, body=body)
-                    created_count += 1
-                    logger.debug(f"Created file {name}")
+                )
+                body["description"] = compute_content_hash(files[name])
+                await create_storage_general_file.asyncio(client=client, body=body)
+                created_count += 1
+                logger.debug(f"Created file {name}")
 
-                # Update or skip existing files
-                for name in target_names & existing_names:
-                    new_content = files[name]
+            # Update or skip existing files
+            for name in target_names & existing_names:
+                new_content = files[name]
 
-                    # Check if content changed
-                    try:
-                        existing_file = await get_one_storage_general_file.asyncio(
-                            client=client, name=name
-                        )
-                        existing_content = self._extract_storage_content(existing_file)
-
-                        if existing_content == new_content:
-                            skipped_count += 1
-                            logger.debug(f"Skipped file {name} (unchanged)")
-                            continue
-                    except Exception as e:
-                        logger.debug(f"Could not fetch file {name}: {e}")
-
-                    # Content changed - use replace for files
-                    body = ReplaceStorageGeneralFileBody(
-                        file_upload=File(
-                            payload=io.BytesIO(new_content.encode("utf-8")),
-                            file_name=name,
-                            mime_type="text/plain",
-                        )
+                # Check if content changed
+                try:
+                    existing_file = await get_one_storage_general_file.asyncio(
+                        client=client, name=name
                     )
-                    body["description"] = compute_content_hash(new_content)
-                    await replace_storage_general_file.asyncio(
-                        client=client, name=name, body=body
+                    existing_content = self._extract_storage_content(existing_file)
+
+                    if existing_content == new_content:
+                        skipped_count += 1
+                        logger.debug(f"Skipped file {name} (unchanged)")
+                        continue
+                except Exception as e:
+                    _log_fetch_error("file", name, e)
+
+                # Content changed - use replace for files
+                body = ReplaceStorageGeneralFileBody(
+                    file_upload=File(
+                        payload=io.BytesIO(new_content.encode("utf-8")),
+                        file_name=name,
+                        mime_type="text/plain",
                     )
-                    updated_count += 1
-                    logger.debug(f"Updated file {name}")
+                )
+                body["description"] = compute_content_hash(new_content)
+                await replace_storage_general_file.asyncio(
+                    client=client, name=name, body=body
+                )
+                updated_count += 1
+                logger.debug(f"Updated file {name}")
 
-                # Delete obsolete files
-                for name in existing_names - target_names:
-                    await delete_storage_general_file.asyncio(client=client, name=name)
-                    logger.debug(f"Deleted file {name}")
+            # Delete obsolete files
+            for name in existing_names - target_names:
+                await delete_storage_general_file.asyncio(client=client, name=name)
+                logger.debug(f"Deleted file {name}")
 
-                # Log summary - only use INFO if something changed
-                if created_count or updated_count:
-                    logger.info(
-                        f"Files: "
-                        f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
-                    )
-                elif skipped_count:
-                    logger.debug(
-                        f"Files: "
-                        f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
-                    )
+            # Log summary - only use INFO if something changed
+            if created_count or updated_count:
+                logger.info(
+                    f"Files: "
+                    f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
+                )
+            elif skipped_count:
+                logger.debug(
+                    f"Files: "
+                    f"{created_count} created, {updated_count} updated, {skipped_count} unchanged"
+                )
 
-                metrics.record_dataplane_api_request(operation, "success")
-
-            except Exception as e:
-                metrics.record_dataplane_api_request(operation, "error")
-                raise DataplaneAPIError(
-                    f"File sync failed: {e}", operation=operation
-                ) from e
+            metrics.record_dataplane_api_request(operation, "success")
 
     async def get_current_configuration(self) -> Optional[str]:
         """Get current raw HAProxy configuration.
@@ -1071,7 +1778,7 @@ class DataplaneClient:
             config = await get_ha_proxy_configuration.asyncio(client=client)
             return config
         except Exception as e:
-            logger.debug(f"Could not fetch current configuration: {e}")
+            _log_fetch_error("configuration", "current", e)
             return None
 
     async def deploy_configuration_conditionally(
@@ -1134,9 +1841,7 @@ class DataplaneClient:
                 # Get current version
                 try:
                     client = self._get_client()
-                    version_response = await get_configuration_version.asyncio(
-                        client=client
-                    )
+                    version_response = await _get_configuration_version(client)
                     return str(version_response) if version_response else "unknown"
                 except Exception:
                     return "unknown"
@@ -1150,21 +1855,393 @@ class DataplaneClient:
             )
             return await self.deploy_configuration(new_config_normalized)
 
+    async def deploy_structured_configuration(self, changes: List[ConfigChange]) -> str:
+        """Deploy HAProxy configuration changes using granular dataplane API endpoints.
+
+        This method applies a list of ConfigChange objects using HAProxy's structured
+        API endpoints within a transaction, which minimizes reloads by only changing
+        what's actually different.
+
+        Args:
+            changes: List of ConfigChange objects to apply
+
+        Returns:
+            Configuration version after deployment
+
+        Raises:
+            DataplaneAPIError: If deployment fails
+        """
+        if not changes:
+            logger.debug("⏭️  No changes to deploy")
+            return "unchanged"
+
+        with trace_dataplane_operation("deploy_structured", self.base_url):
+            add_span_attributes(
+                dataplane_url=self.base_url,
+                changes_count=len(changes),
+                change_types=[str(c.change_type.value) for c in changes],
+            )
+
+            metrics = get_metrics_collector()
+            client = self._get_client()
+
+            # Start a transaction to batch all changes atomically
+            try:
+                # Get current configuration version for transaction consistency
+                current_version = await _get_configuration_version(client)
+                if current_version is None:
+                    raise DataplaneAPIError(
+                        "Failed to get current configuration version for transaction",
+                        endpoint=self.base_url,
+                        operation="get_configuration_version",
+                    )
+
+                # Start transaction with version
+                with metrics.time_dataplane_api_operation("start_transaction"):
+                    transaction = await start_transaction.asyncio(
+                        client=client, version=current_version
+                    )
+                    transaction_id = transaction.id if transaction else None
+
+                logger.debug(
+                    f"📦 Started transaction {transaction_id} for {len(changes)} changes"
+                )
+
+                try:
+                    # Apply all changes within the transaction
+                    for i, change in enumerate(changes):
+                        logger.debug(
+                            f"📝 Applying change {i + 1}/{len(changes)}: {change}"
+                        )
+                        await self._apply_config_change(
+                            client, change, transaction_id or ""
+                        )
+
+                    # Commit the transaction
+                    with metrics.time_dataplane_api_operation("commit_transaction"):
+                        await commit_transaction.asyncio(
+                            client=client, id=transaction_id
+                        )
+
+                    logger.info(
+                        f"✅ Successfully deployed {len(changes)} structured changes in transaction {transaction_id}"
+                    )
+
+                    # Get the new configuration version
+                    version_response = await _get_configuration_version(client)
+                    new_version = (
+                        str(version_response) if version_response else "unknown"
+                    )
+
+                    record_span_event(
+                        "structured_deployment_successful",
+                        {
+                            "transaction_id": transaction_id,
+                            "changes_count": len(changes),
+                            "version": new_version,
+                        },
+                    )
+
+                    return new_version
+
+                except Exception as apply_error:
+                    # Rollback transaction on failure
+                    try:
+                        logger.warning(
+                            f"⚠️  Rolling back transaction {transaction_id} due to error: {apply_error}"
+                        )
+                        await delete_transaction.asyncio(
+                            client=client, id=transaction_id
+                        )
+                    except Exception as rollback_error:
+                        logger.error(
+                            f"❌ Failed to rollback transaction {transaction_id}: {rollback_error}"
+                        )
+
+                    record_span_event(
+                        "structured_deployment_failed",
+                        {"transaction_id": transaction_id, "error": str(apply_error)},
+                    )
+                    set_span_error(apply_error, "Structured deployment failed")
+
+                    raise DataplaneAPIError(
+                        f"Structured deployment failed in transaction {transaction_id}: {apply_error}",
+                        endpoint=self.base_url,
+                        operation="deploy_structured",
+                        original_error=apply_error,
+                    ) from apply_error
+
+            except Exception as transaction_error:
+                record_span_event(
+                    "transaction_start_failed", {"error": str(transaction_error)}
+                )
+                set_span_error(transaction_error, "Failed to start transaction")
+
+                raise DataplaneAPIError(
+                    f"Failed to start transaction for structured deployment: {transaction_error}",
+                    endpoint=self.base_url,
+                    operation="deploy_structured",
+                    original_error=transaction_error,
+                ) from transaction_error
+
+    async def _apply_nested_element_change(
+        self, client: Any, change: ConfigChange, transaction_id: str
+    ) -> None:
+        """Apply a nested element change using the appropriate dataplane API endpoint.
+
+        Args:
+            client: The authenticated dataplane API client
+            change: The nested element change to apply
+            transaction_id: The transaction ID to use for the change
+        """
+        element_type = change.element_type
+        section_type = change.section_type
+        section_name = change.section_name
+
+        try:
+            # Look up handler configuration from registry
+            if element_type is None:
+                logger.warning(
+                    "⚠️  Element type is None - skipping nested element change"
+                )
+                return
+
+            handler_config = _ELEMENT_HANDLERS.get(element_type)
+            if not handler_config:
+                logger.warning(
+                    f"⚠️  Unsupported nested element type for structured deployment: {element_type}"
+                )
+                return
+
+            id_type = handler_config["id_type"]
+
+            # Handle both registry formats: api_map (multiple sections) vs sections + api (single section type)
+            if "api_map" in handler_config:
+                # Multiple sections format
+                api_map = dict(handler_config["api_map"])
+                if section_type not in api_map:
+                    logger.debug(
+                        f"Element type {element_type} not supported for section type {section_type}"
+                    )
+                    return
+                api_tuple = api_map[section_type]
+                if not isinstance(api_tuple, (list, tuple)) or len(api_tuple) != 3:
+                    logger.error(
+                        f"Invalid API tuple for {element_type.value}/{section_type.value}"
+                    )
+                    return
+                create_fn, replace_fn, delete_fn = (
+                    api_tuple[0],
+                    api_tuple[1],
+                    api_tuple[2],
+                )
+            elif "sections" in handler_config and "api" in handler_config:
+                # Single section type format
+                if section_type not in handler_config["sections"]:
+                    logger.debug(
+                        f"Element type {element_type} not supported for section type {section_type}"
+                    )
+                    return
+                create_fn, replace_fn, delete_fn = handler_config["api"]
+            else:
+                logger.error(
+                    f"Invalid handler configuration for element type {element_type}"
+                )
+                return
+
+            # Prepare common parameters
+            base_params = {
+                "client": client,
+                "parent_name": section_name,
+                "transaction_id": transaction_id,
+            }
+
+            # Execute the appropriate operation
+            if change.change_type == ConfigChangeType.CREATE:
+                clean_config = self._get_clean_config_object(change.new_config)
+                params = {**base_params, "body": clean_config}
+                if id_type == "index":
+                    params["index"] = change.element_index
+                await create_fn.asyncio(**params)
+
+            elif change.change_type == ConfigChangeType.UPDATE:
+                clean_config = self._get_clean_config_object(change.new_config)
+                params = {**base_params, "body": clean_config}
+                if id_type == "index":
+                    params["index"] = change.element_index
+                else:  # name
+                    params["name"] = change.element_id
+                await replace_fn.asyncio(**params)
+
+            elif change.change_type == ConfigChangeType.DELETE:
+                params = base_params.copy()
+                if id_type == "index":
+                    params["index"] = change.element_index
+                else:  # name
+                    params["name"] = change.element_id
+                await delete_fn.asyncio(**params)
+
+        except Exception as e:
+            raise DataplaneAPIError(
+                f"Failed to apply nested element change {change}: {e}",
+                endpoint=self.base_url,
+                operation=f"apply_{change.change_type.value}_{element_type.value if element_type else 'unknown'}",
+                original_error=e,
+            ) from e
+
+    def _get_clean_config_object(self, config_obj: Any) -> Any:
+        """Remove dynamically added attributes from config objects.
+
+        This method ensures that only original model attributes are present
+        when passing objects to the API, avoiding JSON serialization errors
+        with dynamically added nested elements.
+
+        Args:
+            config_obj: The config object that may have extra attributes
+
+        Returns:
+            A clean config object suitable for API calls
+        """
+        if config_obj is None:
+            return None
+
+        # If it's a model object with to_dict/from_dict methods, use them
+        # to create a clean copy with only the original schema attributes
+        if hasattr(config_obj, "to_dict") and hasattr(config_obj, "from_dict"):
+            try:
+                # Get the clean dictionary representation (only original attributes)
+                clean_dict = config_obj.to_dict()
+                # Recreate the object from the dictionary
+                return config_obj.__class__.from_dict(clean_dict)
+            except Exception as e:
+                logger.debug(
+                    f"Failed to clean config object {type(config_obj).__name__}: {e}"
+                )
+                return config_obj
+
+        # For non-model objects, return as-is
+        return config_obj
+
+    async def _apply_config_change(
+        self, client: Any, change: ConfigChange, transaction_id: str
+    ) -> None:
+        """Apply a single configuration change using the appropriate dataplane API endpoint.
+
+        Args:
+            client: The authenticated dataplane API client
+            change: The configuration change to apply
+            transaction_id: The transaction ID to use for the change
+        """
+        try:
+            # Handle nested element changes
+            if change.element_type:
+                await self._apply_nested_element_change(client, change, transaction_id)
+                return
+
+            # Handle top-level section changes using registry
+            handler_config = _SECTION_HANDLERS.get(change.section_type)
+            if not handler_config:
+                logger.warning(
+                    f"⚠️  Unsupported section type for structured deployment: {change.section_type}"
+                )
+                return
+
+            # Prepare base parameters
+            base_params = {
+                "client": client,
+                "transaction_id": transaction_id,
+            }
+
+            # Handle different change types
+            if change.change_type == ConfigChangeType.CREATE:
+                if not handler_config.get("supports_create", False):
+                    if change.section_type == ConfigSectionType.GLOBAL:
+                        # Global CREATE is treated as UPDATE
+                        change.change_type = ConfigChangeType.UPDATE
+                    else:
+                        logger.debug(
+                            f"Section type {change.section_type} doesn't support CREATE"
+                        )
+                        return
+
+                if (
+                    change.change_type == ConfigChangeType.CREATE
+                ):  # Still CREATE after potential conversion
+                    clean_config = self._get_clean_config_object(change.new_config)
+                    params = {**base_params, "body": clean_config}
+                    await handler_config["create"](**params)
+                else:
+                    # Fall through to UPDATE handling for converted GLOBAL operations
+                    pass
+
+            if change.change_type == ConfigChangeType.UPDATE:
+                if not handler_config.get("supports_update", False):
+                    logger.debug(
+                        f"Section type {change.section_type} doesn't support UPDATE"
+                    )
+                    return
+
+                # Handle different update strategies
+                if handler_config.get("update_strategy") == "delete_create":
+                    # Userlist: delete then create
+                    if handler_config.get("supports_delete", False):
+                        params = {**base_params}
+                        if handler_config["id_field"]:
+                            params[handler_config["id_field"]] = change.section_name
+                        await handler_config["delete"](**params)
+
+                    clean_config = self._get_clean_config_object(change.new_config)
+                    params = {**base_params, "body": clean_config}
+                    await handler_config["create"](**params)
+                else:
+                    # Standard update
+                    clean_config = self._get_clean_config_object(change.new_config)
+                    params = {**base_params, "body": clean_config}
+                    if handler_config["id_field"]:
+                        params[handler_config["id_field"]] = change.section_name
+                    if handler_config.get("full_section"):
+                        params["full_section"] = True
+                    await handler_config["update"](**params)
+
+            elif change.change_type == ConfigChangeType.DELETE:
+                if not handler_config.get("supports_delete", False):
+                    logger.debug(
+                        f"Section type {change.section_type} doesn't support DELETE"
+                    )
+                    return
+
+                params = {**base_params}
+                if handler_config["id_field"]:
+                    params[handler_config["id_field"]] = change.section_name
+                await handler_config["delete"](**params)
+
+        except Exception as e:
+            raise DataplaneAPIError(
+                f"Failed to apply {change}: {e}",
+                endpoint=self.base_url,
+                operation=f"apply_{change.change_type.value}_{change.section_type.value}",
+                original_error=e,
+            ) from e
+
     async def fetch_structured_configuration(self) -> Dict[str, Any]:
-        """Fetch structured configuration components from this HAProxy instance.
+        """Fetch complete structured configuration components from this HAProxy instance.
+
+        This method fetches both top-level configuration sections and all their detailed
+        nested configurations using specialized endpoints, ensuring complete configuration
+        comparison and deployment.
 
         Returns:
             Dictionary containing:
-            - backends: List of backend configurations
-            - frontends: List of frontend configurations
-            - defaults: List of defaults sections
-            - global: Global configuration section
+            - backends: List of backend configurations with nested details
+            - frontends: List of frontend configurations with nested details
+            - defaults: List of defaults sections with nested details
+            - global: Global configuration section with nested details
             - userlists: List of userlist sections
             - caches: List of cache sections
             - mailers: List of mailers sections
             - resolvers: List of resolvers sections
             - peers: List of peer sections
-            - fcgi_apps: List of fcgi-app sections
+            - fcgi_apps: List of fcgi-app sections with nested details
             - http_errors: List of http-errors sections
             - rings: List of ring sections
             - log_forwards: List of log-forward sections
@@ -1179,50 +2256,128 @@ class DataplaneClient:
             client = self._get_client()
 
             try:
-                # Fetch all components with timing
-                with metrics.time_dataplane_api_operation("fetch_backends"):
-                    backends = await get_backends.asyncio(client=client) or []
+                # Fetch all top-level components with timing using helper
+                backends = await _fetch_with_metrics(
+                    "fetch_backends", get_backends.asyncio, client, metrics, []
+                )
+                frontends = await _fetch_with_metrics(
+                    "fetch_frontends", get_frontends.asyncio, client, metrics, []
+                )
+                defaults = await _fetch_with_metrics(
+                    "fetch_defaults", get_defaults_sections.asyncio, client, metrics, []
+                )
+                global_config = await _fetch_with_metrics(
+                    "fetch_global", get_global.asyncio, client, metrics
+                )
+                userlists = await _fetch_with_metrics(
+                    "fetch_userlists", get_userlists.asyncio, client, metrics, []
+                )
+                caches = await _fetch_with_metrics(
+                    "fetch_caches", get_caches.asyncio, client, metrics, []
+                )
+                mailers = await _fetch_with_metrics(
+                    "fetch_mailers", get_mailers_sections.asyncio, client, metrics, []
+                )
+                resolvers = await _fetch_with_metrics(
+                    "fetch_resolvers", get_resolvers.asyncio, client, metrics, []
+                )
+                peers = await _fetch_with_metrics(
+                    "fetch_peers", get_peer_sections.asyncio, client, metrics, []
+                )
+                fcgi_apps = await _fetch_with_metrics(
+                    "fetch_fcgi_apps", get_fcgi_apps.asyncio, client, metrics, []
+                )
+                http_errors = await _fetch_with_metrics(
+                    "fetch_http_errors",
+                    get_http_errors_sections.asyncio,
+                    client,
+                    metrics,
+                    [],
+                )
+                rings = await _fetch_with_metrics(
+                    "fetch_rings", get_rings.asyncio, client, metrics, []
+                )
+                log_forwards = await _fetch_with_metrics(
+                    "fetch_log_forwards", get_log_forwards.asyncio, client, metrics, []
+                )
+                programs = await _fetch_with_metrics(
+                    "fetch_programs", get_programs.asyncio, client, metrics, []
+                )
 
-                with metrics.time_dataplane_api_operation("fetch_frontends"):
-                    frontends = await get_frontends.asyncio(client=client) or []
+                # Create storage for nested elements to avoid modifying frozen models
+                nested_elements: Dict[str, Dict[str, Dict[str, Any]]] = {
+                    "backends": {},
+                    "frontends": {},
+                    "defaults": {},
+                    "global": {},
+                }
 
-                with metrics.time_dataplane_api_operation("fetch_defaults"):
-                    defaults = await get_defaults_sections.asyncio(client=client) or []
+                # Now fetch detailed configurations for each section using registry-based approach
+                section_configs = [
+                    (ConfigSectionType.BACKEND, backends, "backends"),
+                    (ConfigSectionType.FRONTEND, frontends, "frontends"),
+                ]
 
-                with metrics.time_dataplane_api_operation("fetch_global"):
-                    global_config = await get_global.asyncio(client=client)
+                for section_type, sections, section_key in section_configs:
+                    fetch_apis = _ELEMENT_FETCH_APIS.get(section_type, {})
 
-                with metrics.time_dataplane_api_operation("fetch_userlists"):
-                    userlists = await get_userlists.asyncio(client=client) or []
+                    for section in sections:
+                        if hasattr(section, "name") and section.name:
+                            section_name = section.name
+                            nested_elements[section_key][section_name] = {}
 
-                with metrics.time_dataplane_api_operation("fetch_caches"):
-                    caches = await get_caches.asyncio(client=client) or []
+                            try:
+                                # Fetch all element types for this section
+                                for attr_name, fetch_func in fetch_apis.items():
+                                    if fetch_func is None:
+                                        # Handle unsupported operations (like tcp_response_rules for frontends)
+                                        nested_elements[section_key][section_name][
+                                            attr_name
+                                        ] = []
+                                    else:
+                                        nested_elements[section_key][section_name][
+                                            attr_name
+                                        ] = (
+                                            await fetch_func(
+                                                client=client, parent_name=section_name
+                                            )
+                                            or []
+                                        )
+                            except Exception as e:
+                                logger.debug(
+                                    f"Failed to fetch details for {section_type.value} {section_name}: {e}"
+                                )
+                                # Continue with other sections even if one fails
 
-                with metrics.time_dataplane_api_operation("fetch_mailers"):
-                    mailers = await get_mailers_sections.asyncio(client=client) or []
+                # Skip nested element fetching for defaults sections
+                # HAProxy Dataplane API v3 limitation: nested element endpoints for defaults sections
+                # return HTTP 501 Not Implemented. Instead, defaults are handled as atomic units
+                # using full_section=true in deployment operations.
+                # The main defaults configuration already includes all nested elements.
 
-                with metrics.time_dataplane_api_operation("fetch_resolvers"):
-                    resolvers = await get_resolvers.asyncio(client=client) or []
-
-                with metrics.time_dataplane_api_operation("fetch_peers"):
-                    peers = await get_peer_sections.asyncio(client=client) or []
-
-                with metrics.time_dataplane_api_operation("fetch_fcgi_apps"):
-                    fcgi_apps = await get_fcgi_apps.asyncio(client=client) or []
-
-                with metrics.time_dataplane_api_operation("fetch_http_errors"):
-                    http_errors = (
-                        await get_http_errors_sections.asyncio(client=client) or []
+                # Fetch nested elements for global configuration
+                if global_config:
+                    nested_elements["global"] = {}
+                    global_fetch_apis = _ELEMENT_FETCH_APIS.get(
+                        ConfigSectionType.GLOBAL, {}
                     )
 
-                with metrics.time_dataplane_api_operation("fetch_rings"):
-                    rings = await get_rings.asyncio(client=client) or []
+                    try:
+                        for attr_name, fetch_func in global_fetch_apis.items():
+                            result = await fetch_func(client=client) or []
+                            if isinstance(result, list):
+                                nested_elements["global"][attr_name] = {}
+                                for idx, item in enumerate(result):
+                                    nested_elements["global"][attr_name][str(idx)] = (
+                                        item
+                                    )
+                            else:
+                                nested_elements["global"][attr_name] = {}
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch global configuration: {e}")
 
-                with metrics.time_dataplane_api_operation("fetch_log_forwards"):
-                    log_forwards = await get_log_forwards.asyncio(client=client) or []
-
-                with metrics.time_dataplane_api_operation("fetch_programs"):
-                    programs = await get_programs.asyncio(client=client) or []
+                # Skip fcgi_apps nested elements for now - they have minimal nested configuration
+                # and are not commonly used in most HAProxy setups
 
                 # Record successful fetch
                 metrics.record_dataplane_api_request("fetch_structured", "success")
@@ -1260,10 +2415,11 @@ class DataplaneClient:
                     "rings": rings,
                     "log_forwards": log_forwards,
                     "programs": programs,
+                    "nested_elements": nested_elements,
                 }
             except Exception as e:
                 metrics.record_dataplane_api_request("fetch_structured", "error")
-                logger.debug(f"Could not fetch structured configuration: {e}")
+                _log_fetch_error("structured configuration", "all", e)
                 raise DataplaneAPIError(
                     f"Failed to fetch structured configuration: {e}",
                     endpoint=self.base_url,
@@ -1287,6 +2443,22 @@ class ConfigSynchronizer:
         self.credentials = credentials
         self.deployment_history = deployment_history or DeploymentHistory()
 
+        # Initialize client references (will be created lazily)
+        self._validation_client: Optional[DataplaneClient] = None
+        self._production_clients: Dict[str, DataplaneClient] = {}
+
+    def _get_validation_client(self) -> DataplaneClient:
+        """Get validation client, creating it if needed (lazy initialization)."""
+        if self._validation_client is None:
+            self._validation_client = DataplaneClient(
+                self.validation_url,
+                auth=(
+                    self.credentials.validation.username,
+                    self.credentials.validation.password.get_secret_value(),
+                ),
+            )
+        return self._validation_client
+
     def _prepare_sync_content(
         self, config_context: HAProxyConfigContext
     ) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
@@ -1296,6 +2468,78 @@ class ConfigSynchronizer:
             {rc.filename: rc.content for rc in config_context.rendered_certificates},
             {rc.filename: rc.content for rc in config_context.rendered_files},
         )
+
+    def _update_production_clients(self, new_urls: List[str]) -> None:
+        """Update production clients based on current URLs.
+
+        This method handles dynamic HAProxy pod lifecycle by:
+        - Creating clients for newly discovered URLs
+        - Removing clients for URLs that are no longer present
+        - Preserving existing clients for stable URLs to maintain connection pooling
+
+        Args:
+            new_urls: Current list of production HAProxy URLs
+        """
+        # Remove clients for URLs that are no longer present
+        removed_urls = set(self._production_clients.keys()) - set(new_urls)
+        for url in removed_urls:
+            # Simply remove the client - the underlying httpx client will be cleaned up
+            # when the DataplaneClient is garbage collected
+            del self._production_clients[url]
+            logger.debug(f"Removed cached client for {url}")
+
+        # Create clients for new URLs
+        new_urls_set = set(new_urls)
+        existing_urls = set(self._production_clients.keys())
+        newly_added_urls = new_urls_set - existing_urls
+
+        for url in newly_added_urls:
+            self._production_clients[url] = DataplaneClient(
+                url,
+                auth=(
+                    self.credentials.dataplane.username,
+                    self.credentials.dataplane.password.get_secret_value(),
+                ),
+            )
+            logger.debug(f"Created cached client for {url}")
+
+        # Update the production URLs list
+        self.production_urls = new_urls
+
+    def add_production_url(self, url: str) -> None:
+        """Add a single production URL and create its client.
+
+        Args:
+            url: The production HAProxy dataplane URL to add
+        """
+        if url not in self._production_clients:
+            self._production_clients[url] = DataplaneClient(
+                url,
+                auth=(
+                    self.credentials.dataplane.username,
+                    self.credentials.dataplane.password.get_secret_value(),
+                ),
+            )
+            logger.debug(f"➕ Added production client for {url}")
+
+            # Update the URLs list
+            if url not in self.production_urls:
+                self.production_urls.append(url)
+
+    def remove_production_url(self, url: str) -> None:
+        """Remove a single production URL and cleanup its client.
+
+        Args:
+            url: The production HAProxy dataplane URL to remove
+        """
+        if url in self._production_clients:
+            # Remove the client
+            del self._production_clients[url]
+            logger.debug(f"➖ Removed production client for {url}")
+
+            # Update the URLs list
+            if url in self.production_urls:
+                self.production_urls.remove(url)
 
     async def _sync_content_to_client(
         self,
@@ -1320,19 +2564,483 @@ class ConfigSynchronizer:
 
     async def _validate_configuration(self, config: str) -> None:
         """Validate configuration using the validation instance."""
-        validation_client = DataplaneClient(
-            self.validation_url,
-            auth=(
-                self.credentials.validation.username,
-                self.credentials.validation.password.get_secret_value(),
-            ),
-        )
-
         logger.debug(f"Validating configuration at {self.validation_url}")
         try:
+            validation_client = self._get_validation_client()
             await validation_client.validate_configuration(config)
         except Exception as e:
             raise ValidationError(f"Configuration validation failed: {e}") from e
+
+    def _compare_nested_elements(
+        self,
+        current_nested: Dict[str, Any],
+        new_nested: Dict[str, Any],
+        section_type: ConfigSectionType,
+        section_name: str,
+        changes: List[ConfigChange],
+    ) -> None:
+        """Compare all nested elements within a section.
+
+        This method compares nested configuration elements like servers, ACLs,
+        HTTP request rules, etc. within backends, frontends, and defaults sections.
+
+        Args:
+            current_nested: Current nested elements for this section
+            new_nested: New nested elements for this section
+            section_type: Type of the parent section
+            section_name: Name of the parent section
+            changes: List to append detected changes to
+        """
+        # Get element mappings from registry
+        elements_to_compare = _SECTION_ELEMENTS.get(section_type, [])
+
+        # Compare each type of nested element
+        for attr_name, element_type, is_named in elements_to_compare:
+            # Get nested element lists from the nested storage
+            current_items = current_nested.get(attr_name, []) or []
+            new_items = new_nested.get(attr_name, []) or []
+
+            # Ensure we have lists
+            if not isinstance(current_items, list):
+                current_items = []
+            if not isinstance(new_items, list):
+                new_items = []
+
+            self._compare_element_list(
+                current_items,
+                new_items,
+                element_type,
+                section_type,
+                section_name,
+                changes,
+                is_named,
+            )
+
+    def _compare_element_list(
+        self,
+        current_items: List[Any],
+        new_items: List[Any],
+        element_type: ConfigElementType,
+        section_type: ConfigSectionType,
+        section_name: str,
+        changes: List[ConfigChange],
+        is_named: bool,
+    ) -> None:
+        """Compare element lists using either named or ordered strategy.
+
+        Args:
+            current_items: Current list of elements
+            new_items: New list of elements
+            element_type: Type of the nested element
+            section_type: Type of the parent section
+            section_name: Name of the parent section
+            changes: List to append detected changes to
+            is_named: If True, use named comparison; if False, use ordered comparison
+        """
+        if is_named:
+            self._compare_by_name(
+                current_items,
+                new_items,
+                element_type,
+                section_type,
+                section_name,
+                changes,
+            )
+        else:
+            self._compare_by_order(
+                current_items,
+                new_items,
+                element_type,
+                section_type,
+                section_name,
+                changes,
+            )
+
+    def _compare_by_name(
+        self,
+        current_items: List[Any],
+        new_items: List[Any],
+        element_type: ConfigElementType,
+        section_type: ConfigSectionType,
+        section_name: str,
+        changes: List[ConfigChange],
+    ) -> None:
+        """Compare named nested elements like servers or ACLs."""
+        # Build dictionaries by name for efficient comparison
+        current_dict = {}
+        for item in current_items:
+            if hasattr(item, "name") and item.name:
+                current_dict[item.name] = item
+            elif hasattr(item, "id") and item.id:
+                current_dict[item.id] = item
+
+        new_dict = {}
+        for item in new_items:
+            if hasattr(item, "name") and item.name:
+                new_dict[item.name] = item
+            elif hasattr(item, "id") and item.id:
+                new_dict[item.id] = item
+
+        current_names = set(current_dict.keys())
+        new_names = set(new_dict.keys())
+
+        # Deletions
+        for name in current_names - new_names:
+            changes.append(
+                ConfigChange.create_element_change(
+                    change_type=ConfigChangeType.DELETE,
+                    section_type=section_type,
+                    section_name=section_name,
+                    element_type=element_type,
+                    element_id=name,
+                    old_config=current_dict[name],
+                )
+            )
+
+        # Additions
+        for name in new_names - current_names:
+            changes.append(
+                ConfigChange.create_element_change(
+                    change_type=ConfigChangeType.CREATE,
+                    section_type=section_type,
+                    section_name=section_name,
+                    element_type=element_type,
+                    element_id=name,
+                    new_config=new_dict[name],
+                )
+            )
+
+        # Modifications
+        for name in current_names & new_names:
+            if _to_dict_safe(current_dict[name]) != _to_dict_safe(new_dict[name]):
+                changes.append(
+                    ConfigChange.create_element_change(
+                        change_type=ConfigChangeType.UPDATE,
+                        section_type=section_type,
+                        section_name=section_name,
+                        element_type=element_type,
+                        element_id=name,
+                        old_config=current_dict[name],
+                        new_config=new_dict[name],
+                    )
+                )
+
+    def _compare_by_order(
+        self,
+        current_items: List[Any],
+        new_items: List[Any],
+        element_type: ConfigElementType,
+        section_type: ConfigSectionType,
+        section_name: str,
+        changes: List[ConfigChange],
+    ) -> None:
+        """Compare ordered nested elements like HTTP request rules."""
+        # Compare lists element by element
+        max_len = max(len(current_items), len(new_items))
+
+        for i in range(max_len):
+            if i < len(current_items) and i < len(new_items):
+                # Both exist - check for modifications
+                if _to_dict_safe(current_items[i]) != _to_dict_safe(new_items[i]):
+                    changes.append(
+                        ConfigChange(
+                            change_type=ConfigChangeType.UPDATE,
+                            section_type=section_type,
+                            section_name=section_name,
+                            element_type=element_type,
+                            element_index=i,
+                            old_config=current_items[i],
+                            new_config=new_items[i],
+                        )
+                    )
+            elif i < len(new_items):
+                # New element added
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.CREATE,
+                        section_type=section_type,
+                        section_name=section_name,
+                        element_type=element_type,
+                        element_index=i,
+                        new_config=new_items[i],
+                    )
+                )
+            else:
+                # Element removed (current has more elements than new)
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.DELETE,
+                        section_type=section_type,
+                        section_name=section_name,
+                        element_type=element_type,
+                        element_index=i,
+                        old_config=current_items[i],
+                    )
+                )
+
+    def _analyze_config_changes(
+        self, current: Dict[str, Any], new: Dict[str, Any]
+    ) -> List[ConfigChange]:
+        """Analyze two structured configurations and return list of actionable changes.
+
+        This method compares HAProxy configuration sections and returns a list of
+        ConfigChange objects that can be applied using granular dataplane API endpoints.
+
+        Args:
+            current: Current structured configuration
+            new: New structured configuration
+
+        Returns:
+            List of ConfigChange objects representing the required changes
+        """
+        changes: List[ConfigChange] = []
+
+        # Compare backends
+        current_backends = {
+            b.name: b for b in current.get("backends", []) if hasattr(b, "name")
+        }
+        new_backends = {
+            b.name: b for b in new.get("backends", []) if hasattr(b, "name")
+        }
+
+        current_names = set(current_backends.keys())
+        new_names = set(new_backends.keys())
+
+        # Backend deletions
+        for name in current_names - new_names:
+            changes.append(
+                ConfigChange(
+                    change_type=ConfigChangeType.DELETE,
+                    section_type=ConfigSectionType.BACKEND,
+                    section_name=name,
+                    old_config=current_backends[name],
+                )
+            )
+
+        # Backend additions
+        for name in new_names - current_names:
+            changes.append(
+                ConfigChange(
+                    change_type=ConfigChangeType.CREATE,
+                    section_type=ConfigSectionType.BACKEND,
+                    section_name=name,
+                    new_config=new_backends[name],
+                )
+            )
+
+        # Backend modifications
+        for name in current_names & new_names:
+            if _to_dict_safe(current_backends[name]) != _to_dict_safe(
+                new_backends[name]
+            ):
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.UPDATE,
+                        section_type=ConfigSectionType.BACKEND,
+                        section_name=name,
+                        new_config=new_backends[name],
+                        old_config=current_backends[name],
+                    )
+                )
+
+            # Compare nested elements within existing backends
+            current_nested = (
+                current.get("nested_elements", {}).get("backends", {}).get(name, {})
+            )
+            new_nested = (
+                new.get("nested_elements", {}).get("backends", {}).get(name, {})
+            )
+            self._compare_nested_elements(
+                current_nested, new_nested, ConfigSectionType.BACKEND, name, changes
+            )
+
+        # Compare frontends
+        current_frontends = {
+            f.name: f for f in current.get("frontends", []) if hasattr(f, "name")
+        }
+        new_frontends = {
+            f.name: f for f in new.get("frontends", []) if hasattr(f, "name")
+        }
+
+        current_names = set(current_frontends.keys())
+        new_names = set(new_frontends.keys())
+
+        # Frontend deletions
+        for name in current_names - new_names:
+            changes.append(
+                ConfigChange(
+                    change_type=ConfigChangeType.DELETE,
+                    section_type=ConfigSectionType.FRONTEND,
+                    section_name=name,
+                    old_config=current_frontends[name],
+                )
+            )
+
+        # Frontend additions
+        for name in new_names - current_names:
+            changes.append(
+                ConfigChange(
+                    change_type=ConfigChangeType.CREATE,
+                    section_type=ConfigSectionType.FRONTEND,
+                    section_name=name,
+                    new_config=new_frontends[name],
+                )
+            )
+
+        # Frontend modifications
+        for name in current_names & new_names:
+            if _to_dict_safe(current_frontends[name]) != _to_dict_safe(
+                new_frontends[name]
+            ):
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.UPDATE,
+                        section_type=ConfigSectionType.FRONTEND,
+                        section_name=name,
+                        new_config=new_frontends[name],
+                        old_config=current_frontends[name],
+                    )
+                )
+
+            # Compare nested elements within existing frontends
+            current_nested = (
+                current.get("nested_elements", {}).get("frontends", {}).get(name, {})
+            )
+            new_nested = (
+                new.get("nested_elements", {}).get("frontends", {}).get(name, {})
+            )
+            self._compare_nested_elements(
+                current_nested, new_nested, ConfigSectionType.FRONTEND, name, changes
+            )
+
+        # Compare defaults sections
+        current_defaults = current.get("defaults", [])
+        new_defaults = new.get("defaults", [])
+
+        # For defaults sections, we compare by name (if available) or fallback to index
+        for i, new_def in enumerate(new_defaults):
+            if i < len(current_defaults):
+                # Use the name from the new defaults object if available, otherwise fallback to index-based name
+                section_name = getattr(new_def, "name", None) or f"defaults-{i}"
+
+                # Existing defaults section - check if it needs updating
+                if _to_dict_safe(current_defaults[i]) != _to_dict_safe(new_def):
+                    changes.append(
+                        ConfigChange(
+                            change_type=ConfigChangeType.UPDATE,
+                            section_type=ConfigSectionType.DEFAULTS,
+                            section_name=section_name,
+                            new_config=new_def,
+                            old_config=current_defaults[i],
+                        )
+                    )
+
+                # Skip nested element comparison for defaults sections
+                # HAProxy Dataplane API v3 limitation: defaults sections don't support nested
+                # element endpoints (they return HTTP 501). Defaults are handled as atomic units
+                # and any changes trigger a full section update using full_section=true.
+
+        # Compare global section
+        current_global = current.get("global")
+        new_global = new.get("global")
+
+        if current_global and new_global:
+            if _to_dict_safe(current_global) != _to_dict_safe(new_global):
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.UPDATE,
+                        section_type=ConfigSectionType.GLOBAL,
+                        section_name="global",
+                        new_config=new_global,
+                        old_config=current_global,
+                    )
+                )
+        elif new_global and not current_global:
+            changes.append(
+                ConfigChange(
+                    change_type=ConfigChangeType.CREATE,
+                    section_type=ConfigSectionType.GLOBAL,
+                    section_name="global",
+                    new_config=new_global,
+                )
+            )
+        elif current_global and not new_global:
+            changes.append(
+                ConfigChange(
+                    change_type=ConfigChangeType.DELETE,
+                    section_type=ConfigSectionType.GLOBAL,
+                    section_name="global",
+                    old_config=current_global,
+                )
+            )
+
+        # Helper function for named sections
+        def analyze_named_sections(section_key: str, section_type: ConfigSectionType):
+            """Analyze named configuration sections for changes."""
+            current_sections = {
+                s.name: s
+                for s in current.get(section_key, [])
+                if hasattr(s, "name") and s.name
+            }
+            new_sections = {
+                s.name: s
+                for s in new.get(section_key, [])
+                if hasattr(s, "name") and s.name
+            }
+
+            current_names = set(current_sections.keys())
+            new_names = set(new_sections.keys())
+
+            # Deletions
+            for name in current_names - new_names:
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.DELETE,
+                        section_type=section_type,
+                        section_name=name,
+                        old_config=current_sections[name],
+                    )
+                )
+
+            # Additions
+            for name in new_names - current_names:
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.CREATE,
+                        section_type=section_type,
+                        section_name=name,
+                        new_config=new_sections[name],
+                    )
+                )
+
+            # Modifications
+            for name in current_names & new_names:
+                if _to_dict_safe(current_sections[name]) != _to_dict_safe(
+                    new_sections[name]
+                ):
+                    changes.append(
+                        ConfigChange(
+                            change_type=ConfigChangeType.UPDATE,
+                            section_type=section_type,
+                            section_name=name,
+                            new_config=new_sections[name],
+                            old_config=current_sections[name],
+                        )
+                    )
+
+        # Analyze all named sections
+        analyze_named_sections("userlists", ConfigSectionType.USERLIST)
+        analyze_named_sections("caches", ConfigSectionType.CACHE)
+        analyze_named_sections("mailers", ConfigSectionType.MAILERS)
+        analyze_named_sections("resolvers", ConfigSectionType.RESOLVER)
+        analyze_named_sections("peers", ConfigSectionType.PEER)
+        analyze_named_sections("fcgi_apps", ConfigSectionType.FCGI_APP)
+        analyze_named_sections("http_errors", ConfigSectionType.HTTP_ERRORS)
+        analyze_named_sections("rings", ConfigSectionType.RING)
+        analyze_named_sections("log_forwards", ConfigSectionType.LOG_FORWARD)
+        analyze_named_sections("programs", ConfigSectionType.PROGRAM)
+
+        return changes
 
     def _compare_structured_configs(
         self, current: Dict[str, Any], new: Dict[str, Any]
@@ -1360,35 +3068,14 @@ class ConfigSynchronizer:
         changes: List[str] = []
         max_changes_before_exit = MAX_CONFIG_COMPARISON_CHANGES
 
-        # Helper function to convert to dict if has to_dict method with defensive handling
-        def to_dict_safe(obj: Any) -> Any:
-            try:
-                return obj.to_dict() if hasattr(obj, "to_dict") else obj
-            except Exception as e:
-                logger.debug(f"Failed to serialize configuration object: {e}")
-                # Return a minimal representation to allow comparison to continue
-                return {
-                    "__serialization_error__": str(e),
-                    "__type__": type(obj).__name__,
-                }
-
-        # Helper function to check for early exit condition
-        def check_early_exit() -> bool:
-            if len(changes) >= max_changes_before_exit:
-                changes.append(
-                    f"... and more (stopped after {max_changes_before_exit} changes)"
-                )
-                return True
-            return False
-
         # Compare backends - optimized with dict comprehensions
         current_backends = {
-            b.name: to_dict_safe(b)
+            b.name: _to_dict_safe(b)
             for b in current.get("backends", [])
             if hasattr(b, "name")
         }
         new_backends = {
-            b.name: to_dict_safe(b)
+            b.name: _to_dict_safe(b)
             for b in new.get("backends", [])
             if hasattr(b, "name")
         }
@@ -1398,11 +3085,11 @@ class ConfigSynchronizer:
         new_names = set(new_backends.keys())
 
         changes.extend(f"remove backend {name}" for name in current_names - new_names)
-        if check_early_exit():
+        if _check_early_exit_condition(changes, max_changes_before_exit):
             return changes
 
         changes.extend(f"add backend {name}" for name in new_names - current_names)
-        if check_early_exit():
+        if _check_early_exit_condition(changes, max_changes_before_exit):
             return changes
 
         changes.extend(
@@ -1410,17 +3097,17 @@ class ConfigSynchronizer:
             for name in current_names & new_names
             if current_backends[name] != new_backends[name]
         )
-        if check_early_exit():
+        if _check_early_exit_condition(changes, max_changes_before_exit):
             return changes
 
         # Compare frontends - same optimization
         current_frontends = {
-            f.name: to_dict_safe(f)
+            f.name: _to_dict_safe(f)
             for f in current.get("frontends", [])
             if hasattr(f, "name")
         }
         new_frontends = {
-            f.name: to_dict_safe(f)
+            f.name: _to_dict_safe(f)
             for f in new.get("frontends", [])
             if hasattr(f, "name")
         }
@@ -1429,11 +3116,11 @@ class ConfigSynchronizer:
         new_names = set(new_frontends.keys())
 
         changes.extend(f"remove frontend {name}" for name in current_names - new_names)
-        if check_early_exit():
+        if _check_early_exit_condition(changes, max_changes_before_exit):
             return changes
 
         changes.extend(f"add frontend {name}" for name in new_names - current_names)
-        if check_early_exit():
+        if _check_early_exit_condition(changes, max_changes_before_exit):
             return changes
 
         changes.extend(
@@ -1441,12 +3128,12 @@ class ConfigSynchronizer:
             for name in current_names & new_names
             if current_frontends[name] != new_frontends[name]
         )
-        if check_early_exit():
+        if _check_early_exit_condition(changes, max_changes_before_exit):
             return changes
 
         # Compare defaults sections
-        current_defaults = [to_dict_safe(d) for d in current.get("defaults", [])]
-        new_defaults = [to_dict_safe(d) for d in new.get("defaults", [])]
+        current_defaults = [_to_dict_safe(d) for d in current.get("defaults", [])]
+        new_defaults = [_to_dict_safe(d) for d in new.get("defaults", [])]
 
         if len(current_defaults) != len(new_defaults):
             changes.append(
@@ -1465,12 +3152,12 @@ class ConfigSynchronizer:
             nonlocal changes
             try:
                 current_sections = {
-                    s.name: to_dict_safe(s)
+                    s.name: _to_dict_safe(s)
                     for s in current.get(section_name, [])
                     if hasattr(s, "name") and s.name
                 }
                 new_sections = {
-                    s.name: to_dict_safe(s)
+                    s.name: _to_dict_safe(s)
                     for s in new.get(section_name, [])
                     if hasattr(s, "name") and s.name
                 }
@@ -1482,14 +3169,14 @@ class ConfigSynchronizer:
                     f"remove {section_name[:-1]} {name}"
                     for name in current_names - new_names
                 )
-                if check_early_exit():
+                if _check_early_exit_condition(changes, max_changes_before_exit):
                     return True
 
                 changes.extend(
                     f"add {section_name[:-1]} {name}"
                     for name in new_names - current_names
                 )
-                if check_early_exit():
+                if _check_early_exit_condition(changes, max_changes_before_exit):
                     return True
 
                 changes.extend(
@@ -1497,25 +3184,25 @@ class ConfigSynchronizer:
                     for name in current_names & new_names
                     if current_sections[name] != new_sections[name]
                 )
-                return check_early_exit()
+                return _check_early_exit_condition(changes, max_changes_before_exit)
             except Exception as e:
                 logger.debug(f"Error comparing {section_name}: {type(e).__name__}: {e}")
                 changes.append(f"error comparing {section_name}: {type(e).__name__}")
-                return check_early_exit()
+                return _check_early_exit_condition(changes, max_changes_before_exit)
 
         # Helper function to compare list sections (similar to defaults)
         def compare_list_sections(section_name: str) -> bool:
             """Compare list configuration sections and return True if early exit needed."""
             nonlocal changes
             try:
-                current_list = [to_dict_safe(s) for s in current.get(section_name, [])]
-                new_list = [to_dict_safe(s) for s in new.get(section_name, [])]
+                current_list = [_to_dict_safe(s) for s in current.get(section_name, [])]
+                new_list = [_to_dict_safe(s) for s in new.get(section_name, [])]
 
                 if len(current_list) != len(new_list):
                     changes.append(
                         f"{section_name} count changed from {len(current_list)} to {len(new_list)}"
                     )
-                    return check_early_exit()
+                    return _check_early_exit_condition(changes, max_changes_before_exit)
                 else:
                     changes.extend(
                         f"modify {section_name} section {i}"
@@ -1524,11 +3211,11 @@ class ConfigSynchronizer:
                         )
                         if curr != new_item
                     )
-                    return check_early_exit()
+                    return _check_early_exit_condition(changes, max_changes_before_exit)
             except Exception as e:
                 logger.debug(f"Error comparing {section_name}: {type(e).__name__}: {e}")
                 changes.append(f"error comparing {section_name}: {type(e).__name__}")
-                return check_early_exit()
+                return _check_early_exit_condition(changes, max_changes_before_exit)
 
         # Compare all named sections
         if compare_named_sections("userlists"):
@@ -1562,8 +3249,8 @@ class ConfigSynchronizer:
             return changes
 
         # Compare global section
-        current_global = to_dict_safe(current.get("global"))
-        new_global = to_dict_safe(new.get("global"))
+        current_global = _to_dict_safe(current.get("global"))
+        new_global = _to_dict_safe(new.get("global"))
 
         if current_global and new_global:
             if current_global != new_global:
@@ -1601,13 +3288,7 @@ class ConfigSynchronizer:
         Returns:
             Dict with keys: method, version
         """
-        client = DataplaneClient(
-            url,
-            auth=(
-                self.credentials.dataplane.username,
-                self.credentials.dataplane.password.get_secret_value(),
-            ),
-        )
+        client = self._production_clients[url]
 
         # Sync auxiliary content first (maps, certs, files)
         await self._sync_content_to_client(
@@ -1618,22 +3299,39 @@ class ConfigSynchronizer:
         try:
             production_structured = await client.fetch_structured_configuration()
 
-            # Compare structured configurations
-            changes_needed = self._compare_structured_configs(
+            # Analyze structured configurations to get actionable changes
+            config_changes = self._analyze_config_changes(
                 production_structured, validation_structured
             )
 
-            if not changes_needed:
+            if not config_changes:
                 # No changes needed - skip deployment
                 logger.debug(f"⏭️  No structural changes for {url}, skipping deployment")
                 return {"method": "skipped", "version": "unchanged"}
             else:
-                # Changes detected - deploy
+                # Changes detected - use structured deployment
+                change_descriptions = [str(change) for change in config_changes]
                 logger.debug(
-                    f"📝 {len(changes_needed)} changes detected for {url}: {', '.join(changes_needed[:5])}"
+                    f"📝 {len(config_changes)} changes detected for {url}: {', '.join(change_descriptions[:5])}"
                 )
-                version = await client.deploy_configuration(config)
-                return {"method": "structured", "version": version}
+
+                try:
+                    version = await client.deploy_structured_configuration(
+                        config_changes
+                    )
+                    return {"method": "structured", "version": version}
+                except DataplaneAPIError as structured_error:
+                    # If structured deployment fails, fall back to raw deployment
+                    logger.warning(
+                        f"⚠️  Structured deployment failed for {url}, falling back to raw: {structured_error}"
+                    )
+
+                    # Record structured deployment failure metrics
+                    metrics = get_metrics_collector()
+                    metrics.increment_dataplane_fallback("structured_to_raw")
+
+                    version = await client.deploy_configuration(config)
+                    return {"method": "raw_fallback", "version": version}
 
         except Exception as fetch_error:
             # Fallback to conditional deployment if structured comparison fails
@@ -1714,16 +3412,12 @@ class ConfigSynchronizer:
             config_context
         )
 
-        # Step 1: Sync content to validation instance and validate
-        validation_client = DataplaneClient(
-            self.validation_url,
-            auth=(
-                self.credentials.validation.username,
-                self.credentials.validation.password.get_secret_value(),
-            ),
-        )
+        # Update production clients to handle dynamic URL changes
+        self._update_production_clients(self.production_urls)
 
+        # Step 1: Sync content to validation instance and validate
         logger.debug("🔍 Validating configuration and syncing auxiliary content")
+        validation_client = self._get_validation_client()
         await self._sync_content_to_client(
             validation_client,
             maps_to_sync,
@@ -1788,6 +3482,7 @@ class ConfigSynchronizer:
                     method_emojis = {
                         "structured": "🏗️",
                         "conditional": "✅",
+                        "raw_fallback": "🔄",
                         "fallback": "🔄",
                     }
                     method_emoji = method_emojis.get(result["method"], "✅")

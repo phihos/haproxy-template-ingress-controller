@@ -1,47 +1,52 @@
 """
-E2E test utilities for HAProxy Template IC.
+Test utilities for HAProxy Template IC end-to-end tests.
 
-This package provides shared utilities for end-to-end testing including
-assertion helpers, Kubernetes interaction utilities, and operator-specific
-test helpers.
+This package provides utilities for:
+- Telepresence connection management
+- Local operator execution
+- Test helpers and assertions
+- Management socket communication
 """
 
-# Import commonly used utilities for convenience
-from .assertions import (
+# Import main utilities from consolidated modules
+from .helpers import (
+    # Operator helpers
+    wait_for_operator_ready,
+    wait_for_watch_streams_ready,
+    assert_log_line,
+    assert_config_change,
+    count_log_occurrences,
+    assert_no_reload_loop,
+    assert_operator_health,
+    # Socket communication
+    send_socket_command,
+    # Assertions
     verify_config_contains,
     verify_response_has_structure,
     assert_config_structure,
     assert_dump_all_response_structure,
 )
 
-from .k8s_helpers import (
-    send_socket_command,
-)
-
-from .operator_helpers import (
-    assert_log_line,
-    wait_for_operator_ready,
-    wait_for_watch_streams_ready,
-    assert_config_change,
-    assert_operator_health,
-    count_log_occurrences,
-    assert_no_reload_loop,
-)
+from .local_operator import LocalOperatorRunner
+from .telepresence import TelepresenceConnection
 
 __all__ = [
+    # Classes
+    "LocalOperatorRunner",
+    "TelepresenceConnection",
+    # Operator helpers
+    "wait_for_operator_ready",
+    "wait_for_watch_streams_ready",
+    "assert_log_line",
+    "assert_config_change",
+    "count_log_occurrences",
+    "assert_no_reload_loop",
+    "assert_operator_health",
+    # Socket communication
+    "send_socket_command",
     # Assertions
     "verify_config_contains",
     "verify_response_has_structure",
     "assert_config_structure",
     "assert_dump_all_response_structure",
-    # K8s helpers
-    "send_socket_command",
-    # Operator helpers
-    "assert_log_line",
-    "wait_for_operator_ready",
-    "wait_for_watch_streams_ready",
-    "assert_config_change",
-    "assert_operator_health",
-    "count_log_occurrences",
-    "assert_no_reload_loop",
 ]

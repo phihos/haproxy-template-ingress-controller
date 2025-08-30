@@ -56,7 +56,54 @@ dist/
 build/
 .coverage*
 coverage.xml
+
+# Development and documentation files
 README.md
-tests
-charts
-deploy
+CLAUDE.md
+STYLEGUIDE.md
+CONTRIBUTING.md
+CHANGELOG.md
+LICENSE*
+*.md
+docs/
+scripts/
+.github/
+
+# Development configurations
+kind-config.yaml
+.pre-commit-config.yaml
+pyproject.toml.bak
+requirements*.txt
+compose.yml
+compose.yaml
+docker-compose.yml
+docker-compose.yaml
+
+# Testing and CI/CD
+tests/
+.tox/
+.pytest_cache/
+.pytest-kind/
+charts/
+deploy/
+.ruff_cache/
+htmlcov/
+.nyc_output/
+
+# Development artifacts
+mgmt.sock
+*.sock
+*.log
+*.tmp
+.coverage*
+coverage.xml
+junit.xml
+
+# Editor and IDE specific
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.editorconfig
+.vim/

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-template-ic
+  namespace: haproxy-template-ic
+spec:
+  ports:
+    - name: http
+      port: 8080
+      targetPort: healthz
+    - name: validation-api
+      port: 5555
+      targetPort: validation-api
+      protocol: TCP

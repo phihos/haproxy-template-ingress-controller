@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Protocol, Tuple, Union
 
-from haproxy_template_ic.constants import DEFAULT_SOCKET_PATH, SOCKET_BUFFER_SIZE
+from haproxy_template_ic.constants import SOCKET_BUFFER_SIZE
 from haproxy_template_ic.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
@@ -179,20 +179,37 @@ def serialize_state(memo: Any) -> Dict[str, Any]:
         errors.append(f"metadata serialization: {e}")
         state["metadata"] = {"configmap_name": None}
 
-    # Serialize CLI options with specific error handling
+    # Serialize CLI options (bootstrap parameters only)
     try:
         if hasattr(memo, "cli_options") and memo.cli_options:
             state["cli_options"] = {
                 "configmap_name": memo.cli_options.configmap_name,
-                "healthz_port": memo.cli_options.healthz_port,
-                "verbose": memo.cli_options.verbose,
-                "socket_path": memo.cli_options.socket_path,
+                "secret_name": memo.cli_options.secret_name,
             }
         else:
             state["cli_options"] = {}
     except (AttributeError, TypeError) as e:
         errors.append(f"cli_options serialization: {e}")
         state["cli_options"] = {}
+
+    # Serialize operator configuration (runtime settings)
+    try:
+        if hasattr(memo, "config") and memo.config:
+            state["operator_config"] = {
+                "healthz_port": memo.config.operator.healthz_port,
+                "metrics_port": memo.config.operator.metrics_port,
+                "socket_path": memo.config.operator.socket_path,
+                "verbose": memo.config.logging.verbose,
+                "structured_logging": memo.config.logging.structured,
+                "tracing_enabled": memo.config.tracing.enabled,
+                "validation_dataplane_host": memo.config.validation.dataplane_host,
+                "validation_dataplane_port": memo.config.validation.dataplane_port,
+            }
+        else:
+            state["operator_config"] = {}
+    except (AttributeError, TypeError) as e:
+        errors.append(f"operator_config serialization: {e}")
+        state["operator_config"] = {}
 
     # Serialize indices with specific error handling
     try:
@@ -229,7 +246,7 @@ class ManagementSocketServer:
     def __init__(
         self,
         memo: Any,
-        socket_path: str = DEFAULT_SOCKET_PATH,
+        socket_path: str = "/run/haproxy-template-ic/management.sock",
     ) -> None:
         self.memo = memo
         self.logger = logger
@@ -404,6 +421,18 @@ class ManagementSocketServer:
     async def run(self) -> None:
         """Run the management socket server."""
         try:
+            # Ensure parent directory exists (needed for mirrord compatibility)
+            socket_dir = self.socket_path.parent
+            if not socket_dir.exists():
+                try:
+                    socket_dir.mkdir(parents=True, exist_ok=True)
+                    self.logger.debug(f"🔌 Created socket directory: {socket_dir}")
+                except (PermissionError, OSError) as e:
+                    self.logger.warning(
+                        f"Could not create socket directory {socket_dir}: {e}"
+                    )
+                    # Continue anyway - the socket creation will fail with a more specific error
+
             # Remove existing socket file if it exists
             if self.socket_path.exists():
                 self.socket_path.unlink()
@@ -433,7 +462,12 @@ class ManagementSocketServer:
             self.logger.info("🔌 Management socket server was cancelled")
             raise
         except Exception as e:
-            self.logger.error(f"❌ Management socket server error: {e}")
+            self.logger.error(
+                f"❌ Management socket server (path {self.socket_path}) error: {e}"
+            )
+            import traceback
+
+            logger.error(traceback.format_exc())
             # Don't re-raise other exceptions to avoid crashing the operator
         finally:
             self._cleanup()

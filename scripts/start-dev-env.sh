@@ -38,6 +38,80 @@ warn() { echo -e "${YELLOW}⚠${NC} $*"; }
 err() { echo -e "${RED}✖${NC} $*"; }
 debug() { [[ "$VERBOSE" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $*" || true; }
 
+detect_kind_host_ip() {
+    local kind_network_name="kind"
+    
+    # Try to get the Kind Docker network gateway IP
+    if command -v docker &>/dev/null; then
+        local gateway_ip
+        gateway_ip=$(docker network inspect "$kind_network_name" 2>/dev/null | grep -A5 '"Config"' | grep '"Gateway"' | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
+        
+        if [[ -n "$gateway_ip" && "$gateway_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "$gateway_ip"
+            return 0
+        fi
+    fi
+    
+    # Fallback to common Kind gateway IPs
+    for candidate in "172.20.0.1" "172.18.0.1" "172.17.0.1"; do
+        if timeout 1 bash -c "exec 3<>/dev/tcp/$candidate/1" 2>/dev/null; then
+            echo "$candidate"
+            return 0
+        fi 2>/dev/null
+    done
+    
+    # Last resort: Kind default
+    echo "172.20.0.1"
+}
+
+ensure_buildx_builder() {
+    local builder_name="haproxy-ic-builder"
+    
+    debug "Checking for docker-container builder..."
+    
+    # Check if our builder already exists
+    if docker buildx ls 2>/dev/null | grep -q "^${builder_name}"; then
+        debug "Builder '${builder_name}' already exists"
+        docker buildx use "${builder_name}" >/dev/null 2>&1
+        return 0
+    fi
+    
+    # Create and bootstrap the builder
+    debug "Creating docker-container builder '${builder_name}'..."
+    if [[ "$VERBOSE" == "true" ]]; then
+        log INFO "Setting up docker-container builder for optimized caching..."
+        docker buildx create --driver docker-container --name "${builder_name}" --bootstrap
+    else
+        docker buildx create --driver docker-container --name "${builder_name}" --bootstrap >/dev/null 2>&1
+    fi
+    
+    if [[ $? -eq 0 ]]; then
+        docker buildx use "${builder_name}" >/dev/null 2>&1
+        debug "Builder '${builder_name}' created and activated"
+        return 0
+    else
+        warn "Failed to create docker-container builder, falling back to default driver"
+        return 1
+    fi
+}
+
+cleanup_buildx_builder() {
+    local builder_name="haproxy-ic-builder"
+    
+    debug "Cleaning up docker-container builder..."
+    
+    # Switch back to default builder first
+    docker buildx use default >/dev/null 2>&1
+    
+    # Remove our builder if it exists
+    if docker buildx ls 2>/dev/null | grep -q "^${builder_name}"; then
+        log INFO "Removing docker-container builder '${builder_name}'..."
+        docker buildx rm "${builder_name}" >/dev/null 2>&1 || true
+        ok "Builder removed"
+    fi
+}
+
+
 print_section() {
     echo
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -99,6 +173,11 @@ COMMANDS:
     clean       Clean up and reset environment
     test        Test ingress controller functionality
     port-forward Setup port forwarding for HAProxy services
+    debug       Enable debug mode (sleeps controller, creates dev config)
+    no-debug    Disable debug mode (restores normal operation)
+    telepresence-connect    Connect to cluster via Telepresence
+    telepresence-disconnect Disconnect Telepresence
+    telepresence-status     Show Telepresence connection status
 
 OPTIONS:
     --cluster-name NAME     Custom cluster name (default: haproxy-template-ic-dev)
@@ -122,6 +201,9 @@ EXAMPLES:
     $0 port-forward         # Setup port forwarding for testing
     $0 down                 # Delete cluster
     $0 restart --verbose    # Restart with debug output
+    $0 debug                # Enter debug mode for local development
+    $0 telepresence-connect # Connect via Telepresence for debugging
+    $0 no-debug             # Exit debug mode
 
 EOF
 }
@@ -276,6 +358,13 @@ troubleshooting() {
 		missing-docker)
 			warn "Install Docker: https://docs.docker.com/get-docker/ and ensure your user can run it (linux: add to docker group)."
 			;;
+		missing-telepresence)
+			warn "Install Telepresence: https://www.telepresence.io/docs/latest/install/"
+			echo "  - Linux/macOS: curl -fL https://app.getambassador.io/download/tel2/linux/amd64/latest/telepresence -o telepresence"
+			echo "  - Or use package manager:"
+			echo "    - Homebrew: brew install datawire/blackbird/telepresence"
+			echo "    - Arch: yay -S telepresence2"
+			;;
 		pull-failure)
 			warn "If the controller image cannot be pulled from GHCR:"
 			echo "  - Ensure network access to ghcr.io"
@@ -314,34 +403,206 @@ ensure_cluster() {
 	ok "Context configured."
 }
 
+install_telepresence_traffic_manager() {
+	log INFO "Installing Telepresence traffic manager..."
+	if telepresence helm install 2>/dev/null; then
+		ok "Telepresence traffic manager installed."
+	else
+		warn "Telepresence traffic manager already installed or installation failed."
+	fi
+}
+
+create_dev_configmap() {
+	log INFO "Creating development ConfigMap for Telepresence..."
+	
+	# Get the original ConfigMap
+	kubectl -n "${CTRL_NAMESPACE}" get configmap haproxy-template-ic-config -o yaml > /tmp/original-configmap.yaml
+	
+	# Create modified ConfigMap with dev-specific settings
+	sed -e 's/name: haproxy-template-ic-config/name: haproxy-template-ic-config-dev/' \
+	    -e 's/dataplane_host: localhost/dataplane_host: haproxy-template-ic/' \
+	    -e 's|socket_path: /run/haproxy-template-ic/management.sock|socket_path: mgmt.sock|' \
+	    /tmp/original-configmap.yaml | kubectl apply -f -
+	
+	rm -f /tmp/original-configmap.yaml
+	ok "Development ConfigMap created."
+}
+
+remove_dev_configmap() {
+	log INFO "Removing development ConfigMap..."
+	kubectl -n "${CTRL_NAMESPACE}" delete configmap haproxy-template-ic-config-dev --ignore-not-found=true
+	ok "Development ConfigMap removed."
+}
+
+enter_debug_mode() {
+	print_section "🐛 Entering Debug Mode"
+	
+	log INFO "Setting controller to sleep mode..."
+	kubectl -n "${CTRL_NAMESPACE}" patch deployment haproxy-template-ic \
+		--type='json' \
+		-p='[{"op": "replace", "path": "/spec/template/spec/containers/0/command", "value": ["/usr/bin/sleep"]}, 
+		     {"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["infinity"]},
+		     {"op": "replace", "path": "/spec/template/spec/containers/0/env/0/value", "value": "haproxy-template-ic-config-dev"}]'
+	
+	log INFO "Waiting for controller to enter sleep mode..."
+	kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-template-ic --timeout=60s
+	
+	create_dev_configmap
+	
+	ok "Debug mode enabled. Controller is sleeping and dev ConfigMap created."
+	echo
+	ok "🚀 Next steps for local development:"
+	echo "  1. Connect via Telepresence: $0 telepresence-connect"
+	echo "  2. Run locally: CONFIGMAP_NAME=haproxy-template-ic-config-dev SECRET_NAME=haproxy-template-ic-credentials uv run haproxy-template-ic run"
+	echo "  3. Management socket will be available at: mgmt.sock"
+	echo "  4. When done, restore: $0 no-debug"
+}
+
+exit_debug_mode() {
+	print_section "🔄 Exiting Debug Mode"
+	
+	log INFO "Restoring controller to normal operation..."
+	kubectl -n "${CTRL_NAMESPACE}" patch deployment haproxy-template-ic \
+		--type='json' \
+		-p='[{"op": "replace", "path": "/spec/template/spec/containers/0/command", "value": ["haproxy-template-ic"]}, 
+		     {"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["run"]},
+		     {"op": "replace", "path": "/spec/template/spec/containers/0/env/0/value", "value": "haproxy-template-ic-config"}]'
+	
+	log INFO "Waiting for controller to restart..."
+	kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-template-ic --timeout=120s
+	
+	remove_dev_configmap
+	
+	ok "Debug mode disabled. Controller restored to normal operation."
+}
+
+telepresence_connect() {
+	print_section "🔌 Connecting via Telepresence"
+	
+	if ! command -v telepresence >/dev/null 2>&1; then
+		err "Telepresence not found. Please install it first."
+		troubleshooting "missing-telepresence"
+		return 1
+	fi
+	
+	log INFO "Connecting to cluster via Telepresence..."
+	telepresence connect --context "kind-${CLUSTER_NAME}" --namespace "${CTRL_NAMESPACE}"
+	
+	if [ $? -eq 0 ]; then
+		ok "Telepresence connected successfully."
+		echo
+		ok "🎯 Development environment ready:"
+		echo "  - Run locally: CONFIGMAP_NAME=haproxy-template-ic-config-dev SECRET_NAME=haproxy-template-ic-credentials uv run haproxy-template-ic run"
+		echo "  - Management socket: mgmt.sock"
+		echo "  - Validation endpoint: haproxy-template-ic:5555"
+		echo "  - Disconnect: $0 telepresence-disconnect"
+	else
+		err "Failed to connect via Telepresence."
+		return 1
+	fi
+}
+
+telepresence_disconnect() {
+	print_section "🔌 Disconnecting Telepresence"
+	
+	log INFO "Disconnecting from cluster..."
+	telepresence quit
+	
+	ok "Telepresence disconnected."
+}
+
+telepresence_status() {
+	print_section "📊 Telepresence Status"
+	
+	if ! command -v telepresence >/dev/null 2>&1; then
+		err "Telepresence not found."
+		troubleshooting "missing-telepresence"
+		return 1
+	fi
+	
+	telepresence status
+}
+
 build_and_load_local_image() {
     if [[ "$SKIP_BUILD" == "true" ]] && docker image inspect "${LOCAL_IMAGE}" >/dev/null 2>&1; then
         ok "Using existing image '${LOCAL_IMAGE}'"
         return 0
     fi
     
-    local build_args=("--target" "production" "-t" "${LOCAL_IMAGE}" ".")
-    if [[ "$FORCE_REBUILD" == "true" ]]; then
-        build_args=("--no-cache" "${build_args[@]}")
+    # Determine build target based on image tag
+    local build_target="production"
+    if [[ "${LOCAL_IMAGE}" == *":debug" ]]; then
+        build_target="debug"
     fi
     
-    run_with_spinner "Building local controller image '${LOCAL_IMAGE}'" \
-        docker build "${build_args[@]}"
+    # Set up docker-container builder for cache optimization
+    local use_cache=false
+    if ensure_buildx_builder; then
+        use_cache=true
+        debug "Using docker-container builder with cache optimization"
+    else
+        debug "Using default docker driver without cache"
+        export DOCKER_BUILDKIT=1
+    fi
+    
+    local build_args=("--target" "${build_target}" "-t" "${LOCAL_IMAGE}" "--load")
+    local docker_path
+    docker_path="$(command -v docker)"
+    local build_cmd="${docker_path}"
+    
+    if [[ "$use_cache" == "true" ]]; then
+        build_cmd="${docker_path} buildx"
+        
+        # Add cache optimization for faster rebuilds
+        if [[ "$FORCE_REBUILD" == "true" ]]; then
+            build_args+=("--no-cache")
+        else
+            # Use local cache for faster iteration
+            local cache_dir="/tmp/haproxy-template-ic-buildcache"
+            build_args+=(
+                "--cache-from" "type=local,src=${cache_dir}"
+                "--cache-to" "type=local,dest=${cache_dir}"
+            )
+        fi
+    else
+        # Fallback to standard docker build without cache
+        if [[ "$FORCE_REBUILD" == "true" ]]; then
+            build_args+=("--no-cache")
+        fi
+    fi
+    
+    build_args+=(".")
+    
+    local build_message="Building controller image '${LOCAL_IMAGE}' (target: ${build_target}"
+    if [[ "$use_cache" == "true" ]]; then
+        build_message+=", with cache optimization"
+    fi
+    build_message+=")"
+    
+    if [[ "$use_cache" == "true" ]]; then
+        run_with_spinner "$build_message" \
+            "${docker_path}" buildx build "${build_args[@]}"
+    else
+        run_with_spinner "$build_message" \
+            "${build_cmd}" build "${build_args[@]}"
+    fi
     
     run_with_spinner "Loading image into kind cluster '${CLUSTER_NAME}'" \
         kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
 }
 
 deploy_controller() {
+    local overlay_name="${1:-dev}"
+    
     build_and_load_local_image || {
         err "Failed to build or load image"
         return 1
     }
     
-    print_section "🚀 Deploying Controller"
+    print_section "🚀 Deploying Controller (${overlay_name} mode)"
     
     log INFO "Deploying haproxy-template-ic to namespace '${CTRL_NAMESPACE}' using kustomize overlay..."
-    retry_with_backoff 3 2 kubectl apply -k deploy/overlays/dev || {
+    retry_with_backoff 3 2 kubectl apply -k "deploy/overlays/${overlay_name}" || {
         err "Failed to apply kustomize overlay"
         cleanup_failed_deployment
         return 1
@@ -359,16 +620,21 @@ deploy_controller() {
     fi
     ok "Controller is ready."
     
-    # Wait for HAProxy production deployment
-    log INFO "Waiting for HAProxy production deployment to become ready..."
-    if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-production --timeout="${TIMEOUT}s"; then
-        warn "HAProxy production deployment rollout did not complete in ${TIMEOUT}s."
-        echo "  - Check HAProxy deployment status: kubectl -n ${CTRL_NAMESPACE} describe deploy/haproxy-production"
-        echo "  - Check HAProxy pod logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/haproxy-production -c haproxy"
-        echo "  - Check dataplane logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/haproxy-production -c dataplane"
-        return 1
+    # Wait for HAProxy production deployment (skip in debug mode since controller needs to configure it first)
+    if [[ "${overlay_name}" != "debug" ]]; then
+        log INFO "Waiting for HAProxy production deployment to become ready..."
+        if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-production --timeout="${TIMEOUT}s"; then
+            warn "HAProxy production deployment rollout did not complete in ${TIMEOUT}s."
+            echo "  - Check HAProxy deployment status: kubectl -n ${CTRL_NAMESPACE} describe deploy/haproxy-production"
+            echo "  - Check HAProxy pod logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/haproxy-production -c haproxy"
+            echo "  - Check dataplane logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/haproxy-production -c dataplane"
+            return 1
+        else
+            ok "HAProxy production deployment is ready."
+        fi
     else
-        ok "HAProxy production deployment is ready."
+        log INFO "Skipping HAProxy production deployment readiness check in debug mode"
+        ok "Debug mode: HAProxy will be configured once controller starts running."
     fi
 }
 
@@ -436,7 +702,10 @@ EOF
 	kubectl -n "${ECHO_NAMESPACE}" rollout status deployment/${ECHO_APP_NAME} --timeout=120s >/dev/null
 	ok "Echo Server is ready."
 
-	warn "The created Ingress targets host 'echo.localdev.me'. If you need real traffic routing, install an ingress controller (e.g. ingress-nginx) or integrate HAProxy dataplane as a data-plane. This project currently focuses on templating and watching resources. See Echo-Server docs: https://ealenn.github.io/Echo-Server/pages/quick-start/kubernetes.html"
+	ok "Echo Server deployed with Ingress resource."
+	echo "The Ingress for 'echo.localdev.me' is now being handled by haproxy-template-ic."
+	echo "Traffic will be routed through the production HAProxy instances on port 30080."
+	echo "Test with: curl -H 'Host: echo.localdev.me' http://localhost:30080"
 }
 
 # Development convenience functions
@@ -510,6 +779,9 @@ dev_clean() {
         warn "Cluster '$CLUSTER_NAME' not found"
     fi
     
+    # Clean up docker-container builder
+    cleanup_buildx_builder
+    
     # Clean up local images if requested
     if [[ "${1:-}" == "--images" ]]; then
         log INFO "Removing local images..."
@@ -564,6 +836,7 @@ test_ingress() {
         return 1
     fi
 }
+
 
 port_forward_haproxy() {
     print_section "🔄 Setting up Port Forwarding"
@@ -658,6 +931,7 @@ post_deploy_tips() {
 	echo "  - Template snippet system: Reusable Jinja2 snippets with {% include %} support"
 	echo "  - Resilience patterns: Adaptive timeouts, retry logic, and circuit breakers"
 	echo "  - Comprehensive observability: Prometheus metrics and OpenTelemetry tracing"
+	echo "  - Permissive networking: All traffic allowed for easier development and debugging"
 	echo "  - Optional features (disabled by default):"
 	echo "    - Structured JSON logging: Set STRUCTURED_LOGGING=true environment variable"
 	echo "    - Distributed tracing: Set TRACING_ENABLED=true and configure Jaeger endpoint"
@@ -679,8 +953,11 @@ post_deploy_tips() {
 	echo
 }
 
+
 dev_up() {
-    print_section "🏗️  Starting Development Environment"
+    local overlay_mode="${1:-dev}"
+    
+    print_section "🏗️  Starting Development Environment (${overlay_mode} mode)"
     
     log INFO "Preflight checks..."
     require_cmd kind
@@ -689,8 +966,10 @@ dev_up() {
     ok "Dependencies present."
 
     ensure_cluster
+    
+    install_telepresence_traffic_manager
 
-    deploy_controller || { 
+    deploy_controller "${overlay_mode}" || { 
         troubleshooting pull-failure
         return 1
     }
@@ -701,6 +980,7 @@ dev_up() {
     
     post_deploy_tips
 }
+
 
 main() {
     parse_args "$@"
@@ -729,6 +1009,21 @@ main() {
             ;;
         port-forward)
             port_forward_haproxy
+            ;;
+        debug)
+            enter_debug_mode
+            ;;
+        no-debug)
+            exit_debug_mode
+            ;;
+        telepresence-connect)
+            telepresence_connect
+            ;;
+        telepresence-disconnect)
+            telepresence_disconnect
+            ;;
+        telepresence-status)
+            telepresence_status
             ;;
         *)
             err "Unknown command: $COMMAND"

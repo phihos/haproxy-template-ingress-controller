@@ -127,6 +127,8 @@ class TestConfigSynchronizerComparison:
         current = {"global": None}
         global_obj = Mock()
         global_obj.to_dict.return_value = {"test": "value"}
+        # Mock objects need to have servers attribute return an empty list to avoid iteration errors
+        global_obj.servers = []
         new = {"global": global_obj}
 
         changes = config_synchronizer._compare_structured_configs(current, new)
@@ -142,8 +144,11 @@ class TestConfigSynchronizerComparison:
         # Test modifying global section
         global1 = Mock()
         global1.to_dict.return_value = {"option1": "value1"}
+        global1.servers = []  # Ensure servers attribute returns an empty list
+
         global2 = Mock()
         global2.to_dict.return_value = {"option1": "value2"}
+        global2.servers = []  # Ensure servers attribute returns an empty list
 
         current = {"global": global1}
         new = {"global": global2}
@@ -235,3 +240,113 @@ class TestStorageSyncEdgeCases:
         assert "existing_content == new_content" in source
         assert "Skipped file" in source
         assert "unchanged" in source
+
+
+class TestHelperFunctions:
+    """Test the new helper functions added for simplification."""
+
+    def test_check_early_exit_condition_no_exit(self):
+        """Test early exit condition when limit is not reached."""
+        from haproxy_template_ic.dataplane import _check_early_exit_condition
+
+        changes = ["change1", "change2"]
+        result = _check_early_exit_condition(changes, max_changes=5)
+
+        assert result is False
+        assert len(changes) == 2  # No changes added
+
+    def test_check_early_exit_condition_with_exit(self):
+        """Test early exit condition when limit is reached."""
+        from haproxy_template_ic.dataplane import _check_early_exit_condition
+
+        changes = ["change1", "change2", "change3", "change4", "change5"]
+        result = _check_early_exit_condition(changes, max_changes=5)
+
+        assert result is True
+        assert len(changes) == 6  # One more change added for "... and more"
+        assert "... and more" in changes[-1]
+
+    def test_log_fetch_error(self):
+        """Test error logging helper function."""
+        from haproxy_template_ic.dataplane import _log_fetch_error
+
+        # This should not raise an exception
+        _log_fetch_error("map", "test.map", Exception("test error"))
+
+        # Test with different types
+        _log_fetch_error("certificate", "cert.pem", ValueError("invalid cert"))
+
+    @pytest.mark.asyncio
+    async def test_get_configuration_version_success(self):
+        """Test configuration version fetching success case."""
+        from haproxy_template_ic.dataplane import _get_configuration_version
+        from unittest.mock import AsyncMock, patch
+
+        mock_client = AsyncMock()
+
+        with patch(
+            "haproxy_template_ic.dataplane.get_configuration_version"
+        ) as mock_get_version:
+            mock_get_version.asyncio = AsyncMock(return_value=42)
+
+            result = await _get_configuration_version(mock_client)
+
+            assert result == 42
+            mock_get_version.asyncio.assert_called_once_with(client=mock_client)
+
+    @pytest.mark.asyncio
+    async def test_get_configuration_version_failure(self):
+        """Test configuration version fetching failure case."""
+        from haproxy_template_ic.dataplane import _get_configuration_version
+        from unittest.mock import AsyncMock, patch
+
+        mock_client = AsyncMock()
+
+        with patch(
+            "haproxy_template_ic.dataplane.get_configuration_version"
+        ) as mock_get_version:
+            mock_get_version.asyncio = AsyncMock(side_effect=Exception("API error"))
+
+            result = await _get_configuration_version(mock_client)
+
+            assert result is None  # Should return None on error
+
+    @pytest.mark.asyncio
+    async def test_fetch_with_metrics(self):
+        """Test metrics-wrapped fetching helper."""
+        from haproxy_template_ic.dataplane import _fetch_with_metrics
+        from unittest.mock import AsyncMock, Mock
+
+        # Create mocks
+        mock_fetch_func = AsyncMock(return_value=["data"])
+        mock_client = Mock()
+        mock_metrics = Mock()
+        mock_metrics.time_dataplane_api_operation.return_value.__enter__ = Mock()
+        mock_metrics.time_dataplane_api_operation.return_value.__exit__ = Mock()
+
+        result = await _fetch_with_metrics(
+            "test_op", mock_fetch_func, mock_client, mock_metrics, []
+        )
+
+        assert result == ["data"]
+        mock_fetch_func.assert_called_once_with(client=mock_client)
+        mock_metrics.time_dataplane_api_operation.assert_called_once_with("test_op")
+
+    @pytest.mark.asyncio
+    async def test_fetch_with_metrics_with_default(self):
+        """Test metrics-wrapped fetching with default value."""
+        from haproxy_template_ic.dataplane import _fetch_with_metrics
+        from unittest.mock import AsyncMock, Mock
+
+        # Create mocks - fetch_func returns None/empty
+        mock_fetch_func = AsyncMock(return_value=None)
+        mock_client = Mock()
+        mock_metrics = Mock()
+        mock_metrics.time_dataplane_api_operation.return_value.__enter__ = Mock()
+        mock_metrics.time_dataplane_api_operation.return_value.__exit__ = Mock()
+
+        result = await _fetch_with_metrics(
+            "test_op", mock_fetch_func, mock_client, mock_metrics, ["default"]
+        )
+
+        assert result == ["default"]  # Should return default value

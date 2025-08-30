@@ -1,0 +1,18 @@
+# Telepresence debug mode patch - sets controller to sleep for local development
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-template-ic
+  namespace: haproxy-template-ic
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          command: ["/usr/bin/sleep"]
+          args: ["infinity"]
+          env:
+            - name: CONFIGMAP_NAME
+              value: haproxy-template-ic-config-dev
+            - name: SECRET_NAME
+              value: haproxy-template-ic-credentials

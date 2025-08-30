@@ -1,53 +1,53 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: haproxy-template-ic
-resources:
-  - namespace.yaml
-  - serviceaccount.yaml
-  - clusterrole.yaml
-  - clusterrolebinding.yaml
-  - configmap.yaml
-  - secret.yaml
-  - deployment.yaml
-  - service.yaml
-  - service-metrics.yaml
   # - servicemonitor.yaml  # Requires Prometheus Operator CRDs
-  - networkpolicy.yaml
-  - poddisruptionbudget.yaml
   # Webhook resources
-  - service-webhook.yaml
-  - validatingadmissionwebhook.yaml
-  - webhook-cert-job.yaml
   # HAProxy production resources
-  - deployment-haproxy.yaml
-  - service-haproxy.yaml
-  - service-dataplane.yaml
-  - configmap-universal.yaml
+resources:
+- namespace.yaml
+- serviceaccount.yaml
+- clusterrole.yaml
+- clusterrolebinding.yaml
+- configmap.yaml
+- secret.yaml
+- deployment.yaml
+- service.yaml
+- service-metrics.yaml
+- networkpolicy.yaml
+- poddisruptionbudget.yaml
+- service-webhook.yaml
+- validatingadmissionwebhook.yaml
+- webhook-cert-job.yaml
+- deployment-haproxy.yaml
+- service-haproxy.yaml
+- service-dataplane.yaml
+- configmap-universal.yaml
 
 configMapGenerator:
-  - name: haproxy-config
-    literals:
-      - DATAPLANE_PORT=5555
-      - DATAPLANE_USERNAME=admin
-      - PRODUCTION_PASSWORD=adminpass
-      - VALIDATION_PASSWORD=validationpass
-      - PRODUCTION_HEALTHZ_PORT=8404
-      - VALIDATION_HEALTHZ_PORT=8404
+- literals:
+  - DATAPLANE_PORT=5555
+  - DATAPLANE_USERNAME=admin
+  - PRODUCTION_PASSWORD=adminpass
+  - VALIDATION_PASSWORD=validationpass
+  - PRODUCTION_HEALTHZ_PORT=8404
+  - VALIDATION_HEALTHZ_PORT=8404
+  name: haproxy-config
 
 replacements:
-  - source:
-      kind: ConfigMap
-      name: haproxy-config
-      fieldPath: data.DATAPLANE_PORT
-    targets:
-      - select:
-          kind: Service
-          name: haproxy-production-dataplane
-        fieldPaths:
-          - spec.ports.[name=dataplane-api].port
-          - spec.ports.[name=dataplane-api].targetPort
+- source:
+    fieldPath: data.DATAPLANE_PORT
+    kind: ConfigMap
+    name: haproxy-config
+  targets:
+  - fieldPaths:
+    - spec.ports.[name=dataplane-api].port
+    - spec.ports.[name=dataplane-api].targetPort
+    select:
+      kind: Service
+      name: haproxy-production-dataplane
 
 images:
-  - name: haproxytech/haproxy-alpine
-    newName: haproxytech/haproxy-alpine
-    newTag: "3.1"
+- name: haproxytech/haproxy-alpine
+  newName: haproxytech/haproxy-alpine
+  newTag: "3.1"

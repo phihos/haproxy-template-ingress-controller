@@ -180,6 +180,44 @@ class TestDataplaneClientIntegration:
             # If it fails due to timeout or validation, that's also expected
             pass
 
+    @pytest.mark.asyncio
+    async def test_structured_deployment_basic(
+        self, production_dataplane_client, haproxy_configs
+    ):
+        """Test basic structured deployment functionality."""
+        reporter = get_test_reporter()
+
+        with progress_context("test_structured_deployment_basic", reporter) as progress:
+            progress.phase(
+                "API_CLIENT_SETUP", "Creating production Dataplane API client"
+            )
+
+            # Get base URL and auth from the httpx client
+            base_url = str(production_dataplane_client.base_url).rstrip("/")
+            # Ensure URL has /v3 for the generated client
+            if not base_url.endswith("/v3"):
+                base_url += "/v3"
+            auth = ("admin", "adminpass")  # Correct auth from HAProxy config
+            client = DataplaneClient(base_url, auth=auth)
+
+            progress.phase("CONFIG_DEPLOY", "Deploying initial valid configuration")
+            # First deploy a valid config to establish a baseline
+            await client.deploy_configuration(haproxy_configs["with_health"])
+
+            progress.phase("FETCH_CONFIG", "Fetching structured configuration")
+            # Fetch the current structured configuration
+            current_config = await client.fetch_structured_configuration()
+            reporter.debug(f"Current config sections: {list(current_config.keys())}")
+
+            progress.phase(
+                "STRUCTURED_TEST", "Testing structured deployment with no changes"
+            )
+            # Test structured deployment with no changes (empty changes list)
+            version = await client.deploy_structured_configuration([])
+            assert version == "unchanged"
+
+            progress.phase("STRUCTURED_SUCCESS", "Structured deployment test completed")
+
 
 # NOTE: TestConfigSynchronizerIntegration class has been removed
 # This class was testing the old complex architecture with HAProxyPodDiscovery

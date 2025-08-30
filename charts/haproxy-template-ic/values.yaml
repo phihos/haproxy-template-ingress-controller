@@ -40,21 +40,117 @@ credentials:
 # Controller configuration
 controller:
   configmapName: haproxy-template-ic-config
-  healthzPort: 8080
-  verbose: 1
-  socketPath: /run/haproxy-template-ic/management.sock
-  # Metrics configuration
-  metricsPort: 9090
-  # Structured logging configuration
-  structuredLogging: false
-  # Distributed tracing configuration
-  tracing:
-    enabled: false
-    serviceName: haproxy-template-ic
-    serviceVersion: ""  # Uses chart version if empty
-    jaegerEndpoint: ""  # e.g., "jaeger-collector:14268"
-    sampleRate: 1.0
-    consoleExport: false
+  # Main configuration that will be rendered into the ConfigMap
+  config:
+    pod_selector:
+      match_labels:
+        app: haproxy
+        component: loadbalancer
+    
+    # Grouped operator configuration (previously CLI options)
+    operator:
+      healthz_port: 8080
+      metrics_port: 9090
+      socket_path: /run/haproxy-template-ic/management.sock
+    
+    logging:
+      verbose: 1  # 0=WARNING, 1=INFO, 2=DEBUG
+      structured: false
+    
+    tracing:
+      enabled: false
+      service_name: haproxy-template-ic
+      service_version: ""
+      jaeger_endpoint: ""
+      sample_rate: 1.0
+      console_export: false
+    
+    validation:
+      dataplane_host: localhost
+      dataplane_port: 5555
+    
+    # Fields to omit from indexed resources (reduces memory usage)
+    watched_resources_ignore_fields:
+      - metadata.managedFields
+    
+    watched_resources:
+      ingresses:
+        api_version: networking.k8s.io/v1
+        kind: Ingress
+        enable_validation_webhook: true
+        index_by: ["metadata.namespace", "metadata.name"]
+      endpoints:
+        api_version: discovery.k8s.io/v1
+        kind: EndpointSlice
+        enable_validation_webhook: false
+        index_by: ["metadata.labels['kubernetes.io/service-name']"]
+      services:
+        api_version: v1
+        kind: Service
+        enable_validation_webhook: true
+        index_by: ["metadata.namespace", "metadata.labels['app']"]
+      secrets:
+        api_version: v1
+        kind: Secret
+        enable_validation_webhook: true
+        index_by: ["metadata.namespace", "type"]
+    
+    template_snippets:
+      backend-name:
+        name: backend-name
+        template: |
+          ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+    
+    maps:
+      host.map:
+        template: |
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
+          {% set host_without_asterisk = rule.host | replace('*', '', 1) %}
+          {{ host_without_asterisk }} {{ host_without_asterisk }}
+          {% endfor %}
+          {% endfor %}
+    
+    files:
+      400.http:
+        template: |
+          HTTP/1.0 400 Bad Request
+          Cache-Control: no-cache
+          Connection: close
+          Content-Type: text/html
+
+          <html><body><h1>400 Bad Request</h1>
+          <p>Your browser sent a request that this server could not understand.</p>
+          </body></html>
+    
+    haproxy_config:
+      template: |
+        global
+            log stdout len 4096 local0 info
+            chroot /var/lib/haproxy
+            user haproxy
+            group haproxy
+            daemon
+
+        defaults
+            mode http
+            log global
+            option httplog
+            option dontlognull
+            timeout connect 5000
+            timeout client 50000
+            timeout server 50000
+
+        frontend status
+            bind *:8404
+            http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+
+        frontend http_frontend
+            bind *:80
+            default_backend default_backend
+
+        backend default_backend
+            http-request return status 404
 
 # Validation sidecars configuration  
 validation:
