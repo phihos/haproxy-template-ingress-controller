@@ -183,7 +183,7 @@ jobs:
 
       - name: Run acceptance tests
         run: |
-          uv run --frozen pytest tests -m "acceptance" \
+          uv run --frozen pytest tests -s -m "acceptance" \
             --cluster-name haproxy-template-ic-test \
             --coverage \
             --cov=haproxy_template_ic \
