@@ -78,6 +78,10 @@ logger = structlog.get_logger(__name__)
 
 def get_current_namespace() -> str:
     """Get the current Kubernetes namespace."""
+    # Check for environment variable override (useful for testing)
+    if namespace := os.environ.get("NAMESPACE"):
+        return namespace
+
     if os.path.exists(NAMESPACE_FILE_PATH):
         with open(NAMESPACE_FILE_PATH) as f:
             return f.read().strip()

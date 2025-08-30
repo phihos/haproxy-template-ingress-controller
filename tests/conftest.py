@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 import time
+from collections import namedtuple
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict
@@ -23,7 +24,6 @@ from python_on_whales import DockerClient
 # Kubernetes objects
 from kr8s.objects import (
     APIObject,
-    ClusterRoleBinding,
     ConfigMap,
     Deployment,
     Namespace,
@@ -32,7 +32,6 @@ from kr8s.objects import (
     Service,
     ServiceAccount,
 )
-from kr8s._exceptions import ServerError
 
 # Pytest plugins
 from pytest_kind.cluster import KindCluster
@@ -43,8 +42,7 @@ from pytest_shared_session_scope import (
 )
 
 # Local imports
-from .coverage_extraction import extract_coverage_from_pod
-from tests.e2e.utils.k8s_helpers import print_pod_logs_on_failure
+from tests.e2e.utils.helpers import print_pod_logs_on_failure
 from tests.webhook_certs import (
     create_cert_secret_manifest,
     create_validating_webhook_config,
@@ -411,97 +409,6 @@ def docker_client():
     return DockerClient()
 
 
-@shared_session_scope_pickle()
-def container_image(docker_client, project_root_path, kind_cluster, request):
-    """
-    Build and provide the container image for testing.
-
-    Builds either production or coverage image based on --coverage flag,
-    loads it into the Kind cluster, and shares across test sessions.
-    Uses Buildx with caching when available for improved performance.
-    """
-    use_coverage = request.config.getoption("--coverage")
-    image_name = CONTAINER_IMAGE_NAME_COVERAGE if use_coverage else CONTAINER_IMAGE_NAME
-    target = "coverage" if use_coverage else "production"
-
-    image = yield
-    if image is SetupToken.FIRST:
-        start_time = time.time()
-
-        # Check if we're running in CI with buildx available
-        use_buildx = (
-            os.environ.get("DOCKER_BUILDKIT") == "1" or os.environ.get("CI") == "true"
-        )
-
-        if use_buildx:
-            logger.info(f"Building image with Buildx (target: {target})")
-            try:
-                # Try to use buildx with caching
-                cache_args = []
-
-                # In GitHub Actions, use type=gha cache
-                if os.environ.get("GITHUB_ACTIONS") == "true":
-                    cache_args.extend(
-                        [
-                            "--cache-from",
-                            f"type=gha,scope={target}",
-                            "--cache-to",
-                            f"type=gha,mode=max,scope={target}",
-                        ]
-                    )
-                else:
-                    # For local development, use local cache
-                    cache_dir = "/tmp/haproxy-template-ic-test-cache"
-                    cache_args.extend(
-                        [
-                            "--cache-from",
-                            f"type=local,src={cache_dir}",
-                            "--cache-to",
-                            f"type=local,dest={cache_dir}",
-                        ]
-                    )
-
-                # Build with buildx
-                image = docker_client.buildx.build(
-                    context_path=str(project_root_path),
-                    tags=[image_name],
-                    target=target,
-                    cache_from=cache_args[1] if cache_args else None,
-                    cache_to=cache_args[3] if len(cache_args) > 2 else None,
-                    load=True,  # Load into docker daemon for kind
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Buildx build failed, falling back to regular build: {e}"
-                )
-                # Fall back to regular build
-                image = docker_client.build(
-                    context_path=str(project_root_path),
-                    tags=[image_name],
-                    target=target,
-                    output={"type": "docker"},
-                )
-        else:
-            logger.info(f"Building image with standard Docker (target: {target})")
-            image = docker_client.build(
-                context_path=str(project_root_path),
-                tags=[image_name],
-                target=target,
-                output={"type": "docker"},
-            )
-
-        build_duration = time.time() - start_time
-        logger.info(f"Docker build completed in {build_duration:.1f}s")
-
-        # Load image into kind cluster
-        load_start = time.time()
-        kind_cluster.load_docker_image(image_name)
-        load_duration = time.time() - load_start
-        logger.info(f"Image loaded into kind cluster in {load_duration:.1f}s")
-
-    yield image
-
-
 # =============================================================================
 # KUBERNETES CLIENT FIXTURES
 # =============================================================================
@@ -630,11 +537,35 @@ def k8s_namespace(request, k8s_client):
 # CONFIGURATION FIXTURES
 # =============================================================================
 
+# Named tuple for operator ports
+OperatorPorts = namedtuple("OperatorPorts", ["healthz", "metrics"])
+
+
+def find_free_port() -> int:
+    """Find a free port on the local system."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+    return port
+
 
 @pytest.fixture
-def config_dict():
+def operator_ports():
+    """Provide unique operator ports for each test."""
+    return OperatorPorts(healthz=find_free_port(), metrics=find_free_port())
+
+
+@pytest.fixture
+def config_dict(operator_ports):
     """Provide basic configuration dictionary for HAProxy template ingress controller."""
     return {
+        "operator": {
+            "healthz_port": operator_ports.healthz,
+            "metrics_port": operator_ports.metrics,
+        },
         "logging": {
             "verbose": 2  # Enable DEBUG logging for tests
         },
@@ -691,35 +622,6 @@ backend servers
             },
         },
     }
-
-
-@pytest.fixture
-def webhook_config_dict(config_dict):
-    """Configuration with webhooks enabled for webhook functionality tests."""
-    # Use the same base config as config_dict since webhooks are enabled by default now
-    return config_dict
-
-
-@pytest.fixture
-def webhook_configmap(webhook_config_dict, k8s_client, k8s_namespace):
-    """ConfigMap with webhook validation enabled for webhook functionality tests."""
-    cm = ConfigMap(
-        {
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {
-                "name": "haproxy-template-ic-webhook-config",
-                "namespace": k8s_namespace,
-            },
-            "data": {
-                "config": yaml.dump(webhook_config_dict, Dumper=yaml.CDumper),
-            },
-        },
-        namespace=k8s_namespace,
-        api=k8s_client,
-    )
-    cm.create()
-    return cm
 
 
 @pytest.fixture
@@ -812,6 +714,94 @@ def validating_webhook_config(webhook_certificates, k8s_namespace, k8s_client):
         webhook.delete()
     except Exception:
         pass
+
+
+# =============================================================================
+# TELEPRESENCE AND OPERATOR FIXTURES
+# =============================================================================
+
+
+@shared_session_scope_pickle()
+def telepresence(request, kind_cluster):
+    """Session-scoped Telepresence connection to the Kind cluster.
+
+    This fixture establishes a Telepresence connection that persists for the
+    entire test session, similar to the Kind cluster. It connects before the
+    first test and disconnects after the last test (unless --keep-namespaces).
+    """
+    from tests.e2e.utils.telepresence import (
+        TelepresenceConnection,
+        ensure_telepresence_installed,
+    )
+
+    telepresence_conn = yield
+    if telepresence_conn is SetupToken.FIRST:
+        # Check if Telepresence is installed
+        if not ensure_telepresence_installed():
+            pytest.fail(
+                "Telepresence is not installed. Please install it to run acceptance tests."
+            )
+
+        # Get cluster name from pytest config and kubeconfig from kind_cluster fixture
+        cluster_name = request.config.getoption("cluster_name")
+        kubeconfig_path = kind_cluster.kubeconfig_path
+
+        logger.info(f"Setting up Telepresence connection to cluster {cluster_name}")
+
+        # Create Telepresence connection
+        telepresence_conn = TelepresenceConnection(
+            cluster_name,
+            namespace="default",  # Connect to default namespace for now
+            kubeconfig=kubeconfig_path,
+        )
+
+        # Connect to the cluster (handles already connected state internally)
+        telepresence_conn.connect()
+        logger.info("Telepresence connected successfully")
+
+    yield telepresence_conn
+
+    if telepresence_conn is CleanupToken.LAST:
+        # Only disconnect if not keeping cluster
+        keep_namespaces = request.config.getoption("--keep-namespaces", False)
+        if not keep_namespaces:
+            logger.info("Disconnecting Telepresence")
+            telepresence_conn.disconnect()
+        else:
+            logger.info("Keeping Telepresence connection alive (--keep-namespaces)")
+
+
+@pytest.fixture
+def operator(
+    request, telepresence, k8s_namespace, configmap, credentials_secret, kind_cluster
+):
+    """Run the operator locally using Telepresence.
+
+    This fixture runs the operator as a local subprocess for each test.
+    It uses the session-scoped Telepresence connection, eliminating Docker
+    image builds and achieving 70-170 second speedup per test run.
+    """
+    from tests.e2e.utils.local_operator import LocalOperatorRunner
+
+    # Get kubeconfig from kind_cluster
+    kubeconfig_path = kind_cluster.kubeconfig_path
+
+    # Run operator locally with Telepresence
+    configmap_name = configmap.metadata.name
+    secret_name = credentials_secret.metadata.name
+    coverage = request.config.getoption("--coverage")
+
+    runner = LocalOperatorRunner(
+        configmap_name=configmap_name,
+        secret_name=secret_name,
+        namespace=k8s_namespace,
+        collect_coverage=coverage,
+        kubeconfig_path=kubeconfig_path,
+    )
+
+    runner.start()
+    yield runner
+    runner.stop()
 
 
 # =============================================================================
@@ -1354,566 +1344,9 @@ def haproxy_dataplane_clients(haproxy_production_pods, k8s_namespace):
 # =============================================================================
 
 
-@pytest.fixture
-def controller_with_validation_sidecar(
-    k8s_client, k8s_namespace, container_image, configmap, credentials_secret, request
-):
-    """
-    Create and deploy HAProxy template ingress controller with validation sidecar.
-
-    Creates a controller pod with 3 containers:
-    - Main controller: The HAProxy Template IC operator
-    - Validation HAProxy: HAProxy instance for configuration validation
-    - Validation Dataplane API: Dataplane API for validation HAProxy
-
-    Sets up RBAC permissions, webhook support, and waits for pod readiness.
-    """
-    # Wait for the default serviceaccount before proceeding
-    wait_for_default_serviceaccount(k8s_client, k8s_namespace)
-
-    # Create or reuse ClusterRoleBinding (idempotent)
-    crb_name = f"ingress-controller-cluster-admin-{k8s_namespace}"
-    try:
-        ClusterRoleBinding(
-            {
-                "apiVersion": "rbac.authorization.k8s.io/v1",
-                "kind": "ClusterRoleBinding",
-                "metadata": {
-                    "name": crb_name,
-                },
-                "subjects": [
-                    {
-                        "kind": "ServiceAccount",
-                        "name": "default",
-                        "namespace": k8s_namespace,
-                    }
-                ],
-                "roleRef": {
-                    "kind": "ClusterRole",
-                    "name": "cluster-admin",
-                    "apiGroup": "rbac.authorization.k8s.io",
-                },
-            },
-            api=k8s_client,
-        ).create()
-    except Exception as e:
-        # Handle specific k8s errors for idempotent resource creation
-
-        if isinstance(e, ServerError) and "already exists" in str(e):
-            # Resource already exists, which is expected in test environments
-            # Use module-level logger
-            logger.debug(f"Reusing existing ClusterRoleBinding: {crb_name}")
-        else:
-            # Use module-level logger
-            logger.error(f"Failed to create ClusterRoleBinding {crb_name}: {e}")
-            raise
-
-    # Check if test needs webhook functionality and set up webhook volumes
-    needs_webhook = "webhook" in request.node.name
-    volume_mounts, volumes, webhook_setup_successful = setup_webhook_volumes_and_mounts(
-        k8s_client, k8s_namespace, needs_webhook
-    )
-    needs_webhook = needs_webhook and webhook_setup_successful
-
-    # Add shared volumes for validation sidecar
-    volumes.extend(
-        [
-            {"name": "validation-haproxy-config", "emptyDir": {}},
-            {"name": "validation-haproxy-maps", "emptyDir": {}},
-            {"name": "validation-haproxy-certs", "emptyDir": {}},
-            {"name": "management-socket", "emptyDir": {}},
-        ]
-    )
-
-    # Base HAProxy config for validation sidecar (minimal working config)
-    validation_haproxy_config = """
-global
-    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
-    
-userlist dataplaneapi
-    user admin password adminpass
-    
-defaults
-    mode http
-    timeout connect 5000ms
-    timeout client 50000ms
-    timeout server 50000ms
-    
-frontend validation
-    bind *:8081
-    default_backend validation_backend
-    
-backend validation_backend
-    balance roundrobin
-    # Validation backend - no real servers needed
-"""
-
-    # Pod specification with 3 containers
-    pod_spec = {
-        "apiVersion": "v1",
-        "kind": "Pod",
-        "metadata": {
-            "name": "haproxy-template-ic",
-            "namespace": k8s_namespace,
-            "labels": {
-                "app.kubernetes.io/name": "haproxy-template-ic",
-                "app.kubernetes.io/instance": "acceptance-test",
-                "haproxy-template-ic/role": "controller",
-            },
-        },
-        "spec": {
-            "containers": [
-                # Main controller container
-                {
-                    "name": "haproxy-template-ic",
-                    "image": container_image.repo_tags[0],
-                    "args": ["run"],
-                    "ports": [
-                        {"containerPort": 8080, "name": "healthz"},
-                        {"containerPort": 9443, "name": "webhook"}
-                        if needs_webhook
-                        else {},
-                        {"containerPort": 9090, "name": "metrics"},
-                    ],
-                    "env": [
-                        {"name": "CONFIGMAP_NAME", "value": configmap.name},
-                        {
-                            "name": "SECRET_NAME",
-                            "value": "haproxy-template-ic-credentials",
-                        },
-                        {"name": "VERBOSE", "value": "2"},
-                        {
-                            "name": "SOCKET_PATH",
-                            "value": "/run/haproxy-template-ic/management.sock",
-                        },
-                    ],
-                    "livenessProbe": {
-                        "httpGet": {
-                            "path": "/healthz",
-                            "port": 8080,
-                        },
-                        "initialDelaySeconds": 30,
-                        "periodSeconds": 30,
-                        "timeoutSeconds": 5,
-                        "failureThreshold": 3,
-                    },
-                    "readinessProbe": {
-                        "httpGet": {
-                            "path": "/healthz",
-                            "port": 8080,
-                        },
-                        "initialDelaySeconds": 15,
-                        "periodSeconds": 10,
-                        "timeoutSeconds": 5,
-                        "failureThreshold": 10,
-                    },
-                    "volumeMounts": [
-                        {
-                            "name": "management-socket",
-                            "mountPath": "/run/haproxy-template-ic",
-                        },
-                    ]
-                    + volume_mounts,
-                },
-                # Validation HAProxy sidecar
-                {
-                    "name": "validation-haproxy",
-                    "image": "haproxytech/haproxy-alpine:3.1",
-                    "ports": [
-                        {"containerPort": 8081, "name": "validation-http"},
-                    ],
-                    "volumeMounts": [
-                        {
-                            "name": "validation-haproxy-config",
-                            "mountPath": "/usr/local/etc/haproxy",
-                        },
-                        {
-                            "name": "validation-haproxy-maps",
-                            "mountPath": "/etc/haproxy/maps",
-                        },
-                        {
-                            "name": "validation-haproxy-certs",
-                            "mountPath": "/etc/haproxy/certs",
-                        },
-                    ],
-                    "command": ["haproxy"],
-                    "args": ["-f", "/usr/local/etc/haproxy/haproxy.cfg", "-W"],
-                    "labels": {"haproxy-template-ic/role": "validation"},
-                },
-                # Validation Dataplane API sidecar
-                {
-                    "name": "validation-dataplane-api",
-                    "image": "haproxytech/haproxy-alpine:3.1",
-                    "ports": [
-                        {"containerPort": 5556, "name": "validation-api"},
-                    ],
-                    "volumeMounts": [
-                        {
-                            "name": "validation-haproxy-config",
-                            "mountPath": "/usr/local/etc/haproxy",
-                        },
-                        {
-                            "name": "validation-haproxy-maps",
-                            "mountPath": "/etc/haproxy/maps",
-                        },
-                        {
-                            "name": "validation-haproxy-certs",
-                            "mountPath": "/etc/haproxy/certs",
-                        },
-                    ],
-                    "command": ["dataplaneapi"],
-                    "args": [
-                        "--host",
-                        "0.0.0.0",
-                        "--port",
-                        "5556",
-                        "--haproxy-bin",
-                        "/usr/local/sbin/haproxy",
-                        "--config-file",
-                        "/usr/local/etc/haproxy/haproxy.cfg",
-                        "--reload-cmd",
-                        "kill -USR2 $(pgrep -f 'haproxy.*validation')",
-                        "--restart-cmd",
-                        "kill -TERM $(pgrep -f 'haproxy.*validation') && sleep 1 && /usr/local/sbin/haproxy -f /usr/local/etc/haproxy/haproxy.cfg -W",
-                        "--reload-delay",
-                        "1",
-                        "--userlist",
-                        "dataplaneapi",
-                    ],
-                    "env": [
-                        {"name": "DATAPLANE_API_USER", "value": "admin"},
-                        {"name": "DATAPLANE_API_PASSWORD", "value": "adminpass"},
-                    ],
-                },
-            ],
-            "volumes": volumes,
-            "tolerations": [
-                {
-                    "key": "node-role.kubernetes.io/control-plane",
-                    "operator": "Exists",
-                    "effect": "NoSchedule",
-                }
-            ],
-            "initContainers": [
-                {
-                    "name": "init-validation-config",
-                    "image": "busybox:1.36",
-                    "command": ["sh", "-c"],
-                    "args": [
-                        f'echo "{validation_haproxy_config}" > /usr/local/etc/haproxy/haproxy.cfg'
-                    ],
-                    "volumeMounts": [
-                        {
-                            "name": "validation-haproxy-config",
-                            "mountPath": "/usr/local/etc/haproxy",
-                        }
-                    ],
-                }
-            ],
-        },
-    }
-
-    # Remove empty webhook port if not needed
-    if not needs_webhook:
-        pod_spec["spec"]["containers"][0]["ports"] = [
-            port for port in pod_spec["spec"]["containers"][0]["ports"] if port
-        ]
-
-    pod = Pod(pod_spec, namespace=k8s_namespace, api=k8s_client)
-
-    # Try to create pod, or reuse if it already exists
-    # Use module-level logger
-
-    try:
-        pod.create()
-        logger.debug(f"Created new controller pod in namespace {k8s_namespace}")
-
-        # Track pod creation for resource management
-        if hasattr(request, "node") and hasattr(request.node, "_test_resources"):
-            if "pods" not in request.node._test_resources:
-                request.node._test_resources["pods"] = []
-            request.node._test_resources["pods"].append(
-                {
-                    "name": "haproxy-template-ic",
-                    "namespace": k8s_namespace,
-                    "created": True,
-                    "reused": False,
-                }
-            )
-
-    except Exception as e:
-        # Handle specific k8s errors for idempotent pod creation
-
-        if isinstance(e, ServerError) and "already exists" in str(e):
-            # Pod already exists, get the existing one
-            logger.debug(
-                f"Reusing existing pod: haproxy-template-ic in namespace {k8s_namespace}"
-            )
-            pod = Pod.get(
-                "haproxy-template-ic", namespace=k8s_namespace, api=k8s_client
-            )
-
-            # Track pod reuse
-            if hasattr(request, "node") and hasattr(request.node, "_test_resources"):
-                if "pods" not in request.node._test_resources:
-                    request.node._test_resources["pods"] = []
-                request.node._test_resources["pods"].append(
-                    {
-                        "name": "haproxy-template-ic",
-                        "namespace": k8s_namespace,
-                        "created": False,
-                        "reused": True,
-                    }
-                )
-        else:
-            logger.error(
-                f"Failed to create pod haproxy-template-ic in namespace {k8s_namespace}: {e}"
-            )
-            raise
-
-    # Wait for pod readiness with enhanced logging
-    try:
-        logger.debug(
-            f"Waiting for controller pod readiness (timeout={DEFAULT_POD_READY_TIMEOUT}s)"
-        )
-        pod.wait("condition=Ready", timeout=DEFAULT_POD_READY_TIMEOUT)
-        logger.debug(f"Controller pod ready in namespace {k8s_namespace}")
-    except Exception as e:
-        logger.error(f"Controller pod failed to become ready: {e}")
-        # Log pod status for debugging
-        try:
-            pod.refresh()
-            logger.error(
-                f"Pod status: {pod.status.phase if hasattr(pod.status, 'phase') else 'unknown'}"
-            )
-            if hasattr(pod.status, "containerStatuses"):
-                for container_status in pod.status.containerStatuses or []:
-                    logger.error(
-                        f"Container {container_status.name}: ready={container_status.ready}"
-                    )
-        except (AttributeError, OSError):
-            logger.error("Could not retrieve pod status for debugging")
-        raise
-
-    if needs_webhook:
-        create_webhook_service(k8s_client, k8s_namespace)
-
-    return pod
-
-
-@pytest.fixture
-def simple_controller(
-    k8s_client, k8s_namespace, container_image, configmap, credentials_secret, request
-):
-    """
-    Create a simplified HAProxy template ingress controller WITHOUT validation sidecars.
-    This fixture is optimized for faster startup and should be used for tests that don't
-    require the validation functionality.
-    """
-    # Wait for the default serviceaccount before proceeding
-    wait_for_default_serviceaccount(k8s_client, k8s_namespace)
-
-    # Create or reuse ClusterRoleBinding (idempotent)
-    crb_name = f"ingress-controller-cluster-admin-{k8s_namespace}"
-    try:
-        ClusterRoleBinding(
-            {
-                "apiVersion": "rbac.authorization.k8s.io/v1",
-                "kind": "ClusterRoleBinding",
-                "metadata": {
-                    "name": crb_name,
-                },
-                "subjects": [
-                    {
-                        "kind": "ServiceAccount",
-                        "name": "default",
-                        "namespace": k8s_namespace,
-                    }
-                ],
-                "roleRef": {
-                    "kind": "ClusterRole",
-                    "name": "cluster-admin",
-                    "apiGroup": "rbac.authorization.k8s.io",
-                },
-            },
-            api=k8s_client,
-        ).create()
-    except Exception as e:
-        # Handle specific k8s errors for idempotent resource creation
-
-        if isinstance(e, ServerError) and "already exists" in str(e):
-            # Resource already exists, which is expected in test environments
-            # Use module-level logger
-            logger.debug(f"Reusing existing ClusterRoleBinding: {crb_name}")
-        else:
-            # Use module-level logger
-            logger.error(f"Failed to create ClusterRoleBinding {crb_name}: {e}")
-            raise
-
-    # Check if test needs webhook functionality
-    needs_webhook = "webhook" in request.node.name
-    volume_mounts, volumes, webhook_setup_successful = setup_webhook_volumes_and_mounts(
-        k8s_client, k8s_namespace, needs_webhook
-    )
-    needs_webhook = needs_webhook and webhook_setup_successful
-
-    # Simplified pod specification with only main controller container
-    pod_spec = {
-        "apiVersion": "v1",
-        "kind": "Pod",
-        "metadata": {
-            "name": "haproxy-template-ic",
-            "namespace": k8s_namespace,
-            "labels": {
-                "app.kubernetes.io/name": "haproxy-template-ic",
-                "app.kubernetes.io/instance": "acceptance-test",
-                "haproxy-template-ic/role": "controller",
-            },
-        },
-        "spec": {
-            "containers": [
-                # Main controller container only
-                {
-                    "name": "haproxy-template-ic",
-                    "image": container_image.repo_tags[0],
-                    "args": ["run"],
-                    "ports": [
-                        {"containerPort": 8080, "name": "healthz"},
-                        {"containerPort": 9443, "name": "webhook"}
-                        if needs_webhook
-                        else {},
-                        {"containerPort": 9090, "name": "metrics"},
-                    ],
-                    "env": [
-                        {"name": "CONFIGMAP_NAME", "value": configmap.name},
-                        {
-                            "name": "SECRET_NAME",
-                            "value": "haproxy-template-ic-credentials",
-                        },
-                        {"name": "VERBOSE", "value": "2"},
-                        {
-                            "name": "SOCKET_PATH",
-                            "value": "/run/haproxy-template-ic/management.sock",
-                        },
-                    ],
-                    "livenessProbe": {
-                        "httpGet": {
-                            "path": "/healthz",
-                            "port": 8080,
-                        },
-                        "initialDelaySeconds": 20,
-                        "periodSeconds": 30,
-                        "timeoutSeconds": 5,
-                        "failureThreshold": 3,
-                    },
-                    "readinessProbe": {
-                        "httpGet": {
-                            "path": "/healthz",
-                            "port": 8080,
-                        },
-                        "initialDelaySeconds": 10,
-                        "periodSeconds": 10,
-                        "timeoutSeconds": 5,
-                        "failureThreshold": 6,
-                    },
-                    "volumeMounts": [
-                        {
-                            "name": "management-socket",
-                            "mountPath": "/run/haproxy-template-ic",
-                        },
-                    ]
-                    + volume_mounts,
-                },
-            ],
-            "volumes": volumes + [{"name": "management-socket", "emptyDir": {}}],
-            "tolerations": [
-                {
-                    "key": "node-role.kubernetes.io/control-plane",
-                    "operator": "Exists",
-                    "effect": "NoSchedule",
-                }
-            ],
-        },
-    }
-
-    # Remove empty webhook port if not needed
-    if not needs_webhook:
-        pod_spec["spec"]["containers"][0]["ports"] = [
-            port for port in pod_spec["spec"]["containers"][0]["ports"] if port
-        ]
-
-    pod = Pod(pod_spec, namespace=k8s_namespace, api=k8s_client)
-
-    # Try to create pod, or reuse if it already exists
-    try:
-        pod.create()
-    except Exception as e:
-        # Handle specific k8s errors for idempotent pod creation
-
-        if isinstance(e, ServerError) and "already exists" in str(e):
-            # Pod already exists, get the existing one
-            # Use module-level logger
-            logger.debug(
-                f"Reusing existing pod: haproxy-template-ic in namespace {k8s_namespace}"
-            )
-            pod = Pod.get(
-                "haproxy-template-ic", namespace=k8s_namespace, api=k8s_client
-            )
-        else:
-            # Use module-level logger
-            logger.error(
-                f"Failed to create pod haproxy-template-ic in namespace {k8s_namespace}: {e}"
-            )
-            raise
-
-    pod.wait("condition=Ready", timeout=90)  # Shorter timeout for simpler pod
-
-    if needs_webhook:
-        create_webhook_service(k8s_client, k8s_namespace)
-
-    return pod
-
-
-# Legacy fixture for backward compatibility
-@pytest.fixture
-def ingress_controller(controller_with_validation_sidecar):
-    """Legacy fixture name for backward compatibility."""
-    return controller_with_validation_sidecar
-
-
 # =============================================================================
 # HELPER FIXTURES FOR CONFIGURATION AND TESTING
 # =============================================================================
-
-
-@pytest.fixture
-def validation_dataplane_client(controller_with_validation_sidecar):
-    """
-    Create Dataplane API client for the validation sidecar.
-
-    Provides HTTP client configured to communicate with the validation
-    Dataplane API container in the controller pod.
-    """
-
-    # Get pod IP
-    controller_pod = controller_with_validation_sidecar
-    pod_ip = controller_pod.status.podIP
-    if not pod_ip:
-        # Wait for pod IP assignment
-        for _ in range(30):
-            controller_pod.refresh()
-            if controller_pod.status.podIP:
-                pod_ip = controller_pod.status.podIP
-                break
-            time.sleep(1)
-        else:
-            raise TimeoutError("Controller pod did not get IP address")
-
-    return httpx.AsyncClient(
-        base_url=f"http://{pod_ip}:5556",
-        auth=("admin", "adminpass"),
-        timeout=30.0,
-    )
 
 
 @pytest.fixture
@@ -1999,24 +1432,15 @@ backend servers
 
 
 @pytest.fixture(scope="function")
-def collect_coverage(request, controller_with_validation_sidecar):
+def collect_coverage(request, operator):
     """
-    Collect coverage data from the running container if --coverage flag is enabled.
+    Collect coverage data from the local operator if --coverage flag is enabled.
 
-    Extracts coverage data after test completion and stores the file path
-    in the test node stash for potential aggregation.
+    The LocalOperatorRunner handles coverage collection automatically when
+    coverage is enabled, so this fixture just needs to exist for compatibility.
     """
     yield
-
-    if not request.config.getoption("--coverage"):
-        return
-
-    coverage_file = extract_coverage_from_pod(
-        controller_with_validation_sidecar, request.node.name, request.config.rootpath
-    )
-
-    if coverage_file:
-        request.node.stash["coverage_file"] = coverage_file
+    # Coverage is handled by LocalOperatorRunner.stop() method
 
 
 def pytest_runtest_teardown(item, nextitem):

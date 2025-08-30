@@ -655,13 +655,45 @@ Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<ty
 
 ## Development Rules
 
+### CRITICAL: No Production Code Changes for Tests
+**⚠️ ABSOLUTE RULE**: Production code must NEVER be modified solely to make tests pass. This is the most important development principle in this project.
+
+**What this means:**
+- NO environment variable overrides added just for testing
+- NO test-only configuration options in production code
+- NO conditional logic that checks if code is running in tests
+- NO test-specific parameters or methods in production classes
+- Test infrastructure MUST adapt to production code, not vice versa
+
+**Examples of violations (DO NOT DO):**
+```python
+# ❌ WRONG: Adding test-only environment variable override
+if os.environ.get("TEST_PORT"):  # Never do this!
+    port = int(os.environ["TEST_PORT"])
+
+# ❌ WRONG: Adding test-only configuration
+class Config:
+    def __init__(self, test_mode=False):  # Never add test_mode!
+        self.port = 8080 if not test_mode else 0
+
+# ❌ WRONG: Checking if running in tests
+if "pytest" in sys.modules:  # Never check for test runners!
+    behavior = "test_behavior"
+```
+
+**Correct approach:**
+- Tests must work with production code AS IS
+- Use fixtures to configure test environments properly
+- Mock external dependencies when needed
+- Configure test data to work with production requirements
+
+### Other Development Rules
 - Always fix failing tests without asking confirmation
 - Run `uv run pytest -n auto` after code changes to verify full test suite passes
 - Update tests as mandatory part of API changes in same session - test updates are NOT an afterthought
 - Never edit generated code - regenerate from source specifications
 - Prefer module-level imports over local imports in Python
 - Use `progress_context` (not `test_progress`) to avoid pytest discovery issues
-- **No production code solely for tests**: Production code must serve a real feature or operational need. Never add code just to make tests pass. If tests expect something not tied to a feature, fix the tests, not the production code.
 - **Zero tolerance for flaky tests**: All tests must be deterministic and reliable. Flaky tests must be either fixed to be deterministic or removed entirely. Using `pytest.mark.skip` for flaky tests is not acceptable. Timing-sensitive tests should use mocking, controlled async primitives, or be redesigned to avoid race conditions.
 
 ## No Backward Compatibility Policy

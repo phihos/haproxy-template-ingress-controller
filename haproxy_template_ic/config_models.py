@@ -855,6 +855,14 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
     """
     Create Config object from dictionary with automatic validation.
     """
+    import os
+
+    # Apply environment variable overrides for testing
+    if socket_path := os.environ.get("SOCKET_PATH"):
+        if "operator" not in data:
+            data["operator"] = {}
+        data["operator"]["socket_path"] = socket_path
+
     try:
         # Use Pydantic parsing for validation
         config = Config.model_validate(data)

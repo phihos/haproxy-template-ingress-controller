@@ -151,7 +151,7 @@ def wait_for_deployment_replicas(deployment, expected_replicas, timeout=60):
 
 @pytest.mark.asyncio
 async def test_pod_discovery_with_scaling(
-    ingress_controller,
+    operator,
     haproxy_deployment,
     enhanced_configmap_with_pod_selector,
     k8s_client,
@@ -166,11 +166,11 @@ async def test_pod_discovery_with_scaling(
     3. Verifies that only 1 instance is discovered after scaling
     """
     # Wait for operator to be ready
-    wait_for_operator_ready(ingress_controller)
+    wait_for_operator_ready(operator)
 
     # Step 1: Wait for controller to discover initial HAProxy pods (2 instances)
     async def check_initial_discovery():
-        response = send_socket_command(ingress_controller, "dump all")
+        response = send_socket_command(operator, "dump all")
         # Debug logging to understand response structure
         if isinstance(response, dict):
             if "indices" in response:
@@ -217,7 +217,7 @@ async def test_pod_discovery_with_scaling(
 
     # Step 3: Wait for controller to detect scaling change and update discovery
     async def check_scaled_discovery():
-        response = send_socket_command(ingress_controller, "dump all")
+        response = send_socket_command(operator, "dump all")
         discovered_ips_after = get_pod_ips_from_socket_response(response)
 
         haproxy_pods_after = k8s_client.get(
@@ -244,7 +244,7 @@ async def test_pod_discovery_with_scaling(
     )
 
     # Get final state after scaling
-    response = send_socket_command(ingress_controller, "dump all")
+    response = send_socket_command(operator, "dump all")
     discovered_ips_after = get_pod_ips_from_socket_response(response)
     haproxy_pods_after = k8s_client.get(
         "pods",
@@ -269,7 +269,7 @@ async def test_pod_discovery_with_scaling(
 
     # Wait for controller to detect scale-up and discover new pods
     async def check_scale_up_discovery():
-        response = send_socket_command(ingress_controller, "dump all")
+        response = send_socket_command(operator, "dump all")
         discovered_ips_final = get_pod_ips_from_socket_response(response)
         return len(discovered_ips_final) >= 3
 
@@ -281,7 +281,7 @@ async def test_pod_discovery_with_scaling(
 
 @pytest.mark.asyncio
 async def test_pod_discovery_with_pod_deletion(
-    ingress_controller,
+    operator,
     haproxy_deployment,
     enhanced_configmap_with_pod_selector,
     k8s_client,
@@ -292,11 +292,11 @@ async def test_pod_discovery_with_pod_deletion(
 
     This test verifies proper handling when pods are deleted directly (not via scaling).
     """
-    wait_for_operator_ready(ingress_controller)
+    wait_for_operator_ready(operator)
 
     # Wait for initial pod discovery
     async def check_initial_pods_discovered():
-        response = send_socket_command(ingress_controller, "dump all")
+        response = send_socket_command(operator, "dump all")
         initial_ips = get_pod_ips_from_socket_response(response)
         return len(initial_ips) >= 2
 
@@ -308,7 +308,7 @@ async def test_pod_discovery_with_pod_deletion(
     )
 
     # Get initial discovered instances
-    response = send_socket_command(ingress_controller, "dump all")
+    response = send_socket_command(operator, "dump all")
     initial_ips = get_pod_ips_from_socket_response(response)
 
     # Delete one HAProxy pod
@@ -329,7 +329,7 @@ async def test_pod_discovery_with_pod_deletion(
 
         # Wait for controller to re-discover after pod recreation
         async def check_pod_recreation_discovery():
-            response = send_socket_command(ingress_controller, "dump all")
+            response = send_socket_command(operator, "dump all")
             updated_ips = get_pod_ips_from_socket_response(response)
             return len(updated_ips) >= 2
 
@@ -341,7 +341,7 @@ async def test_pod_discovery_with_pod_deletion(
         )
 
         # Get updated state for verification
-        response = send_socket_command(ingress_controller, "dump all")
+        response = send_socket_command(operator, "dump all")
         updated_ips = get_pod_ips_from_socket_response(response)
         # Verify pod recreation worked - either:
         # 1. The deleted pod IP is no longer in the discovered list, OR
