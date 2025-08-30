@@ -172,17 +172,12 @@ async def test_pod_discovery_with_scaling(
     async def check_initial_discovery():
         response = send_socket_command(ingress_controller, "dump all")
         # Debug logging to understand response structure
-        print(f"DEBUG: Response type: {type(response)}")
         if isinstance(response, dict):
-            print(f"DEBUG: Response keys: {response.keys()}")
             if "indices" in response:
-                print(f"DEBUG: Indices keys: {response.get('indices', {}).keys()}")
                 if "haproxy_pods" in response.get("indices", {}):
                     haproxy_pods = response["indices"]["haproxy_pods"]
-                    print(f"DEBUG: haproxy_pods type: {type(haproxy_pods)}")
                     if isinstance(haproxy_pods, dict) and haproxy_pods:
                         first_key = list(haproxy_pods.keys())[0]
-                        print(f"DEBUG: First key in haproxy_pods: {first_key}")
                         print(
                             f"DEBUG: First value type: {type(haproxy_pods[first_key])}"
                         )

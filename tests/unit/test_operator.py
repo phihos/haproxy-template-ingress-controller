@@ -921,10 +921,14 @@ async def test_synchronize_with_haproxy_instances_with_failures(
 
 
 @pytest.mark.asyncio
+@patch("kopf.on.update")
+@patch("kopf.on.delete")
 @patch("kopf.on.create")
 @patch("kopf.index")
 @patch("kopf.on.event")
-async def test_setup_resource_watchers(mock_event, mock_index, mock_create):
+async def test_setup_resource_watchers(
+    mock_event, mock_index, mock_create, mock_delete, mock_update
+):
     """Test setup_resource_watchers function."""
     # Create mock memo with watch resources and pod selector
     memo = MagicMock()
@@ -946,14 +950,22 @@ async def test_setup_resource_watchers(mock_event, mock_index, mock_create):
     mock_index.return_value = lambda func: func
     mock_event.return_value = lambda func: func
     mock_create.return_value = lambda func: func
+    mock_delete.return_value = lambda func: func
+    mock_update.return_value = lambda func: func
 
     # Call the function
-    setup_resource_watchers(memo)
+    with patch(
+        "haproxy_template_ic.operator.get_current_namespace",
+        return_value="test-namespace",
+    ):
+        setup_resource_watchers(memo)
 
     # Verify that kopf.index was called for each resource plus HAProxy pod indexing
     assert mock_index.call_count == 3  # 2 watched resources + 1 HAProxy pod index
     assert mock_event.call_count == 2  # 2 watched resources
     assert mock_create.call_count == 1  # 1 HAProxy pod create handler
+    assert mock_delete.call_count == 1  # 1 HAProxy pod delete handler
+    assert mock_update.call_count == 1  # 1 HAProxy pod update handler
 
     # Check the first resource (Pod without group/version)
     mock_index.assert_any_call("pod", id="pods", param="pods")
@@ -971,12 +983,24 @@ async def test_setup_resource_watchers(mock_event, mock_index, mock_create):
         "ingress", id="ingresses_event", group="networking.k8s.io", version="v1"
     )
 
-    # Check HAProxy pod indexing
+    # Check HAProxy pod indexing - now includes namespace filtering
+    from unittest.mock import ANY
+
     mock_index.assert_any_call(
-        "pods", id="haproxy_pods", param="haproxy_pods", labels={"app": "haproxy"}
+        "pods",
+        id="haproxy_pods",
+        param="haproxy_pods",
+        labels={"app": "haproxy"},
+        when=ANY,
     )
     mock_create.assert_any_call(
-        "pods", id="haproxy_pod_create", labels={"app": "haproxy"}
+        "pods", id="haproxy_pod_create", labels={"app": "haproxy"}, when=ANY
+    )
+    mock_delete.assert_any_call(
+        "pods", id="haproxy_pod_delete", labels={"app": "haproxy"}, when=ANY
+    )
+    mock_update.assert_any_call(
+        "pods", id="haproxy_pod_update", labels={"app": "haproxy"}, when=ANY
     )
 
 

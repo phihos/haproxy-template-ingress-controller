@@ -559,6 +559,9 @@ def k8s_namespace(request, k8s_client):
 def config_dict():
     """Provide basic configuration dictionary for HAProxy template ingress controller."""
     return {
+        "logging": {
+            "verbose": 2  # Enable DEBUG logging for tests
+        },
         "pod_selector": {
             "match_labels": {
                 "app": "haproxy",
@@ -1198,6 +1201,13 @@ backend servers
                         {"name": "haproxy-maps", "emptyDir": {}},
                         {"name": "haproxy-certs", "emptyDir": {}},
                     ],
+                    "tolerations": [
+                        {
+                            "key": "node-role.kubernetes.io/control-plane",
+                            "operator": "Exists",
+                            "effect": "NoSchedule",
+                        }
+                    ],
                     "initContainers": [
                         {
                             "name": "init-config",
@@ -1501,6 +1511,13 @@ backend validation_backend
                 },
             ],
             "volumes": volumes,
+            "tolerations": [
+                {
+                    "key": "node-role.kubernetes.io/control-plane",
+                    "operator": "Exists",
+                    "effect": "NoSchedule",
+                }
+            ],
             "initContainers": [
                 {
                     "name": "init-validation-config",
@@ -1733,6 +1750,13 @@ def simple_controller(
                 },
             ],
             "volumes": volumes + [{"name": "management-socket", "emptyDir": {}}],
+            "tolerations": [
+                {
+                    "key": "node-role.kubernetes.io/control-plane",
+                    "operator": "Exists",
+                    "effect": "NoSchedule",
+                }
+            ],
         },
     }
 

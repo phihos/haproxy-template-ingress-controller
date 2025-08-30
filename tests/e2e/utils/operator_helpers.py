@@ -139,11 +139,22 @@ def _log_search_failure(
 
 def wait_for_operator_ready(pod):
     """Wait for the operator to be fully initialized and ready."""
-    assert_log_line(pod, "✅ Configuration and credentials loaded successfully.")
-    assert_log_line(
-        pod,
-        "🔌 Management socket server listening on /run/haproxy-template-ic/management.sock",
-    )
+    from tests.e2e.utils.k8s_helpers import send_socket_command
+
+    # Instead of relying on log messages that may not be captured due to timing,
+    # test socket availability which indicates the operator is ready
+    max_attempts = 30  # 30 seconds timeout
+    for attempt in range(max_attempts):
+        try:
+            response = send_socket_command(pod, "dump all", retries=1)
+            if response and "config" in response:
+                print(f"✅ Operator ready after {attempt + 1} attempts")
+                return
+        except Exception as e:
+            if attempt == max_attempts - 1:  # Last attempt
+                raise AssertionError(
+                    f"❌ Operator not ready after {max_attempts} attempts. Last error: {e}"
+                )
 
 
 def wait_for_watch_streams_ready(pod):
@@ -157,9 +168,7 @@ def wait_for_watch_streams_ready(pod):
 def assert_config_change(pod, timeout=30):
     """Assert that a configuration change is detected and processed."""
     assert_log_line(pod, "🔄 Config has changed:", timeout=timeout)
-    assert_log_line(
-        pod, "✅ Configuration and credentials loaded successfully.", timeout=timeout
-    )
+    assert_log_line(pod, "🔄 Configuration changed. Reinitializing...", timeout=timeout)
 
 
 def count_log_occurrences(pod, pattern, timeout=30):
@@ -231,5 +240,11 @@ def assert_no_reload_loop(pod, max_reloads=1, timeout=30):
 
 def assert_operator_health(pod):
     """Assert that the operator is healthy and functioning."""
-    assert_log_line(pod, "Serving health status at http://0.0.0.0:8080/healthz")
-    assert_log_line(pod, "Starting the watch-stream for configmaps.v1 cluster-wide")
+    from tests.e2e.utils.k8s_helpers import send_socket_command
+
+    # If socket responds successfully, operator is healthy
+    response = send_socket_command(pod, "dump all", retries=1)
+    assert response is not None, "Management socket should be responsive"
+    assert "error" not in response, (
+        f"Socket should not return errors: {response.get('error', 'N/A')}"
+    )

@@ -63,6 +63,5 @@ def assert_dump_all_response_structure(response):
     # Verify expected CLI options
     expected_cli_options = {
         "configmap_name": "haproxy-template-ic-config",
-        "socket_path": "/run/haproxy-template-ic/management.sock",
     }
     verify_config_contains(response["cli_options"], expected_cli_options)

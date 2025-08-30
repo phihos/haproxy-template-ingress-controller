@@ -1030,21 +1030,35 @@ def setup_haproxy_pod_indexing(memo: Any) -> None:
     pod_labels = memo.config.pod_selector.match_labels if memo.config else {}
     logger.info(f"📋 Using label selector: {pod_labels}")
 
-    # Register HAProxy pod indexing with label filtering
-    kopf.index("pods", id=HAPROXY_PODS_INDEX, param="haproxy_pods", labels=pod_labels)(
-        haproxy_pods_index
-    )  # type: ignore
+    # Register HAProxy pod indexing with label and namespace filtering
+    current_namespace = get_current_namespace()
+    kopf.index(
+        "pods",
+        id=HAPROXY_PODS_INDEX,
+        param="haproxy_pods",
+        labels=pod_labels,
+        when=lambda namespace, **_: namespace == current_namespace,
+    )(haproxy_pods_index)  # type: ignore
 
-    # Register pod event handlers with label filtering
-    kopf.on.create("pods", id="haproxy_pod_create", labels=pod_labels)(
-        handle_haproxy_pod_create
-    )
-    kopf.on.delete("pods", id="haproxy_pod_delete", labels=pod_labels)(
-        handle_haproxy_pod_delete
-    )
-    kopf.on.update("pods", id="haproxy_pod_update", labels=pod_labels)(
-        handle_haproxy_pod_update
-    )
+    # Register pod event handlers with label and namespace filtering
+    kopf.on.create(
+        "pods",
+        id="haproxy_pod_create",
+        labels=pod_labels,
+        when=lambda namespace, **_: namespace == current_namespace,
+    )(handle_haproxy_pod_create)
+    kopf.on.delete(
+        "pods",
+        id="haproxy_pod_delete",
+        labels=pod_labels,
+        when=lambda namespace, **_: namespace == current_namespace,
+    )(handle_haproxy_pod_delete)
+    kopf.on.update(
+        "pods",
+        id="haproxy_pod_update",
+        labels=pod_labels,
+        when=lambda namespace, **_: namespace == current_namespace,
+    )(handle_haproxy_pod_update)
 
     logger.info(
         f"✅ HAProxy pod indexing configured for namespace '{current_namespace}' with labels {pod_labels}"
