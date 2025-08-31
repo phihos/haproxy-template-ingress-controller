@@ -28,7 +28,7 @@ from .secrets import (
 from .pod_management import (
     haproxy_pods_index,
     handle_haproxy_pod_create,
-    handle_haproxy_pod_delete, 
+    handle_haproxy_pod_delete,
     handle_haproxy_pod_update,
     setup_haproxy_pod_indexing,
 )
@@ -78,32 +78,27 @@ from .utils import (
 __all__ = [
     # Test compatibility re-exports
     "config",
-    "Secret", 
+    "Secret",
     "ConfigMap",
     "Pod",
-    
     # Resource management
-    "update_resource_index", 
+    "update_resource_index",
     "setup_resource_watchers",
     "_collect_resource_indices",
     "_record_resource_metrics",
-    
     # ConfigMap handling
     "load_config_from_configmap",
-    "fetch_configmap", 
+    "fetch_configmap",
     "handle_configmap_change",
-    
     # Secret handling
     "fetch_secret",
     "handle_secret_change",
-    
     # Pod management
     "haproxy_pods_index",
     "handle_haproxy_pod_create",
     "handle_haproxy_pod_delete",
-    "handle_haproxy_pod_update", 
+    "handle_haproxy_pod_update",
     "setup_haproxy_pod_indexing",
-    
     # Template rendering
     "render_haproxy_templates",
     "trigger_template_rendering",
@@ -111,18 +106,16 @@ __all__ = [
     "_render_haproxy_config",
     "_render_content_templates",
     "_validate_template_errors",
-    
     # Synchronization
     "synchronize_with_haproxy_instances",
     "_validate_sync_prerequisites",
     "_get_haproxy_pod_collection",
     "_record_sync_metrics",
     "_log_haproxy_error_hints",
-    
     # Initialization
     "initialize_configuration",
     "init_watch_configmap",
-    "init_management_socket", 
+    "init_management_socket",
     "init_template_debouncer",
     "init_metrics_server",
     "cleanup_template_debouncer",
@@ -131,7 +124,6 @@ __all__ = [
     "configure_webhook_server",
     "create_event_loop",
     "run_operator_loop",
-    
     # Utilities
     "get_current_namespace",
     "extract_nested_field",

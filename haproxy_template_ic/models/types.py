@@ -53,7 +53,7 @@ SnippetName = Annotated[str, StringConstraints(min_length=1, pattern="^[^\\s\\n]
 
 __all__ = [
     "NonEmptyStr",
-    "NonEmptyStrictStr", 
+    "NonEmptyStrictStr",
     "AbsolutePath",
     "Filename",
     "KubernetesKind",

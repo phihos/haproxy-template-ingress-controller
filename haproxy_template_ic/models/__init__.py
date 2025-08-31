@@ -4,8 +4,6 @@
 
 import logging
 
-logger = logging.getLogger(__name__)
-
 from .types import (
     NonEmptyStr,
     NonEmptyStrictStr,
@@ -52,6 +50,8 @@ from .context import (
     HAProxyConfigContext,
 )
 
+logger = logging.getLogger(__name__)
+
 # Rebuild models with forward references after all imports are complete
 try:
     HAProxyConfigContext.model_rebuild()
@@ -63,13 +63,12 @@ except Exception as e:  # nosec B110 - Exception is logged and safe to ignore fo
 __all__ = [
     # Type aliases and validation
     "NonEmptyStr",
-    "NonEmptyStrictStr", 
+    "NonEmptyStrictStr",
     "AbsolutePath",
     "Filename",
     "KubernetesKind",
     "ApiVersion",
     "SnippetName",
-    
     # Configuration models
     "ResourceFilter",
     "WatchResourceConfig",
@@ -81,7 +80,6 @@ __all__ = [
     "ValidationConfig",
     "Config",
     "config_from_dict",
-    
     # Template models
     "TemplateConfig",
     "TemplateSnippet",
@@ -89,14 +87,11 @@ __all__ = [
     "RenderedContent",
     "TriggerContext",
     "RenderedConfig",
-    
     # Resource models
     "IndexedResourceCollection",
-    
     # Context models
     "TemplateContext",
     "HAProxyConfigContext",
-    
     # Type aliases for collections
     "WatchResourceCollection",
     "MapCollection",

@@ -55,7 +55,7 @@ def _validate_sync_prerequisites(memo: Any) -> bool:
 def _get_haproxy_pod_collection(memo: Any) -> Any:
     """Get HAProxy pod collection from indices."""
     from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
-    
+
     if not hasattr(memo, "indices") or HAPROXY_PODS_INDEX not in memo.indices:
         logger.warning("⚠️ No HAProxy pods index available")
         return None
@@ -71,10 +71,14 @@ def _record_sync_metrics(
 ) -> None:
     """Record synchronization metrics."""
     if successful_count > 0:
-        logger.info(f"✅ Successfully synchronized {successful_count}/{total_urls} instances")
+        logger.info(
+            f"✅ Successfully synchronized {successful_count}/{total_urls} instances"
+        )
 
     if failed_count > 0:
-        logger.warning(f"❌ Failed to synchronize {failed_count}/{total_urls} instances")
+        logger.warning(
+            f"❌ Failed to synchronize {failed_count}/{total_urls} instances"
+        )
 
     metrics.record_haproxy_sync(successful_count, failed_count)
 
@@ -89,7 +93,9 @@ def _log_haproxy_error_hints(validation_error: ValidationError, memo: Any) -> No
     # Common HAProxy configuration errors and hints
     hints = []
 
-    if "bind" in error_details and ("address" in error_details or "port" in error_details):
+    if "bind" in error_details and (
+        "address" in error_details or "port" in error_details
+    ):
         hints.append("Check that bind addresses and ports are valid and available")
 
     if "backend" in error_details and "server" in error_details:
@@ -110,7 +116,10 @@ def _log_haproxy_error_hints(validation_error: ValidationError, memo: Any) -> No
             logger.info(f"   - {hint}")
 
     # Log rendered config size for context
-    if hasattr(memo, "haproxy_config_context") and memo.haproxy_config_context.rendered_config:
+    if (
+        hasattr(memo, "haproxy_config_context")
+        and memo.haproxy_config_context.rendered_config
+    ):
         config_size = len(memo.haproxy_config_context.rendered_config.content)
         logger.info(f"📊 Configuration size: {config_size} characters")
 
@@ -136,9 +145,11 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
         haproxy_pods_store = _get_haproxy_pod_collection(memo)
         if haproxy_pods_store is None:
             return
-            
+
         # Convert kopf Store to IndexedResourceCollection
-        haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(haproxy_pods_store)
+        haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(
+            haproxy_pods_store
+        )
 
         production_urls = get_production_urls_from_index(haproxy_pods_collection)
         if not production_urls:

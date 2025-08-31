@@ -102,11 +102,11 @@ async def handle_configmap_change(
     if hasattr(memo, "config") and memo.config:
         # Compare raw configuration dictionaries using DeepDiff
         diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
-        
+
         if not diff:
             structured_logger.info("Configuration unchanged, skipping reload")
             return
-        
+
         # Configuration has changed - show the diff and trigger reload
         diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
         structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
@@ -119,6 +119,6 @@ async def handle_configmap_change(
     # Set new config in memo
     memo.config = new_config
 
-    # Trigger reload by setting the flag  
+    # Trigger reload by setting the flag
     memo.config_reload_flag.set_result(None)
     memo.stop_flag.set_result(None)

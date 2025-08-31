@@ -35,7 +35,7 @@ __all__ = [
     "render_haproxy_templates",
     "_prepare_template_context",
     "_render_haproxy_config",
-    "_render_content_templates", 
+    "_render_content_templates",
     "_validate_template_errors",
 ]
 
@@ -172,13 +172,15 @@ def _validate_template_errors(template_errors: List) -> None:
     if template_errors:
         error_count = len(template_errors)
         error_summary = f"Template rendering failed with {error_count} error(s):\n"
-        
+
         for error in template_errors[:5]:  # Show first 5 errors
-            error_summary += f"- {error['type']} '{error['filename']}': {error['error']}\n"
-            
+            error_summary += (
+                f"- {error['type']} '{error['filename']}': {error['error']}\n"
+            )
+
         if error_count > 5:
             error_summary += f"... and {error_count - 5} more errors"
-            
+
         raise RuntimeError(error_summary.strip())
 
 
@@ -192,13 +194,16 @@ async def trigger_template_rendering(memo: Any, force: bool = False, **kwargs) -
     span_name="render_haproxy_templates",
     attributes={"operation.category": "templating"},
 )
-async def render_haproxy_templates(memo: Any, logger: logging.Logger, **kwargs: Any) -> None:
+async def render_haproxy_templates(
+    memo: Any, logger: logging.Logger, **kwargs: Any
+) -> None:
     """Render all HAProxy templates with comprehensive error handling and metrics."""
     metrics = memo.metrics
 
     try:
         # Collect all current resource indices
         from .k8s_resources import _collect_resource_indices
+
         indices = _collect_resource_indices(memo, metrics)
 
         # Prepare template context
@@ -218,7 +223,9 @@ async def render_haproxy_templates(memo: Any, logger: logging.Logger, **kwargs: 
         # Handle validation errors from templates
         if validation_errors:
             error_count = len(validation_errors)
-            logger.warning(f"⚠️ Template validation completed with {error_count} warning(s)")
+            logger.warning(
+                f"⚠️ Template validation completed with {error_count} warning(s)"
+            )
             for error in validation_errors[:3]:  # Show first 3 warnings
                 logger.warning(
                     f"Template warning in {error['resource_type']}: {error['error']}"
@@ -231,14 +238,14 @@ async def render_haproxy_templates(memo: Any, logger: logging.Logger, **kwargs: 
         )
         content_items = len(memo.haproxy_config_context.rendered_content)
         resource_types = len(indices)
-        
+
         logger.info(
             f"🎯 Template rendering completed successfully: haproxy_config_size={haproxy_config_size} content_items={content_items} resource_types={resource_types}"
         )
 
         record_span_event("template_rendering_completed")
         metrics.record_template_render("all", "success")
-        
+
         # Trigger synchronization with HAProxy instances
         try:
             await synchronize_with_haproxy_instances(memo)
@@ -251,12 +258,12 @@ async def render_haproxy_templates(memo: Any, logger: logging.Logger, **kwargs: 
         metrics.record_template_render("all", "error")
         metrics.record_error("template_rendering_failed", "operator")
         record_span_event("template_rendering_failed", {"error": str(e)})
-        
+
         logger.error(f"❌ Template rendering failed: {e}")
-        
+
         # Clear any partial results to prevent inconsistent state
         if hasattr(memo, "haproxy_config_context"):
             memo.haproxy_config_context.rendered_content.clear()
             memo.haproxy_config_context.rendered_config = None
-            
+
         raise

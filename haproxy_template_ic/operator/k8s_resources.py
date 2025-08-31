@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "update_resource_index",
-    "setup_resource_watchers", 
+    "setup_resource_watchers",
     "_collect_resource_indices",
     "_record_resource_metrics",
 ]
@@ -34,7 +34,7 @@ async def update_resource_index(
     logger.debug(f"📝 Updating index {param} for {namespace}/{name}...")
 
     # Convert kopf Body to dictionary if needed
-    body_dict = dict(body) if hasattr(body, 'items') else body
+    body_dict = dict(body) if hasattr(body, "items") else body
 
     # Get the watch config for this resource type
     if memo and hasattr(memo, "config") and hasattr(memo.config, "watched_resources"):
@@ -56,8 +56,11 @@ async def update_resource_index(
     if memo and hasattr(memo, "debouncer"):
         # Use asyncio to schedule the trigger since this function might not be awaited
         import asyncio
+
         asyncio.create_task(memo.debouncer.trigger("resource_changes"))
-        logger.debug(f"⏰ Triggered template rendering due to {param} resource change: {namespace}/{name}")
+        logger.debug(
+            f"⏰ Triggered template rendering due to {param} resource change: {namespace}/{name}"
+        )
 
     return {tuple(index_values): body_dict}
 
@@ -104,15 +107,15 @@ def _record_resource_metrics(metrics: Any, indices: Dict[str, Any]) -> None:
 
 def setup_resource_watchers(memo: Any) -> None:
     """Set up resource watchers based on configuration.
-    
+
     This function dynamically registers kopf resource watchers based on the
     configuration in memo.config.watched_resources.
-    
+
     Args:
         memo: Kopf memo object containing configuration and indices
     """
     import kopf
-    
+
     if not hasattr(memo, "config") or not hasattr(memo.config, "watched_resources"):
         logger.warning("No watched_resources configuration found")
         return
@@ -121,17 +124,17 @@ def setup_resource_watchers(memo: Any) -> None:
         try:
             api_version = watch_config.api_version
             kind = watch_config.kind
-            
+
             logger.info(f"Setting up watcher for {resource_id}: {api_version}/{kind}")
-            
+
             # Register kopf indexing and handlers
             kopf.index(
-                api_version, 
+                api_version,
                 kind,
                 id=resource_id,
                 param=resource_id,
             )(update_resource_index)
-                
+
         except Exception as e:
             logger.error(f"Failed to setup watcher for {resource_id}: {e}")
             raise

@@ -363,6 +363,7 @@ class TestTemplateRenderDebouncer:
         finally:
             await debouncer.stop()
 
+
 # Extended tests (merged from test_debouncer_extended.py)
 class TestDebouncerWarnings:
     """Test warning messages for unusual configurations."""

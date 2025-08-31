@@ -974,8 +974,8 @@ class ConfigSynchronizer:
             logger.error(error_msg)
         else:
             try:
-                parsed_error_msg, error_line, error_context = parse_validation_error_details(
-                    str(error), config
+                parsed_error_msg, error_line, error_context = (
+                    parse_validation_error_details(str(error), config)
                 )
                 if error_context:
                     error_msg += (

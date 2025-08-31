@@ -20,7 +20,7 @@ from .errors import DataplaneAPIError, ValidationError
 
 __all__ = [
     "normalize_dataplane_url",
-    "parse_haproxy_error_line", 
+    "parse_haproxy_error_line",
     "extract_config_context",
     "parse_validation_error_details",
     "handle_dataplane_errors",

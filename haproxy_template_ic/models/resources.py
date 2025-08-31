@@ -54,6 +54,7 @@ class IndexedResourceCollection(BaseModel):
                     # Convert Kopf Body objects to regular dictionaries and apply field filtering
                     try:
                         from haproxy_template_ic.k8s import normalize_kopf_resource
+
                         normalized_resource = normalize_kopf_resource(
                             resource, ignore_fields
                         )

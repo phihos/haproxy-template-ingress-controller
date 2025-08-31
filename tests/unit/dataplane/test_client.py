@@ -5,7 +5,6 @@ Contains only tests that don't make network calls - testing
 exceptions, URL normalization, and pure functions.
 """
 
-
 from haproxy_template_ic.dataplane import (
     DataplaneAPIError,
     ValidationError,
@@ -86,6 +85,7 @@ class TestNormalizeDataplaneUrl:
         # Test that function handles normal cases correctly
         # Note: Error handling behavior is implementation detail
         pass
+
     # Additional edge case tests (moved from test_url_normalization.py)
     def test_normalize_url_with_path_prefix(self):
         """Test URL with existing path prefix."""

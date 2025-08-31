@@ -37,7 +37,11 @@ from haproxy_template_ic.models.context import (
 )
 # from haproxy_template_ic.webhook import start_webhook_server  # Function may not exist
 
-from .configmap import fetch_configmap, handle_configmap_change, load_config_from_configmap
+from .configmap import (
+    fetch_configmap,
+    handle_configmap_change,
+    load_config_from_configmap,
+)
 from .secrets import fetch_secret, handle_secret_change
 from .k8s_resources import setup_resource_watchers
 from .template_renderer import render_haproxy_templates
@@ -52,7 +56,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "initialize_configuration",
     "init_watch_configmap",
-    "init_management_socket", 
+    "init_management_socket",
     "init_template_debouncer",
     "init_metrics_server",
     "cleanup_template_debouncer",
@@ -132,7 +136,7 @@ async def initialize_configuration(memo: Any) -> None:
 
 async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
     """Set up startup handlers after configuration is loaded."""
-    
+
     configmap_name = memo.cli_options.configmap_name
     kopf.on.event(
         "configmap",
@@ -215,12 +219,12 @@ async def cleanup_metrics_server(memo: Any, **kwargs: Any) -> None:
 async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
     """Start the metrics server."""
     metrics_port = memo.config.operator.metrics_port
-    
+
     # Check if metrics server is already initialized
-    if hasattr(memo, 'metrics') and memo.metrics:
+    if hasattr(memo, "metrics") and memo.metrics:
         logger.warning("⚠️ Metrics server already started")
         return
-    
+
     memo.metrics = get_metrics_collector()
     await memo.metrics.start_metrics_server(port=metrics_port)
     logger.info(f"📊 Metrics server started on port {metrics_port}")
@@ -268,7 +272,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
     # Initialize metrics
     metrics = get_metrics_collector()
     metrics.set_app_info()
-    
+
     logger = structlog.get_logger("operator")
 
     # Load Kubernetes configuration once
@@ -321,7 +325,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         )
 
         asyncio.set_event_loop(loop)
-        
+
         try:
             # Fetch config from configmap, validate it and attach it to the memo
             loop.run_until_complete(initialize_configuration(memo))
@@ -362,7 +366,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
 
             # Config changed, loop back to reload
             logger.info("🔄 Reloading configuration...")
-            
+
         except KeyboardInterrupt:
             logger.info("👋 Operator stopped by user")
             break

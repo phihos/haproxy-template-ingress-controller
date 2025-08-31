@@ -14,7 +14,7 @@ from haproxy_template_ic.constants import (
 
 __all__ = [
     "DEFAULT_API_TIMEOUT",
-    "DEFAULT_DATAPLANE_PASSWORD", 
+    "DEFAULT_DATAPLANE_PASSWORD",
     "DEFAULT_DATAPLANE_PORT",
     "DEFAULT_DATAPLANE_USERNAME",
 ]

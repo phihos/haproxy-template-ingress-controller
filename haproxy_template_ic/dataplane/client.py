@@ -713,8 +713,10 @@ class DataplaneClient:
                             )
 
                             # Extract error line and context for better debugging
-                            error_msg, error_line, error_context = parse_validation_error_details(
-                                validation_details, config_data
+                            error_msg, error_line, error_context = (
+                                parse_validation_error_details(
+                                    validation_details, config_data
+                                )
                             )
 
                             raise ValidationError(

@@ -9,7 +9,7 @@ from enum import Enum
 
 __all__ = [
     "ConfigChangeType",
-    "ConfigSectionType", 
+    "ConfigSectionType",
     "ConfigElementType",
 ]
 

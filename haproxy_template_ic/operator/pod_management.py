@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "haproxy_pods_index",
     "handle_haproxy_pod_create",
-    "handle_haproxy_pod_delete", 
+    "handle_haproxy_pod_delete",
     "handle_haproxy_pod_update",
     "setup_haproxy_pod_indexing",
 ]
@@ -54,7 +54,9 @@ async def haproxy_pods_index(
         )
         return {}  # Return empty dict to exclude from index
 
-    logger.debug(f"✅ Successfully indexed HAProxy pod {namespace}/{name} with IP {pod_ip}")
+    logger.debug(
+        f"✅ Successfully indexed HAProxy pod {namespace}/{name} with IP {pod_ip}"
+    )
     return {(namespace, name): dict(body)}
 
 
@@ -144,10 +146,10 @@ async def handle_haproxy_pod_update(
 
 def setup_haproxy_pod_indexing(memo: Any) -> None:
     """Set up HAProxy pod indexing and event handlers.
-    
+
     This function registers kopf handlers for HAProxy pod lifecycle management.
     It uses the pod_selector from the configuration to determine which pods to watch.
-    
+
     Args:
         memo: Kopf memo object containing configuration
     """
@@ -156,14 +158,16 @@ def setup_haproxy_pod_indexing(memo: Any) -> None:
         return
 
     pod_selector = memo.config.pod_selector
-    
-    logger.info(f"Setting up HAProxy pod indexing with selector: {pod_selector.match_labels}")
-    
+
+    logger.info(
+        f"Setting up HAProxy pod indexing with selector: {pod_selector.match_labels}"
+    )
+
     try:
         # Register kopf index for HAProxy pods
         kopf.index(
             "v1",
-            "pods", 
+            "pods",
             id=HAPROXY_PODS_INDEX,
             labels=pod_selector.match_labels,
         )(haproxy_pods_index)
@@ -178,7 +182,7 @@ def setup_haproxy_pod_indexing(memo: Any) -> None:
             return await handle_haproxy_pod_create(**kwargs)
 
         @kopf.on.delete(
-            "v1", 
+            "v1",
             "pods",
             labels=pod_selector.match_labels,
         )
@@ -187,14 +191,16 @@ def setup_haproxy_pod_indexing(memo: Any) -> None:
 
         @kopf.on.update(
             "v1",
-            "pods", 
+            "pods",
             labels=pod_selector.match_labels,
         )
         async def haproxy_pod_update_handler(**kwargs):
             return await handle_haproxy_pod_update(**kwargs)
-            
-        logger.info("✅ HAProxy pod indexing and event handlers registered successfully")
-        
+
+        logger.info(
+            "✅ HAProxy pod indexing and event handlers registered successfully"
+        )
+
     except Exception as e:
         logger.error(f"Failed to setup HAProxy pod indexing: {e}")
         raise

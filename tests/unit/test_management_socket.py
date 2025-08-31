@@ -8,7 +8,7 @@ import asyncio
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, MagicMock, patch
+from unittest.mock import Mock, AsyncMock, patch
 
 from haproxy_template_ic.management_socket import (
     ManagementSocketServer,
@@ -962,10 +962,8 @@ class TestManagementSocketCriticalPaths:
         }
         assert result == expected
 
+
 # Extended tests (merged from test_management_socket_extended.py)
-from haproxy_template_ic.management_socket import (
-    _serialize_memo_indices,
-)
 
 
 class TestSerializeResourceCollection:
@@ -995,5 +993,3 @@ class TestSerializeResourceCollection:
         """Test fallback for non-iterable, non-dict types."""
         result = _serialize_resource_collection(42)
         assert result == [{"data": 42}]
-
-

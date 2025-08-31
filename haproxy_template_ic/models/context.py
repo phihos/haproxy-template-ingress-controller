@@ -1,7 +1,7 @@
 """
 Template context and HAProxy configuration context models.
 
-Contains models for template rendering context and complete 
+Contains models for template rendering context and complete
 HAProxy configuration context with change detection capabilities.
 """
 
@@ -210,7 +210,6 @@ class HAProxyConfigContext(BaseModel):
         # Allow forward references and arbitrary types
         arbitrary_types_allowed=True,
     )
-
 
 
 # Note: model_rebuild() should be called after all models are defined
