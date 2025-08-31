@@ -72,6 +72,8 @@ data:
     haproxy:
       config_file: /etc/haproxy/haproxy.cfg
       haproxy_bin: /usr/local/sbin/haproxy
+      master_worker_mode: true
+      master_runtime: /etc/haproxy/haproxy-master.sock
       reload:
         reload_delay: 1
         reload_cmd: /opt/haproxy/reload.sh

@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import structlog
 import structlog.contextvars
-from haproxy_template_ic.structured_logging import (
+from haproxy_template_ic.core.logging import (
     _extract_context_from_parameters,
     _get_function_signature,
     autolog,
@@ -353,7 +353,7 @@ class TestEdgeCases:
             """Worker function that sets and reads context in a thread."""
             # Simulate some work
 
-            time.sleep(0.01)
+            time.sleep(0.005)
 
             # Return the context as seen by this worker
             return dict(structlog.contextvars.get_contextvars())

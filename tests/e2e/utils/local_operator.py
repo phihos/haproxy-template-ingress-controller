@@ -139,6 +139,11 @@ class LocalOperatorRunner:
             socket_path=self.socket_path,
         )
 
+        # Determine project root directory
+        import haproxy_template_ic
+
+        project_root = os.path.dirname(os.path.dirname(haproxy_template_ic.__file__))
+
         # Start the process
         self.process = subprocess.Popen(
             cmd,
@@ -148,6 +153,7 @@ class LocalOperatorRunner:
             text=True,
             bufsize=1,  # Line buffered
             preexec_fn=os.setsid if os.name != "nt" else None,  # Create process group
+            cwd=project_root,  # Ensure correct working directory
         )
 
         # Start log reader thread

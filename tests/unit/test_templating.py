@@ -25,7 +25,7 @@ from haproxy_template_ic.templating import (
     _extract_snippet_name,
     _get_context_lines,
 )
-from haproxy_template_ic.config_models import TemplateSnippet
+from haproxy_template_ic.models import TemplateSnippet
 
 
 class TestB64DecodeFilter:

@@ -5,7 +5,7 @@ Tests for kopf_utils module.
 import pytest
 from unittest.mock import MagicMock, patch
 
-from haproxy_template_ic.kopf_utils import (
+from haproxy_template_ic.k8s.kopf_utils import (
     convert_kopf_body_to_dict,
     normalize_kopf_resource,
     is_valid_kubernetes_resource,

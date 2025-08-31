@@ -297,7 +297,7 @@ await run_operator(
 ### Configuration
 
 ```python
-from haproxy_template_ic.config_models import Config
+from haproxy_template_ic.models import Config
 
 config = Config.from_dict(config_dict)
 ```
@@ -336,7 +336,7 @@ await client.reload_haproxy()
 ### Resource Collection
 
 ```python
-from haproxy_template_ic.config_models import IndexedResourceCollection
+from haproxy_template_ic.models import IndexedResourceCollection
 
 collection = IndexedResourceCollection(
     index_by=["metadata.name"]

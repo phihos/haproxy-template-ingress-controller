@@ -101,6 +101,12 @@ haproxy_instances_total = Gauge(
     ["instance_type"],
 )
 
+haproxy_sync_results_total = Counter(
+    "haproxy_template_ic_haproxy_sync_results_total",
+    "Total HAProxy synchronization results",
+    ["result"],  # "success" or "failure"
+)
+
 # Webhook validation metrics
 webhook_requests_total = Counter(
     "haproxy_template_ic_webhook_requests_total",
@@ -193,6 +199,20 @@ class MetricsCollector:
             logger.info(f"📊 Metrics server started on port {port}")
         except Exception as e:
             logger.error(f"❌ Failed to start metrics server: {e}")
+
+    async def stop_metrics_server(self) -> None:
+        """Stop the Prometheus metrics HTTP server."""
+        if not self._server_started:
+            logger.debug("Metrics server not running, nothing to stop")
+            return
+
+        try:
+            # Note: prometheus_async doesn't provide a direct stop method
+            # The server will be stopped when the event loop shuts down
+            self._server_started = False
+            logger.debug("📊 Metrics server stopped")
+        except Exception as e:
+            logger.error(f"❌ Failed to stop metrics server: {e}")
 
     def set_app_info(self, version: str = "development") -> None:
         """Set application information metrics."""
@@ -356,6 +376,18 @@ class MetricsCollector:
             time_since_last_render: Seconds since last render
         """
         debouncer_time_since_last_render.set(time_since_last_render)
+
+    def record_haproxy_sync(self, successful_count: int, failed_count: int) -> None:
+        """Record HAProxy synchronization results.
+
+        Args:
+            successful_count: Number of successful synchronizations
+            failed_count: Number of failed synchronizations
+        """
+        if successful_count > 0:
+            haproxy_sync_results_total.labels(result="success").inc(successful_count)
+        if failed_count > 0:
+            haproxy_sync_results_total.labels(result="failure").inc(failed_count)
 
     @contextmanager
     def time_webhook_request(self) -> Iterator[None]:

@@ -1,4 +1,4 @@
-Start the development environment via "start-dev-env.sh" and check the following thing:
+Start the development environment via "start-dev-env.sh" (if not already started) and check the following things:
 
 1. Did the cluster start up?
 2. Did all required pods start?

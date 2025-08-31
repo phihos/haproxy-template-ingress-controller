@@ -12,7 +12,7 @@ from typing import Any, Callable, Coroutine, Optional
 
 import structlog
 
-from haproxy_template_ic.config_models import TriggerContext
+from haproxy_template_ic.models import TriggerContext
 
 logger = structlog.get_logger(__name__)
 
@@ -212,7 +212,9 @@ class TemplateRenderDebouncer:
                 # Render templates with trigger context
                 self._last_render_time = time.time()
                 try:
-                    await self.render_func(self.memo, trigger_context=trigger_context)
+                    await self.render_func(
+                        self.memo, logger, trigger_context=trigger_context
+                    )
                 except Exception as e:
                     logger.error(
                         f"Error during template rendering: {e}",

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 from jinja2 import Template, TemplateNotFound
 from haproxy_template_ic.templating import TemplateRenderer
-from haproxy_template_ic.config_models import (
+from haproxy_template_ic.models import (
     Config,
     ContentType,
     HAProxyConfigContext,
@@ -2192,16 +2192,11 @@ class TestFieldValidators:
     def test_validate_ignore_fields_with_invalid_expressions(self):
         """Test that invalid JSONPath expressions trigger warning."""
 
-        with patch(
-            "haproxy_template_ic.field_filter.validate_ignore_fields"
-        ) as mock_validate:
+        with patch("haproxy_template_ic.k8s.validate_ignore_fields") as mock_validate:
             # Return fewer fields than input (simulating some invalid)
             mock_validate.return_value = ["metadata.managedFields"]
 
-            with patch("logging.getLogger") as mock_get_logger:
-                mock_logger = MagicMock()
-                mock_get_logger.return_value = mock_logger
-
+            with patch("haproxy_template_ic.models.config.logger") as mock_logger:
                 config = Config(
                     pod_selector={"match_labels": {"app": "test"}},
                     haproxy_config={"template": "test"},
@@ -2271,10 +2266,7 @@ class TestIndexedResourceCollectionFromKopfIndex:
             ]
         )
 
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_logger = MagicMock()
-            mock_get_logger.return_value = mock_logger
-
+        with patch("haproxy_template_ic.models.resources.logger") as mock_logger:
             collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
             # Should log warning about normalization failure
@@ -2297,10 +2289,7 @@ class TestIndexedResourceCollectionFromKopfIndex:
             ]
         )
 
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_logger = MagicMock()
-            mock_get_logger.return_value = mock_logger
-
+        with patch("haproxy_template_ic.models.resources.logger") as mock_logger:
             collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
             # Should log warning about invalid resource
@@ -2319,10 +2308,7 @@ class TestIndexedResourceCollectionFromKopfIndex:
         mock_index.__iter__.return_value = iter([("key1",)])
         mock_index.__getitem__.side_effect = RuntimeError("Unexpected error")
 
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_logger = MagicMock()
-            mock_get_logger.return_value = mock_logger
-
+        with patch("haproxy_template_ic.models.resources.logger") as mock_logger:
             collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
             # Should log warning about error
@@ -2499,10 +2485,7 @@ class TestIndexedResourceCollectionQueryMethods:
             {"metadata": {"name": "resource3"}},
         ]
 
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_logger = MagicMock()
-            mock_get_logger.return_value = mock_logger
-
+        with patch("haproxy_template_ic.models.resources.logger") as mock_logger:
             # Should raise ValueError
             with pytest.raises(ValueError, match="Multiple resources found"):
                 collection.get_indexed_single("default", "service1")
