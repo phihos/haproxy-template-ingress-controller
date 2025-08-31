@@ -714,6 +714,7 @@ if "pytest" in sys.modules:  # Never check for test runners!
 - **No helper methods for old APIs**: Don't create bridge functions to maintain old interfaces  
 - **Clean test updates**: Update test data formats and API calls to match new patterns
 - **Explicit over implicit**: Prefer `config.create_template_compiler()` over hidden `_parent_config` injection
+- **Package exports**: Packages must export their public API through `__init__.py`. External modules should import from the package, not submodules (e.g., `from haproxy_template_ic.dataplane import DataplaneClient`, not `from haproxy_template_ic.dataplane.client import DataplaneClient`)
 
 ### Examples of What NOT to Do
 

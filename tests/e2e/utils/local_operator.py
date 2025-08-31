@@ -94,7 +94,7 @@ class LocalOperatorRunner:
             {
                 "CONFIGMAP_NAME": self.configmap_name,
                 "SECRET_NAME": self.secret_name,
-                "NAMESPACE": self.namespace,  # Pass namespace to operator
+                "POD_NAMESPACE": self.namespace,  # Pass namespace to operator
                 "SOCKET_PATH": self.socket_path,
                 "VERBOSE": str(self.verbose),
                 # Disable buffering for real-time log capture

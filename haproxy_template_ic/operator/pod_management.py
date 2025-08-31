@@ -24,13 +24,15 @@ __all__ = [
 
 
 async def haproxy_pods_index(
-    namespace: str,
-    name: str,
-    body: Dict[str, Any],
-    logger: logging.Logger,
     **kwargs: Any,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Index HAProxy pods for efficient discovery."""
+    # Extract kopf parameters
+    namespace = kwargs.get("namespace", "")
+    name = kwargs.get("name", "")
+    body = kwargs.get("body", {})
+    logger = kwargs.get("logger", logging.getLogger(__name__))
+
     logger.info(f"📝 Indexing HAProxy pod {namespace}/{name}")
 
     # Check if pod is being deleted using deletionTimestamp

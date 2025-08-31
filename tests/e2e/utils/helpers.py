@@ -64,9 +64,7 @@ def assert_log_line(
 def assert_config_change(operator: LocalOperatorRunner, timeout: float = 30) -> None:
     """Assert that a configuration change is detected and processed."""
     assert_log_line(operator, "🔄 Config has changed:", timeout=timeout)
-    assert_log_line(
-        operator, "🔄 Configuration changed. Reinitializing...", timeout=timeout
-    )
+    assert_log_line(operator, "🔄 Config has changed: reloading", timeout=timeout)
 
 
 def count_log_occurrences(

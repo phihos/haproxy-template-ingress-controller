@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, List, Tuple
 
 from haproxy_template_ic.models import (
+    ContentType,
     RenderedConfig,
     RenderedContent,
     TemplateContext,
@@ -133,7 +134,7 @@ def _render_content_templates(
                 rendered_content = RenderedContent(
                     filename=filename,
                     content=rendered_content_text,
-                    content_type=content_type,
+                    content_type=ContentType(content_type),
                 )
                 memo.haproxy_config_context.rendered_content.append(rendered_content)
 

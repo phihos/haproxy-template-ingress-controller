@@ -23,7 +23,13 @@ class TestUpdateResourceIndex:
         body = {"name": "test-pod", "host": "10.0.1.5", "port": "80"}
         logger = logging.getLogger()
 
-        result = await update_resource_index(param, namespace, name, body, logger)
+        result = await update_resource_index(
+            param=param,
+            namespace=namespace,
+            name=name,
+            body=body,
+            logger=logger,
+        )
 
         # Should fallback to default indexing
         assert result == {(namespace, name): body}

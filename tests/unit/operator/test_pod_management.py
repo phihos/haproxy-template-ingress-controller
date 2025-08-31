@@ -30,7 +30,12 @@ class TestHAProxyPodsIndex:
         }
         logger = MagicMock()
 
-        result = await haproxy_pods_index(namespace, name, body, logger)
+        result = await haproxy_pods_index(
+            namespace=namespace,
+            name=name,
+            body=body,
+            logger=logger,
+        )
 
         # Should return indexed pod data
         assert result == {(namespace, name): body}
@@ -54,7 +59,12 @@ class TestHAProxyPodsIndex:
         }
         logger = MagicMock()
 
-        result = await haproxy_pods_index(namespace, name, body, logger)
+        result = await haproxy_pods_index(
+            namespace=namespace,
+            name=name,
+            body=body,
+            logger=logger,
+        )
 
         # Should return empty dict to remove from index
         assert result == {}
@@ -80,7 +90,12 @@ class TestHAProxyPodsIndex:
         }
         logger = MagicMock()
 
-        result = await haproxy_pods_index(namespace, name, body, logger)
+        result = await haproxy_pods_index(
+            namespace=namespace,
+            name=name,
+            body=body,
+            logger=logger,
+        )
 
         # Should return empty dict to exclude from index
         assert result == {}

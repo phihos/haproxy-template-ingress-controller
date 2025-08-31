@@ -23,6 +23,12 @@ def get_current_namespace() -> str:
     Returns:
         Current namespace name, or "default" if not found
     """
+    # First check environment variable for local development/testing
+    env_namespace = os.environ.get("KUBERNETES_NAMESPACE")
+    if env_namespace:
+        return env_namespace
+
+    # Then check service account namespace file for in-cluster operation
     namespace_path = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
     if os.path.exists(namespace_path):
@@ -34,8 +40,8 @@ def get_current_namespace() -> str:
         except Exception as e:
             logger.warning(f"Failed to read namespace from {namespace_path}: {e}")
 
-    # Fallback to environment variable or default
-    return os.environ.get("KUBERNETES_NAMESPACE", "default")
+    # Final fallback to default
+    return "default"
 
 
 @lru_cache(maxsize=256)

@@ -22,15 +22,17 @@ __all__ = [
 
 
 async def update_resource_index(
-    param: str,
-    namespace: str,
-    name: str,
-    body: Dict[str, Any],
-    logger: logging.Logger,
-    memo: Any = None,
-    **kwargs_: Any,
+    **kwargs: Any,
 ) -> Dict[Tuple[str, ...], Dict[str, Any]]:
     """Update resource index with configurable key."""
+    # Extract kopf parameters
+    param = kwargs.get("param", "")
+    namespace = kwargs.get("namespace", "")
+    name = kwargs.get("name", "")
+    body = kwargs.get("body", {})
+    logger = kwargs.get("logger", logging.getLogger(__name__))
+    memo = kwargs.get("memo", None)
+
     logger.debug(f"📝 Updating index {param} for {namespace}/{name}...")
 
     # Convert kopf Body to dictionary if needed
