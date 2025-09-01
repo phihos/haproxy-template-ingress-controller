@@ -216,6 +216,21 @@ async def cleanup_metrics_server(memo: Any, **kwargs: Any) -> None:
         logger.error(f"❌ Error shutting down metrics server: {e}")
 
 
+async def cleanup_management_socket(memo: Any, **kwargs: Any) -> None:
+    """Clean up management socket server."""
+    try:
+        if hasattr(memo, "socket_server_task") and memo.socket_server_task:
+            memo.socket_server_task.cancel()
+            try:
+                await memo.socket_server_task
+            except asyncio.CancelledError:
+                pass  # Expected when cancelling
+            memo.socket_server_task = None
+            logger.debug("🔌 Management socket server shutdown complete")
+    except Exception as e:
+        logger.error(f"❌ Error shutting down management socket server: {e}")
+
+
 async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
     """Start the metrics server."""
     metrics_port = memo.config.operator.metrics_port
@@ -261,10 +276,7 @@ def configure_webhook_server(
 
 def create_event_loop() -> asyncio.AbstractEventLoop:
     """Create and configure the asyncio event loop."""
-    uvloop.install()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    return loop
+    return uvloop.EventLoopPolicy().new_event_loop()
 
 
 def run_operator_loop(cli_options: "CliOptions") -> None:
@@ -348,6 +360,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             kopf.on.cleanup()(cleanup_template_debouncer)
             kopf.on.cleanup()(cleanup_tracing)
             kopf.on.cleanup()(cleanup_metrics_server)
+            kopf.on.cleanup()(cleanup_management_socket)
 
             # Run operator
             kopf.run(
@@ -359,7 +372,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
                 registry=registry,
                 indexers=indexers,
             )
-
+            loop.close()
             # Check if we should exit or reload
             if not memo.config_reload_flag.done():
                 break  # Normal shutdown

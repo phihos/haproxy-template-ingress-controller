@@ -12,10 +12,20 @@ from typing import Any, Dict
 from haproxy_template_ic.constants import NAMESPACE_FILE_PATH
 from haproxy_template_ic.k8s import (
     _compile_jsonpath as k8s_compile_jsonpath,
+)
+from haproxy_template_ic.k8s import (
     _is_valid_dict_resource as k8s_is_valid_dict_resource,
-    _is_valid_sequence_resource as k8s_is_valid_sequence_resource,
+)
+from haproxy_template_ic.k8s import (
     _is_valid_object_resource as k8s_is_valid_object_resource,
+)
+from haproxy_template_ic.k8s import (
     _is_valid_resource as k8s_is_valid_resource,
+)
+from haproxy_template_ic.k8s import (
+    _is_valid_sequence_resource as k8s_is_valid_sequence_resource,
+)
+from haproxy_template_ic.k8s import (
     extract_nested_field as k8s_extract_nested_field,
 )
 
@@ -39,7 +49,11 @@ def get_current_namespace() -> str:
     Returns:
         The current namespace string, defaulting to "default" if not determinable
     """
-    # Try mounted service account token first
+    namespace = os.environ.get("POD_NAMESPACE", "").strip()
+    if namespace:
+        logger.debug(f"🏷️ Current namespace from env: {namespace}")
+        return namespace
+
     try:
         with open(NAMESPACE_FILE_PATH, "r", encoding="utf-8") as f:
             namespace = f.read().strip()
@@ -50,10 +64,6 @@ def get_current_namespace() -> str:
         logger.debug(f"Could not read namespace from {NAMESPACE_FILE_PATH}: {e}")
 
     # Fallback to environment variable
-    namespace = os.environ.get("POD_NAMESPACE", "").strip()
-    if namespace:
-        logger.debug(f"🏷️ Current namespace from env: {namespace}")
-        return namespace
 
     # Try kubeconfig context
     try:
