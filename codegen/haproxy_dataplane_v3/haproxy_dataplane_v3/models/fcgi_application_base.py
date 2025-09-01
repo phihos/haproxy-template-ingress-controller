@@ -169,12 +169,14 @@ class FCGIApplicationBase:
         else:
             keep_conn = FCGIApplicationBaseKeepConn(_keep_conn)
 
-        log_stderrs = []
         _log_stderrs = d.pop("log_stderrs", UNSET)
-        for log_stderrs_item_data in _log_stderrs or []:
-            log_stderrs_item = FcgiLogStderr.from_dict(log_stderrs_item_data)
+        log_stderrs: Union[Unset, list[FcgiLogStderr]] = UNSET
+        if not isinstance(_log_stderrs, Unset):
+            log_stderrs = []
+            for log_stderrs_item_data in _log_stderrs:
+                log_stderrs_item = FcgiLogStderr.from_dict(log_stderrs_item_data)
 
-            log_stderrs.append(log_stderrs_item)
+                log_stderrs.append(log_stderrs_item)
 
         max_reqs = d.pop("max_reqs", UNSET)
 
@@ -187,21 +189,25 @@ class FCGIApplicationBase:
         else:
             mpxs_conns = FCGIApplicationBaseMpxsConns(_mpxs_conns)
 
-        pass_headers = []
         _pass_headers = d.pop("pass_headers", UNSET)
-        for pass_headers_item_data in _pass_headers or []:
-            pass_headers_item = FcgiPassHeader.from_dict(pass_headers_item_data)
+        pass_headers: Union[Unset, list[FcgiPassHeader]] = UNSET
+        if not isinstance(_pass_headers, Unset):
+            pass_headers = []
+            for pass_headers_item_data in _pass_headers:
+                pass_headers_item = FcgiPassHeader.from_dict(pass_headers_item_data)
 
-            pass_headers.append(pass_headers_item)
+                pass_headers.append(pass_headers_item)
 
         path_info = d.pop("path_info", UNSET)
 
-        set_params = []
         _set_params = d.pop("set_params", UNSET)
-        for set_params_item_data in _set_params or []:
-            set_params_item = FcgiSetParam.from_dict(set_params_item_data)
+        set_params: Union[Unset, list[FcgiSetParam]] = UNSET
+        if not isinstance(_set_params, Unset):
+            set_params = []
+            for set_params_item_data in _set_params:
+                set_params_item = FcgiSetParam.from_dict(set_params_item_data)
 
-            set_params.append(set_params_item)
+                set_params.append(set_params_item)
 
         fcgi_application_base = cls(
             docroot=docroot,

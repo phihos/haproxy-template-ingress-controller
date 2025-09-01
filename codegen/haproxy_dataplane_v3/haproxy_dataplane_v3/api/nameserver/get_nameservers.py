@@ -35,8 +35,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["Nameserver"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasnameservers_item_data in _response_200:
             componentsschemasnameservers_item = Nameserver.from_dict(componentsschemasnameservers_item_data)
 

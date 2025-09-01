@@ -118,19 +118,23 @@ class Compression:
         else:
             algo_req = CompressionAlgoReq(_algo_req)
 
-        algorithms = []
         _algorithms = d.pop("algorithms", UNSET)
-        for algorithms_item_data in _algorithms or []:
-            algorithms_item = CompressionAlgorithmsItem(algorithms_item_data)
+        algorithms: Union[Unset, list[CompressionAlgorithmsItem]] = UNSET
+        if not isinstance(_algorithms, Unset):
+            algorithms = []
+            for algorithms_item_data in _algorithms:
+                algorithms_item = CompressionAlgorithmsItem(algorithms_item_data)
 
-            algorithms.append(algorithms_item)
+                algorithms.append(algorithms_item)
 
-        algos_res = []
         _algos_res = d.pop("algos-res", UNSET)
-        for algos_res_item_data in _algos_res or []:
-            algos_res_item = CompressionAlgosResItem(algos_res_item_data)
+        algos_res: Union[Unset, list[CompressionAlgosResItem]] = UNSET
+        if not isinstance(_algos_res, Unset):
+            algos_res = []
+            for algos_res_item_data in _algos_res:
+                algos_res_item = CompressionAlgosResItem(algos_res_item_data)
 
-            algos_res.append(algos_res_item)
+                algos_res.append(algos_res_item)
 
         _direction = d.pop("direction", UNSET)
         direction: Union[Unset, CompressionDirection]

@@ -75,12 +75,14 @@ class CertificateStore:
 
         key_base = d.pop("key_base", UNSET)
 
-        loads = []
         _loads = d.pop("loads", UNSET)
-        for componentsschemascrt_loads_item_data in _loads or []:
-            componentsschemascrt_loads_item = CertificateLoadAction.from_dict(componentsschemascrt_loads_item_data)
+        loads: Union[Unset, list[CertificateLoadAction]] = UNSET
+        if not isinstance(_loads, Unset):
+            loads = []
+            for componentsschemascrt_loads_item_data in _loads:
+                componentsschemascrt_loads_item = CertificateLoadAction.from_dict(componentsschemascrt_loads_item_data)
 
-            loads.append(componentsschemascrt_loads_item)
+                loads.append(componentsschemascrt_loads_item)
 
         metadata = d.pop("metadata", UNSET)
 

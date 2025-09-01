@@ -154,19 +154,23 @@ class AWSRegion:
 
         access_key_id = d.pop("access_key_id", UNSET)
 
-        allowlist = []
         _allowlist = d.pop("allowlist", UNSET)
-        for allowlist_item_data in _allowlist or []:
-            allowlist_item = AwsFilters.from_dict(allowlist_item_data)
+        allowlist: Union[Unset, list[AwsFilters]] = UNSET
+        if not isinstance(_allowlist, Unset):
+            allowlist = []
+            for allowlist_item_data in _allowlist:
+                allowlist_item = AwsFilters.from_dict(allowlist_item_data)
 
-            allowlist.append(allowlist_item)
+                allowlist.append(allowlist_item)
 
-        denylist = []
         _denylist = d.pop("denylist", UNSET)
-        for denylist_item_data in _denylist or []:
-            denylist_item = AwsFilters.from_dict(denylist_item_data)
+        denylist: Union[Unset, list[AwsFilters]] = UNSET
+        if not isinstance(_denylist, Unset):
+            denylist = []
+            for denylist_item_data in _denylist:
+                denylist_item = AwsFilters.from_dict(denylist_item_data)
 
-            denylist.append(denylist_item)
+                denylist.append(denylist_item)
 
         description = d.pop("description", UNSET)
 

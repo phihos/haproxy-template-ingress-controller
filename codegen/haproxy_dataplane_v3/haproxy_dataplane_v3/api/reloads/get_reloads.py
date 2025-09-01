@@ -22,8 +22,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["HAProxyReload"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasreloads_item_data in _response_200:
             componentsschemasreloads_item = HAProxyReload.from_dict(componentsschemasreloads_item_data)
 

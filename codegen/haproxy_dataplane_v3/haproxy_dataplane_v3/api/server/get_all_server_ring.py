@@ -33,8 +33,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["Server"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasservers_item_data in _response_200:
             componentsschemasservers_item = Server.from_dict(componentsschemasservers_item_data)
 

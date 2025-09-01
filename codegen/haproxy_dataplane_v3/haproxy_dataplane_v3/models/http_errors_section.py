@@ -58,8 +58,8 @@ class HttpErrorsSection:
         from ..models.errorfile import Errorfile
 
         d = dict(src_dict)
-        error_files = []
         _error_files = d.pop("error_files")
+        error_files = []
         for error_files_item_data in _error_files:
             error_files_item = Errorfile.from_dict(error_files_item_data)
 

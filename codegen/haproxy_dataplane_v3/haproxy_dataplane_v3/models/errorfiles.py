@@ -51,12 +51,14 @@ class Errorfiles:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        codes = []
         _codes = d.pop("codes", UNSET)
-        for codes_item_data in _codes or []:
-            codes_item = ErrorfilesCodesItem(codes_item_data)
+        codes: Union[Unset, list[ErrorfilesCodesItem]] = UNSET
+        if not isinstance(_codes, Unset):
+            codes = []
+            for codes_item_data in _codes:
+                codes_item = ErrorfilesCodesItem(codes_item_data)
 
-            codes.append(codes_item)
+                codes.append(codes_item)
 
         metadata = d.pop("metadata", UNSET)
 

@@ -463,12 +463,14 @@ class TuneOptions:
 
         disable_zero_copy_forwarding = d.pop("disable_zero_copy_forwarding", UNSET)
 
-        epoll_mask_events = []
         _epoll_mask_events = d.pop("epoll_mask_events", UNSET)
-        for epoll_mask_events_item_data in _epoll_mask_events or []:
-            epoll_mask_events_item = TuneOptionsEpollMaskEventsItem(epoll_mask_events_item_data)
+        epoll_mask_events: Union[Unset, list[TuneOptionsEpollMaskEventsItem]] = UNSET
+        if not isinstance(_epoll_mask_events, Unset):
+            epoll_mask_events = []
+            for epoll_mask_events_item_data in _epoll_mask_events:
+                epoll_mask_events_item = TuneOptionsEpollMaskEventsItem(epoll_mask_events_item_data)
 
-            epoll_mask_events.append(epoll_mask_events_item)
+                epoll_mask_events.append(epoll_mask_events_item)
 
         events_max_events_at_once = d.pop("events_max_events_at_once", UNSET)
 

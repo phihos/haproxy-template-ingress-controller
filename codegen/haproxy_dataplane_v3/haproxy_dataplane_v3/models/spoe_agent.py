@@ -241,12 +241,14 @@ class SPOEAgent:
 
         idle_timeout = d.pop("idle_timeout", UNSET)
 
-        log = []
         _log = d.pop("log", UNSET)
-        for componentsschemaslog_targets_item_data in _log or []:
-            componentsschemaslog_targets_item = LogTarget.from_dict(componentsschemaslog_targets_item_data)
+        log: Union[Unset, list[LogTarget]] = UNSET
+        if not isinstance(_log, Unset):
+            log = []
+            for componentsschemaslog_targets_item_data in _log:
+                componentsschemaslog_targets_item = LogTarget.from_dict(componentsschemaslog_targets_item_data)
 
-            log.append(componentsschemaslog_targets_item)
+                log.append(componentsschemaslog_targets_item)
 
         max_frame_size = d.pop("max-frame-size", UNSET)
 

@@ -660,12 +660,14 @@ class GlobalBase:
 
         cluster_secret = d.pop("cluster_secret", UNSET)
 
-        cpu_maps = []
         _cpu_maps = d.pop("cpu_maps", UNSET)
-        for cpu_maps_item_data in _cpu_maps or []:
-            cpu_maps_item = GlobalBaseCpuMapsItem.from_dict(cpu_maps_item_data)
+        cpu_maps: Union[Unset, list[GlobalBaseCpuMapsItem]] = UNSET
+        if not isinstance(_cpu_maps, Unset):
+            cpu_maps = []
+            for cpu_maps_item_data in _cpu_maps:
+                cpu_maps_item = GlobalBaseCpuMapsItem.from_dict(cpu_maps_item_data)
 
-            cpu_maps.append(cpu_maps_item)
+                cpu_maps.append(cpu_maps_item)
 
         _cpu_policy = d.pop("cpu_policy", UNSET)
         cpu_policy: Union[Unset, GlobalBaseCpuPolicy]
@@ -674,12 +676,14 @@ class GlobalBase:
         else:
             cpu_policy = GlobalBaseCpuPolicy(_cpu_policy)
 
-        cpu_set = []
         _cpu_set = d.pop("cpu_set", UNSET)
-        for cpu_set_item_data in _cpu_set or []:
-            cpu_set_item = GlobalBaseCpuSetItem.from_dict(cpu_set_item_data)
+        cpu_set: Union[Unset, list[GlobalBaseCpuSetItem]] = UNSET
+        if not isinstance(_cpu_set, Unset):
+            cpu_set = []
+            for cpu_set_item_data in _cpu_set:
+                cpu_set_item = GlobalBaseCpuSetItem.from_dict(cpu_set_item_data)
 
-            cpu_set.append(cpu_set_item)
+                cpu_set.append(cpu_set_item)
 
         daemon = d.pop("daemon", UNSET)
 
@@ -752,12 +756,14 @@ class GlobalBase:
 
         h1_accept_payload_with_any_method = d.pop("h1_accept_payload_with_any_method", UNSET)
 
-        h1_case_adjust = []
         _h1_case_adjust = d.pop("h1_case_adjust", UNSET)
-        for h1_case_adjust_item_data in _h1_case_adjust or []:
-            h1_case_adjust_item = GlobalBaseH1CaseAdjustItem.from_dict(h1_case_adjust_item_data)
+        h1_case_adjust: Union[Unset, list[GlobalBaseH1CaseAdjustItem]] = UNSET
+        if not isinstance(_h1_case_adjust, Unset):
+            h1_case_adjust = []
+            for h1_case_adjust_item_data in _h1_case_adjust:
+                h1_case_adjust_item = GlobalBaseH1CaseAdjustItem.from_dict(h1_case_adjust_item_data)
 
-            h1_case_adjust.append(h1_case_adjust_item)
+                h1_case_adjust.append(h1_case_adjust_item)
 
         h1_case_adjust_file = d.pop("h1_case_adjust_file", UNSET)
 
@@ -788,19 +794,23 @@ class GlobalBase:
         else:
             http_client_options = HttpClientOptions.from_dict(_http_client_options)
 
-        http_err_codes = []
         _http_err_codes = d.pop("http_err_codes", UNSET)
-        for http_err_codes_item_data in _http_err_codes or []:
-            http_err_codes_item = HttpCodes.from_dict(http_err_codes_item_data)
+        http_err_codes: Union[Unset, list[HttpCodes]] = UNSET
+        if not isinstance(_http_err_codes, Unset):
+            http_err_codes = []
+            for http_err_codes_item_data in _http_err_codes:
+                http_err_codes_item = HttpCodes.from_dict(http_err_codes_item_data)
 
-            http_err_codes.append(http_err_codes_item)
+                http_err_codes.append(http_err_codes_item)
 
-        http_fail_codes = []
         _http_fail_codes = d.pop("http_fail_codes", UNSET)
-        for http_fail_codes_item_data in _http_fail_codes or []:
-            http_fail_codes_item = HttpCodes.from_dict(http_fail_codes_item_data)
+        http_fail_codes: Union[Unset, list[HttpCodes]] = UNSET
+        if not isinstance(_http_fail_codes, Unset):
+            http_fail_codes = []
+            for http_fail_codes_item_data in _http_fail_codes:
+                http_fail_codes_item = HttpCodes.from_dict(http_fail_codes_item_data)
 
-            http_fail_codes.append(http_fail_codes_item)
+                http_fail_codes.append(http_fail_codes_item)
 
         insecure_fork_wanted = d.pop("insecure_fork_wanted", UNSET)
 
@@ -870,28 +880,34 @@ class GlobalBase:
 
         prealloc_fd = d.pop("prealloc_fd", UNSET)
 
-        runtime_apis = []
         _runtime_apis = d.pop("runtime_apis", UNSET)
-        for runtime_apis_item_data in _runtime_apis or []:
-            runtime_apis_item = GlobalBaseRuntimeApisItem.from_dict(runtime_apis_item_data)
+        runtime_apis: Union[Unset, list[GlobalBaseRuntimeApisItem]] = UNSET
+        if not isinstance(_runtime_apis, Unset):
+            runtime_apis = []
+            for runtime_apis_item_data in _runtime_apis:
+                runtime_apis_item = GlobalBaseRuntimeApisItem.from_dict(runtime_apis_item_data)
 
-            runtime_apis.append(runtime_apis_item)
+                runtime_apis.append(runtime_apis_item)
 
         set_dumpable = d.pop("set_dumpable", UNSET)
 
-        set_var = []
         _set_var = d.pop("set_var", UNSET)
-        for set_var_item_data in _set_var or []:
-            set_var_item = GlobalBaseSetVarItem.from_dict(set_var_item_data)
+        set_var: Union[Unset, list[GlobalBaseSetVarItem]] = UNSET
+        if not isinstance(_set_var, Unset):
+            set_var = []
+            for set_var_item_data in _set_var:
+                set_var_item = GlobalBaseSetVarItem.from_dict(set_var_item_data)
 
-            set_var.append(set_var_item)
+                set_var.append(set_var_item)
 
-        set_var_fmt = []
         _set_var_fmt = d.pop("set_var_fmt", UNSET)
-        for set_var_fmt_item_data in _set_var_fmt or []:
-            set_var_fmt_item = GlobalBaseSetVarFmtItem.from_dict(set_var_fmt_item_data)
+        set_var_fmt: Union[Unset, list[GlobalBaseSetVarFmtItem]] = UNSET
+        if not isinstance(_set_var_fmt, Unset):
+            set_var_fmt = []
+            for set_var_fmt_item_data in _set_var_fmt:
+                set_var_fmt_item = GlobalBaseSetVarFmtItem.from_dict(set_var_fmt_item_data)
 
-            set_var_fmt.append(set_var_fmt_item)
+                set_var_fmt.append(set_var_fmt_item)
 
         setcap = d.pop("setcap", UNSET)
 
@@ -924,12 +940,14 @@ class GlobalBase:
 
         strict_limits = d.pop("strict_limits", UNSET)
 
-        thread_group_lines = []
         _thread_group_lines = d.pop("thread_group_lines", UNSET)
-        for thread_group_lines_item_data in _thread_group_lines or []:
-            thread_group_lines_item = GlobalBaseThreadGroupLinesItem.from_dict(thread_group_lines_item_data)
+        thread_group_lines: Union[Unset, list[GlobalBaseThreadGroupLinesItem]] = UNSET
+        if not isinstance(_thread_group_lines, Unset):
+            thread_group_lines = []
+            for thread_group_lines_item_data in _thread_group_lines:
+                thread_group_lines_item = GlobalBaseThreadGroupLinesItem.from_dict(thread_group_lines_item_data)
 
-            thread_group_lines.append(thread_group_lines_item)
+                thread_group_lines.append(thread_group_lines_item)
 
         thread_groups = d.pop("thread_groups", UNSET)
 

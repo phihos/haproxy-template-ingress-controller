@@ -71,12 +71,14 @@ class SPOEMessage:
         d = dict(src_dict)
         name = d.pop("name")
 
-        acl = []
         _acl = d.pop("acl", UNSET)
-        for componentsschemasacls_item_data in _acl or []:
-            componentsschemasacls_item = ACLLines.from_dict(componentsschemasacls_item_data)
+        acl: Union[Unset, list[ACLLines]] = UNSET
+        if not isinstance(_acl, Unset):
+            acl = []
+            for componentsschemasacls_item_data in _acl:
+                componentsschemasacls_item = ACLLines.from_dict(componentsschemasacls_item_data)
 
-            acl.append(componentsschemasacls_item)
+                acl.append(componentsschemasacls_item)
 
         args = d.pop("args", UNSET)
 

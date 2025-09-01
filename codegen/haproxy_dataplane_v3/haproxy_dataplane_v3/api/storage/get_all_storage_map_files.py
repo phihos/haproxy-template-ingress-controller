@@ -22,8 +22,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["MapFile"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasmaps_item_data in _response_200:
             componentsschemasmaps_item = MapFile.from_dict(componentsschemasmaps_item_data)
 

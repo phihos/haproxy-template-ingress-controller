@@ -34,8 +34,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["SPOEAgent"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasspoe_agents_item_data in _response_200:
             componentsschemasspoe_agents_item = SPOEAgent.from_dict(componentsschemasspoe_agents_item_data)
 

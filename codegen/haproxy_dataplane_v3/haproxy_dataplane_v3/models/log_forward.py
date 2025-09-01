@@ -152,12 +152,14 @@ class LogForward:
 
         dgram_binds = d.pop("dgram_binds", UNSET)
 
-        log_target_list = []
         _log_target_list = d.pop("log_target_list", UNSET)
-        for componentsschemaslog_targets_item_data in _log_target_list or []:
-            componentsschemaslog_targets_item = LogTarget.from_dict(componentsschemaslog_targets_item_data)
+        log_target_list: Union[Unset, list[LogTarget]] = UNSET
+        if not isinstance(_log_target_list, Unset):
+            log_target_list = []
+            for componentsschemaslog_targets_item_data in _log_target_list:
+                componentsschemaslog_targets_item = LogTarget.from_dict(componentsschemaslog_targets_item_data)
 
-            log_target_list.append(componentsschemaslog_targets_item)
+                log_target_list.append(componentsschemaslog_targets_item)
 
         log_forward = cls(
             name=name,

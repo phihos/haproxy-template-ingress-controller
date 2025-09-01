@@ -79,12 +79,14 @@ class SiteService:
         else:
             http_connection_mode = SiteServiceHttpConnectionMode(_http_connection_mode)
 
-        listeners = []
         _listeners = d.pop("listeners", UNSET)
-        for listeners_item_data in _listeners or []:
-            listeners_item = Bind.from_dict(listeners_item_data)
+        listeners: Union[Unset, list[Bind]] = UNSET
+        if not isinstance(_listeners, Unset):
+            listeners = []
+            for listeners_item_data in _listeners:
+                listeners_item = Bind.from_dict(listeners_item_data)
 
-            listeners.append(listeners_item)
+                listeners.append(listeners_item)
 
         def _parse_maxconn(data: object) -> Union[None, Unset, int]:
             if data is None:

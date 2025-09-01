@@ -32,8 +32,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["ACMEProvider"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasacme_providers_item_data in _response_200:
             componentsschemasacme_providers_item = ACMEProvider.from_dict(componentsschemasacme_providers_item_data)
 

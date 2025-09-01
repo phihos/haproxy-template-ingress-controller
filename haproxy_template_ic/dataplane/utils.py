@@ -26,6 +26,7 @@ __all__ = [
     "handle_dataplane_errors",
     "_get_configuration_version",
     "_fetch_with_metrics",
+    "_natural_sort_key",
     "MAX_CONFIG_COMPARISON_CHANGES",
 ]
 
@@ -33,6 +34,23 @@ logger = logging.getLogger(__name__)
 
 # Constants for configuration comparison performance
 MAX_CONFIG_COMPARISON_CHANGES = 10  # Stop comparison after finding this many changes
+
+
+def _natural_sort_key(name: str) -> tuple:
+    """Extract numeric parts for natural sorting of names like SRV_1, SRV_10.
+
+    This function splits a string into alternating text and numeric parts,
+    converting numeric parts to integers for proper numerical sorting.
+
+    Examples:
+        SRV_1 -> ('SRV_', 1, '')
+        SRV_10 -> ('SRV_', 10, '')
+        SRV_2 -> ('SRV_', 2, '')
+
+    This ensures SRV_1, SRV_2, ..., SRV_9, SRV_10 instead of SRV_1, SRV_10, SRV_2, ...
+    """
+    parts = re.split(r"(\d+)", name)
+    return tuple(int(part) if part.isdigit() else part for part in parts)
 
 
 def normalize_dataplane_url(base_url: str) -> str:

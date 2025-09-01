@@ -71,14 +71,16 @@ class LogProfile:
 
         metadata = d.pop("metadata", UNSET)
 
-        steps = []
         _steps = d.pop("steps", UNSET)
-        for componentsschemaslog_profile_steps_item_data in _steps or []:
-            componentsschemaslog_profile_steps_item = LogProfileStep.from_dict(
-                componentsschemaslog_profile_steps_item_data
-            )
+        steps: Union[Unset, list[LogProfileStep]] = UNSET
+        if not isinstance(_steps, Unset):
+            steps = []
+            for componentsschemaslog_profile_steps_item_data in _steps:
+                componentsschemaslog_profile_steps_item = LogProfileStep.from_dict(
+                    componentsschemaslog_profile_steps_item_data
+                )
 
-            steps.append(componentsschemaslog_profile_steps_item)
+                steps.append(componentsschemaslog_profile_steps_item)
 
         log_profile = cls(
             name=name,

@@ -171,23 +171,27 @@ class StatsOptions:
 
         stats_admin_cond_test = d.pop("stats_admin_cond_test", UNSET)
 
-        stats_auths = []
         _stats_auths = d.pop("stats_auths", UNSET)
-        for stats_auths_item_data in _stats_auths or []:
-            stats_auths_item = StatsAuth.from_dict(stats_auths_item_data)
+        stats_auths: Union[Unset, list[StatsAuth]] = UNSET
+        if not isinstance(_stats_auths, Unset):
+            stats_auths = []
+            for stats_auths_item_data in _stats_auths:
+                stats_auths_item = StatsAuth.from_dict(stats_auths_item_data)
 
-            stats_auths.append(stats_auths_item)
+                stats_auths.append(stats_auths_item)
 
         stats_enable = d.pop("stats_enable", UNSET)
 
         stats_hide_version = d.pop("stats_hide_version", UNSET)
 
-        stats_http_requests = []
         _stats_http_requests = d.pop("stats_http_requests", UNSET)
-        for stats_http_requests_item_data in _stats_http_requests or []:
-            stats_http_requests_item = StatsHttpRequest.from_dict(stats_http_requests_item_data)
+        stats_http_requests: Union[Unset, list[StatsHttpRequest]] = UNSET
+        if not isinstance(_stats_http_requests, Unset):
+            stats_http_requests = []
+            for stats_http_requests_item_data in _stats_http_requests:
+                stats_http_requests_item = StatsHttpRequest.from_dict(stats_http_requests_item_data)
 
-            stats_http_requests.append(stats_http_requests_item)
+                stats_http_requests.append(stats_http_requests_item)
 
         stats_maxconn = d.pop("stats_maxconn", UNSET)
 

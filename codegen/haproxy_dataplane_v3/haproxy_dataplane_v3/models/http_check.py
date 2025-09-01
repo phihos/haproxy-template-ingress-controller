@@ -297,12 +297,14 @@ class HTTPCheck:
 
         exclamation_mark = d.pop("exclamation_mark", UNSET)
 
-        headers = []
         _headers = d.pop("headers", UNSET)
-        for headers_item_data in _headers or []:
-            headers_item = ReturnHeader.from_dict(headers_item_data)
+        headers: Union[Unset, list[ReturnHeader]] = UNSET
+        if not isinstance(_headers, Unset):
+            headers = []
+            for headers_item_data in _headers:
+                headers_item = ReturnHeader.from_dict(headers_item_data)
 
-            headers.append(headers_item)
+                headers.append(headers_item)
 
         linger = d.pop("linger", UNSET)
 

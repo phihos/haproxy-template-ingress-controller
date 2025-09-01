@@ -35,8 +35,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["Backend"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasbackends_item_data in _response_200:
             componentsschemasbackends_item = Backend.from_dict(componentsschemasbackends_item_data)
 

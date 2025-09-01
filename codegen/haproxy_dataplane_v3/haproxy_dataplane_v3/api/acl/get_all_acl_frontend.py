@@ -36,8 +36,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["ACLLines"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasacls_item_data in _response_200:
             componentsschemasacls_item = ACLLines.from_dict(componentsschemasacls_item_data)
 

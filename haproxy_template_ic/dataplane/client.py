@@ -9,7 +9,7 @@ common operations like validation, deployment, and storage synchronization.
 import base64
 import io
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 import httpx
 from tenacity import (
@@ -161,6 +161,18 @@ from haproxy_dataplane_v3.api.server import (
     get_all_server_backend,
     replace_server_backend,
 )
+
+# Runtime APIs for reload-free operations
+from haproxy_dataplane_v3.api.acl_runtime import (
+    add_payload_runtime_acl,
+    delete_services_haproxy_runtime_acls_parent_name_entries_id,
+    post_services_haproxy_runtime_acls_parent_name_entries,
+)
+from haproxy_dataplane_v3.api.maps import (
+    add_map_entry,
+    delete_runtime_map_entry,
+    replace_runtime_map_entry,
+)
 from haproxy_dataplane_v3.api.server_switching_rule import (
     create_server_switching_rule,
     delete_server_switching_rule,
@@ -232,6 +244,11 @@ from haproxy_dataplane_v3.models.replace_storage_general_file_body import (
     ReplaceStorageGeneralFileBody,
 )
 from haproxy_dataplane_v3.types import File
+from haproxy_dataplane_v3.models.one_map_entry import OneMapEntry
+from haproxy_dataplane_v3.models.one_acl_file_entry import OneACLFileEntry
+from haproxy_dataplane_v3.models.server_params_maintenance import (
+    ServerParamsMaintenance,
+)
 
 from haproxy_template_ic.constants import (
     DEFAULT_API_TIMEOUT,
@@ -250,6 +267,7 @@ from .utils import (
     _fetch_with_metrics,
     _get_configuration_version,
     _log_fetch_error,
+    _natural_sort_key,
 )
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import (
@@ -585,6 +603,42 @@ _STORAGE_SYNC_CONFIGS = {
         "mime_type": "application/x-pem-file",
     },
 }
+
+
+# Runtime-compatible server fields (these don't cause reload when changed via API)
+RUNTIME_COMPATIBLE_FIELDS = {
+    "name",
+    "address",
+    "port",  # Basic identification
+    "weight",  # Weight changes
+    "maintenance",  # Maps to enable/disable
+    "agent_addr",
+    "agent_port",
+    "agent_send",  # Agent parameters
+    "health_check_address",
+    "health_check_port",  # Health check location
+    # Note: 'ssl' was supported in 2.4 but deprecated after 2.5
+}
+
+
+def has_non_runtime_fields(server_config):
+    """Check if server config has fields that require reload."""
+    if not hasattr(server_config, "to_dict"):
+        return []
+
+    config_dict = server_config.to_dict()
+    non_runtime_fields = []
+
+    for field_name, field_value in config_dict.items():
+        # Skip unset fields, empty lists, and runtime-compatible fields
+        if (
+            field_value is not None
+            and field_value != []
+            and field_name not in RUNTIME_COMPATIBLE_FIELDS
+        ):
+            non_runtime_fields.append(field_name)
+
+    return non_runtime_fields
 
 
 class DataplaneClient:
@@ -1001,11 +1055,209 @@ class DataplaneClient:
             metrics.record_dataplane_api_request(operation, "success")
 
     async def sync_maps(self, maps: Dict[str, str]) -> None:
-        """Synchronize HAProxy map files to storage."""
-        config = _STORAGE_SYNC_CONFIGS["maps"]
-        await self._sync_storage_resources(
-            resource_type="map", new_resources=maps, **config
-        )
+        """Synchronize HAProxy map files to storage with runtime entry updates."""
+        await self._sync_maps_with_runtime(maps)
+
+    def _parse_map_entries(self, content: str) -> Dict[str, str]:
+        """Parse map file content into key-value pairs.
+
+        Args:
+            content: Map file content as string
+
+        Returns:
+            Dict mapping keys to values
+        """
+        entries = {}
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                # Split on first whitespace
+                parts = line.split(None, 1)
+                if len(parts) == 2:
+                    key, value = parts
+                    entries[key] = value
+                elif len(parts) == 1:
+                    # Key without value
+                    entries[parts[0]] = ""
+        return entries
+
+    def _detect_map_entry_changes(
+        self, old_entries: Dict[str, str], new_entries: Dict[str, str]
+    ) -> List[Any]:
+        """Detect entry-level changes between old and new map content.
+
+        Returns:
+            List of change objects with operation, key, and data attributes
+        """
+        from dataclasses import dataclass
+
+        @dataclass
+        class MapChange:
+            operation: str
+            key: str
+            value: str = ""
+            data: str = ""  # Keep for backward compatibility
+
+        changes = []
+        old_keys = set(old_entries.keys())
+        new_keys = set(new_entries.keys())
+
+        # Deletions
+        for key in old_keys - new_keys:
+            changes.append(MapChange(operation="delete", key=key))
+
+        # Additions
+        for key in new_keys - old_keys:
+            changes.append(
+                MapChange(
+                    operation="add",
+                    key=key,
+                    value=new_entries[key],
+                    data=f"{key} {new_entries[key]}".strip(),
+                )
+            )
+
+        # Modifications
+        for key in old_keys & new_keys:
+            if old_entries[key] != new_entries[key]:
+                changes.append(
+                    MapChange(
+                        operation="replace",
+                        key=key,
+                        value=new_entries[key],
+                        data=f"{key} {new_entries[key]}".strip(),
+                    )
+                )
+
+        return changes
+
+    @handle_dataplane_errors()
+    async def _sync_maps_with_runtime(self, maps: Dict[str, str]) -> None:
+        """Advanced map synchronization with runtime API for entry changes."""
+        metrics = get_metrics_collector()
+        operation = "sync_maps_runtime"
+
+        with metrics.time_dataplane_api_operation(operation):
+            client = self._get_client()
+            config = _STORAGE_SYNC_CONFIGS["maps"]
+
+            # Get existing map files
+            existing = await config["get_all_func"](client=client)
+            existing_dict = {
+                f.storage_name: f for f in (existing or []) if f.storage_name
+            }
+
+            target_names = set(maps.keys())
+            existing_names = set(existing_dict.keys())
+
+            created_count = 0
+            updated_count = 0
+            skipped_count = 0
+            runtime_updates = 0
+
+            # Create new map files (these require full sync)
+            for name in target_names - existing_names:
+                body = config["create_body_class"](
+                    file_upload=File(
+                        payload=io.BytesIO(maps[name].encode("utf-8")),
+                        file_name=name,
+                        mime_type=config["mime_type"],
+                    )
+                )
+                await config["create_func"](client=client, body=body)
+                created_count += 1
+                logger.info(f"🗺️  Created new map file: {name}")
+
+            # Handle existing map files with smart entry-level updates
+            for name in target_names & existing_names:
+                new_content = maps[name]
+
+                # Get current content
+                try:
+                    existing_resource = await config["get_one_func"](
+                        client=client, name=name
+                    )
+                    existing_content = self._extract_storage_content(existing_resource)
+
+                    if existing_content == new_content:
+                        skipped_count += 1
+                        logger.debug(f"🗺️  Skipped map {name} (unchanged)")
+                        continue
+
+                    # Parse entries and detect changes
+                    old_entries = self._parse_map_entries(existing_content or "")
+                    new_entries = self._parse_map_entries(new_content)
+                    entry_changes = self._detect_map_entry_changes(
+                        old_entries, new_entries
+                    )
+
+                    if (
+                        entry_changes and len(entry_changes) <= 20
+                    ):  # Limit runtime operations
+                        try:
+                            # Try runtime API for entry changes
+                            map_path = f"/etc/haproxy/maps/{name}"
+                            await self._apply_runtime_map_operations(
+                                client, map_path, entry_changes
+                            )
+                            runtime_updates += len(entry_changes)
+                            logger.info(
+                                f"🗺️  Updated map {name} via runtime API: {len(entry_changes)} changes"
+                            )
+                            updated_count += 1
+                            continue
+                        except Exception as runtime_error:
+                            logger.warning(
+                                f"⚠️  Runtime update failed for map {name}, falling back to file replacement: {runtime_error}"
+                            )
+
+                    # Fallback to full file replacement
+                    await config["replace_func"](
+                        client=client, name=name, body=new_content
+                    )
+                    updated_count += 1
+                    logger.info(f"🗺️  Updated map {name} via file replacement")
+
+                except Exception as e:
+                    logger.warning(
+                        f"⚠️  Error processing map {name}: {e}, using file replacement"
+                    )
+                    await config["replace_func"](
+                        client=client, name=name, body=new_content
+                    )
+                    updated_count += 1
+
+            # Delete obsolete map files
+            for name in existing_names - target_names:
+                await config["delete_func"](client=client, name=name)
+                logger.info(f"🗺️  Deleted obsolete map file: {name}")
+
+            # Enhanced logging with runtime statistics
+            if created_count or updated_count or runtime_updates:
+                logger.info(
+                    f"🗺️  Maps sync complete: {created_count} created, {updated_count} updated "
+                    f"({runtime_updates} runtime entries), {skipped_count} unchanged"
+                )
+            elif skipped_count:
+                logger.debug(f"🗺️  Maps sync: {skipped_count} maps unchanged")
+
+            metrics.record_dataplane_api_request(operation, "success")
+
+    def _parse_acl_entries(self, content: str) -> Set[str]:
+        """Parse ACL file content into individual entries.
+
+        Args:
+            content: ACL file content as string
+
+        Returns:
+            Set of ACL entries (lines)
+        """
+        entries = set()
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                entries.add(line)
+        return entries
 
     async def sync_certificates(self, certificates: Dict[str, str]) -> None:
         """Synchronize SSL certificates to storage."""
@@ -1013,6 +1265,32 @@ class DataplaneClient:
         await self._sync_storage_resources(
             resource_type="certificate", new_resources=certificates, **config
         )
+
+    async def sync_acls(self, acls: Dict[str, str]) -> None:
+        """Synchronize HAProxy ACL entries using runtime API only.
+
+        Note: ACL files are not stored in HAProxy storage, only runtime entries are updated.
+        """
+        if not acls:
+            return
+
+        logger.debug(f"📋 Processing {len(acls)} ACL files for runtime updates")
+        client = self._get_client()
+
+        for acl_name, acl_content in acls.items():
+            entries = self._parse_acl_entries(acl_content)
+            if entries:
+                # For runtime API, we add entries directly
+                changes = [{"operation": "add", "data": entry} for entry in entries]
+                try:
+                    await self._apply_runtime_acl_operations(client, acl_name, changes)
+                    logger.debug(
+                        f"📋 Updated ACL {acl_name} via runtime API ({len(entries)} entries)"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"📋 Failed to update ACL {acl_name} via runtime API: {e}"
+                    )
 
     @handle_dataplane_errors()
     async def sync_files(self, files: Dict[str, str]) -> None:
@@ -1223,7 +1501,90 @@ class DataplaneClient:
             metrics = get_metrics_collector()
             client = self._get_client()
 
-            # Start a transaction to batch all changes atomically
+            # Separate server changes from other changes for runtime API optimization
+            server_changes = [
+                c
+                for c in changes
+                if c.element_type == ConfigElementType.SERVER
+                and c.section_type == ConfigSectionType.BACKEND
+            ]
+            other_changes = [c for c in changes if c not in server_changes]
+
+            # Sort server changes by name for consistent ordering (SRV_1, SRV_2, ..., SRV_10)
+            server_changes.sort(key=lambda c: _natural_sort_key(c.element_id or ""))
+
+            logger.debug(
+                f"🔄 Separated changes: {len(server_changes)} server changes (runtime-eligible), "
+                f"{len(other_changes)} other changes (transaction-required)"
+            )
+
+            # Apply server changes first WITHOUT transaction to enable runtime API
+            runtime_failed_servers = []
+            if server_changes:
+                logger.info(
+                    f"🏃 Applying {len(server_changes)} server changes via runtime-eligible path"
+                )
+                for i, change in enumerate(server_changes):
+                    logger.debug(
+                        f"🏃 Applying server change {i + 1}/{len(server_changes)}: {change}"
+                    )
+                    try:
+                        await self._apply_server_without_transaction(client, change)
+                    except Exception as server_error:
+                        logger.warning(
+                            f"⚠️  Runtime API failed for server {change.element_id}, will retry via transaction: {server_error}"
+                        )
+                        runtime_failed_servers.append(change)
+
+                # If some servers failed runtime API, add them to other_changes for transaction
+                if runtime_failed_servers:
+                    logger.info(
+                        f"🔄 {len(runtime_failed_servers)} server changes failed runtime API, will retry via transaction"
+                    )
+                    other_changes.extend(runtime_failed_servers)
+
+                # Update success count
+                successful_runtime_servers = len(server_changes) - len(
+                    runtime_failed_servers
+                )
+                if successful_runtime_servers > 0:
+                    logger.info(
+                        f"✅ {successful_runtime_servers} server changes applied via runtime API"
+                    )
+
+            # Only use transaction if there are non-server changes
+            if not other_changes:
+                logger.info(
+                    "✅ All changes were server changes applied via runtime API - no transaction needed"
+                )
+                # Get current version for return
+                try:
+                    version_response = await _get_configuration_version(client)
+                    new_version = (
+                        str(version_response) if version_response else "runtime-only"
+                    )
+                    record_span_event(
+                        "runtime_only_deployment_successful",
+                        {
+                            "server_changes_count": len(server_changes),
+                            "version": new_version,
+                        },
+                    )
+                    return new_version
+                except Exception:
+                    return "runtime-only"
+
+            # Sort other_changes to ensure consistent ordering, especially for initial server creation
+            other_changes.sort(
+                key=lambda c: (
+                    c.section_type.value if c.section_type else "",
+                    c.section_name or "",
+                    c.element_type.value if c.element_type else "",
+                    _natural_sort_key(c.element_id or ""),
+                )
+            )
+
+            # Start a transaction to batch remaining changes atomically
             try:
                 # Get current configuration version for transaction consistency
                 current_version = await _get_configuration_version(client)
@@ -1242,14 +1603,14 @@ class DataplaneClient:
                     transaction_id = transaction.id if transaction else None
 
                 logger.debug(
-                    f"📦 Started transaction {transaction_id} for {len(changes)} changes"
+                    f"📦 Started transaction {transaction_id} for {len(other_changes)} remaining changes"
                 )
 
                 try:
-                    # Apply all changes within the transaction
-                    for i, change in enumerate(changes):
+                    # Apply remaining changes within the transaction
+                    for i, change in enumerate(other_changes):
                         logger.debug(
-                            f"📝 Applying change {i + 1}/{len(changes)}: {change}"
+                            f"📝 Applying change {i + 1}/{len(other_changes)}: {change}"
                         )
                         await self._apply_config_change(
                             client, change, transaction_id or ""
@@ -1262,7 +1623,7 @@ class DataplaneClient:
                         )
 
                     logger.info(
-                        f"✅ Successfully deployed {len(changes)} structured changes in transaction {transaction_id}"
+                        f"✅ Successfully deployed {len(other_changes)} structured changes in transaction {transaction_id}"
                     )
 
                     # Get the new configuration version
@@ -1276,6 +1637,11 @@ class DataplaneClient:
                         {
                             "transaction_id": transaction_id,
                             "changes_count": len(changes),
+                            "server_changes_runtime": len(server_changes)
+                            - len(runtime_failed_servers),
+                            "server_changes_transaction": len(runtime_failed_servers),
+                            "other_changes": len(other_changes)
+                            - len(runtime_failed_servers),
                             "version": new_version,
                         },
                     )
@@ -1321,6 +1687,261 @@ class DataplaneClient:
                     operation="deploy_structured",
                     original_error=transaction_error,
                 ) from transaction_error
+
+    async def _apply_server_without_transaction(
+        self, client: Any, change: ConfigChange
+    ) -> None:
+        """Apply server changes directly without transaction to enable runtime API usage.
+
+        This method calls the configuration API endpoints for servers without
+        wrapping them in a transaction. This allows the Go dataplane API to
+        automatically use the runtime API when possible (no default_server, etc.)
+        which avoids HAProxy reloads.
+
+        Args:
+            client: The authenticated dataplane API client
+            change: The server configuration change to apply
+        """
+        try:
+            section_name = change.section_name
+
+            # Get current configuration version for non-transactional operations
+            # The DataPlane API requires EITHER transaction_id OR version parameter
+            current_version = await _get_configuration_version(client)
+            if current_version is None:
+                raise DataplaneAPIError(
+                    "Failed to get configuration version for runtime operation",
+                    endpoint=self.base_url,
+                    operation="get_version",
+                    original_error=None,
+                )
+
+            # Prepare base parameters with version (not transaction_id)
+            base_params = {
+                "client": client,
+                "parent_name": section_name,
+                "version": current_version,
+                # Note: Using version parameter enables runtime API usage
+            }
+
+            # Execute the appropriate server operation
+            if change.change_type == ConfigChangeType.CREATE:
+                clean_config = self._get_clean_config_object(change.new_config)
+                # Ensure the server name is properly set from element_id
+                if hasattr(clean_config, "name"):
+                    clean_config.name = change.element_id
+                logger.debug(
+                    f"🏃 Sending server config: name={getattr(clean_config, 'name', None)}, address={getattr(clean_config, 'address', None)}"
+                )
+                params = {**base_params, "body": clean_config}
+
+                # Use detailed response to check for HTTP errors
+                response = await create_server_backend.asyncio_detailed(**params)
+                if response.status_code >= 400:
+                    error_content = (
+                        response.content.decode()
+                        if response.content
+                        else "No error details"
+                    )
+                    raise DataplaneAPIError(
+                        f"Server creation failed: {error_content}",
+                        endpoint=self.base_url,
+                        operation="create_server",
+                        original_error=None,
+                    )
+
+            elif change.change_type == ConfigChangeType.UPDATE:
+                clean_config = self._get_clean_config_object(change.new_config)
+                if hasattr(clean_config, "name"):
+                    clean_config.name = change.element_id
+
+                # Check for non-runtime fields and warn user
+                non_runtime_fields = has_non_runtime_fields(clean_config)
+                if non_runtime_fields:
+                    logger.warning(
+                        f"⚠️ Server '{change.element_id}' update includes non-runtime parameters {non_runtime_fields} "
+                        f"which will cause HAProxy reload. Consider using 'default-server' for parameters like 'check'."
+                    )
+
+                # Handle maintenance field for disabled servers
+                # Check if server has 'disabled' field set
+                if (
+                    hasattr(clean_config, "disabled")
+                    and clean_config.disabled is not None
+                ):
+                    # Server is disabled, set maintenance to enabled
+                    clean_config.maintenance = ServerParamsMaintenance.ENABLED
+                    logger.debug(
+                        f"🔧 Converting disabled server '{change.element_id}' to maintenance mode"
+                    )
+                    # Remove the 'disabled' field as it's not runtime-compatible
+                    clean_config.disabled = None
+
+                params = {
+                    **base_params,
+                    "name": change.element_id,
+                    "body": clean_config,
+                }
+
+                response = await replace_server_backend.asyncio_detailed(**params)
+                if response.status_code >= 400:
+                    error_content = (
+                        response.content.decode()
+                        if response.content
+                        else "No error details"
+                    )
+                    raise DataplaneAPIError(
+                        f"Server update failed: {error_content}",
+                        endpoint=self.base_url,
+                        operation="update_server",
+                        original_error=None,
+                    )
+
+            elif change.change_type == ConfigChangeType.DELETE:
+                params = {**base_params, "name": change.element_id}
+
+                response = await delete_server_backend.asyncio_detailed(**params)
+                if response.status_code >= 400:
+                    error_content = (
+                        response.content.decode()
+                        if response.content
+                        else "No error details"
+                    )
+                    raise DataplaneAPIError(
+                        f"Server deletion failed: {error_content}",
+                        endpoint=self.base_url,
+                        operation="delete_server",
+                        original_error=None,
+                    )
+
+            logger.debug(
+                f"✅ Server {change.change_type.value} applied via runtime-eligible path: {change.element_id}"
+            )
+
+        except Exception as e:
+            logger.debug(f"⚠️ Runtime API failed for server {change.element_id}: {e}")
+            # Re-raise so deploy_structured_configuration can handle fallback
+            raise
+
+    async def _apply_runtime_map_operations(
+        self, client: Any, map_file_path: str, map_changes: List[Any]
+    ) -> None:
+        """Apply map file changes using runtime API (no reload required).
+
+        This method uses HAProxy's runtime map API to add, update, or delete
+        map entries without requiring a configuration reload.
+
+        Args:
+            client: The authenticated dataplane API client
+            map_file_path: Path to the map file (e.g., "/etc/haproxy/maps/host.map")
+            map_changes: List of map entry changes to apply
+        """
+        try:
+            # Extract just the filename from the full path for the API
+            import os
+
+            map_filename = os.path.basename(map_file_path)
+
+            # NOTE: Map operations are always runtime in the dataplane API
+            # The API endpoints automatically use runtime operations
+            for change in map_changes:
+                if hasattr(change, "operation"):
+                    if change.operation == "add":
+                        # Create OneMapEntry object for the API
+                        entry = OneMapEntry(
+                            key=change.key, value=getattr(change, "value", "")
+                        )
+                        await add_map_entry.asyncio(
+                            client=client, parent_name=map_filename, body=entry
+                        )
+                        logger.debug(
+                            f"🗺️  Added map entry to {map_filename}: {change.key}"
+                        )
+                    elif change.operation == "delete":
+                        await delete_runtime_map_entry.asyncio(
+                            client=client, parent_name=map_filename, id=change.key
+                        )
+                        logger.debug(
+                            f"🗺️  Deleted map entry from {map_filename}: {change.key}"
+                        )
+                    elif change.operation == "replace":
+                        # Create OneMapEntry object for replacement
+                        entry = OneMapEntry(
+                            key=change.key, value=getattr(change, "value", "")
+                        )
+                        await replace_runtime_map_entry.asyncio(
+                            client=client,
+                            parent_name=map_filename,
+                            id=change.key,
+                            body=entry,
+                        )
+                        logger.debug(
+                            f"🗺️  Replaced map entry in {map_filename}: {change.key}"
+                        )
+
+        except Exception as e:
+            logger.error(
+                f"❌ Failed to apply runtime map operations to {map_file_path}"
+            )
+            raise DataplaneAPIError(
+                f"Failed to apply runtime map operations to {map_file_path}: {e}",
+                endpoint=self.base_url,
+                operation="apply_runtime_map_operations",
+                original_error=e,
+            ) from e
+
+    async def _apply_runtime_acl_operations(
+        self, client: Any, acl_file_name: str, acl_changes: List[Any]
+    ) -> None:
+        """Apply ACL file changes using runtime API (no reload required).
+
+        This method uses HAProxy's runtime ACL API to add or delete
+        ACL entries without requiring a configuration reload.
+
+        Args:
+            client: The authenticated dataplane API client
+            acl_file_name: Name of the ACL file
+            acl_changes: List of ACL entry changes to apply
+        """
+        try:
+            # NOTE: ACL operations are always runtime in the dataplane API
+            for change in acl_changes:
+                if hasattr(change, "operation"):
+                    if change.operation == "add":
+                        # Create OneACLFileEntry object for the API
+                        entry = OneACLFileEntry(value=change.data)
+                        await post_services_haproxy_runtime_acls_parent_name_entries.asyncio(
+                            client=client, parent_name=acl_file_name, body=entry
+                        )
+                        logger.debug(
+                            f"🛡️  Added ACL entry to {acl_file_name}: {change.data}"
+                        )
+                    elif change.operation == "delete":
+                        await delete_services_haproxy_runtime_acls_parent_name_entries_id.asyncio(
+                            client=client, parent_name=acl_file_name, id=change.data
+                        )
+                        logger.debug(
+                            f"🛡️  Deleted ACL entry from {acl_file_name}: {change.data}"
+                        )
+                    elif change.operation == "bulk_add":
+                        # For bulk operations, use the payload endpoint
+                        await add_payload_runtime_acl.asyncio(
+                            client=client,
+                            parent_name=acl_file_name,
+                            body=change.payload,
+                        )
+                        logger.debug(f"🛡️  Bulk added ACL entries to {acl_file_name}")
+
+        except Exception as e:
+            logger.error(
+                f"❌ Failed to apply runtime ACL operations to {acl_file_name}"
+            )
+            raise DataplaneAPIError(
+                f"Failed to apply runtime ACL operations to {acl_file_name}: {e}",
+                endpoint=self.base_url,
+                operation="apply_runtime_acl_operations",
+                original_error=e,
+            ) from e
 
     async def _apply_nested_element_change(
         self, client: Any, change: ConfigChange, transaction_id: str

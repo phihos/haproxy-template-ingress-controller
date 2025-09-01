@@ -1159,19 +1159,23 @@ class Backend:
 
         enabled = d.pop("enabled", UNSET)
 
-        error_files = []
         _error_files = d.pop("error_files", UNSET)
-        for error_files_item_data in _error_files or []:
-            error_files_item = Errorfile.from_dict(error_files_item_data)
+        error_files: Union[Unset, list[Errorfile]] = UNSET
+        if not isinstance(_error_files, Unset):
+            error_files = []
+            for error_files_item_data in _error_files:
+                error_files_item = Errorfile.from_dict(error_files_item_data)
 
-            error_files.append(error_files_item)
+                error_files.append(error_files_item)
 
-        errorfiles_from_http_errors = []
         _errorfiles_from_http_errors = d.pop("errorfiles_from_http_errors", UNSET)
-        for errorfiles_from_http_errors_item_data in _errorfiles_from_http_errors or []:
-            errorfiles_from_http_errors_item = Errorfiles.from_dict(errorfiles_from_http_errors_item_data)
+        errorfiles_from_http_errors: Union[Unset, list[Errorfiles]] = UNSET
+        if not isinstance(_errorfiles_from_http_errors, Unset):
+            errorfiles_from_http_errors = []
+            for errorfiles_from_http_errors_item_data in _errorfiles_from_http_errors:
+                errorfiles_from_http_errors_item = Errorfiles.from_dict(errorfiles_from_http_errors_item_data)
 
-            errorfiles_from_http_errors.append(errorfiles_from_http_errors_item)
+                errorfiles_from_http_errors.append(errorfiles_from_http_errors_item)
 
         _errorloc302 = d.pop("errorloc302", UNSET)
         errorloc302: Union[Unset, Errorloc]
@@ -1205,12 +1209,14 @@ class Backend:
         else:
             force_persist = BackendBaseForcePersist.from_dict(_force_persist)
 
-        force_persist_list = []
         _force_persist_list = d.pop("force_persist_list", UNSET)
-        for force_persist_list_item_data in _force_persist_list or []:
-            force_persist_list_item = BackendBaseForcePersistListItem.from_dict(force_persist_list_item_data)
+        force_persist_list: Union[Unset, list[BackendBaseForcePersistListItem]] = UNSET
+        if not isinstance(_force_persist_list, Unset):
+            force_persist_list = []
+            for force_persist_list_item_data in _force_persist_list:
+                force_persist_list_item = BackendBaseForcePersistListItem.from_dict(force_persist_list_item_data)
 
-            force_persist_list.append(force_persist_list_item)
+                force_persist_list.append(force_persist_list_item)
 
         _forwardfor = d.pop("forwardfor", UNSET)
         forwardfor: Union[Unset, Forwardfor]
@@ -1375,12 +1381,14 @@ class Backend:
         else:
             ignore_persist = BackendBaseIgnorePersist.from_dict(_ignore_persist)
 
-        ignore_persist_list = []
         _ignore_persist_list = d.pop("ignore_persist_list", UNSET)
-        for ignore_persist_list_item_data in _ignore_persist_list or []:
-            ignore_persist_list_item = BackendBaseIgnorePersistListItem.from_dict(ignore_persist_list_item_data)
+        ignore_persist_list: Union[Unset, list[BackendBaseIgnorePersistListItem]] = UNSET
+        if not isinstance(_ignore_persist_list, Unset):
+            ignore_persist_list = []
+            for ignore_persist_list_item_data in _ignore_persist_list:
+                ignore_persist_list_item = BackendBaseIgnorePersistListItem.from_dict(ignore_persist_list_item_data)
 
-            ignore_persist_list.append(ignore_persist_list_item)
+                ignore_persist_list.append(ignore_persist_list_item)
 
         _independent_streams = d.pop("independent_streams", UNSET)
         independent_streams: Union[Unset, BackendBaseIndependentStreams]
@@ -1650,114 +1658,140 @@ class Backend:
 
         use_fcgi_app = d.pop("use_fcgi_app", UNSET)
 
-        acl_list = []
         _acl_list = d.pop("acl_list", UNSET)
-        for componentsschemasacls_item_data in _acl_list or []:
-            componentsschemasacls_item = ACLLines.from_dict(componentsschemasacls_item_data)
+        acl_list: Union[Unset, list[ACLLines]] = UNSET
+        if not isinstance(_acl_list, Unset):
+            acl_list = []
+            for componentsschemasacls_item_data in _acl_list:
+                componentsschemasacls_item = ACLLines.from_dict(componentsschemasacls_item_data)
 
-            acl_list.append(componentsschemasacls_item)
+                acl_list.append(componentsschemasacls_item)
 
-        filter_list = []
         _filter_list = d.pop("filter_list", UNSET)
-        for componentsschemasfilters_item_data in _filter_list or []:
-            componentsschemasfilters_item = Filter.from_dict(componentsschemasfilters_item_data)
+        filter_list: Union[Unset, list[Filter]] = UNSET
+        if not isinstance(_filter_list, Unset):
+            filter_list = []
+            for componentsschemasfilters_item_data in _filter_list:
+                componentsschemasfilters_item = Filter.from_dict(componentsschemasfilters_item_data)
 
-            filter_list.append(componentsschemasfilters_item)
+                filter_list.append(componentsschemasfilters_item)
 
-        http_after_response_rule_list = []
         _http_after_response_rule_list = d.pop("http_after_response_rule_list", UNSET)
-        for componentsschemashttp_after_response_rules_item_data in _http_after_response_rule_list or []:
-            componentsschemashttp_after_response_rules_item = HTTPAfterResponseRule.from_dict(
-                componentsschemashttp_after_response_rules_item_data
-            )
+        http_after_response_rule_list: Union[Unset, list[HTTPAfterResponseRule]] = UNSET
+        if not isinstance(_http_after_response_rule_list, Unset):
+            http_after_response_rule_list = []
+            for componentsschemashttp_after_response_rules_item_data in _http_after_response_rule_list:
+                componentsschemashttp_after_response_rules_item = HTTPAfterResponseRule.from_dict(
+                    componentsschemashttp_after_response_rules_item_data
+                )
 
-            http_after_response_rule_list.append(componentsschemashttp_after_response_rules_item)
+                http_after_response_rule_list.append(componentsschemashttp_after_response_rules_item)
 
-        http_check_list = []
         _http_check_list = d.pop("http_check_list", UNSET)
-        for componentsschemashttp_checks_item_data in _http_check_list or []:
-            componentsschemashttp_checks_item = HTTPCheck.from_dict(componentsschemashttp_checks_item_data)
+        http_check_list: Union[Unset, list[HTTPCheck]] = UNSET
+        if not isinstance(_http_check_list, Unset):
+            http_check_list = []
+            for componentsschemashttp_checks_item_data in _http_check_list:
+                componentsschemashttp_checks_item = HTTPCheck.from_dict(componentsschemashttp_checks_item_data)
 
-            http_check_list.append(componentsschemashttp_checks_item)
+                http_check_list.append(componentsschemashttp_checks_item)
 
-        http_error_rule_list = []
         _http_error_rule_list = d.pop("http_error_rule_list", UNSET)
-        for componentsschemashttp_error_rules_item_data in _http_error_rule_list or []:
-            componentsschemashttp_error_rules_item = HTTPErrorRule.from_dict(
-                componentsschemashttp_error_rules_item_data
-            )
+        http_error_rule_list: Union[Unset, list[HTTPErrorRule]] = UNSET
+        if not isinstance(_http_error_rule_list, Unset):
+            http_error_rule_list = []
+            for componentsschemashttp_error_rules_item_data in _http_error_rule_list:
+                componentsschemashttp_error_rules_item = HTTPErrorRule.from_dict(
+                    componentsschemashttp_error_rules_item_data
+                )
 
-            http_error_rule_list.append(componentsschemashttp_error_rules_item)
+                http_error_rule_list.append(componentsschemashttp_error_rules_item)
 
-        http_request_rule_list = []
         _http_request_rule_list = d.pop("http_request_rule_list", UNSET)
-        for componentsschemashttp_request_rules_item_data in _http_request_rule_list or []:
-            componentsschemashttp_request_rules_item = HTTPRequestRule.from_dict(
-                componentsschemashttp_request_rules_item_data
-            )
+        http_request_rule_list: Union[Unset, list[HTTPRequestRule]] = UNSET
+        if not isinstance(_http_request_rule_list, Unset):
+            http_request_rule_list = []
+            for componentsschemashttp_request_rules_item_data in _http_request_rule_list:
+                componentsschemashttp_request_rules_item = HTTPRequestRule.from_dict(
+                    componentsschemashttp_request_rules_item_data
+                )
 
-            http_request_rule_list.append(componentsschemashttp_request_rules_item)
+                http_request_rule_list.append(componentsschemashttp_request_rules_item)
 
-        http_response_rule_list = []
         _http_response_rule_list = d.pop("http_response_rule_list", UNSET)
-        for componentsschemashttp_response_rules_item_data in _http_response_rule_list or []:
-            componentsschemashttp_response_rules_item = HTTPResponseRule.from_dict(
-                componentsschemashttp_response_rules_item_data
-            )
+        http_response_rule_list: Union[Unset, list[HTTPResponseRule]] = UNSET
+        if not isinstance(_http_response_rule_list, Unset):
+            http_response_rule_list = []
+            for componentsschemashttp_response_rules_item_data in _http_response_rule_list:
+                componentsschemashttp_response_rules_item = HTTPResponseRule.from_dict(
+                    componentsschemashttp_response_rules_item_data
+                )
 
-            http_response_rule_list.append(componentsschemashttp_response_rules_item)
+                http_response_rule_list.append(componentsschemashttp_response_rules_item)
 
-        log_target_list = []
         _log_target_list = d.pop("log_target_list", UNSET)
-        for componentsschemaslog_targets_item_data in _log_target_list or []:
-            componentsschemaslog_targets_item = LogTarget.from_dict(componentsschemaslog_targets_item_data)
+        log_target_list: Union[Unset, list[LogTarget]] = UNSET
+        if not isinstance(_log_target_list, Unset):
+            log_target_list = []
+            for componentsschemaslog_targets_item_data in _log_target_list:
+                componentsschemaslog_targets_item = LogTarget.from_dict(componentsschemaslog_targets_item_data)
 
-            log_target_list.append(componentsschemaslog_targets_item)
+                log_target_list.append(componentsschemaslog_targets_item)
 
-        server_switching_rule_list = []
         _server_switching_rule_list = d.pop("server_switching_rule_list", UNSET)
-        for componentsschemasserver_switching_rules_item_data in _server_switching_rule_list or []:
-            componentsschemasserver_switching_rules_item = ServerSwitchingRule.from_dict(
-                componentsschemasserver_switching_rules_item_data
-            )
+        server_switching_rule_list: Union[Unset, list[ServerSwitchingRule]] = UNSET
+        if not isinstance(_server_switching_rule_list, Unset):
+            server_switching_rule_list = []
+            for componentsschemasserver_switching_rules_item_data in _server_switching_rule_list:
+                componentsschemasserver_switching_rules_item = ServerSwitchingRule.from_dict(
+                    componentsschemasserver_switching_rules_item_data
+                )
 
-            server_switching_rule_list.append(componentsschemasserver_switching_rules_item)
+                server_switching_rule_list.append(componentsschemasserver_switching_rules_item)
 
         server_templates = d.pop("server_templates", UNSET)
 
         servers = d.pop("servers", UNSET)
 
-        stick_rule_list = []
         _stick_rule_list = d.pop("stick_rule_list", UNSET)
-        for componentsschemasstick_rules_item_data in _stick_rule_list or []:
-            componentsschemasstick_rules_item = StickRule.from_dict(componentsschemasstick_rules_item_data)
+        stick_rule_list: Union[Unset, list[StickRule]] = UNSET
+        if not isinstance(_stick_rule_list, Unset):
+            stick_rule_list = []
+            for componentsschemasstick_rules_item_data in _stick_rule_list:
+                componentsschemasstick_rules_item = StickRule.from_dict(componentsschemasstick_rules_item_data)
 
-            stick_rule_list.append(componentsschemasstick_rules_item)
+                stick_rule_list.append(componentsschemasstick_rules_item)
 
-        tcp_check_rule_list = []
         _tcp_check_rule_list = d.pop("tcp_check_rule_list", UNSET)
-        for componentsschemastcp_checks_item_data in _tcp_check_rule_list or []:
-            componentsschemastcp_checks_item = TCPCheck.from_dict(componentsschemastcp_checks_item_data)
+        tcp_check_rule_list: Union[Unset, list[TCPCheck]] = UNSET
+        if not isinstance(_tcp_check_rule_list, Unset):
+            tcp_check_rule_list = []
+            for componentsschemastcp_checks_item_data in _tcp_check_rule_list:
+                componentsschemastcp_checks_item = TCPCheck.from_dict(componentsschemastcp_checks_item_data)
 
-            tcp_check_rule_list.append(componentsschemastcp_checks_item)
+                tcp_check_rule_list.append(componentsschemastcp_checks_item)
 
-        tcp_request_rule_list = []
         _tcp_request_rule_list = d.pop("tcp_request_rule_list", UNSET)
-        for componentsschemastcp_request_rules_item_data in _tcp_request_rule_list or []:
-            componentsschemastcp_request_rules_item = TCPRequestRule.from_dict(
-                componentsschemastcp_request_rules_item_data
-            )
+        tcp_request_rule_list: Union[Unset, list[TCPRequestRule]] = UNSET
+        if not isinstance(_tcp_request_rule_list, Unset):
+            tcp_request_rule_list = []
+            for componentsschemastcp_request_rules_item_data in _tcp_request_rule_list:
+                componentsschemastcp_request_rules_item = TCPRequestRule.from_dict(
+                    componentsschemastcp_request_rules_item_data
+                )
 
-            tcp_request_rule_list.append(componentsschemastcp_request_rules_item)
+                tcp_request_rule_list.append(componentsschemastcp_request_rules_item)
 
-        tcp_response_rule_list = []
         _tcp_response_rule_list = d.pop("tcp_response_rule_list", UNSET)
-        for componentsschemastcp_response_rules_item_data in _tcp_response_rule_list or []:
-            componentsschemastcp_response_rules_item = TCPResponseRule.from_dict(
-                componentsschemastcp_response_rules_item_data
-            )
+        tcp_response_rule_list: Union[Unset, list[TCPResponseRule]] = UNSET
+        if not isinstance(_tcp_response_rule_list, Unset):
+            tcp_response_rule_list = []
+            for componentsschemastcp_response_rules_item_data in _tcp_response_rule_list:
+                componentsschemastcp_response_rules_item = TCPResponseRule.from_dict(
+                    componentsschemastcp_response_rules_item_data
+                )
 
-            tcp_response_rule_list.append(componentsschemastcp_response_rules_item)
+                tcp_response_rule_list.append(componentsschemastcp_response_rules_item)
 
         backend = cls(
             name=name,

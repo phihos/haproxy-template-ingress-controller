@@ -80,12 +80,14 @@ class StickTable:
         from ..models.stick_table_fields_item import StickTableFieldsItem
 
         d = dict(src_dict)
-        fields = []
         _fields = d.pop("fields", UNSET)
-        for fields_item_data in _fields or []:
-            fields_item = StickTableFieldsItem.from_dict(fields_item_data)
+        fields: Union[Unset, list[StickTableFieldsItem]] = UNSET
+        if not isinstance(_fields, Unset):
+            fields = []
+            for fields_item_data in _fields:
+                fields_item = StickTableFieldsItem.from_dict(fields_item_data)
 
-            fields.append(fields_item)
+                fields.append(fields_item)
 
         name = d.pop("name", UNSET)
 

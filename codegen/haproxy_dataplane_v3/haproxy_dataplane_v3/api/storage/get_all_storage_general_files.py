@@ -22,8 +22,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["GeneralUseFile"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasgeneral_files_item_data in _response_200:
             componentsschemasgeneral_files_item = GeneralUseFile.from_dict(componentsschemasgeneral_files_item_data)
 

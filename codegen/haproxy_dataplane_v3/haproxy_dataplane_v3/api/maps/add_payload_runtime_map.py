@@ -44,8 +44,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["OneMapEntry"]]:
     if response.status_code == 201:
-        response_201 = []
         _response_201 = response.json()
+        response_201 = []
         for componentsschemasmap_entries_item_data in _response_201:
             componentsschemasmap_entries_item = OneMapEntry.from_dict(componentsschemasmap_entries_item_data)
 

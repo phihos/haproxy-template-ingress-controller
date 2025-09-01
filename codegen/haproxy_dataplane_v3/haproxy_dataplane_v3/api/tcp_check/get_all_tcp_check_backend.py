@@ -33,8 +33,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["TCPCheck"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemastcp_checks_item_data in _response_200:
             componentsschemastcp_checks_item = TCPCheck.from_dict(componentsschemastcp_checks_item_data)
 

@@ -50,8 +50,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["BackendSwitchingRule"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasbackend_switching_rules_item_data in _response_200:
             componentsschemasbackend_switching_rules_item = BackendSwitchingRule.from_dict(
                 componentsschemasbackend_switching_rules_item_data
@@ -62,8 +62,8 @@ def _parse_response(
         return response_200
 
     if response.status_code == 202:
-        response_202 = []
         _response_202 = response.json()
+        response_202 = []
         for componentsschemasbackend_switching_rules_item_data in _response_202:
             componentsschemasbackend_switching_rules_item = BackendSwitchingRule.from_dict(
                 componentsschemasbackend_switching_rules_item_data

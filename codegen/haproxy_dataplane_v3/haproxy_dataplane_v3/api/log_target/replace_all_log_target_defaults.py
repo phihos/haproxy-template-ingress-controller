@@ -50,8 +50,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["LogTarget"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemaslog_targets_item_data in _response_200:
             componentsschemaslog_targets_item = LogTarget.from_dict(componentsschemaslog_targets_item_data)
 
@@ -60,8 +60,8 @@ def _parse_response(
         return response_200
 
     if response.status_code == 202:
-        response_202 = []
         _response_202 = response.json()
+        response_202 = []
         for componentsschemaslog_targets_item_data in _response_202:
             componentsschemaslog_targets_item = LogTarget.from_dict(componentsschemaslog_targets_item_data)
 

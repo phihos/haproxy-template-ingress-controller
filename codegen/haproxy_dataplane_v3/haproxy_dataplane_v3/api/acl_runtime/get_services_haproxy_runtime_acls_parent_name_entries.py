@@ -24,8 +24,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["OneACLFileEntry"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasacl_files_entries_item_data in _response_200:
             componentsschemasacl_files_entries_item = OneACLFileEntry.from_dict(
                 componentsschemasacl_files_entries_item_data
