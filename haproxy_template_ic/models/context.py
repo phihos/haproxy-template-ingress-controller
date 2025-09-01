@@ -57,6 +57,7 @@ class HAProxyConfigContext(BaseModel):
     # Private attributes for caching filtered lists
     _cached_maps: Optional[List[RenderedContent]] = PrivateAttr(default=None)
     _cached_certificates: Optional[List[RenderedContent]] = PrivateAttr(default=None)
+    _cached_acls: Optional[List[RenderedContent]] = PrivateAttr(default=None)
     _cached_files: Optional[List[RenderedContent]] = PrivateAttr(default=None)
     _cache_version: int = PrivateAttr(default=0)
 
@@ -80,6 +81,7 @@ class HAProxyConfigContext(BaseModel):
         """Clear cached filtered lists when content changes."""
         self._cached_maps = None
         self._cached_certificates = None
+        self._cached_acls = None
         self._cached_files = None
         self._cache_version += 1
 
@@ -101,6 +103,15 @@ class HAProxyConfigContext(BaseModel):
                 c for c in self.rendered_content if c.content_type == "certificate"
             ]
         return self._cached_certificates
+
+    @property
+    def rendered_acls(self) -> List[RenderedContent]:
+        """Get rendered ACLs (cached)."""
+        if self._cached_acls is None:
+            self._cached_acls = [
+                c for c in self.rendered_content if c.content_type == "acl"
+            ]
+        return self._cached_acls
 
     @property
     def rendered_files(self) -> List[RenderedContent]:

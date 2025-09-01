@@ -96,14 +96,16 @@ class ClusterSettingsClusterControllerInformation:
 
         description = d.pop("description", UNSET)
 
-        log_targets = []
         _log_targets = d.pop("log_targets", UNSET)
-        for log_targets_item_data in _log_targets or []:
-            log_targets_item = ClusterSettingsClusterControllerInformationLogTargetsItem.from_dict(
-                log_targets_item_data
-            )
+        log_targets: Union[Unset, list[ClusterSettingsClusterControllerInformationLogTargetsItem]] = UNSET
+        if not isinstance(_log_targets, Unset):
+            log_targets = []
+            for log_targets_item_data in _log_targets:
+                log_targets_item = ClusterSettingsClusterControllerInformationLogTargetsItem.from_dict(
+                    log_targets_item_data
+                )
 
-            log_targets.append(log_targets_item)
+                log_targets.append(log_targets_item)
 
         name = d.pop("name", UNSET)
 

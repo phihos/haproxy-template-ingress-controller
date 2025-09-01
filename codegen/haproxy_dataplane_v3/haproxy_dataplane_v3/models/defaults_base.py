@@ -1254,21 +1254,25 @@ class DefaultsBase:
 
         enabled = d.pop("enabled", UNSET)
 
-        error_files = []
         _error_files = d.pop("error_files", UNSET)
-        for error_files_item_data in _error_files or []:
-            error_files_item = Errorfile.from_dict(error_files_item_data)
+        error_files: Union[Unset, list[Errorfile]] = UNSET
+        if not isinstance(_error_files, Unset):
+            error_files = []
+            for error_files_item_data in _error_files:
+                error_files_item = Errorfile.from_dict(error_files_item_data)
 
-            error_files.append(error_files_item)
+                error_files.append(error_files_item)
 
         error_log_format = d.pop("error_log_format", UNSET)
 
-        errorfiles_from_http_errors = []
         _errorfiles_from_http_errors = d.pop("errorfiles_from_http_errors", UNSET)
-        for errorfiles_from_http_errors_item_data in _errorfiles_from_http_errors or []:
-            errorfiles_from_http_errors_item = Errorfiles.from_dict(errorfiles_from_http_errors_item_data)
+        errorfiles_from_http_errors: Union[Unset, list[Errorfiles]] = UNSET
+        if not isinstance(_errorfiles_from_http_errors, Unset):
+            errorfiles_from_http_errors = []
+            for errorfiles_from_http_errors_item_data in _errorfiles_from_http_errors:
+                errorfiles_from_http_errors_item = Errorfiles.from_dict(errorfiles_from_http_errors_item_data)
 
-            errorfiles_from_http_errors.append(errorfiles_from_http_errors_item)
+                errorfiles_from_http_errors.append(errorfiles_from_http_errors_item)
 
         _errorloc302 = d.pop("errorloc302", UNSET)
         errorloc302: Union[Unset, Errorloc]
@@ -1509,12 +1513,14 @@ class DefaultsBase:
         else:
             log_separate_errors = DefaultsBaseLogSeparateErrors(_log_separate_errors)
 
-        log_steps = []
         _log_steps = d.pop("log_steps", UNSET)
-        for log_steps_item_data in _log_steps or []:
-            log_steps_item = DefaultsBaseLogStepsItem(log_steps_item_data)
+        log_steps: Union[Unset, list[DefaultsBaseLogStepsItem]] = UNSET
+        if not isinstance(_log_steps, Unset):
+            log_steps = []
+            for log_steps_item_data in _log_steps:
+                log_steps_item = DefaultsBaseLogStepsItem(log_steps_item_data)
 
-            log_steps.append(log_steps_item)
+                log_steps.append(log_steps_item)
 
         log_tag = d.pop("log_tag", UNSET)
 

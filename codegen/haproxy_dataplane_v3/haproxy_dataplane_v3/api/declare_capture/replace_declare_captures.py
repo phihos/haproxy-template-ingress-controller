@@ -50,8 +50,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["DeclareCapture"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemascaptures_item_data in _response_200:
             componentsschemascaptures_item = DeclareCapture.from_dict(componentsschemascaptures_item_data)
 
@@ -60,8 +60,8 @@ def _parse_response(
         return response_200
 
     if response.status_code == 202:
-        response_202 = []
         _response_202 = response.json()
+        response_202 = []
         for componentsschemascaptures_item_data in _response_202:
             componentsschemascaptures_item = DeclareCapture.from_dict(componentsschemascaptures_item_data)
 

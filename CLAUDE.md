@@ -193,6 +193,7 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 
 **Flow**: Initial → Validation → Deployment → Ready
 **Critical**: Health endpoint required, pod selector matching, shared volumes, validation-first
+**Configuration**: Universal ConfigMap (`deploy/base/configmap-universal.yaml`) manages both HAProxy and dataplane configs with runtime API support
 
 #### Port Reference
 | Component | Port | Purpose | Notes |
@@ -374,6 +375,52 @@ data:
 **Measured dataplaneapi startup times**:
 - Version 3.0: 30-60+ seconds (requires failureThreshold: 10)
 - Version 3.1+: 3-5 seconds (works with failureThreshold: 3)
+
+### Runtime API Configuration Requirements
+**Critical**: Runtime API requires proper HAProxy stats socket and dataplane API master socket configuration to avoid "Runtime API not configured, not using it" warnings.
+
+**Required HAProxy Master Socket**:
+```bash
+# HAProxy master-worker mode with master socket (in startup command)
+haproxy -W -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
+```
+
+**Required Dataplane API Configuration**:
+```yaml
+haproxy:
+  master_runtime: /etc/haproxy/haproxy-master.sock
+```
+
+**Note**: The `-S` flag creates the master socket that dataplane API uses for runtime operations. No separate `stats socket` in the global section is needed.
+
+**Version Parameter Requirements**: All runtime API operations require either `transaction_id` OR `version` parameter:
+- Non-transactional operations must include current configuration version
+- Implemented in `dataplane.py:505` via `_get_configuration_version()`
+- Prevents HTTP 400 "version or transaction not specified" errors
+
+### Runtime API Optimization for Zero-Reload Deployments
+**Decision**: The controller optimizes deployments by separating runtime-eligible operations from configuration operations to avoid unnecessary HAProxy reloads.
+
+**Implementation**:
+- **Server Operations**: Server add/update/delete operations are applied without transactions when possible, enabling the Go dataplane API to automatically use HAProxy's runtime API
+- **Map Operations**: Map file entries use runtime API endpoints exclusively (no reload required)
+- **ACL Operations**: ACL file entries use runtime API endpoints (no reload required)
+- **Mixed Operations**: Server changes applied first via runtime API, then other changes via transaction
+
+**Runtime Requirements for Servers**:
+- No `default_server` defined in backend or defaults section
+- Backend uses compatible load balancing algorithm (roundrobin, leastconn, first, random)
+- Operation not within a transaction
+- Proper stats socket and master runtime configuration (see above)
+
+**Benefits**:
+- **Zero reloads** for most server add/remove/update operations
+- **Instant updates** for map and ACL entries  
+- **Improved availability** - no connection drops during server changes
+- **Better performance** - no reload overhead
+- **Smart fallback** - automatically falls back to transaction/reload for complex configurations
+
+**Monitoring**: Look for log messages like "server added through runtime" from dataplane API to confirm runtime API usage.
 
 ### HAProxy Dataplane API v3 Defaults Section Limitation
 **Issue**: HAProxy Dataplane API v3 returns HTTP 501 Not Implemented for nested element endpoints on defaults sections.
@@ -592,8 +639,10 @@ auth = credentials.dataplane  # Clear and type-safe
 1. Setup: `bash ./scripts/start-dev-env.sh up`, optionally with `--skip-build` or `--verbose`
 2. Monitor: `bash ./scripts/start-dev-env.sh logs` or `status`
 3. Debug: Port-forward management socket, inspect with `dump all`
-4. Restart: `bash ./scripts/start-dev-env.sh restart` for quick iteration
+4. **CRITICAL: Code Changes**: `bash ./scripts/start-dev-env.sh restart` - MANDATORY after ANY code changes to rebuild Docker image and reload to kind cluster
 5. Clean: `bash ./scripts/start-dev-env.sh down` to remove cluster
+
+**⚠️ CRITICAL DEPLOYMENT REQUIREMENT**: When making code changes in the dev environment, you MUST rebuild and reload the Docker image using `./scripts/start-dev-env.sh restart`. Code changes will NOT take effect without rebuilding the image and reloading it into the kind cluster. This is because the controller runs in containers, not directly from source code.
 
 **Debugging**:
 
@@ -646,6 +695,13 @@ No Docker rebuilds needed for code changes. The application runs locally with fu
 - Check HAProxy config syntax before deployment
 - **Version 3.0**: Increase `failureThreshold: 10` for slow dataplaneapi startup
 - **Version 3.1+**: Use `failureThreshold: 3` for fast startup
+
+**Runtime API Issues:**
+- **"Runtime API not configured, not using it"**: Ensure HAProxy runs with `-S` master socket flag and `master_runtime` in dataplane config
+- **HTTP 400 "version or transaction not specified"**: Verify current version is fetched before runtime operations
+- **Missing master socket**: Ensure HAProxy starts with `-S "/etc/haproxy/haproxy-master.sock,level,admin"`
+- **Missing master runtime**: Add `master_runtime: /etc/haproxy/haproxy-master.sock` to dataplane config
+- Check `/home/phil/Quellcode/haproxy-template-ic/deploy/base/configmap-universal.yaml` for proper dataplane configuration
 
 **Performance Issues:**
 - HAProxy 3.0: dataplaneapi startup takes 30-60+ seconds

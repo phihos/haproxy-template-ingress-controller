@@ -49,12 +49,14 @@ class Traces:
         from ..models.trace_event import TraceEvent
 
         d = dict(src_dict)
-        entries = []
         _entries = d.pop("entries", UNSET)
-        for componentsschemastrace_entries_item_data in _entries or []:
-            componentsschemastrace_entries_item = TraceEvent.from_dict(componentsschemastrace_entries_item_data)
+        entries: Union[Unset, list[TraceEvent]] = UNSET
+        if not isinstance(_entries, Unset):
+            entries = []
+            for componentsschemastrace_entries_item_data in _entries:
+                componentsschemastrace_entries_item = TraceEvent.from_dict(componentsschemastrace_entries_item_data)
 
-            entries.append(componentsschemastrace_entries_item)
+                entries.append(componentsschemastrace_entries_item)
 
         metadata = d.pop("metadata", UNSET)
 

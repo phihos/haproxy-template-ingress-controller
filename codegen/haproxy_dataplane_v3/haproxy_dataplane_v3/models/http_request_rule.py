@@ -677,12 +677,14 @@ class HTTPRequestRule:
 
         return_content_type = _parse_return_content_type(d.pop("return_content_type", UNSET))
 
-        return_hdrs = []
         _return_hdrs = d.pop("return_hdrs", UNSET)
-        for return_hdrs_item_data in _return_hdrs or []:
-            return_hdrs_item = ReturnHeader.from_dict(return_hdrs_item_data)
+        return_hdrs: Union[Unset, list[ReturnHeader]] = UNSET
+        if not isinstance(_return_hdrs, Unset):
+            return_hdrs = []
+            for return_hdrs_item_data in _return_hdrs:
+                return_hdrs_item = ReturnHeader.from_dict(return_hdrs_item_data)
 
-            return_hdrs.append(return_hdrs_item)
+                return_hdrs.append(return_hdrs_item)
 
         def _parse_return_status_code(data: object) -> Union[None, Unset, int]:
             if data is None:

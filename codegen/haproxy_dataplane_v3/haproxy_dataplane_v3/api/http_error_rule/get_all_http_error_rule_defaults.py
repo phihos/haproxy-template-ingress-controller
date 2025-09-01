@@ -33,8 +33,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["HTTPErrorRule"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemashttp_error_rules_item_data in _response_200:
             componentsschemashttp_error_rules_item = HTTPErrorRule.from_dict(
                 componentsschemashttp_error_rules_item_data

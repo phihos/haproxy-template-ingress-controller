@@ -136,12 +136,14 @@ class SiteFarmsItem:
         else:
             mode = SiteFarmsItemMode(_mode)
 
-        servers = []
         _servers = d.pop("servers", UNSET)
-        for servers_item_data in _servers or []:
-            servers_item = Server.from_dict(servers_item_data)
+        servers: Union[Unset, list[Server]] = UNSET
+        if not isinstance(_servers, Unset):
+            servers = []
+            for servers_item_data in _servers:
+                servers_item = Server.from_dict(servers_item_data)
 
-            servers.append(servers_item)
+                servers.append(servers_item)
 
         site_farms_item = cls(
             name=name,

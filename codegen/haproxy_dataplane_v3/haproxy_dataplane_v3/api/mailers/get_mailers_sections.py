@@ -35,8 +35,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["MailersSection"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasmailers_sections_item_data in _response_200:
             componentsschemasmailers_sections_item = MailersSection.from_dict(
                 componentsschemasmailers_sections_item_data

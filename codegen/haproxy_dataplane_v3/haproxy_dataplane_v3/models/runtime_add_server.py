@@ -963,12 +963,14 @@ class RuntimeAddServer:
 
         proto = d.pop("proto", UNSET)
 
-        proxy_v2_options = []
         _proxy_v2_options = d.pop("proxy-v2-options", UNSET)
-        for proxy_v2_options_item_data in _proxy_v2_options or []:
-            proxy_v2_options_item = RuntimeAddServerProxyV2OptionsItem(proxy_v2_options_item_data)
+        proxy_v2_options: Union[Unset, list[RuntimeAddServerProxyV2OptionsItem]] = UNSET
+        if not isinstance(_proxy_v2_options, Unset):
+            proxy_v2_options = []
+            for proxy_v2_options_item_data in _proxy_v2_options:
+                proxy_v2_options_item = RuntimeAddServerProxyV2OptionsItem(proxy_v2_options_item_data)
 
-            proxy_v2_options.append(proxy_v2_options_item)
+                proxy_v2_options.append(proxy_v2_options_item)
 
         def _parse_rise(data: object) -> Union[None, Unset, int]:
             if data is None:

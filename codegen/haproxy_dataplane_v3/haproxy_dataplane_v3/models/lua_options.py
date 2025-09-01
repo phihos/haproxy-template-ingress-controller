@@ -65,19 +65,23 @@ class LuaOptions:
         d = dict(src_dict)
         load_per_thread = d.pop("load_per_thread", UNSET)
 
-        loads = []
         _loads = d.pop("loads", UNSET)
-        for loads_item_data in _loads or []:
-            loads_item = LuaOptionsLoadsItem.from_dict(loads_item_data)
+        loads: Union[Unset, list[LuaOptionsLoadsItem]] = UNSET
+        if not isinstance(_loads, Unset):
+            loads = []
+            for loads_item_data in _loads:
+                loads_item = LuaOptionsLoadsItem.from_dict(loads_item_data)
 
-            loads.append(loads_item)
+                loads.append(loads_item)
 
-        prepend_path = []
         _prepend_path = d.pop("prepend_path", UNSET)
-        for prepend_path_item_data in _prepend_path or []:
-            prepend_path_item = LuaOptionsPrependPathItem.from_dict(prepend_path_item_data)
+        prepend_path: Union[Unset, list[LuaOptionsPrependPathItem]] = UNSET
+        if not isinstance(_prepend_path, Unset):
+            prepend_path = []
+            for prepend_path_item_data in _prepend_path:
+                prepend_path_item = LuaOptionsPrependPathItem.from_dict(prepend_path_item_data)
 
-            prepend_path.append(prepend_path_item)
+                prepend_path.append(prepend_path_item)
 
         lua_options = cls(
             load_per_thread=load_per_thread,

@@ -33,8 +33,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["TCPRequestRule"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemastcp_request_rules_item_data in _response_200:
             componentsschemastcp_request_rules_item = TCPRequestRule.from_dict(
                 componentsschemastcp_request_rules_item_data

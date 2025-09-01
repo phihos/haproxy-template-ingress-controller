@@ -130,19 +130,23 @@ class Cookie:
         d = dict(src_dict)
         name = d.pop("name")
 
-        attr = []
         _attr = d.pop("attr", UNSET)
-        for attr_item_data in _attr or []:
-            attr_item = CookieAttrItem.from_dict(attr_item_data)
+        attr: Union[Unset, list[CookieAttrItem]] = UNSET
+        if not isinstance(_attr, Unset):
+            attr = []
+            for attr_item_data in _attr:
+                attr_item = CookieAttrItem.from_dict(attr_item_data)
 
-            attr.append(attr_item)
+                attr.append(attr_item)
 
-        domain = []
         _domain = d.pop("domain", UNSET)
-        for domain_item_data in _domain or []:
-            domain_item = CookieDomainItem.from_dict(domain_item_data)
+        domain: Union[Unset, list[CookieDomainItem]] = UNSET
+        if not isinstance(_domain, Unset):
+            domain = []
+            for domain_item_data in _domain:
+                domain_item = CookieDomainItem.from_dict(domain_item_data)
 
-            domain.append(domain_item)
+                domain.append(domain_item)
 
         dynamic = d.pop("dynamic", UNSET)
 

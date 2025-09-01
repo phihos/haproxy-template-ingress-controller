@@ -33,8 +33,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["SSLFrontendUseCertificate"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasssl_front_uses_item_data in _response_200:
             componentsschemasssl_front_uses_item = SSLFrontendUseCertificate.from_dict(
                 componentsschemasssl_front_uses_item_data

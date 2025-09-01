@@ -109,12 +109,14 @@ class OneCRLEntry:
         else:
             next_update = isoparse(_next_update).date()
 
-        revoked_certificates = []
         _revoked_certificates = d.pop("revoked_certificates", UNSET)
-        for revoked_certificates_item_data in _revoked_certificates or []:
-            revoked_certificates_item = OneCRLEntryRevokedCertificatesItem.from_dict(revoked_certificates_item_data)
+        revoked_certificates: Union[Unset, list[OneCRLEntryRevokedCertificatesItem]] = UNSET
+        if not isinstance(_revoked_certificates, Unset):
+            revoked_certificates = []
+            for revoked_certificates_item_data in _revoked_certificates:
+                revoked_certificates_item = OneCRLEntryRevokedCertificatesItem.from_dict(revoked_certificates_item_data)
 
-            revoked_certificates.append(revoked_certificates_item)
+                revoked_certificates.append(revoked_certificates_item)
 
         signature_algorithm = d.pop("signature_algorithm", UNSET)
 

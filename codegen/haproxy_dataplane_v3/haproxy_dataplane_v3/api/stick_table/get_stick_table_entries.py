@@ -42,8 +42,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["StickTableEntry"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemasstick_table_entries_item_data in _response_200:
             componentsschemasstick_table_entries_item = StickTableEntry.from_dict(
                 componentsschemasstick_table_entries_item_data

@@ -22,6 +22,7 @@ from .utils import (
     parse_validation_error_details,
     _check_early_exit_condition,
     _to_dict_safe,
+    _natural_sort_key,
     MAX_CONFIG_COMPARISON_CHANGES,
 )
 from haproxy_template_ic.metrics import get_metrics_collector
@@ -62,11 +63,12 @@ class ConfigSynchronizer:
 
     def _prepare_sync_content(
         self, config_context: HAProxyConfigContext
-    ) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+    ) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]:
         """Prepare content for synchronization."""
         return (
             {rc.filename: rc.content for rc in config_context.rendered_maps},
             {rc.filename: rc.content for rc in config_context.rendered_certificates},
+            {rc.filename: rc.content for rc in config_context.rendered_acls},
             {rc.filename: rc.content for rc in config_context.rendered_files},
         )
 
@@ -147,6 +149,7 @@ class ConfigSynchronizer:
         client: DataplaneClient,
         maps: Dict[str, str],
         certificates: Dict[str, str],
+        acls: Dict[str, str],
         files: Dict[str, str],
         url: str,
     ) -> None:
@@ -158,6 +161,10 @@ class ConfigSynchronizer:
         if certificates:
             logger.debug(f"Syncing {len(certificates)} certificates to {url}")
             await client.sync_certificates(certificates)
+
+        if acls:
+            logger.debug(f"Syncing {len(acls)} ACLs to {url}")
+            await client.sync_acls(acls)
 
         if files:
             logger.debug(f"Syncing {len(files)} files to {url}")
@@ -286,7 +293,7 @@ class ConfigSynchronizer:
         new_names = set(new_dict.keys())
 
         # Deletions
-        for name in current_names - new_names:
+        for name in sorted(current_names - new_names, key=_natural_sort_key):
             changes.append(
                 ConfigChange.create_element_change(
                     change_type=ConfigChangeType.DELETE,
@@ -299,7 +306,7 @@ class ConfigSynchronizer:
             )
 
         # Additions
-        for name in new_names - current_names:
+        for name in sorted(new_names - current_names, key=_natural_sort_key):
             changes.append(
                 ConfigChange.create_element_change(
                     change_type=ConfigChangeType.CREATE,
@@ -312,7 +319,7 @@ class ConfigSynchronizer:
             )
 
         # Modifications
-        for name in current_names & new_names:
+        for name in sorted(current_names & new_names, key=_natural_sort_key):
             if _to_dict_safe(current_dict[name]) != _to_dict_safe(new_dict[name]):
                 changes.append(
                     ConfigChange.create_element_change(
@@ -881,6 +888,7 @@ class ConfigSynchronizer:
         config: str,
         maps_to_sync: Dict[str, str],
         certificates_to_sync: Dict[str, str],
+        acls_to_sync: Dict[str, str],
         files_to_sync: Dict[str, str],
         validation_structured: Dict[str, Any],
     ) -> Dict[str, Any]:
@@ -893,7 +901,7 @@ class ConfigSynchronizer:
 
         # Sync auxiliary content first (maps, certs, files)
         await self._sync_content_to_client(
-            client, maps_to_sync, certificates_to_sync, files_to_sync, url
+            client, maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync, url
         )
 
         # Fetch current structured config from production instance
@@ -1009,8 +1017,8 @@ class ConfigSynchronizer:
             raise DataplaneAPIError("No rendered HAProxy configuration available")
 
         config = config_context.rendered_config.content
-        maps_to_sync, certificates_to_sync, files_to_sync = self._prepare_sync_content(
-            config_context
+        maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync = (
+            self._prepare_sync_content(config_context)
         )
 
         # Update production clients to handle dynamic URL changes
@@ -1023,6 +1031,7 @@ class ConfigSynchronizer:
             validation_client,
             maps_to_sync,
             certificates_to_sync,
+            acls_to_sync,
             files_to_sync,
             "validation instance",
         )
@@ -1058,6 +1067,7 @@ class ConfigSynchronizer:
                 config,
                 maps_to_sync,
                 certificates_to_sync,
+                acls_to_sync,
                 files_to_sync,
                 validation_structured,
             )

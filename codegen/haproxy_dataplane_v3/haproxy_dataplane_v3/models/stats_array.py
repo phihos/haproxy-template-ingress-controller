@@ -61,12 +61,14 @@ class StatsArray:
 
         runtime_api = d.pop("runtimeAPI", UNSET)
 
-        stats = []
         _stats = d.pop("stats", UNSET)
-        for stats_item_data in _stats or []:
-            stats_item = Stats.from_dict(stats_item_data)
+        stats: Union[Unset, list[Stats]] = UNSET
+        if not isinstance(_stats, Unset):
+            stats = []
+            for stats_item_data in _stats:
+                stats_item = Stats.from_dict(stats_item_data)
 
-            stats.append(stats_item)
+                stats.append(stats_item)
 
         stats_array = cls(
             error=error,

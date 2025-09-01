@@ -256,12 +256,14 @@ class SslOptions:
 
         dh_param_file = d.pop("dh_param_file", UNSET)
 
-        engines = []
         _engines = d.pop("engines", UNSET)
-        for engines_item_data in _engines or []:
-            engines_item = SslOptionsEnginesItem.from_dict(engines_item_data)
+        engines: Union[Unset, list[SslOptionsEnginesItem]] = UNSET
+        if not isinstance(_engines, Unset):
+            engines = []
+            for engines_item_data in _engines:
+                engines_item = SslOptionsEnginesItem.from_dict(engines_item_data)
 
-            engines.append(engines_item)
+                engines.append(engines_item)
 
         issuers_chain_path = d.pop("issuers_chain_path", UNSET)
 

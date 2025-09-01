@@ -35,8 +35,8 @@ def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
 ) -> Union[Error, list["PeerEntry"]]:
     if response.status_code == 200:
-        response_200 = []
         _response_200 = response.json()
+        response_200 = []
         for componentsschemaspeer_entries_item_data in _response_200:
             componentsschemaspeer_entries_item = PeerEntry.from_dict(componentsschemaspeer_entries_item_data)
 

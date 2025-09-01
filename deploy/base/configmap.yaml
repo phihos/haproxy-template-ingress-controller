@@ -112,14 +112,38 @@ data:
       backend-servers:
         name: backend-servers
         template: |
-          {# Generate backend server entries from EndpointSlice using indexed lookup #}
-          {# This demonstrates O(1) lookup using custom indexing by service name #}
+          {# Pre-allocated server pool with auto-expansion #}
+          {% set initial_slots = 10 %}  {# Single place to adjust initial slots #}
+          
+          {# Collect active endpoints #}
+          {% set active_endpoints = [] %}
           {% for endpoint_slice in resources.get('endpoints', {}).get_indexed(service_name) %}
             {% for endpoint in endpoint_slice.get('endpoints') | default([], true) %}
               {% for address in endpoint.addresses %}
-          server {{ endpoint.targetRef.name }} {{ address }}:{{ port }}
+                {% set _ = active_endpoints.append({'name': endpoint.targetRef.name, 'address': address, 'port': port}) %}
               {% endfor %}
             {% endfor %}
+          {% endfor %}
+          
+          {# Calculate required slots using power-of-2 expansion #}
+          {% set active_count = active_endpoints|length %}
+          {% set max_servers = initial_slots %}
+          {% for _ in range(10) %}  {# Loop to find right size #}
+            {% if active_count >= max_servers %}
+              {% set max_servers = max_servers * 2 %}
+            {% endif %}
+          {% endfor %}
+          
+          {# Generate all server slots with fixed names #}
+          {% for i in range(1, max_servers + 1) %}
+            {% if loop.index0 < active_endpoints|length %}
+              {# Active server with real endpoint #}
+              {% set endpoint = active_endpoints[loop.index0] %}
+          server SRV_{{ i }} {{ endpoint.address }}:{{ endpoint.port }}
+            {% else %}
+              {# Disabled placeholder server #}
+          server SRV_{{ i }} 127.0.0.1:1 disabled
+            {% endif %}
           {% endfor %}
       
       ingress-backends:
@@ -139,6 +163,7 @@ data:
           backend {% include "backend-name" %}
               balance roundrobin
               option httpchk GET {{ path.path | default('/') }}
+              default-server check
           {% include "backend-servers" %}
           {% endif %}
           {% endfor %}

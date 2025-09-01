@@ -139,6 +139,7 @@ data:
           backend {% include "backend-name" %}
               balance roundrobin
               option httpchk GET {{ path.path | default('/') }}
+              default-server check
           {% include "backend-servers" %}
           {% endif %}
           {% endfor %}

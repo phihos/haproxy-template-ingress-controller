@@ -72,12 +72,14 @@ class Site:
         d = dict(src_dict)
         name = d.pop("name")
 
-        farms = []
         _farms = d.pop("farms", UNSET)
-        for farms_item_data in _farms or []:
-            farms_item = SiteFarmsItem.from_dict(farms_item_data)
+        farms: Union[Unset, list[SiteFarmsItem]] = UNSET
+        if not isinstance(_farms, Unset):
+            farms = []
+            for farms_item_data in _farms:
+                farms_item = SiteFarmsItem.from_dict(farms_item_data)
 
-            farms.append(farms_item)
+                farms.append(farms_item)
 
         _service = d.pop("service", UNSET)
         service: Union[Unset, SiteService]

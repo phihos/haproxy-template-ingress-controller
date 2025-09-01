@@ -969,19 +969,23 @@ class BackendBase:
 
         enabled = d.pop("enabled", UNSET)
 
-        error_files = []
         _error_files = d.pop("error_files", UNSET)
-        for error_files_item_data in _error_files or []:
-            error_files_item = Errorfile.from_dict(error_files_item_data)
+        error_files: Union[Unset, list[Errorfile]] = UNSET
+        if not isinstance(_error_files, Unset):
+            error_files = []
+            for error_files_item_data in _error_files:
+                error_files_item = Errorfile.from_dict(error_files_item_data)
 
-            error_files.append(error_files_item)
+                error_files.append(error_files_item)
 
-        errorfiles_from_http_errors = []
         _errorfiles_from_http_errors = d.pop("errorfiles_from_http_errors", UNSET)
-        for errorfiles_from_http_errors_item_data in _errorfiles_from_http_errors or []:
-            errorfiles_from_http_errors_item = Errorfiles.from_dict(errorfiles_from_http_errors_item_data)
+        errorfiles_from_http_errors: Union[Unset, list[Errorfiles]] = UNSET
+        if not isinstance(_errorfiles_from_http_errors, Unset):
+            errorfiles_from_http_errors = []
+            for errorfiles_from_http_errors_item_data in _errorfiles_from_http_errors:
+                errorfiles_from_http_errors_item = Errorfiles.from_dict(errorfiles_from_http_errors_item_data)
 
-            errorfiles_from_http_errors.append(errorfiles_from_http_errors_item)
+                errorfiles_from_http_errors.append(errorfiles_from_http_errors_item)
 
         _errorloc302 = d.pop("errorloc302", UNSET)
         errorloc302: Union[Unset, Errorloc]
@@ -1015,12 +1019,14 @@ class BackendBase:
         else:
             force_persist = BackendBaseForcePersist.from_dict(_force_persist)
 
-        force_persist_list = []
         _force_persist_list = d.pop("force_persist_list", UNSET)
-        for force_persist_list_item_data in _force_persist_list or []:
-            force_persist_list_item = BackendBaseForcePersistListItem.from_dict(force_persist_list_item_data)
+        force_persist_list: Union[Unset, list[BackendBaseForcePersistListItem]] = UNSET
+        if not isinstance(_force_persist_list, Unset):
+            force_persist_list = []
+            for force_persist_list_item_data in _force_persist_list:
+                force_persist_list_item = BackendBaseForcePersistListItem.from_dict(force_persist_list_item_data)
 
-            force_persist_list.append(force_persist_list_item)
+                force_persist_list.append(force_persist_list_item)
 
         _forwardfor = d.pop("forwardfor", UNSET)
         forwardfor: Union[Unset, Forwardfor]
@@ -1185,12 +1191,14 @@ class BackendBase:
         else:
             ignore_persist = BackendBaseIgnorePersist.from_dict(_ignore_persist)
 
-        ignore_persist_list = []
         _ignore_persist_list = d.pop("ignore_persist_list", UNSET)
-        for ignore_persist_list_item_data in _ignore_persist_list or []:
-            ignore_persist_list_item = BackendBaseIgnorePersistListItem.from_dict(ignore_persist_list_item_data)
+        ignore_persist_list: Union[Unset, list[BackendBaseIgnorePersistListItem]] = UNSET
+        if not isinstance(_ignore_persist_list, Unset):
+            ignore_persist_list = []
+            for ignore_persist_list_item_data in _ignore_persist_list:
+                ignore_persist_list_item = BackendBaseIgnorePersistListItem.from_dict(ignore_persist_list_item_data)
 
-            ignore_persist_list.append(ignore_persist_list_item)
+                ignore_persist_list.append(ignore_persist_list_item)
 
         _independent_streams = d.pop("independent_streams", UNSET)
         independent_streams: Union[Unset, BackendBaseIndependentStreams]

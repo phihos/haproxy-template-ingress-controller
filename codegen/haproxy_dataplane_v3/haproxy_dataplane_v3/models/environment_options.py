@@ -69,21 +69,25 @@ class EnvironmentOptions:
         from ..models.environment_options_setenv_item import EnvironmentOptionsSetenvItem
 
         d = dict(src_dict)
-        presetenv = []
         _presetenv = d.pop("presetenv", UNSET)
-        for presetenv_item_data in _presetenv or []:
-            presetenv_item = EnvironmentOptionsPresetenvItem.from_dict(presetenv_item_data)
+        presetenv: Union[Unset, list[EnvironmentOptionsPresetenvItem]] = UNSET
+        if not isinstance(_presetenv, Unset):
+            presetenv = []
+            for presetenv_item_data in _presetenv:
+                presetenv_item = EnvironmentOptionsPresetenvItem.from_dict(presetenv_item_data)
 
-            presetenv.append(presetenv_item)
+                presetenv.append(presetenv_item)
 
         resetenv = d.pop("resetenv", UNSET)
 
-        setenv = []
         _setenv = d.pop("setenv", UNSET)
-        for setenv_item_data in _setenv or []:
-            setenv_item = EnvironmentOptionsSetenvItem.from_dict(setenv_item_data)
+        setenv: Union[Unset, list[EnvironmentOptionsSetenvItem]] = UNSET
+        if not isinstance(_setenv, Unset):
+            setenv = []
+            for setenv_item_data in _setenv:
+                setenv_item = EnvironmentOptionsSetenvItem.from_dict(setenv_item_data)
 
-            setenv.append(setenv_item)
+                setenv.append(setenv_item)
 
         unsetenv = d.pop("unsetenv", UNSET)
 
