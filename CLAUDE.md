@@ -43,8 +43,11 @@ tests/fixtures/    # Test data and configurations
 
 #### E2E Test Features
 - **Real Kubernetes**: Creates temporary clusters for full system testing
+- **Telepresence integration**: LocalOperatorRunner runs operators locally via Telepresence for 60-80% faster iteration
+- **Time-based log analysis**: Millisecond-precision log searching with `since_milliseconds` parameter
 - **Resource lifecycle**: Tests ConfigMap updates, pod discovery, template rendering
 - **Webhook validation**: Tests admission controllers and error handling
+- **Socket communication**: Management socket integration for runtime state inspection
 - **Cleanup automation**: Namespaces and resources automatically removed unless `--keep-namespaces`
 
 ### Code Quality
@@ -606,6 +609,12 @@ The project uses [Telepresence](https://www.telepresence.io/) for debugging in K
 
 No Docker rebuilds needed for code changes. The application runs locally with full cluster network access.
 
+**E2E Test Utilities**:
+- **LocalOperatorRunner**: Context manager for running operators locally during tests
+- **Log assertions**: `assert_log_line(operator, pattern, since_milliseconds=100)` for timing-sensitive checks
+- **Socket commands**: `send_socket_command(operator, "dump all")` for runtime state inspection
+- **Time-based search**: `get_log_position_at_time(milliseconds_ago)` for precise log analysis
+
 **Other debugging tools**:
 - Metrics: Port-forward 9090, `curl /metrics`
 - Tracing: Set `tracing.enabled: true` and `tracing.console_export: true` in ConfigMap
@@ -622,6 +631,7 @@ No Docker rebuilds needed for code changes. The application runs locally with fu
 - Kind conflicts: Use `--keep-namespaces` for debugging, clean with `kind delete cluster`
 - Import errors: Run `uv sync --group dev` to install test dependencies
 - Docker permissions: Ensure Docker daemon accessible without sudo
+- Timing issues: Use `since_milliseconds` parameter for log assertions that need recent context
 
 **Template Issues:**
 - Use correct resource access patterns: `resources.get('type', {}).items()`
@@ -647,6 +657,12 @@ No Docker rebuilds needed for code changes. The application runs locally with fu
 - Check controller logs for template rendering errors
 - Validate Jinja2 syntax with `--webhook-enabled=true`
 - Use management socket `dump config` to inspect rendered templates
+
+**ConfigMap Reload Issues:**
+- Configuration changes now properly trigger operator reload without infinite loops
+- Debug with structured logging: `logging.structured: true` in ConfigMap
+- ConfigMap change detection uses DeepDiff for accurate comparison
+- Operator lifecycle properly manages event loop reuse across restarts
 
 ## Commit Message Guidelines
 

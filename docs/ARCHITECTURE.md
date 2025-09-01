@@ -4,7 +4,49 @@
 
 Template-driven HAProxy configuration management for Kubernetes. The controller watches Kubernetes resources, renders Jinja2 templates, and deploys validated configurations to HAProxy instances via Dataplane API.
 
-## Components
+Built with modular architecture for maintainability, comprehensive test infrastructure for reliability, and optimized performance for production environments.
+
+## Production Code Structure
+
+The controller is organized into focused packages for maintainability and testability:
+
+```
+haproxy_template_ic/
+├── core/              # Core functionality
+│   └── logging.py     # Structured logging setup
+├── dataplane/         # HAProxy Dataplane API integration
+│   ├── client.py      # API client wrapper
+│   ├── synchronizer.py # Config deployment logic
+│   └── utils.py       # Dataplane utilities
+├── k8s/               # Kubernetes integration
+│   ├── field_filter.py # Resource field filtering
+│   ├── kopf_utils.py  # Kopf framework utilities
+│   └── resource_utils.py # Resource manipulation
+├── models/            # Data models and validation
+│   ├── config.py      # Configuration models
+│   ├── context.py     # Template context
+│   ├── resources.py   # Resource collections
+│   └── templates.py   # Template models
+├── operator/          # Operator lifecycle management
+│   ├── configmap.py   # ConfigMap change handling
+│   ├── initialization.py # Startup and cleanup
+│   └── utils.py       # Operator utilities
+└── [legacy files]     # Backward compatibility wrappers
+```
+
+### Package Responsibilities
+
+- **core/**: Foundation services like logging configuration
+- **dataplane/**: All HAProxy Dataplane API interactions and deployment logic
+- **k8s/**: Kubernetes-specific operations and resource handling
+- **models/**: Type-safe data models with Pydantic validation
+- **operator/**: Operator lifecycle, event handling, and configuration management
+
+### Backward Compatibility
+
+Legacy import paths are preserved through wrapper modules that re-export from new packages, ensuring smooth migration without breaking changes.
+
+## Runtime Components
 
 ### Controller Pod (3 containers)
 
@@ -70,6 +112,24 @@ Resource Change → Watch Event → Template Render → Validation → Productio
 3. **Validate** - Config tested in validation sidecar
 4. **Deploy** - Validated config pushed to production
 5. **Reconcile** - Periodic full sync prevents drift
+
+### ConfigMap Change Detection
+
+The operator uses intelligent change detection to prevent unnecessary reloads:
+
+```python
+# DeepDiff-based comparison
+diff = DeepDiff(old_config.raw, new_config.raw, verbose_level=2)
+if not diff:
+    # No actual changes - skip reload
+    return
+```
+
+Key features:
+- **Accurate comparison**: DeepDiff detects actual content changes vs. Kubernetes metadata updates
+- **Loop prevention**: Identical configurations don't trigger redundant reloads
+- **Debug visibility**: Configuration diffs logged for troubleshooting
+- **Event loop reuse**: Optimized asyncio handling across operator restarts
 
 ## Resource Indexing
 
