@@ -14,8 +14,8 @@ import sys
 import tempfile
 import threading
 import time
-from queue import Queue, Empty
-from typing import Any, Dict, List, Optional
+from queue import Empty, Queue
+from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
 
@@ -73,7 +73,7 @@ class LocalOperatorRunner:
         self.process: Optional[subprocess.Popen] = None
         self.log_queue: Queue = Queue()
         self.log_thread: Optional[threading.Thread] = None
-        self.logs: List[str] = []
+        self.logs: List[Tuple[float, str]] = []  # (timestamp, log_line) pairs
         self.exit_code: Optional[int] = None
         self.exception: Optional[Exception] = None
 
@@ -94,7 +94,7 @@ class LocalOperatorRunner:
             {
                 "CONFIGMAP_NAME": self.configmap_name,
                 "SECRET_NAME": self.secret_name,
-                "NAMESPACE": self.namespace,  # Pass namespace to operator
+                "POD_NAMESPACE": self.namespace,  # Pass namespace to operator
                 "SOCKET_PATH": self.socket_path,
                 "VERBOSE": str(self.verbose),
                 # Disable buffering for real-time log capture
@@ -139,6 +139,11 @@ class LocalOperatorRunner:
             socket_path=self.socket_path,
         )
 
+        # Determine project root directory
+        import haproxy_template_ic
+
+        project_root = os.path.dirname(os.path.dirname(haproxy_template_ic.__file__))
+
         # Start the process
         self.process = subprocess.Popen(
             cmd,
@@ -148,6 +153,7 @@ class LocalOperatorRunner:
             text=True,
             bufsize=1,  # Line buffered
             preexec_fn=os.setsid if os.name != "nt" else None,  # Create process group
+            cwd=project_root,  # Ensure correct working directory
         )
 
         # Start log reader thread
@@ -207,8 +213,9 @@ class LocalOperatorRunner:
                 if not line:
                     break
                 line = line.rstrip()
-                self.logs.append(line)
-                self.log_queue.put(line)
+                timestamp = time.time()
+                self.logs.append((timestamp, line))
+                self.log_queue.put((timestamp, line))
                 # Also print to console for debugging
                 if self.verbose >= 2:
                     print(f"[OPERATOR] {line}")
@@ -226,30 +233,70 @@ class LocalOperatorRunner:
         Returns:
             String containing log lines joined with newlines
         """
-        return "\n".join(self.logs[since_index:])
+        # Extract just the log lines from the (timestamp, log_line) tuples
+        log_lines = [log_line for _, log_line in self.logs[since_index:]]
+        return "\n".join(log_lines)
 
-    def wait_for_log(self, pattern: str, timeout: float = 30) -> bool:
+    def get_log_position(self) -> int:
+        """
+        Get the current log position (number of log lines).
+
+        Returns:
+            Current number of log lines
+        """
+        return len(self.logs)
+
+    def get_log_position_at_time(self, milliseconds_ago: float) -> int:
+        """
+        Get the log position N milliseconds ago.
+
+        Args:
+            milliseconds_ago: Number of milliseconds to look back
+
+        Returns:
+            Log position at the specified time ago
+        """
+        if milliseconds_ago <= 0:
+            return len(self.logs)
+
+        target_time = time.time() - (milliseconds_ago / 1000.0)
+
+        # Find the first log entry at or after the target time
+        for i, (timestamp, _) in enumerate(self.logs):
+            if timestamp >= target_time:
+                return i
+
+        # If no logs found after target time, return current position
+        return len(self.logs)
+
+    def wait_for_log(
+        self,
+        pattern: str,
+        timeout: float = 30,
+        since_index: int = 0,
+    ) -> bool:
         """
         Wait for a specific log pattern to appear.
 
         Args:
             pattern: String pattern to search for in logs
             timeout: Maximum time to wait in seconds
+            since_index: Only check logs starting from this index (0 means check all existing logs)
 
         Returns:
             True if pattern found, False if timeout
         """
         start_time = time.time()
 
-        # Check existing logs first
-        for log_line in self.logs:
+        # Check existing logs from the specified index
+        for _, log_line in self.logs[since_index:]:
             if pattern in log_line:
                 return True
 
         # Wait for new logs
         while time.time() - start_time < timeout:
             try:
-                log_line = self.log_queue.get(timeout=0.1)
+                timestamp, log_line = self.log_queue.get(timeout=0.1)
                 if pattern in log_line:
                     return True
             except Empty:
@@ -339,36 +386,3 @@ def wait_for_operator_ready(runner: LocalOperatorRunner, timeout: int = 60) -> N
         )
 
     logger.info("Operator is ready")
-
-
-def assert_log_line(
-    runner: LocalOperatorRunner, expected_log_line: str, timeout: float = 5
-) -> str:
-    """
-    Assert that a specific log line appears in the operator's logs.
-
-    Args:
-        runner: The LocalOperatorRunner instance
-        expected_log_line: The log line text to search for
-        timeout: Maximum time to wait
-
-    Returns:
-        The complete log output
-
-    Raises:
-        AssertionError: If the expected log line is not found
-    """
-    if not expected_log_line.strip():
-        raise ValueError("Expected log line cannot be empty")
-
-    found = runner.wait_for_log(expected_log_line, timeout)
-
-    if not found:
-        logs = runner.get_logs()
-        raise AssertionError(
-            f"Expected log line not found: '{expected_log_line}'\n"
-            f"Timeout: {timeout}s\n"
-            f"Complete logs:\n{logs}"
-        )
-
-    return runner.get_logs()

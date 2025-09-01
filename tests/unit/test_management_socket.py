@@ -961,3 +961,35 @@ class TestManagementSocketCriticalPaths:
             }
         }
         assert result == expected
+
+
+# Extended tests (merged from test_management_socket_extended.py)
+
+
+class TestSerializeResourceCollection:
+    """Test _serialize_resource_collection function edge cases."""
+
+    def test_fallback_for_non_listable_iterables(self):
+        """Test fallback for iterables that can't be converted to list."""
+
+        class BadIterable:
+            def __iter__(self):
+                raise TypeError("Can't iterate")
+
+        bad_iter = BadIterable()
+        result = _serialize_resource_collection(bad_iter)
+        # When list() fails, it returns the object wrapped
+        assert len(result) == 1
+        assert isinstance(result[0], BadIterable)
+
+    def test_dict_as_iterable(self):
+        """Test that dicts are treated as iterables and return keys."""
+        # Dicts are iterable, so they hit the first branch
+        resource = {"name": "test", "kind": "Service"}
+        result = _serialize_resource_collection(resource)
+        assert result == ["name", "kind"]  # Dict iteration gives keys
+
+    def test_fallback_for_other_types(self):
+        """Test fallback for non-iterable, non-dict types."""
+        result = _serialize_resource_collection(42)
+        assert result == [{"data": 42}]

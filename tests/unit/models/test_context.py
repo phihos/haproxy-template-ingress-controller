@@ -2,7 +2,7 @@
 
 import pytest
 
-from haproxy_template_ic.config_models import (
+from haproxy_template_ic.models import (
     HAProxyConfigContext,
     TriggerContext,
     Config,

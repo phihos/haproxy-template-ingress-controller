@@ -24,7 +24,7 @@ from jinja2 import (
 )
 
 # Import Pydantic models and collection type aliases
-from .config_models import (
+from .models import (
     TemplateSnippet,
     TemplateSnippetCollection,
 )

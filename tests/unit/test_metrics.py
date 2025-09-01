@@ -124,7 +124,7 @@ class TestMetricsCollector:
         collector = MetricsCollector()
 
         with collector.time_template_render("map"):
-            time.sleep(0.01)  # Simulate work
+            time.sleep(0.005)  # Simulate work
 
         # Should not raise any exceptions
         assert True
@@ -134,7 +134,7 @@ class TestMetricsCollector:
         collector = MetricsCollector()
 
         with collector.time_config_reload():
-            time.sleep(0.01)  # Simulate work
+            time.sleep(0.005)  # Simulate work
 
         # Should not raise any exceptions
         assert True
@@ -144,7 +144,7 @@ class TestMetricsCollector:
         collector = MetricsCollector()
 
         with collector.time_dataplane_api_operation("validate"):
-            time.sleep(0.01)  # Simulate work
+            time.sleep(0.005)  # Simulate work
 
         # Should not raise any exceptions
         assert True
@@ -262,12 +262,12 @@ class TestMetricsIntegration:
 
         # Simulate template rendering
         with collector.time_template_render("haproxy_config"):
-            time.sleep(0.001)
+            time.sleep(0.0005)
         collector.record_template_render("haproxy_config", "success")
 
         # Simulate Dataplane API operations
         with collector.time_dataplane_api_operation("validate"):
-            time.sleep(0.001)
+            time.sleep(0.0005)
         collector.record_dataplane_api_request("validate", "success")
 
         # Simulate HAProxy instances
@@ -275,7 +275,7 @@ class TestMetricsIntegration:
 
         # Simulate configuration reload
         with collector.time_config_reload():
-            time.sleep(0.001)
+            time.sleep(0.0005)
         collector.record_config_reload(success=True)
 
         # Simulate management socket activity

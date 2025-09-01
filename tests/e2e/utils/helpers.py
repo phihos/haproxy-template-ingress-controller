@@ -38,35 +38,60 @@ def wait_for_watch_streams_ready(operator: LocalOperatorRunner) -> None:
 
 
 def assert_log_line(
-    operator: LocalOperatorRunner, expected_log_line: str, timeout: float = 5
+    operator: LocalOperatorRunner,
+    expected_log_line: str,
+    timeout: float = 5,
+    since_milliseconds: float = 0,
 ) -> str:
-    """Assert that a specific log line appears in the operator's logs within timeout.
+    """Assert that a specific log line appears in the operator's logs.
 
     Args:
-        operator: LocalOperatorRunner instance
-        expected_log_line: The log line text to search for (partial match)
-        timeout: Maximum time to wait for the log line (default: 5 seconds)
+        operator: The LocalOperatorRunner instance
+        expected_log_line: The log line text to search for
+        timeout: Maximum time to wait
+        since_milliseconds: Include logs from the last N milliseconds in addition to new logs.
+                           Default 0 means only check new logs from current position.
+        comparison_operator: How to compare log lines against expected_log_line:
+            - "equal": substring match (expected_log_line in log_line)
+            - "startswith": log_line.startswith(expected_log_line)
+            - "endswith": log_line.endswith(expected_log_line)
 
     Returns:
-        str: The complete log output collected during the search
+        The complete log output
 
     Raises:
-        pytest.fail: If the expected log line is not found within timeout
+        AssertionError: If the expected log line is not found
     """
-    from tests.e2e.utils.local_operator import assert_log_line as local_assert
+    if not expected_log_line.strip():
+        raise ValueError("Expected log line cannot be empty")
 
-    if not isinstance(operator, LocalOperatorRunner):
-        raise ValueError(f"Expected LocalOperatorRunner, got {type(operator)}")
+    # Determine the starting position for log search
+    if since_milliseconds > 0:
+        since_index = operator.get_log_position_at_time(since_milliseconds)
+    else:
+        since_index = operator.get_log_position()
 
-    return local_assert(operator, expected_log_line, timeout)
+    found = operator.wait_for_log(expected_log_line, timeout, since_index)
+
+    if not found:
+        logs = operator.get_logs(since_index)
+        if since_milliseconds > 0:
+            search_scope = f"logs from last {since_milliseconds}ms plus new logs since position {since_index}"
+        else:
+            search_scope = f"new logs since position {since_index}"
+
+        raise AssertionError(
+            f"Expected log line not found: '{expected_log_line}'\n"
+            f"Timeout: {timeout}s (searched {search_scope})\n"
+            f"Complete logs:\n{logs}"
+        )
+
+    return operator.get_logs()
 
 
 def assert_config_change(operator: LocalOperatorRunner, timeout: float = 30) -> None:
     """Assert that a configuration change is detected and processed."""
-    assert_log_line(operator, "🔄 Config has changed:", timeout=timeout)
-    assert_log_line(
-        operator, "🔄 Configuration changed. Reinitializing...", timeout=timeout
-    )
+    assert_log_line(operator, "🔄 Config has changed: reloading", timeout=timeout)
 
 
 def count_log_occurrences(

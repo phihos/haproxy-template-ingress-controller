@@ -7,12 +7,12 @@ Tests the ability to remove fields from resources using JSONPath expressions.
 import copy
 from unittest.mock import patch, MagicMock
 
-from haproxy_template_ic.field_filter import (
+from haproxy_template_ic.k8s.field_filter import (
     _remove_field_at_path,
     remove_fields_from_resource,
     validate_ignore_fields,
 )
-from haproxy_template_ic.config_models import IndexedResourceCollection
+from haproxy_template_ic.models import IndexedResourceCollection
 
 
 class TestFieldFilter:
@@ -231,7 +231,7 @@ class TestFieldFilter:
         resource = {"metadata": {"name": "test"}}
 
         # Test with non-string field paths
-        with patch("haproxy_template_ic.field_filter.logger") as mock_logger:
+        with patch("haproxy_template_ic.k8s.field_filter.logger") as mock_logger:
             result = remove_fields_from_resource(
                 resource,
                 [None, 123, [], "valid.path"],  # Mix of invalid and valid
@@ -247,7 +247,7 @@ class TestFieldFilter:
         # Create a path > 500 characters
         long_path = "a" * 501
 
-        with patch("haproxy_template_ic.field_filter.logger") as mock_logger:
+        with patch("haproxy_template_ic.k8s.field_filter.logger") as mock_logger:
             result = remove_fields_from_resource(resource, [long_path])
             assert result == resource  # Should skip the long path
             mock_logger.warning.assert_called_once()
@@ -258,12 +258,12 @@ class TestFieldFilter:
         resource = {"metadata": {"name": "test"}}
 
         with patch(
-            "haproxy_template_ic.field_filter._compile_jsonpath_filter"
+            "haproxy_template_ic.k8s.field_filter._compile_jsonpath_filter"
         ) as mock_compile:
             # Make it raise an unexpected exception
             mock_compile.side_effect = RuntimeError("Unexpected error")
 
-            with patch("haproxy_template_ic.field_filter.logger") as mock_logger:
+            with patch("haproxy_template_ic.k8s.field_filter.logger") as mock_logger:
                 result = remove_fields_from_resource(resource, ["metadata.name"])
                 # Should handle the error gracefully
                 assert result == resource
@@ -394,7 +394,7 @@ class TestFieldFilter:
             "[[[invalid",  # Invalid syntax
         ]
 
-        with patch("haproxy_template_ic.field_filter.logger") as mock_logger:
+        with patch("haproxy_template_ic.k8s.field_filter.logger") as mock_logger:
             validated = validate_ignore_fields(fields)
 
             # Only the first valid field should remain

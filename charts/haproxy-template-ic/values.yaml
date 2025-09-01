@@ -21,12 +21,41 @@ haproxyImage:
 
 # Unified dataplane configuration for all instances
 dataplaneConfig:
-  port: 5555
-  username: admin
-  # Environment-specific passwords
-  passwords:
-    production: adminpass
-    validation: validationpass
+  config_version: 2
+  name: haproxy-dataplaneapi
+  dataplaneapi:
+    host: 0.0.0.0
+    port: 5555
+    user:
+      - name: admin
+        password: validationpass
+        insecure: true
+    transaction:
+      transaction_dir: /var/lib/dataplaneapi/transactions
+      backups_number: 10
+      backups_dir: /var/lib/dataplaneapi/backups
+    resources:
+      maps_dir: /etc/haproxy/maps
+      ssl_certs_dir: /etc/haproxy/ssl
+      general_storage_dir: /etc/haproxy/general
+      spoe_dir: /etc/haproxy/spoe
+  haproxy:
+    config_file: /etc/haproxy/haproxy.cfg
+    haproxy_bin: /usr/local/sbin/haproxy
+    master_worker_mode: true
+    master_runtime: /etc/haproxy/haproxy-master.sock
+    reload:
+      reload_delay: 1
+      reload_cmd: /opt/haproxy/reload.sh
+      restart_cmd: /opt/haproxy/reload.sh
+      reload_strategy: custom
+  log_targets:
+    - log_to: stdout
+      log_level: trace
+      log_types:
+        - access
+        - app
+
 
 # Credentials configuration for Kubernetes Secret
 credentials:

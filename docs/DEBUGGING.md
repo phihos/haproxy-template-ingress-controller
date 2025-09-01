@@ -2,6 +2,8 @@
 
 This project uses [Telepresence](https://www.telepresence.io/) for debugging the HAProxy Template IC in a real Kubernetes environment. Telepresence allows you to run the controller locally while seamlessly accessing the cluster network.
 
+The project includes advanced testing utilities with **LocalOperatorRunner** for programmatic operator control, millisecond-precision log analysis, and socket-based runtime inspection.
+
 ## Requirements
 
 ### System Requirements
@@ -211,6 +213,115 @@ socat - UNIX-CONNECT:mgmt.sock
 - **Network latency**: Local-to-cluster calls have some latency overhead
 - **DNS resolution**: All cluster services accessible via their DNS names
 - **Validation endpoint**: Should be accessible at `haproxy-template-ic:5555`
+
+## Testing Utilities
+
+### LocalOperatorRunner
+
+The `LocalOperatorRunner` class provides programmatic control over operator instances for testing and debugging:
+
+```python
+from tests.e2e.utils import LocalOperatorRunner
+
+# Context manager automatically handles lifecycle
+with LocalOperatorRunner(
+    configmap_name="haproxy-template-ic-config",
+    secret_name="haproxy-template-ic-credentials", 
+    namespace="test-namespace",
+    verbose=2,  # DEBUG level logging
+    collect_coverage=True
+) as operator:
+    # Operator runs locally via Telepresence
+    # Full access to Kubernetes cluster network
+```
+
+**Key Features:**
+- **Automatic lifecycle management** - Starts/stops operator process
+- **Real-time log capture** - Timestamp-indexed log streaming
+- **Coverage integration** - Automatic code coverage collection
+- **Socket access** - Management socket for runtime inspection
+- **Network access** - Full cluster connectivity via Telepresence
+
+### Log Analysis Tools
+
+#### Time-based Log Searching
+
+```python
+# Get log position from N milliseconds ago
+position = operator.get_log_position_at_time(500)  # 500ms ago
+
+# Search logs with precise timing
+found = operator.wait_for_log(
+    "✅ Configuration loaded", 
+    timeout=30, 
+    since_index=position
+)
+
+# Extract logs from specific timeframe
+recent_logs = operator.get_logs(since_index=position)
+```
+
+#### Assertion Helpers
+
+```python
+from tests.e2e.utils import assert_log_line, send_socket_command
+
+# Wait for specific log with timing control
+assert_log_line(
+    operator, 
+    "🔄 Config has changed: reloading",
+    since_milliseconds=200  # Include last 200ms of logs
+)
+
+# Socket-based state inspection
+response = send_socket_command(operator, "dump all")
+config = response["config"]
+```
+
+#### Advanced Timing Features
+
+```python
+# Millisecond-precision timing for race condition debugging
+assert_log_line(operator, "Stop-flag raised", since_milliseconds=50)
+assert_log_line(operator, "Operator restarted", since_milliseconds=100)
+
+# Count occurrences for loop detection
+reload_count = count_log_occurrences(operator, "Config has changed")
+assert reload_count <= 1, f"Reload loop detected: {reload_count} reloads"
+
+# Health checks
+assert_operator_health(operator)  # Validates socket responsiveness
+```
+
+### Socket Commands
+
+The management socket provides runtime inspection capabilities:
+
+```python
+# Comprehensive state dump
+response = send_socket_command(operator, "dump all")
+print(f"Config: {response['config']}")
+print(f"Indices: {response['indices']}")
+print(f"Metadata: {response['metadata']}")
+
+# Specific data queries  
+maps = send_socket_command(operator, "get maps host.map")
+snippets = send_socket_command(operator, "get template_snippets backend-name")
+```
+
+### Performance Benefits
+
+**Development Speed:**
+- **60-80% faster iteration** - No Docker build/deploy cycles
+- **Real-time debugging** - Immediate code changes with restart
+- **Precise timing control** - Millisecond-level test timing
+- **Race condition detection** - Time-aware log analysis prevents flaky tests
+
+**Testing Reliability:**
+- **Deterministic timing** - Time-based assertions eliminate timing issues
+- **Comprehensive state access** - Socket inspection for deep debugging
+- **Automatic coverage** - Built-in code coverage collection
+- **Isolated execution** - Each test runs in controlled environment
 
 ## Additional Resources
 

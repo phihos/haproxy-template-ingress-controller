@@ -46,10 +46,16 @@ def test_config_reload(operator, configmap, config_dict, collect_coverage):
     # Verify change detection and reload process
     assert_config_change(operator)
     assert_log_line(operator, "Stop-flag is raised. Operator is stopping.")
-    assert_log_line(operator, "🔄 Configuration changed. Reinitializing...", timeout=10)
 
     # Wait for operator to be ready again after reload
-    wait_for_operator_ready(operator)
+    assert_log_line(
+        operator,
+        "✅ Configuration and credentials loaded successfully.",
+        since_milliseconds=100,
+    )
+    assert_log_line(
+        operator, "🔌 Management socket server listening on", since_milliseconds=100
+    )
 
     # Verify new configuration is applied
     updated_response = send_socket_command(operator, "dump all")

@@ -248,6 +248,119 @@ Validation sidecar:
 curl -u admin:validationpass http://localhost:5555/v3/
 ```
 
+## Python API
+
+### Import Paths
+
+The codebase uses a modular package structure with backward compatibility:
+
+#### Legacy Imports (Deprecated but Functional)
+```python
+# Old flat structure - still works via wrapper modules
+from haproxy_template_ic.config_models import Config
+from haproxy_template_ic.dataplane import DataplaneClient
+from haproxy_template_ic.debouncer import Debouncer
+```
+
+#### Modern Modular Imports (Recommended)
+```python
+# New organized structure
+from haproxy_template_ic.models.config import Config
+from haproxy_template_ic.models.resources import IndexedResourceCollection
+from haproxy_template_ic.dataplane.client import DataplaneClient
+from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
+from haproxy_template_ic.k8s.resource_utils import validate_resource
+from haproxy_template_ic.operator.utils import get_current_namespace
+```
+
+### Testing Utilities
+
+#### LocalOperatorRunner
+
+Context manager for running operators locally during tests:
+
+```python
+from tests.e2e.utils import LocalOperatorRunner
+
+with LocalOperatorRunner(
+    configmap_name="test-config",
+    secret_name="test-secret", 
+    namespace="test-ns",
+    verbose=2,
+    collect_coverage=True
+) as operator:
+    # Operator process management
+    assert operator.is_running()
+    
+    # Log analysis with millisecond precision  
+    position = operator.get_log_position_at_time(500)  # 500ms ago
+    logs = operator.get_logs(since_index=position)
+    
+    # Socket communication
+    response = operator.send_socket_command("dump all")
+```
+
+**Constructor Parameters:**
+- `configmap_name: str` - ConfigMap containing operator configuration
+- `secret_name: str` - Secret containing credentials
+- `namespace: str` - Kubernetes namespace to operate in
+- `socket_path: Optional[str]` - Management socket path (auto-generated if None)
+- `verbose: int` - Logging level (0=WARNING, 1=INFO, 2=DEBUG)
+- `collect_coverage: bool` - Enable code coverage collection
+- `kubeconfig_path: Optional[str]` - Custom kubeconfig file path
+
+**Methods:**
+- `start() -> None` - Start operator process
+- `stop() -> None` - Stop operator process gracefully
+- `is_running() -> bool` - Check if process is active
+- `get_logs(since_index: int = 0) -> str` - Get operator logs
+- `get_log_position() -> int` - Current number of log lines
+- `get_log_position_at_time(milliseconds_ago: float) -> int` - Log position N milliseconds ago
+- `wait_for_log(pattern: str, timeout: float = 30, since_index: int = 0) -> bool` - Wait for log pattern
+- `send_socket_command(command: str, retries: int = 3) -> Optional[Dict[str, Any]]` - Send socket command
+
+#### Log Assertion Helpers
+
+```python
+from tests.e2e.utils import assert_log_line, send_socket_command, count_log_occurrences
+
+# Wait for specific log with millisecond timing
+assert_log_line(
+    operator, 
+    "✅ Configuration loaded successfully",
+    timeout=10,
+    since_milliseconds=200  # Include logs from last 200ms
+)
+
+# Socket-based state inspection
+response = send_socket_command(operator, "dump all")
+config = response["config"]
+
+# Count log occurrences for loop detection
+reload_count = count_log_occurrences(operator, "Config has changed")
+```
+
+**assert_log_line Parameters:**
+- `operator: LocalOperatorRunner` - Operator instance
+- `expected_log_line: str` - Log text to search for (substring match)
+- `timeout: float = 5` - Maximum wait time in seconds
+- `since_milliseconds: float = 0` - Include logs from last N milliseconds
+
+### Method Signature Changes
+
+#### Time Resolution Changes
+Previous versions used seconds; current version uses milliseconds for higher precision:
+
+```python
+# Old (deprecated)
+operator.get_log_position_at_time(seconds_ago=1.5)
+assert_log_line(operator, "message", since_seconds=1)
+
+# New (current) 
+operator.get_log_position_at_time(milliseconds_ago=1500)
+assert_log_line(operator, "message", since_milliseconds=1000)
+```
+
 ### Key Endpoints
 
 #### Configuration
@@ -297,7 +410,7 @@ await run_operator(
 ### Configuration
 
 ```python
-from haproxy_template_ic.config_models import Config
+from haproxy_template_ic.models import Config
 
 config = Config.from_dict(config_dict)
 ```
@@ -336,7 +449,7 @@ await client.reload_haproxy()
 ### Resource Collection
 
 ```python
-from haproxy_template_ic.config_models import IndexedResourceCollection
+from haproxy_template_ic.models import IndexedResourceCollection
 
 collection = IndexedResourceCollection(
     index_by=["metadata.name"]

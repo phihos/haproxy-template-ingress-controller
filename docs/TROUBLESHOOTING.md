@@ -98,6 +98,69 @@ kubectl exec deployment/haproxy-template-ic -- env | grep -E "(DATAPLANE_USER|DA
 1. Ensure Dataplane API container is running
 2. Verify port 5555 is exposed
 3. Check authentication credentials match (admin/adminpass for production)
+
+### Test Timing Issues
+
+**Symptoms**: E2E tests fail with "Expected log line not found" or timing-related assertion errors
+
+**Diagnosis**:
+```python
+# Check if tests are looking for old logs instead of new ones
+assert_log_line(operator, "Config loaded")  # May find old log
+
+# Use millisecond timing for precision
+assert_log_line(operator, "Config loaded", since_milliseconds=100)  # Correct
+```
+
+**Resolution**:
+1. Use `since_milliseconds` parameter for time-sensitive assertions
+2. Avoid checking old logs for events that should be recent
+3. Use appropriate timeouts for operations (100-500ms for config changes)
+4. Check operator health with `assert_operator_health()` before assertions
+
+### ConfigMap Reload Loops
+
+**Symptoms**: Continuous "Config has changed: reloading" messages in logs, operator never stabilizes
+
+**Diagnosis**:
+```bash
+# Check for repeated reload messages
+kubectl logs deployment/haproxy-template-ic | grep -c "Config has changed: reloading"
+
+# Enable debug logging to see configuration comparison
+kubectl patch configmap haproxy-template-ic-config --patch '
+data:
+  config: |
+    logging:
+      structured: true
+    # ... rest of config
+'
+```
+
+**Resolution**:
+1. **Fixed automatically** - Modern operator uses DeepDiff for accurate change detection
+2. Identical configurations no longer trigger unnecessary reloads  
+3. Check structured logs for configuration diff details
+4. Verify ConfigMap updates contain actual content changes, not just metadata updates
+
+### Package Import Issues
+
+**Symptoms**: ImportError or ModuleNotFoundError after code updates
+
+**Diagnosis**:
+```python
+# Old import paths (still work via compatibility layer)
+from haproxy_template_ic.config_models import Config
+
+# New modular import paths
+from haproxy_template_ic.models.config import Config
+```
+
+**Resolution**:
+1. **Backward compatibility maintained** - Old imports continue working
+2. New code should use modular import paths for better organization
+3. Run `uv sync` to ensure all dependencies are updated
+4. Check for any cached bytecode: `find . -name "*.pyc" -delete`
 4. Confirm HAProxy 3.1+ for fast startup
 
 ### Resources Deleted While In Use
