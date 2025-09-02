@@ -8,7 +8,7 @@ and collecting resource metrics.
 import logging
 from typing import Any, Dict, Tuple
 
-from haproxy_template_ic.models import IndexedResourceCollection
+from haproxy_template_ic.models import IndexedResourceCollection, ResourceTypeMetadata
 from .utils import extract_nested_field
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,40 @@ async def update_resource_index(
         value = extract_nested_field(body_dict, field_path)
         index_values.append(value)
 
+    # Track resource change timestamp
+    if memo:
+        # Initialize resource_metadata if not exists
+        if not hasattr(memo, "resource_metadata"):
+            memo.resource_metadata = {}
+
+        # Initialize metadata for this resource type if not exists
+        if param not in memo.resource_metadata:
+            memo.resource_metadata[param] = ResourceTypeMetadata(resource_type=param)
+
+        # Update the last change timestamp
+        memo.resource_metadata[param].update_change_timestamp()
+        logger.debug(
+            f"📅 Updated last change timestamp for {param} due to {namespace}/{name}"
+        )
+
+        # Generate activity event for resource change
+        if hasattr(memo, "activity_buffer"):
+            from haproxy_template_ic.activity import EventType
+
+            # Create descriptive message that mentions resource type explicitly
+            resource_name = f"{namespace}/{name}" if namespace else name
+            event_message = f"{param.title()} resource updated: {resource_name}"
+
+            memo.activity_buffer.add_event_sync(
+                event_type=EventType.UPDATE,
+                message=event_message,
+                source="k8s-resources",
+                metadata={"resource_type": param, "namespace": namespace, "name": name},
+            )
+            logger.debug(
+                f"🎯 Generated activity event for {param} resource change: {resource_name}"
+            )
+
     # Trigger template rendering when resource changes
     if memo and hasattr(memo, "debouncer"):
         # Use asyncio to schedule the trigger since this function might not be awaited
@@ -74,6 +108,10 @@ def _collect_resource_indices(memo: Any, metrics: Any) -> Dict[str, Any]:
     # Get the ignore_fields configuration
     ignore_fields = getattr(memo.config, "watched_resources_ignore_fields", None)
 
+    # Initialize resource_metadata if not exists
+    if not hasattr(memo, "resource_metadata"):
+        memo.resource_metadata = {}
+
     for resource_id in memo.config.watched_resources:
         try:
             if resource_id in memo.indices:
@@ -84,12 +122,56 @@ def _collect_resource_indices(memo: Any, metrics: Any) -> Dict[str, Any]:
             else:
                 indices[resource_id] = IndexedResourceCollection()
 
-            logger.debug(
-                f"📊 Retrieved index '{resource_id}' with {len(indices[resource_id])} items"
+            # Initialize metadata for this resource type if not exists
+            if resource_id not in memo.resource_metadata:
+                memo.resource_metadata[resource_id] = ResourceTypeMetadata(
+                    resource_type=resource_id
+                )
+                # Set initial timestamp when first tracking this resource type
+                memo.resource_metadata[resource_id].update_change_timestamp()
+                logger.debug(
+                    f"📅 Initialized tracking for {resource_id} with current timestamp"
+                )
+
+            # Update statistics in the metadata
+            collection = indices[resource_id]
+            total_count = len(collection)
+
+            # Calculate namespace distribution
+            namespaces: Dict[str, int] = {}
+            for resource_list in collection._internal_dict.values():
+                for resource in resource_list:
+                    namespace = resource.get("metadata", {}).get("namespace", "default")
+                    namespaces[namespace] = namespaces.get(namespace, 0) + 1
+
+            namespace_count = len(namespaces)
+            memory_size = (
+                collection.get_memory_size()
+                if hasattr(collection, "get_memory_size")
+                else 0
             )
+
+            memo.resource_metadata[resource_id].update_statistics(
+                total_count=total_count,
+                namespace_count=namespace_count,
+                memory_size=memory_size,
+                namespaces=namespaces,
+            )
+
+            logger.debug(f"📊 Retrieved index '{resource_id}' with {total_count} items")
         except Exception as e:
             logger.warning(f"⚠️ Could not retrieve index '{resource_id}': {e}")
             indices[resource_id] = IndexedResourceCollection()
+            # Ensure metadata exists even on error
+            if resource_id not in memo.resource_metadata:
+                memo.resource_metadata[resource_id] = ResourceTypeMetadata(
+                    resource_type=resource_id
+                )
+                # Set initial timestamp when first tracking this resource type
+                memo.resource_metadata[resource_id].update_change_timestamp()
+                logger.debug(
+                    f"📅 Initialized tracking for {resource_id} with current timestamp (error case)"
+                )
 
     _record_resource_metrics(metrics, indices)
     return indices

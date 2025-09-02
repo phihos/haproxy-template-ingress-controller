@@ -8,6 +8,7 @@ template-based content with metrics and error handling.
 import logging
 from typing import Any, Dict, List, Tuple
 
+from haproxy_template_ic.activity import EventType
 from haproxy_template_ic.models import (
     ContentType,
     RenderedConfig,
@@ -244,6 +245,19 @@ async def render_haproxy_templates(
             f"🎯 Template rendering completed successfully: haproxy_config_size={haproxy_config_size} content_items={content_items} resource_types={resource_types}"
         )
 
+        # Record activity event for successful template rendering
+        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+            memo.activity_buffer.add_event_sync(
+                EventType.SUCCESS,
+                f"Templates rendered successfully: {content_items} content items, {resource_types} resource types",
+                source="template_renderer",
+                metadata={
+                    "haproxy_config_size": haproxy_config_size,
+                    "content_items": content_items,
+                    "resource_types": resource_types,
+                },
+            )
+
         record_span_event("template_rendering_completed")
         metrics.record_template_render("all", "success")
 
@@ -261,6 +275,15 @@ async def render_haproxy_templates(
         record_span_event("template_rendering_failed", {"error": str(e)})
 
         logger.error(f"❌ Template rendering failed: {e}")
+
+        # Record activity event for template rendering failure
+        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+            memo.activity_buffer.add_event_sync(
+                EventType.ERROR,
+                f"Template rendering failed: {str(e)[:100]}",
+                source="template_renderer",
+                metadata={"error": str(e)[:500]},
+            )
 
         # Clear any partial results to prevent inconsistent state
         if hasattr(memo, "haproxy_config_context"):

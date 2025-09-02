@@ -21,6 +21,7 @@ from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
 from kubernetes import config
 
+from haproxy_template_ic.activity import get_activity_buffer
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.management_socket import run_management_socket_server
@@ -124,6 +125,10 @@ async def initialize_configuration(memo: Any) -> None:
                     memo.config.tracing.console_export or tracing_config.console_export
                 )
                 initialize_tracing(tracing_config)
+
+        # Initialize activity buffer for event tracking
+        memo.activity_buffer = get_activity_buffer()
+        logger.debug("🔄 Activity buffer initialized")
 
         metrics.record_config_reload(success=True)
         logger.info("✅ Configuration and credentials loaded successfully.")

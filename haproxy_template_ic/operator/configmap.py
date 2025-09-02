@@ -14,6 +14,7 @@ import yaml
 from deepdiff import DeepDiff
 from kr8s.objects import ConfigMap
 
+from haproxy_template_ic.activity import EventType
 from haproxy_template_ic.models import config_from_dict
 from haproxy_template_ic.structured_logging import autolog
 from haproxy_template_ic.tracing import (
@@ -58,6 +59,8 @@ async def load_config_from_configmap(configmap) -> Any:
 
     # Register validation webhooks based on configuration
     register_validation_webhooks_from_config(config)
+
+    record_span_event("config_loaded")
 
     return config
 
@@ -117,6 +120,15 @@ async def handle_configmap_change(
         # Configuration has changed - show the diff and trigger reload
         diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
         structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
+
+        # Record activity event for config change
+        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+            memo.activity_buffer.add_event_sync(
+                EventType.UPDATE,
+                f"ConfigMap {name} updated - triggering reload",
+                source="configmap",
+                metadata={"name": name, "type": type, "diff_preview": diff_str[:100]},
+            )
     else:
         # First time - no existing config to compare, so don't trigger reload
         structured_logger.info("Initial configuration loaded, no reload needed")

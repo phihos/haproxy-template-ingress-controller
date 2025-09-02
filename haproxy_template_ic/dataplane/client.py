@@ -809,7 +809,7 @@ class DataplaneClient:
                         original_error=e,
                     ) from e
 
-    async def deploy_configuration(self, config_content: str) -> str:
+    async def deploy_configuration(self, config_content: str) -> Dict[str, Any]:
         """Deploy HAProxy configuration.
 
         Uses direct httpx calls since openapi-python-client doesn't support
@@ -880,7 +880,33 @@ class DataplaneClient:
                             )
 
                         new_version = new_version_response.json()
-                        return str(new_version)
+
+                        # Check if deployment triggered a reload based on HTTP 202 status and Reload-ID header
+                        reload_triggered = deploy_response.status_code == 202
+                        # Try different cases for Reload-ID header (HTTP headers are case-insensitive)
+                        reload_id = None
+                        if reload_triggered:
+                            for header_name in [
+                                "Reload-ID",
+                                "reload-id",
+                                "RELOAD-ID",
+                                "reload_id",
+                            ]:
+                                reload_id = deploy_response.headers.get(header_name)
+                                if reload_id:
+                                    break
+
+                        logger.debug(
+                            f"🔍 Raw deployment response: status={deploy_response.status_code}, "
+                            f"reload_triggered={reload_triggered}, reload_id={reload_id}, "
+                            f"headers={dict(deploy_response.headers)}"
+                        )
+
+                        return {
+                            "version": str(new_version),
+                            "reload_triggered": reload_triggered,
+                            "reload_id": reload_id,
+                        }
 
             try:
                 # Simple retry with tenacity
@@ -1399,7 +1425,7 @@ class DataplaneClient:
 
     async def deploy_configuration_conditionally(
         self, config_content: str, force: bool = False
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Deploy HAProxy configuration only if it differs from current config.
 
         This method compares the new configuration with the current one and only
@@ -1411,7 +1437,7 @@ class DataplaneClient:
             force: If True, deploy even if configs are identical
 
         Returns:
-            Configuration version after deployment
+            Dict containing version, reload_triggered status, and reload_id
 
         Raises:
             ValidationError: If configuration validation fails
@@ -1458,9 +1484,18 @@ class DataplaneClient:
                 try:
                     client = self._get_client()
                     version_response = await _get_configuration_version(client)
-                    return str(version_response) if version_response else "unknown"
+                    version = str(version_response) if version_response else "unknown"
+                    return {
+                        "version": version,
+                        "reload_triggered": False,
+                        "reload_id": None,
+                    }
                 except Exception:
-                    return "unknown"
+                    return {
+                        "version": "unknown",
+                        "reload_triggered": False,
+                        "reload_id": None,
+                    }
 
             # Deploy the configuration (it's different or forced)
             logger.info(
@@ -1469,9 +1504,12 @@ class DataplaneClient:
             add_span_attributes(
                 deployment_skipped=False, config_changed=current_config is not None
             )
-            return await self.deploy_configuration(new_config_normalized)
+            result = await self.deploy_configuration(new_config_normalized)
+            return result
 
-    async def deploy_structured_configuration(self, changes: List[ConfigChange]) -> str:
+    async def deploy_structured_configuration(
+        self, changes: List[ConfigChange]
+    ) -> Dict[str, Any]:
         """Deploy HAProxy configuration changes using granular dataplane API endpoints.
 
         This method applies a list of ConfigChange objects using HAProxy's structured
@@ -1482,14 +1520,18 @@ class DataplaneClient:
             changes: List of ConfigChange objects to apply
 
         Returns:
-            Configuration version after deployment
+            Dict containing version, reload_triggered status, and reload_id
 
         Raises:
             DataplaneAPIError: If deployment fails
         """
         if not changes:
             logger.debug("⏭️  No changes to deploy")
-            return "unchanged"
+            return {
+                "version": "unchanged",
+                "reload_triggered": False,
+                "reload_id": None,
+            }
 
         with trace_dataplane_operation("deploy_structured", self.base_url):
             add_span_attributes(
@@ -1570,9 +1612,20 @@ class DataplaneClient:
                             "version": new_version,
                         },
                     )
-                    return new_version
+
+                    # Runtime-only deployments don't trigger reloads
+                    return {
+                        "version": new_version,
+                        "reload_triggered": False,
+                        "reload_id": None,
+                    }
                 except Exception:
-                    return "runtime-only"
+                    # Runtime-only fallback - no reload
+                    return {
+                        "version": "runtime-only",
+                        "reload_triggered": False,
+                        "reload_id": None,
+                    }
 
             # Sort other_changes to ensure consistent ordering, especially for initial server creation
             other_changes.sort(
@@ -1618,7 +1671,7 @@ class DataplaneClient:
 
                     # Commit the transaction
                     with metrics.time_dataplane_api_operation("commit_transaction"):
-                        await commit_transaction.asyncio(
+                        commit_response = await commit_transaction.asyncio_detailed(
                             client=client, id=transaction_id
                         )
 
@@ -1646,7 +1699,32 @@ class DataplaneClient:
                         },
                     )
 
-                    return new_version
+                    # Check if transaction commit triggered a reload based on HTTP 202 status and Reload-ID header
+                    reload_triggered = commit_response.status_code == 202
+                    # Try different cases for Reload-ID header (HTTP headers are case-insensitive)
+                    reload_id = None
+                    if reload_triggered:
+                        for header_name in [
+                            "Reload-ID",
+                            "reload-id",
+                            "RELOAD-ID",
+                            "reload_id",
+                        ]:
+                            reload_id = commit_response.headers.get(header_name)
+                            if reload_id:
+                                break
+
+                    logger.debug(
+                        f"🔍 Transaction commit response: status={commit_response.status_code}, "
+                        f"reload_triggered={reload_triggered}, reload_id={reload_id}, "
+                        f"headers={dict(commit_response.headers)}"
+                    )
+
+                    return {
+                        "version": new_version,
+                        "reload_triggered": reload_triggered,
+                        "reload_id": reload_id,
+                    }
 
                 except Exception as apply_error:
                     # Rollback transaction on failure

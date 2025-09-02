@@ -8,7 +8,7 @@ performance, resource counts, operation timing, and error rates.
 import time
 import logging
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
 from functools import wraps
 
 from prometheus_async import aio
@@ -296,6 +296,8 @@ class MetricsCollector:
             template_render_duration_seconds.labels(
                 template_type=template_type
             ).observe(duration)
+            # Also store in history for sparklines
+            _metrics_history.add_template_render_time(duration)
 
     @contextmanager
     def time_config_reload(self) -> Iterator[None]:
@@ -316,6 +318,8 @@ class MetricsCollector:
         finally:
             duration = time.time() - start_time
             dataplane_api_duration_seconds.labels(operation=operation).observe(duration)
+            # Also store in history for sparklines
+            _metrics_history.add_dataplane_api_time(duration)
 
     def increment_dataplane_fallback(self, fallback_type: str) -> None:
         """Increment the counter for dataplane deployment fallbacks.
@@ -353,6 +357,8 @@ class MetricsCollector:
         dataplane_deployment_methods_total.labels(
             method=method, success=success_str
         ).inc()
+        # Also record sync result in history for dashboard sparklines
+        _metrics_history.add_sync_result(success)
 
     def record_debouncer_trigger(self) -> None:
         """Record a debouncer trigger event."""
@@ -461,3 +467,207 @@ def get_metrics_collector() -> MetricsCollector:
 def export_metrics() -> str:
     """Export current metrics in Prometheus format."""
     return generate_latest().decode("utf-8")
+
+
+def calculate_histogram_percentiles(
+    histogram, percentiles: list = [50, 95, 99]
+) -> Dict[str, Any]:
+    """Calculate approximate percentiles from a Prometheus histogram.
+
+    Args:
+        histogram: Prometheus Histogram metric
+        percentiles: List of percentiles to calculate (e.g., [50, 95, 99])
+
+    Returns:
+        Dictionary mapping percentile keys (e.g., 'p50', 'p95', 'p99') to values in milliseconds
+    """
+    result = {}
+
+    try:
+        # Get all samples from the histogram
+        samples = []
+        for sample in histogram.collect():
+            for metric in sample.samples:
+                if metric.name.endswith("_bucket"):
+                    # Extract bucket upper bound and count
+                    le = metric.labels.get("le", "")
+                    if le and le != "+Inf":
+                        try:
+                            bucket_upper_bound = float(le)
+                            count = metric.value
+                            samples.append((bucket_upper_bound, count))
+                        except ValueError:
+                            continue
+
+        if not samples:
+            # No samples, return N/A for all percentiles
+            return {f"p{p}": "N/A" for p in percentiles}
+
+        # Sort by bucket upper bound
+        samples.sort(key=lambda x: x[0])
+
+        # Calculate total count
+        total_count = max(count for _, count in samples) if samples else 0
+
+        if total_count == 0:
+            return {f"p{p}": "N/A" for p in percentiles}
+
+        # Calculate percentiles
+        for percentile in percentiles:
+            target_count = (percentile / 100.0) * total_count
+
+            # Find the bucket where this percentile falls
+            percentile_value = 0.0
+            for i, (bucket_bound, cumulative_count) in enumerate(samples):
+                if cumulative_count >= target_count:
+                    if i == 0:
+                        # First bucket, use 0 as lower bound
+                        percentile_value = bucket_bound * (
+                            target_count / cumulative_count
+                        )
+                    else:
+                        # Linear interpolation between buckets
+                        prev_bound, prev_count = samples[i - 1]
+                        ratio = (target_count - prev_count) / (
+                            cumulative_count - prev_count
+                        )
+                        percentile_value = prev_bound + ratio * (
+                            bucket_bound - prev_bound
+                        )
+                    break
+            else:
+                # If we get here, use the highest bucket
+                percentile_value = samples[-1][0] if samples else 0.0
+
+            # Convert from seconds to milliseconds and round
+            result[f"p{percentile}"] = round(percentile_value * 1000, 1)
+
+    except Exception as e:
+        logger.debug(f"Error calculating histogram percentiles: {e}")
+        return {f"p{p}": "N/A" for p in percentiles}
+
+    return result
+
+
+def get_performance_metrics() -> Dict[str, Any]:
+    """Get performance metrics for dashboard display.
+
+    Returns:
+        Dictionary containing template_render, dataplane_api, and sync_success_rate metrics with historical data
+    """
+    performance: Dict[str, Any] = {}
+
+    try:
+        # Template render metrics
+        template_percentiles = calculate_histogram_percentiles(
+            template_render_duration_seconds
+        )
+        if template_percentiles:
+            template_render_data = template_percentiles.copy()
+            # Add historical data for sparklines
+            template_render_data["history"] = (
+                _metrics_history.get_template_render_values()
+            )
+            performance["template_render"] = template_render_data
+
+        # Dataplane API metrics
+        api_percentiles = calculate_histogram_percentiles(
+            dataplane_api_duration_seconds
+        )
+        if api_percentiles:
+            dataplane_api_data = api_percentiles.copy()
+            # Add historical data for sparklines
+            dataplane_api_data["history"] = _metrics_history.get_dataplane_api_values()
+            performance["dataplane_api"] = dataplane_api_data
+
+        # Add sync pattern and recent success rate from history
+        sync_pattern = _metrics_history.get_sync_success_pattern()
+        if sync_pattern:
+            performance["sync_pattern"] = sync_pattern
+            performance["recent_sync_success_rate"] = (
+                _metrics_history.get_recent_sync_success_rate()
+            )
+
+    except Exception as e:
+        logger.debug(f"Error calculating performance metrics: {e}")
+
+    return performance
+
+
+class MetricsHistory:
+    """Store rolling buffer of metrics data for sparkline visualization."""
+
+    def __init__(self, max_samples: int = 30):
+        """Initialize with maximum number of samples to store."""
+        self.max_samples = max_samples
+        self.template_render_times: List[
+            Tuple[float, float]
+        ] = []  # List of (timestamp, duration_ms)
+        self.dataplane_api_times: List[
+            Tuple[float, float]
+        ] = []  # List of (timestamp, duration_ms)
+        self.sync_results: List[
+            Tuple[float, bool]
+        ] = []  # List of (timestamp, success_boolean)
+
+    def add_template_render_time(self, duration_seconds: float) -> None:
+        """Add template render time sample."""
+        timestamp = time.time()
+        duration_ms = duration_seconds * 1000  # Convert to milliseconds
+        self._add_sample(self.template_render_times, timestamp, duration_ms)
+
+    def add_dataplane_api_time(self, duration_seconds: float) -> None:
+        """Add dataplane API time sample."""
+        timestamp = time.time()
+        duration_ms = duration_seconds * 1000  # Convert to milliseconds
+        self._add_sample(self.dataplane_api_times, timestamp, duration_ms)
+
+    def add_sync_result(self, success: bool) -> None:
+        """Add sync success/failure result."""
+        timestamp = time.time()
+        self._add_sample(self.sync_results, timestamp, success)
+
+    def _add_sample(self, buffer: list, timestamp: float, value) -> None:
+        """Add sample to buffer and maintain max size."""
+        buffer.append((timestamp, value))
+        if len(buffer) > self.max_samples:
+            buffer.pop(0)  # Remove oldest sample
+
+    def get_template_render_values(self) -> list:
+        """Get template render durations for sparkline."""
+        return [duration for _, duration in self.template_render_times]
+
+    def get_dataplane_api_values(self) -> list:
+        """Get dataplane API durations for sparkline."""
+        return [duration for _, duration in self.dataplane_api_times]
+
+    def get_sync_success_pattern(self) -> str:
+        """Get sync success/failure pattern as string of symbols."""
+        if not self.sync_results:
+            return ""
+
+        pattern = ""
+        for _, success in self.sync_results[-20:]:  # Last 20 results
+            pattern += "▲" if success else "▼"
+        return pattern
+
+    def get_recent_sync_success_rate(self) -> float:
+        """Calculate success rate from recent samples."""
+        if not self.sync_results:
+            return 0.0
+
+        recent_results = [success for _, success in self.sync_results[-10:]]  # Last 10
+        if not recent_results:
+            return 0.0
+
+        success_count = sum(recent_results)
+        return success_count / len(recent_results)
+
+
+# Global metrics history instance
+_metrics_history = MetricsHistory()
+
+
+def get_metrics_history() -> MetricsHistory:
+    """Get the global metrics history instance."""
+    return _metrics_history

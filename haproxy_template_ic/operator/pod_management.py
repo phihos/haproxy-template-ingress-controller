@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, Tuple
 
 import kopf
+from haproxy_template_ic.activity import EventType
 from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
 from haproxy_template_ic.structured_logging import autolog
 
@@ -83,6 +84,20 @@ async def handle_haproxy_pod_create(
 
     logger.info(f"📊 Pod status: phase={phase}, podIP={pod_ip}")
 
+    # Record activity event
+    if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+        memo.activity_buffer.add_event_sync(
+            EventType.CREATE,
+            f"HAProxy pod created: {namespace}/{name} (phase={phase})",
+            source="pod_management",
+            metadata={
+                "namespace": namespace,
+                "name": name,
+                "phase": phase,
+                "pod_ip": pod_ip,
+            },
+        )
+
     # Trigger template rendering and sync after a brief delay to allow pod to stabilize
     if hasattr(memo, "debouncer"):
         await memo.debouncer.trigger("pod_changes")
@@ -102,6 +117,15 @@ async def handle_haproxy_pod_delete(
     name = meta["name"]
 
     logger.info(f"🗑️ HAProxy pod deleted: {namespace}/{name}")
+
+    # Record activity event
+    if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+        memo.activity_buffer.add_event_sync(
+            EventType.DELETE,
+            f"HAProxy pod deleted: {namespace}/{name}",
+            source="pod_management",
+            metadata={"namespace": namespace, "name": name},
+        )
 
     # The pod will be automatically removed from the index by the indexing function
     # Trigger template rendering and sync to update remaining instances
@@ -138,6 +162,40 @@ async def handle_haproxy_pod_update(
     logger.info(
         f"🔄 HAProxy pod updated: {namespace}/{name} phase={phase} pod_ip={pod_ip} ready={ready_condition}"
     )
+
+    # Record activity event for significant state changes
+    if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+        # Only record activity for significant state changes
+        if (
+            phase == "Running"
+            and pod_ip
+            and pod_ip != "Not assigned"
+            and ready_condition == "True"
+        ):
+            memo.activity_buffer.add_event_sync(
+                EventType.SUCCESS,
+                f"HAProxy pod ready: {namespace}/{name} (IP: {pod_ip})",
+                source="pod_management",
+                metadata={
+                    "namespace": namespace,
+                    "name": name,
+                    "phase": phase,
+                    "pod_ip": pod_ip,
+                    "ready": ready_condition,
+                },
+            )
+        elif phase in ["Pending", "ContainerCreating"]:
+            memo.activity_buffer.add_event_sync(
+                EventType.INFO,
+                f"HAProxy pod starting: {namespace}/{name} (phase={phase})",
+                source="pod_management",
+                metadata={
+                    "namespace": namespace,
+                    "name": name,
+                    "phase": phase,
+                    "ready": ready_condition,
+                },
+            )
 
     # Trigger sync if pod became ready or IP changed
     if phase == "Running" and pod_ip and pod_ip != "Not assigned":

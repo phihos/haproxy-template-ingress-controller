@@ -119,9 +119,11 @@ class TestDataplaneClientIntegration:
                 "CONFIG_DEPLOYMENT", "Deploying HAProxy configuration to production"
             )
             # Deploy valid configuration
-            version = await client.deploy_configuration(haproxy_configs["with_health"])
+            result = await client.deploy_configuration(haproxy_configs["with_health"])
 
             progress.phase("VALIDATION", "Validating deployment result")
+            assert isinstance(result, dict)
+            version = result["version"]
             assert isinstance(version, str)
             assert len(version) > 0  # Should have a version number
 
@@ -213,8 +215,8 @@ class TestDataplaneClientIntegration:
                 "STRUCTURED_TEST", "Testing structured deployment with no changes"
             )
             # Test structured deployment with no changes (empty changes list)
-            version = await client.deploy_structured_configuration([])
-            assert version == "unchanged"
+            result = await client.deploy_structured_configuration([])
+            assert result["version"] == "unchanged"
 
             progress.phase("STRUCTURED_SUCCESS", "Structured deployment test completed")
 
@@ -246,11 +248,15 @@ class TestResilienceFeatures:
         client = DataplaneClient(base_url, auth=auth)
 
         # Deploy a valid config first to establish baseline
-        version1 = await client.deploy_configuration(haproxy_configs["valid"])
+        result1 = await client.deploy_configuration(haproxy_configs["valid"])
+        assert isinstance(result1, dict)
+        version1 = result1["version"]
         assert isinstance(version1, str)
 
         # Deploy another config to test retry behavior
-        version2 = await client.deploy_configuration(haproxy_configs["with_health"])
+        result2 = await client.deploy_configuration(haproxy_configs["with_health"])
+        assert isinstance(result2, dict)
+        version2 = result2["version"]
         assert isinstance(version2, str)
         assert version2 != version1  # Should get new version
 

@@ -45,6 +45,10 @@ from .resources import (
     IndexedResourceCollection,
 )
 
+from .resource_metadata import (
+    ResourceTypeMetadata,
+)
+
 from .context import (
     TemplateContext,
     HAProxyConfigContext,
@@ -89,6 +93,7 @@ __all__ = [
     "RenderedConfig",
     # Resource models
     "IndexedResourceCollection",
+    "ResourceTypeMetadata",
     # Context models
     "TemplateContext",
     "HAProxyConfigContext",

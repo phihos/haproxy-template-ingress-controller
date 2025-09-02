@@ -103,5 +103,105 @@ def version() -> None:
         click.echo("haproxy-template-ic (development)")
 
 
+@cli.command()
+@click.option(
+    "-n",
+    "--namespace",
+    help="Kubernetes namespace where the operator is deployed. If not specified, uses current kubectl context default.",
+)
+@click.option(
+    "--context", help="Kubectl context to use. If not specified, uses current context."
+)
+@click.option(
+    "-r",
+    "--refresh",
+    default=5,
+    type=click.IntRange(1, 60),
+    help="Refresh interval in seconds (1-60). Default: 5",
+)
+@click.option(
+    "--deployment-name",
+    default="haproxy-template-ic",
+    help="Name of the operator deployment. Default: haproxy-template-ic",
+)
+@click.pass_context
+def dashboard(
+    ctx: click.Context,
+    namespace: str,
+    context: str,
+    refresh: int,
+    deployment_name: str,
+) -> None:
+    """Launch live status dashboard for monitoring HAProxy Template IC.
+
+    The dashboard provides real-time monitoring of operator status, HAProxy pods,
+    template rendering, resource synchronization, and performance metrics.
+
+    The dashboard connects to your Kubernetes cluster using kubectl and displays
+    information in a beautiful terminal interface. It automatically detects the
+    operator version and adapts its functionality accordingly.
+
+    Examples:
+    \b
+        # Basic usage with current context
+        haproxy-template-ic dashboard
+
+        # Specific namespace and context
+        haproxy-template-ic dashboard -n production --context prod-cluster
+
+        # Custom refresh interval
+        haproxy-template-ic dashboard -r 3
+    """
+    import asyncio
+    from haproxy_template_ic.dashboard import DashboardLauncher
+
+    # Get namespace from current kubectl context if not provided
+    if not namespace:
+        try:
+            # Safe: Only runs system kubectl command with controlled arguments
+            import subprocess  # nosec B404
+
+            # Safe: kubectl command with controlled arguments, no user input
+            result = subprocess.run(  # nosec B603, B607
+                [
+                    "kubectl",
+                    "config",
+                    "view",
+                    "--minify",
+                    "--output",
+                    "jsonpath={.contexts[0].context.namespace}",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            namespace = result.stdout.strip() or "default"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            namespace = "default"
+
+    # Launch the dashboard
+    launcher = DashboardLauncher(
+        namespace=namespace,
+        context=context,
+        refresh_interval=refresh,
+        deployment_name=deployment_name,
+    )
+
+    try:
+        asyncio.run(launcher.launch())
+    except KeyboardInterrupt:
+        click.echo("\nDashboard stopped by user.")
+    except Exception as e:
+        click.echo(f"\nDashboard error: {e}", err=True)
+        import traceback
+
+        if hasattr(ctx, "obj") and ctx.obj.get("debug", False):
+            traceback.print_exc()
+        click.echo(
+            "Please check your Kubernetes configuration and try again.", err=True
+        )
+        ctx.exit(1)
+
+
 if __name__ == "__main__":
     cli()
