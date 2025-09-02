@@ -6,7 +6,7 @@ and adapting the dashboard functionality accordingly.
 """
 
 from enum import Enum
-from typing import Set, Optional
+from typing import Set, Optional, Callable, Awaitable, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,9 @@ class CompatibilityChecker:
         self.server_capabilities: Set[str] = set()
         self.compatibility_level: Optional[CompatibilityLevel] = None
 
-    async def check_compatibility(self, socket_data_func) -> CompatibilityLevel:
+    async def check_compatibility(
+        self, socket_data_func: Callable[[str], Awaitable[Dict[str, Any]]]
+    ) -> CompatibilityLevel:
         """Check server version and determine compatibility mode.
 
         Args:
@@ -183,7 +185,9 @@ class CompatibilityChecker:
 
 
 # Convenience function for simple compatibility checking
-async def check_compatibility(socket_data_func) -> CompatibilityLevel:
+async def check_compatibility(
+    socket_data_func: Callable[[str], Awaitable[Dict[str, Any]]],
+) -> CompatibilityLevel:
     """Simple convenience function to check compatibility.
 
     Args:

@@ -869,7 +869,11 @@ class ManagementSocketServer:
                         "status": "valid",
                     }
 
-                stats["templates"] = template_stats
+                # Ensure template_stats only has string keys by filtering out None keys
+                filtered_template_stats: Dict[str, Any] = {
+                    k: v for k, v in template_stats.items() if k is not None
+                }
+                stats["templates"] = filtered_template_stats
 
             # Extract sync stats from deployment history
             if (
@@ -1247,10 +1251,6 @@ class ManagementSocketServer:
                 command_data = b"dump all"  # Default command
 
             command_str = command_data.decode("utf-8").strip()
-
-            # Handle empty commands properly (fix for here-string issue)
-            if not command_str:
-                command_str = "dump all"
             self.logger.debug(f"📥 Received command: {command_str}")
 
             # Process command

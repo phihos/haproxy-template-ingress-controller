@@ -387,7 +387,7 @@ class DashboardDataFetcher:
 
                 # Use the call_api method to make the raw API request
                 async with api.call_api(method="GET", url=endpoint) as response:
-                    response_data = await response
+                    response_data = await response.json()
 
                 # Parse the metrics response
                 metrics_data = {}
