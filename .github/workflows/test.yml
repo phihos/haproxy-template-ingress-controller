@@ -289,7 +289,7 @@ jobs:
 
       - name: Run dev environment script
         run: |
-          bash ./scripts/start-dev-env.sh
+          bash ./scripts/start-dev-env.sh --verbose
 
       - name: Verify resources created by script
         run: |
