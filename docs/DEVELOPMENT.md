@@ -247,17 +247,40 @@ FROM production AS coverage
 ```
 haproxy_template_ic/
 ├── __main__.py              # CLI entry point
-├── operator.py              # Kubernetes operator
-├── config_models.py         # Configuration models
-├── dataplane.py            # HAProxy API client
-├── templating.py           # Template engine
-├── webhook.py              # Admission webhooks
-├── management_socket.py    # Debug socket
-├── metrics.py              # Prometheus metrics
-├── tracing.py              # OpenTelemetry
-├── resilience.py           # Retry/circuit breaker
-├── structured_logging.py   # Logging setup
-└── utils.py               # Utilities
+├── core/                    # Foundation services
+│   └── logging.py          # Structured logging setup
+├── dataplane/               # HAProxy Dataplane API integration
+│   ├── client.py           # API client wrapper
+│   ├── synchronizer.py     # Configuration deployment
+│   ├── models.py           # API models
+│   └── utils.py            # Dataplane utilities
+├── k8s/                     # Kubernetes integration
+│   ├── field_filter.py     # Resource field filtering
+│   ├── kopf_utils.py       # Kopf framework utilities
+│   └── resource_utils.py   # Resource manipulation
+├── models/                  # Data models & validation
+│   ├── config.py           # Configuration models
+│   ├── resources.py        # Resource collections
+│   ├── templates.py        # Template models
+│   └── context.py          # Template context
+├── operator/                # Operator lifecycle management
+│   ├── initialization.py   # Startup and cleanup
+│   ├── configmap.py        # ConfigMap handling
+│   ├── pod_management.py   # HAProxy pod discovery
+│   ├── synchronization.py  # Resource synchronization
+│   └── k8s_resources.py    # K8s resource operations
+├── tui/                     # Terminal User Interface
+│   ├── app.py              # Main TUI application
+│   ├── launcher.py         # TUI entry point
+│   ├── screens.py          # Screen definitions
+│   └── widgets/            # UI widget components
+├── templating.py            # Jinja2 template engine
+├── webhook.py               # Admission webhooks
+├── management_socket.py     # Debug socket server
+├── metrics.py               # Prometheus metrics
+├── tracing.py               # OpenTelemetry tracing
+├── activity.py              # Activity tracking
+└── deployment_state.py      # Deployment state management
 ```
 
 ## Development Workflow

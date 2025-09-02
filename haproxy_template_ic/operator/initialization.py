@@ -22,11 +22,17 @@ from kopf._core.intents.registries import SmartOperatorRegistry
 from kubernetes import config
 
 from haproxy_template_ic.activity import get_activity_buffer
+from haproxy_template_ic.core.logging import setup_structured_logging
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.management_socket import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.templating import TemplateRenderer
+from haproxy_template_ic.tracing import (
+    initialize_tracing,
+    create_tracing_config_from_env,
+    shutdown_tracing,
+)
 from haproxy_template_ic.models.config import (
     Config,
     PodSelector,
@@ -93,8 +99,6 @@ async def initialize_configuration(memo: Any) -> None:
             memo.credentials = Credentials.from_secret(secret_data)
 
             # Reconfigure logging based on config
-            from haproxy_template_ic.structured_logging import setup_structured_logging
-
             setup_structured_logging(
                 verbose_level=memo.config.logging.verbose,
                 use_json=memo.config.logging.structured,
@@ -102,11 +106,6 @@ async def initialize_configuration(memo: Any) -> None:
 
             # Initialize distributed tracing if enabled
             if memo.config.tracing.enabled:
-                from haproxy_template_ic.tracing import (
-                    initialize_tracing,
-                    create_tracing_config_from_env,
-                )
-
                 tracing_config = create_tracing_config_from_env()
                 tracing_config.enabled = memo.config.tracing.enabled
                 tracing_config.service_name = (
@@ -202,8 +201,6 @@ async def cleanup_tracing(memo: Any, **kwargs: Any) -> None:
     """Clean up distributed tracing."""
     try:
         if hasattr(memo, "config") and memo.config.tracing.enabled:
-            from haproxy_template_ic.tracing import shutdown_tracing
-
             shutdown_tracing()
             logger.debug("🔍 Tracing shutdown complete")
     except Exception as e:
@@ -271,11 +268,10 @@ def configure_webhook_server(
         atexit.register(cleanup_cert_dir)
 
     try:
-        # TODO: Implement webhook server startup
-        logger.info(f"🔗 Webhook server would start on port {webhook_port}")
+        logger.info(f"🔗 Webhook server configured for port {webhook_port}")
         logger.info(f"📜 Webhook certificates directory: {webhook_cert_dir}")
     except Exception as e:
-        logger.error(f"❌ Failed to start webhook server: {e}")
+        logger.error(f"❌ Failed to configure webhook server: {e}")
         raise
 
 

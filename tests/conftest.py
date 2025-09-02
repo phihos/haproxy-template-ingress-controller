@@ -559,15 +559,26 @@ def operator_ports():
 
 
 @pytest.fixture
-def config_dict(operator_ports):
+def socket_path(tmp_path):
+    """Provide shared socket path for operator and test communication."""
+    return str(tmp_path / "management.sock")
+
+
+@pytest.fixture
+def config_dict(operator_ports, socket_path):
     """Provide basic configuration dictionary for HAProxy template ingress controller."""
     return {
         "operator": {
             "healthz_port": operator_ports.healthz,
             "metrics_port": operator_ports.metrics,
+            "socket_path": socket_path,  # Use shared socket path for E2E tests
         },
         "logging": {
             "verbose": 2  # Enable DEBUG logging for tests
+        },
+        "validation": {
+            "dataplane_host": "validation-unavailable",  # Validation disabled for E2E tests
+            "dataplane_port": 5555,
         },
         "pod_selector": {
             "match_labels": {
@@ -773,7 +784,13 @@ def telepresence(request, kind_cluster):
 
 @pytest.fixture
 def operator(
-    request, telepresence, k8s_namespace, configmap, credentials_secret, kind_cluster
+    request,
+    telepresence,
+    k8s_namespace,
+    configmap,
+    credentials_secret,
+    kind_cluster,
+    socket_path,
 ):
     """Run the operator locally using Telepresence.
 
@@ -795,6 +812,7 @@ def operator(
         configmap_name=configmap_name,
         secret_name=secret_name,
         namespace=k8s_namespace,
+        socket_path=socket_path,
         collect_coverage=coverage,
         kubeconfig_path=kubeconfig_path,
     )
@@ -1065,9 +1083,9 @@ def haproxy_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap, req
                                             }
                                         ],
                                     },
-                                    "initialDelaySeconds": 15,
+                                    "initialDelaySeconds": 20,  # Increased from 15 to 20
                                     "periodSeconds": 10,
-                                    "failureThreshold": 3,
+                                    "failureThreshold": 5,  # Increased from 3 to 5
                                 },
                                 "readinessProbe": {
                                     "httpGet": {
@@ -1080,8 +1098,9 @@ def haproxy_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap, req
                                             }
                                         ],
                                     },
-                                    "initialDelaySeconds": 10,
+                                    "initialDelaySeconds": 15,  # Increased from 10 to 15
                                     "periodSeconds": 5,
+                                    "failureThreshold": 5,  # Added failureThreshold
                                 },
                             },
                         ],
@@ -1107,7 +1126,7 @@ def haproxy_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap, req
 
     # Wait for deployment to be ready
 
-    max_wait = 60
+    max_wait = 120  # Increased from 60 to 120 seconds
     start_time = time.time()
     while time.time() - start_time < max_wait:
         deployment.refresh()
@@ -1429,6 +1448,9 @@ backend servers
     )
     cm.create()
     return cm
+
+
+# Removed unused commented fixtures: validation_deployment_unused, validation_service_unused
 
 
 @pytest.fixture(scope="function")

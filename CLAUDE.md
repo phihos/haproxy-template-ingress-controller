@@ -145,6 +145,7 @@ docker build \
 
 ### Application
 - **Run operator**: `uv run haproxy-template-ic run --configmap-name=<name>` (or use `version` subcommand)
+- **Launch TUI dashboard**: `uv run haproxy-template-ic tui` (Terminal User Interface for monitoring)
 - **Management socket**: `socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock`
 - **Monitoring endpoints** (require port-forward):
   - Metrics: `curl http://localhost:9090/metrics`
@@ -157,16 +158,40 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 ### Core Components
 
 - **`haproxy_template_ic/__main__.py`**: CLI interface using Click, application entry point
-- **`haproxy_template_ic/operator.py`**: Kubernetes operator logic using kopf framework  
-- **`haproxy_template_ic/config_models.py`**: Pydantic configuration models with IndexedResourceCollection for O(1) resource lookups
-- **`haproxy_template_ic/dataplane.py`**: HAProxy Dataplane API client and synchronization logic
+- **`haproxy_template_ic/operator/`**: Kubernetes operator logic using kopf framework
+  - `initialization.py`: Startup and shutdown logic
+  - `configmap.py`: ConfigMap change handling
+  - `pod_management.py`: HAProxy pod discovery and management
+  - `synchronization.py`: Resource synchronization orchestration
+  - `k8s_resources.py`: Kubernetes resource operations
+- **`haproxy_template_ic/models/`**: Pydantic configuration models with IndexedResourceCollection for O(1) resource lookups
+  - `config.py`: Configuration validation and parsing
+  - `resources.py`: Resource collections and indexing
+  - `templates.py`: Template models and validation
+  - `context.py`: Template rendering context
+- **`haproxy_template_ic/dataplane/`**: HAProxy Dataplane API client and synchronization logic
+  - `client.py`: Dataplane API client wrapper
+  - `synchronizer.py`: Configuration deployment logic
+  - `models.py`: Dataplane API models
+  - `utils.py`: Dataplane utilities and helpers
+- **`haproxy_template_ic/tui/`**: Terminal User Interface dashboard
+  - `app.py`: Main TUI application
+  - `launcher.py`: TUI launcher and entry point
+  - `screens.py`: TUI screen definitions
+  - `widgets/`: Widget components for different views
+- **`haproxy_template_ic/core/`**: Core functionality
+  - `logging.py`: Structured logging with context injection
+- **`haproxy_template_ic/k8s/`**: Kubernetes integration utilities
+  - `field_filter.py`: Resource field filtering
+  - `kopf_utils.py`: Kopf framework utilities
+  - `resource_utils.py`: Resource manipulation helpers
 - **`haproxy_template_ic/webhook.py`**: Validating admission webhook handlers using kopf framework
 - **`haproxy_template_ic/management_socket.py`**: Unix socket server for runtime state inspection
 - **`haproxy_template_ic/metrics.py`**: Prometheus metrics collection and exposure
 - **`haproxy_template_ic/tracing.py`**: OpenTelemetry distributed tracing implementation
-- **`haproxy_template_ic/resilience.py`**: Retry policies, circuit breakers, and adaptive timeouts
-- **`haproxy_template_ic/structured_logging.py`**: Structured logging with context injection
-- **`haproxy_template_ic/utils.py`**: Kubernetes utilities (namespace detection)
+- **`haproxy_template_ic/templating.py`**: Jinja2 template rendering engine
+- **`haproxy_template_ic/activity.py`**: Activity tracking and monitoring
+- **`haproxy_template_ic/deployment_state.py`**: Deployment state management
 
 ### Key Technologies
 
@@ -219,7 +244,7 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 - ✅ Management socket for state inspection
 - ✅ Dataplane API synchronization with validation and deployment
 - ✅ Prometheus metrics collection for comprehensive monitoring
-- ✅ Resilient operations with retry logic, circuit breakers, and adaptive timeouts
+- ✅ Reliable operations with error handling and recovery mechanisms
 - ✅ Distributed tracing with OpenTelemetry for end-to-end observability
 - ✅ High-performance resource indexing with O(1) lookups using IndexedResourceCollection
 
@@ -523,19 +548,79 @@ Uses official OpenAPI-generated HAProxy Dataplane API v3 client (218 endpoints, 
 **Error handling**: Validation failures stop deployment, retry logic, version tracking
 **Resource Indexing**: IndexedResourceCollection provides O(1) resource lookups using `from_kopf_index()`
 
+## Terminal User Interface (TUI) Dashboard
+
+The TUI provides a modern, interactive terminal dashboard for monitoring the HAProxy Template IC operator in real-time.
+
+### Features
+
+- **Real-time monitoring** - Live updates of operator status, pod health, and performance metrics
+- **Widget-based architecture** - Organized views for different aspects of the system
+- **Interactive navigation** - Keyboard shortcuts for efficient dashboard usage
+- **Template inspection** - Built-in template editor and renderer for debugging
+- **Activity tracking** - Visual timeline of operator events and resource changes
+- **Performance metrics** - Resource usage, response times, and operational statistics
+
+### Usage
+
+```bash
+# Launch TUI dashboard
+uv run haproxy-template-ic tui
+
+# With custom options
+uv run haproxy-template-ic tui --namespace default --refresh 10 --deployment-name my-operator
+```
+
+### TUI Options
+
+- `--namespace`: Kubernetes namespace to monitor (defaults to current kubectl context)
+- `--context`: Kubernetes context to use
+- `--refresh`: Refresh interval in seconds (default: 5)
+- `--deployment-name`: Name of the operator deployment (default: haproxy-template-ic)
+- `--socket-path`: Path to management socket for direct connection
+
+### TUI Architecture
+
+The TUI is built using the Textual framework with a modular widget system:
+
+- **HeaderWidget**: Status overview and navigation
+- **ActivityWidget**: Recent operator events and changes
+- **PodsWidget**: HAProxy pod status and health
+- **ResourcesWidget**: Watched Kubernetes resources
+- **TemplatesWidget**: Template rendering status
+- **PerformanceWidget**: Metrics and performance indicators
+
+### Keyboard Shortcuts
+
+- `q`: Quit the application
+- `r`: Force refresh all data
+- `t`: Open template inspector
+- `d`: Toggle debug mode
+- `h`: Show help screen
+- `Tab`/`Shift+Tab`: Navigate between widgets
+
+### Template Inspector
+
+The integrated template inspector provides:
+- Syntax highlighting for Jinja2 templates
+- Live template rendering with current resource data
+- Error highlighting and validation
+- Resource context browser
+
 ## Monitoring and Observability
 
 **Structured Logging**: Uses structlog with operation correlation, component context, JSON output (set `logging.structured: true` in ConfigMap)
 **Prometheus Metrics**: Port 9090, tracks application/resources/templates/dataplane/errors
 **Management Socket**: `/run/haproxy-template-ic/management.sock` for runtime inspection
 - Commands: `dump all|indices|config`, `get maps|template_snippets <name>`
+**TUI Dashboard**: Interactive terminal interface for real-time monitoring and debugging
 
-## Resilience and Reliability
+## Reliability and Error Handling
 
-**Retry mechanisms**: Exponential backoff, jitter, error categorization, configurable policies
-**Circuit breakers**: Automatic failure detection, fast failure, recovery timeouts, per-instance isolation
-**Adaptive timeouts**: Dynamic adjustment, operation-specific, bounded limits, metrics tracking
 **Error recovery**: Graceful degradation, validation isolation, state consistency, operational visibility
+**Validation-first approach**: Configuration tested before production deployment
+**Robust deployment**: Smart change detection, version tracking, deployment rollback
+**Operational monitoring**: Comprehensive metrics for debugging and performance tracking
 
 ## Configuration
 
@@ -665,11 +750,12 @@ No Docker rebuilds needed for code changes. The application runs locally with fu
 - **Time-based search**: `get_log_position_at_time(milliseconds_ago)` for precise log analysis
 
 **Other debugging tools**:
+- TUI Dashboard: `uv run haproxy-template-ic tui` for real-time interactive monitoring
 - Metrics: Port-forward 9090, `curl /metrics`
 - Tracing: Set `tracing.enabled: true` and `tracing.console_export: true` in ConfigMap
 - Logging: Set `logging.structured: true` in ConfigMap
 - Webhooks: Enable via ConfigMap webhook configuration, test with `kubectl apply`
-- Templates: Watch logs, use `dump config`, test incrementally
+- Templates: Watch logs, use `dump config`, test incrementally, or use TUI template inspector
 - Dataplane: Access via Telepresence networking (e.g., `haproxy-template-ic:5555`)
 
 ## Troubleshooting

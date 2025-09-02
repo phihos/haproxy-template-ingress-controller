@@ -5,7 +5,6 @@
 from .types import ConfigChangeType, ConfigSectionType, ConfigElementType
 from .models import (
     ConfigChange,
-    DeploymentHistory,
     compute_content_hash,
     extract_hash_from_description,
     get_production_urls_from_index,
@@ -14,12 +13,6 @@ from .errors import DataplaneAPIError, ValidationError
 from .client import DataplaneClient
 from .synchronizer import ConfigSynchronizer
 
-# Re-export for test mocking
-from tenacity import AsyncRetrying
-from haproxy_dataplane_v3.api.configuration import (
-    get_ha_proxy_configuration,
-    get_configuration_version,
-)
 from .utils import (
     extract_config_context,
     normalize_dataplane_url,
@@ -35,7 +28,6 @@ __all__ = [
     "ConfigElementType",
     # Data models
     "ConfigChange",
-    "DeploymentHistory",
     # Exceptions
     "DataplaneAPIError",
     "ValidationError",
@@ -51,8 +43,4 @@ __all__ = [
     "parse_haproxy_error_line",
     "parse_validation_error_details",
     "MAX_CONFIG_COMPARISON_CHANGES",
-    # Re-exports for testing
-    "AsyncRetrying",
-    "get_ha_proxy_configuration",
-    "get_configuration_version",
 ]

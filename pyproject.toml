@@ -22,18 +22,19 @@ dependencies = [
     "pathvalidate>=3.2.0",
     "prometheus-async>=25.1.0",
     "prometheus-client>=0.22.1",
-    "prompt-toolkit>=3.0.0",
     "pydantic>=2.0.0", # Required by generated client
     "python-dateutil>=2.8.2", # Required by generated client
     "python-jsonpath>=1.2.0",
     "pyyaml>=6.0.2",
     "structlog>=25.4.0",
+    "textual>=0.83.0",
     "rich>=13.7.0", # Beautiful terminal UI for dashboard
     "tenacity>=9.1.0",
     "typing-extensions>=4.0.0", # Required by generated client
     "urllib3>=2.0.0", # Required by generated client (with asyncio support)
     "uvloop>=0.21.0",
     "xxhash>=3.5.0", # Fast non-cryptographic hashing for content change detection
+    "pygments>=2.19.2",
 ]
 
 [dependency-groups]
@@ -61,6 +62,7 @@ dev = [
     "requests>=2.32.4",
     "ruff>=0.12.7",
     "types-click>=7.1.8",
+    "types-pygments>=2.19.0.20250809",
     "types-PyYAML>=6.0.0",
     "types-requests>=2.32.4.20250809",
 ]
@@ -81,6 +83,9 @@ openapi-python-client = { git = "https://github.com/phihos/openapi-python-client
 
 [tool.setuptools.packages.find]
 where = [".", "codegen/haproxy_dataplane_v3"]
+
+[tool.setuptools.package-data]
+haproxy_template_ic = ["tui/*.css"]
 
 [tool.pytest.ini_options]
 filterwarnings = [

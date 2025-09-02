@@ -8,11 +8,24 @@ external tools to query the operator's internal state via Unix socket commands.
 import asyncio
 import json
 import logging
+import os
+import traceback
+from datetime import datetime
+from importlib import metadata
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Protocol, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Protocol, Tuple, Union
 
-from haproxy_template_ic.constants import SOCKET_BUFFER_SIZE
-from haproxy_template_ic.metrics import get_metrics_collector
+from kr8s.objects import Pod
+
+from haproxy_template_ic.constants import (
+    HAPROXY_PODS_INDEX,
+    SOCKET_BUFFER_SIZE,
+    DEFAULT_ACTIVITY_QUERY_LIMIT,
+)
+from haproxy_template_ic.deployment_state import DeploymentStateTracker
+from haproxy_template_ic.metrics import get_metrics_collector, get_performance_metrics
+from haproxy_template_ic.models import IndexedResourceCollection
+from haproxy_template_ic.tui.models import PodInfo
 
 logger = logging.getLogger(__name__)
 
@@ -48,17 +61,13 @@ def _serialize_resource_collection(resources: Any) -> List[ResourceDict]:
         List representation of the resources
     """
     if hasattr(resources, "__iter__") and not isinstance(resources, (str, bytes)):
-        # Convert to list if it's iterable but not a string
         try:
             return list(resources)
         except (TypeError, ValueError):
-            # Fallback for non-listable iterables
             return [resources]
     elif isinstance(resources, dict):
-        # Wrap single resource dict in a list
         return [resources]
     else:
-        # Fallback for other types - convert to dict-like structure
         return [{"data": resources}]
 
 
@@ -70,11 +79,7 @@ def _serialize_kopf_index(index_data: KopfIndexData) -> Dict[str, List[ResourceD
 
     Returns:
         Dictionary with string keys and resource lists as values
-
-    Raises:
-        TypeError: If index_data cannot be serialized
     """
-    # Check if it's a dict-like object (not just iterable like strings)
     if not (
         hasattr(index_data, "__iter__")
         and hasattr(index_data, "__getitem__")
@@ -86,15 +91,11 @@ def _serialize_kopf_index(index_data: KopfIndexData) -> Dict[str, List[ResourceD
     try:
         for key in index_data:
             resources = index_data[key]
-            # Convert tuple keys to structured strings with ':' separator
-            # e.g., ('namespace', 'name') becomes 'namespace:name'
-            if isinstance(key, tuple):
-                serialized_key = ":".join(str(k) for k in key)
-            else:
-                serialized_key = str(key)
+            serialized_key = (
+                ":".join(str(k) for k in key) if isinstance(key, tuple) else str(key)
+            )
             serialized_index[serialized_key] = _serialize_resource_collection(resources)
     except (TypeError, KeyError):
-        # Handle cases where index_data doesn't behave like a dict
         return {}
 
     return serialized_index
@@ -123,79 +124,78 @@ def _serialize_memo_indices(
                 errors.append(f"index '{name}' serialization: {e}")
                 indices[name] = {}
 
-    # Handle legacy _index attributes (backward compatibility)
-    for name in dir(memo):
-        if (
-            name.endswith("_index")
-            and not name.startswith("_")
-            and hasattr(getattr(memo, name), "items")
-        ):
-            try:
-                indices[name] = dict(getattr(memo, name))
-            except (TypeError, ValueError) as e:
-                errors.append(f"legacy index '{name}' serialization: {e}")
-                indices[name] = {}
-
     return indices, errors
+
+
+def _safe_serialize(
+    operation_name: str,
+    serializer_func: Callable[[], Any],
+    default_value: Any,
+    errors: List[str],
+    exception_types: Tuple = (AttributeError, TypeError, ValueError, RuntimeError),
+) -> Any:
+    """Safely serialize data with consistent error handling."""
+    try:
+        return serializer_func()
+    except exception_types as e:
+        errors.append(f"{operation_name} serialization: {e}")
+        return default_value
 
 
 def serialize_state(memo: Any) -> Dict[str, Any]:
     """Serialize the application's internal state to a JSON-serializable dictionary."""
     state = {}
-    errors = []
+    errors: List[str] = []
 
     # Serialize config with specific error handling
-    try:
+    def serialize_config():
         if hasattr(memo, "config") and memo.config:
-            state["config"] = memo.config.model_dump(mode="json")
-        else:
-            state["config"] = {}
-    except (AttributeError, TypeError, ValueError, RuntimeError) as e:
-        errors.append(f"config serialization: {e}")
-        state["config"] = {}
+            return memo.config.model_dump(mode="json")
+        return {}
+
+    state["config"] = _safe_serialize("config", serialize_config, {}, errors)
 
     # Serialize HAProxy config context with specific error handling
-    try:
+    def serialize_config_context():
         if hasattr(memo, "haproxy_config_context") and memo.haproxy_config_context:
-            state["haproxy_config_context"] = memo.haproxy_config_context.model_dump(
-                mode="json"
-            )
-        else:
-            state["haproxy_config_context"] = {}
-    except (AttributeError, TypeError, ValueError, RuntimeError) as e:
-        errors.append(f"haproxy_config_context serialization: {e}")
-        state["haproxy_config_context"] = {}
+            return memo.haproxy_config_context.model_dump(mode="json")
+        return {}
+
+    state["haproxy_config_context"] = _safe_serialize(
+        "haproxy_config_context", serialize_config_context, {}, errors
+    )
 
     # Serialize metadata with specific error handling
-    try:
-        state["metadata"] = {
+    def serialize_metadata():
+        return {
             "configmap_name": getattr(memo.cli_options, "configmap_name", None)
             if hasattr(memo, "cli_options")
             else None,
             "has_config_reload_flag": hasattr(memo, "config_reload_flag"),
             "has_stop_flag": hasattr(memo, "stop_flag"),
         }
-    except (AttributeError, TypeError) as e:
-        errors.append(f"metadata serialization: {e}")
-        state["metadata"] = {"configmap_name": None}
+
+    state["metadata"] = _safe_serialize(
+        "metadata", serialize_metadata, {"configmap_name": None}, errors
+    )
 
     # Serialize CLI options (bootstrap parameters only)
-    try:
+    def serialize_cli_options():
         if hasattr(memo, "cli_options") and memo.cli_options:
-            state["cli_options"] = {
+            return {
                 "configmap_name": memo.cli_options.configmap_name,
                 "secret_name": memo.cli_options.secret_name,
             }
-        else:
-            state["cli_options"] = {}
-    except (AttributeError, TypeError) as e:
-        errors.append(f"cli_options serialization: {e}")
-        state["cli_options"] = {}
+        return {}
+
+    state["cli_options"] = _safe_serialize(
+        "cli_options", serialize_cli_options, {}, errors
+    )
 
     # Serialize operator configuration (runtime settings)
-    try:
+    def serialize_operator_config():
         if hasattr(memo, "config") and memo.config:
-            state["operator_config"] = {
+            return {
                 "healthz_port": memo.config.operator.healthz_port,
                 "metrics_port": memo.config.operator.metrics_port,
                 "socket_path": memo.config.operator.socket_path,
@@ -205,30 +205,27 @@ def serialize_state(memo: Any) -> Dict[str, Any]:
                 "validation_dataplane_host": memo.config.validation.dataplane_host,
                 "validation_dataplane_port": memo.config.validation.dataplane_port,
             }
-        else:
-            state["operator_config"] = {}
-    except (AttributeError, TypeError) as e:
-        errors.append(f"operator_config serialization: {e}")
-        state["operator_config"] = {}
+        return {}
+
+    state["operator_config"] = _safe_serialize(
+        "operator_config", serialize_operator_config, {}, errors
+    )
 
     # Serialize indices with specific error handling
-    try:
+    def serialize_indices():
         indices, index_errors = _serialize_memo_indices(memo)
-        state["indices"] = indices
         errors.extend(index_errors)
-    except (AttributeError, TypeError) as e:
-        errors.append(f"indices serialization: {e}")
-        state["indices"] = {}
+        return indices
+
+    state["indices"] = _safe_serialize("indices", serialize_indices, {}, errors)
 
     # Serialize debouncer stats with specific error handling
-    try:
+    def serialize_debouncer():
         if hasattr(memo, "debouncer") and memo.debouncer:
-            state["debouncer"] = memo.debouncer.get_stats()
-        else:
-            state["debouncer"] = None
-    except (AttributeError, TypeError) as e:
-        errors.append(f"debouncer serialization: {e}")
-        state["debouncer"] = None
+            return memo.debouncer.get_stats()
+        return None
+
+    state["debouncer"] = _safe_serialize("debouncer", serialize_debouncer, None, errors)
 
     # Add any serialization errors to the response
     if errors:
@@ -380,54 +377,48 @@ class ManagementSocketServer:
                 except Exception as e:
                     indices[name] = {"error": f"Failed to serialize: {e}"}
 
-        # Also check for old-style _index attributes for backward compatibility
-        for name in dir(self.memo):
-            if (
-                name.endswith("_index")
-                and not name.startswith("_")
-                and hasattr(getattr(self.memo, name), "items")
-            ):
-                if name not in indices:  # Don't override new-style indices
-                    try:
-                        indices[name] = dict(getattr(self.memo, name))
-                    except Exception as e:
-                        indices[name] = {"error": f"Failed to serialize: {e}"}
-
         return {"indices": indices}
 
     def _dump_config(self) -> Dict[str, Any]:
-        """Dump HAProxy configuration context."""
+        """Dump HAProxy configuration context and config."""
+        result = {}
+
+        # Include the actual config (contains template_snippets, maps, etc.)
+        if hasattr(self.memo, "config") and self.memo.config:
+            config_dict = self.memo.config.model_dump(mode="json")
+            result["config"] = config_dict
+
+        # Include the rendered context
         if (
             hasattr(self.memo, "haproxy_config_context")
             and self.memo.haproxy_config_context
         ):
             context_dict = self.memo.haproxy_config_context.model_dump(mode="json")
-            # Add convenience properties for backward compatibility
-            rendered_content = context_dict.get("rendered_content", [])
-            context_dict["rendered_maps"] = [
-                c for c in rendered_content if c.get("content_type") == "map"
-            ]
-            context_dict["rendered_certificates"] = [
-                c for c in rendered_content if c.get("content_type") == "certificate"
-            ]
-            context_dict["rendered_files"] = [
-                c for c in rendered_content if c.get("content_type") == "file"
-            ]
-            return {"haproxy_config_context": context_dict}
-        return {
-            "haproxy_config_context": {
+            result["haproxy_config_context"] = context_dict
+        else:
+            result["haproxy_config_context"] = {
                 "rendered_content": [],
-                "rendered_maps": [],
-                "rendered_certificates": [],
-                "rendered_files": [],
                 "rendered_config": None,
             }
-        }
+
+        return result
 
     def _dump_deployments(self) -> Dict[str, Any]:
-        """Dump all deployment history."""
-        if hasattr(self.memo, "deployment_history") and self.memo.deployment_history:
-            return self.memo.deployment_history.to_dict()
+        """Dump all deployment history using DeploymentStateTracker."""
+        # Use DeploymentStateTracker with activity_buffer
+        if hasattr(self.memo, "activity_buffer") and self.memo.activity_buffer:
+            tracker = DeploymentStateTracker(self.memo.activity_buffer)
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(tracker.to_dict())
+                    return {"deployment_history": {}}
+                except RuntimeError:
+                    return asyncio.run(tracker.to_dict())
+            except Exception as e:
+                logger.error(f"Failed to get deployment history: {e}")
+                return {"error": f"Failed to get deployment history: {e}"}
+
         return {"deployment_history": {}}
 
     def _dump_debouncer(self) -> Dict[str, Any]:
@@ -437,19 +428,757 @@ class ManagementSocketServer:
         return {"debouncer": None}
 
     def _get_deployment_history(self, endpoint_url: str) -> Dict[str, Any]:
-        """Get deployment history for a specific endpoint."""
-        if hasattr(self.memo, "deployment_history") and self.memo.deployment_history:
-            history_dict = self.memo.deployment_history.to_dict()
-            deployment_data = history_dict.get("deployment_history", {})
+        """Get deployment history for a specific endpoint from activity events."""
+        # Get all deployment history
+        deployment_data = self._dump_deployments().get("deployment_history", {})
 
-            if endpoint_url in deployment_data:
-                return {"result": deployment_data[endpoint_url]}
+        if endpoint_url in deployment_data:
+            return {"result": deployment_data[endpoint_url]}
+        else:
+            return {
+                "error": f"No deployment history found for endpoint: {endpoint_url}",
+                "available_endpoints": list(deployment_data.keys()),
+            }
+
+    def _extract_template_from_collection(
+        self,
+        collection,
+        collection_type: str,
+        template_name: str,
+        template_sources: List[Dict[str, Any]],
+    ) -> None:
+        """Extract template source from a configuration collection."""
+        if template_name in collection:
+            template_obj = collection[template_name]
+            try:
+                source = (
+                    template_obj.template
+                    if hasattr(template_obj, "template")
+                    else str(template_obj)
+                )
+                template_sources.append(
+                    {
+                        "type": collection_type,
+                        "source": source,
+                        "filename": template_name,
+                    }
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to extract {collection_type} template source for {template_name}: {e}"
+                )
+
+    def _get_template_source(self, template_name: str) -> Dict[str, Any]:
+        """Get the source template content (Jinja2) for a given template."""
+        logger.debug(f"Getting template source for: {template_name}")
+
+        if not hasattr(self.memo, "config") or not self.memo.config:
+            logger.debug("Configuration not available in memo")
+            return {"error": "Configuration not available"}
+
+        template_sources: List[Dict[str, Any]] = []
+
+        # Check all template collections
+        collections = [
+            (self.memo.config.maps, "map"),
+            (self.memo.config.files, "file"),
+            (self.memo.config.certificates, "certificate"),
+            (self.memo.config.template_snippets, "snippet"),
+        ]
+
+        for collection, collection_type in collections:
+            self._extract_template_from_collection(
+                collection, collection_type, template_name, template_sources
+            )
+
+        # HAProxy config template
+        if template_name == "haproxy.cfg":
+            if hasattr(self.memo.config, "haproxy_config"):
+                config_template = self.memo.config.haproxy_config
+                try:
+                    source = (
+                        config_template.template
+                        if hasattr(config_template, "template")
+                        else str(config_template)
+                    )
+                    template_sources.append(
+                        {"type": "config", "source": source, "filename": "haproxy.cfg"}
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to extract haproxy_config template source: {e}"
+                    )
+                    logger.error(f"config_template attributes: {dir(config_template)}")
             else:
-                return {
-                    "error": f"No deployment history found for endpoint: {endpoint_url}",
-                    "available_endpoints": list(deployment_data.keys()),
+                logger.debug("haproxy_config not found in memo.config")
+                logger.debug(f"memo.config attributes: {dir(self.memo.config)}")
+
+        if template_sources:
+            # Return the first matching template (there should only be one per name)
+            template_info = template_sources[0]
+            logger.debug(
+                f"Returning template source for {template_name}: type={template_info['type']}, source_length={len(template_info['source'])}"
+            )
+            return {
+                "result": {
+                    "template_name": template_name,
+                    "type": template_info["type"],
+                    "source": template_info["source"],
+                    "filename": template_info["filename"],
                 }
-        return {"error": "No deployment history available"}
+            }
+
+        # Debug: List available templates
+        available_templates = []
+        if hasattr(self.memo.config, "maps") and self.memo.config.maps:
+            available_templates.extend(self.memo.config.maps.keys())
+        if hasattr(self.memo.config, "files") and self.memo.config.files:
+            available_templates.extend(self.memo.config.files.keys())
+        if hasattr(self.memo.config, "certificates") and self.memo.config.certificates:
+            available_templates.extend(self.memo.config.certificates.keys())
+        if (
+            hasattr(self.memo.config, "template_snippets")
+            and self.memo.config.template_snippets
+        ):
+            available_templates.extend(self.memo.config.template_snippets.keys())
+        if hasattr(self.memo.config, "haproxy_config"):
+            available_templates.append("haproxy.cfg")
+
+        logger.debug(f"Available templates: {available_templates}")
+        return {
+            "error": f"Template source not found: {template_name}. Available: {available_templates}"
+        }
+
+    def _get_rendered_template(self, template_name: str) -> Dict[str, Any]:
+        """Get the rendered content for a given template."""
+        logger.debug(f"Getting rendered template for: {template_name}")
+
+        if (
+            not hasattr(self.memo, "haproxy_config_context")
+            or not self.memo.haproxy_config_context
+        ):
+            logger.debug("HAProxy config context not available in memo")
+            return {"error": "HAProxy config context not available"}
+
+        context = self.memo.haproxy_config_context
+        logger.debug(f"Found haproxy_config_context, type: {type(context)}")
+
+        # Check rendered HAProxy config
+        if template_name == "haproxy.cfg":
+            logger.debug("Checking for rendered HAProxy config")
+            rendered_config = getattr(context, "rendered_config", None)
+            logger.debug(
+                f"rendered_config found: {rendered_config is not None}, type: {type(rendered_config)}"
+            )
+
+            if rendered_config:
+                if hasattr(rendered_config, "content"):
+                    content = rendered_config.content
+                    logger.debug(
+                        f"Found rendered_config.content, length: {len(content) if content else 0}"
+                    )
+                    if content:
+                        return {
+                            "result": {
+                                "template_name": template_name,
+                                "type": "config",
+                                "content": content,
+                                "filename": "haproxy.cfg",
+                            }
+                        }
+                    else:
+                        logger.debug("rendered_config.content is empty")
+                else:
+                    logger.debug("rendered_config does not have content attribute")
+                    logger.debug(f"rendered_config attributes: {dir(rendered_config)}")
+            else:
+                logger.debug("rendered_config is None or False")
+
+        # Check rendered content (maps, certificates, files)
+        rendered_content = getattr(context, "rendered_content", None) or []
+        logger.debug(
+            f"rendered_content found: {rendered_content is not None}, length: {len(rendered_content) if rendered_content else 0}"
+        )
+
+        if rendered_content:
+            available_filenames = []
+            for content_item in rendered_content:
+                if hasattr(content_item, "filename"):
+                    filename = content_item.filename
+                    available_filenames.append(filename)
+                    logger.debug(f"Found rendered content item: {filename}")
+
+                    if filename == template_name:
+                        content = getattr(content_item, "content", "")
+                        content_type = getattr(content_item, "content_type", "unknown")
+                        logger.debug(
+                            f"Match found for {template_name}: type={content_type}, content_length={len(content)}"
+                        )
+
+                        return {
+                            "result": {
+                                "template_name": template_name,
+                                "type": content_type,
+                                "content": content,
+                                "filename": filename,
+                            }
+                        }
+                else:
+                    logger.debug(
+                        f"Rendered content item missing filename attribute: {dir(content_item)}"
+                    )
+
+            logger.debug(f"Available rendered content filenames: {available_filenames}")
+
+        # Debug: List all available rendered templates
+        available_rendered = []
+        if hasattr(context, "rendered_config") and context.rendered_config:
+            available_rendered.append("haproxy.cfg")
+        if rendered_content:
+            for item in rendered_content:
+                if hasattr(item, "filename"):
+                    available_rendered.append(item.filename)
+
+        logger.debug(f"Available rendered templates: {available_rendered}")
+        return {
+            "error": f"Rendered template content not found: {template_name}. Available: {available_rendered}"
+        }
+
+    def _handle_version_command(self) -> Dict[str, Any]:
+        """Handle version command."""
+        try:
+            app_version = metadata.version("haproxy-template-ic")
+        except Exception:
+            app_version = "development"
+
+        return {
+            "version": app_version,
+            "api_version": "v1",
+            "capabilities": [
+                "dump_all",
+                "dump_indices",
+                "dump_config",
+                "dump_deployments",
+                "dump_debouncer",
+                "dump_stats",
+                "dump_activity",
+                "dump_pods",
+                "dump_dashboard",
+                "get",
+                "get_template_source",
+                "get_rendered_template",
+                "version",
+            ],
+            "dashboard_api": {"min_supported": "1.0.0", "recommended": "1.2.0"},
+        }
+
+    def _dump_stats(self) -> Dict[str, Any]:
+        """Dump dashboard-optimized statistics."""
+        try:
+            # Start with basic operator info
+            stats = {
+                "operator": {
+                    "status": "RUNNING"
+                    if hasattr(self.memo, "config") and self.memo.config
+                    else "UNKNOWN",
+                    "uptime_seconds": 0,  # Would need startup tracking to implement
+                    "version": self._handle_version_command().get("version", "unknown"),
+                },
+                "resources": {},
+                "templates": {},
+                "performance": self._get_performance_stats(),
+                "sync_stats": self._get_sync_stats(),
+            }
+
+            # Extract resource counts from resource metadata
+            if hasattr(self.memo, "indices") and self.memo.indices:
+                from haproxy_template_ic.operator.k8s_resources import (
+                    _collect_resource_indices,
+                )
+
+                # Collect normalized resource indices (same method used by operator)
+                # This updates the resource_metadata with current statistics
+                try:
+                    metrics = getattr(self.memo, "metrics", None)
+                    _collect_resource_indices(
+                        self.memo, metrics
+                    )  # Updates resource_metadata
+                    resource_counts = {}
+
+                    # Use the populated resource metadata instead of recalculating
+                    if (
+                        hasattr(self.memo, "resource_metadata")
+                        and self.memo.resource_metadata
+                    ):
+                        for (
+                            resource_type,
+                            metadata,
+                        ) in self.memo.resource_metadata.items():
+                            # Only include resource types that have data
+                            if metadata.total_count > 0:
+                                # Format top 5 namespaces for display
+                                top_namespaces = dict(
+                                    sorted(
+                                        metadata.namespaces.items(),
+                                        key=lambda x: x[1],
+                                        reverse=True,
+                                    )[:5]
+                                )
+                                resource_counts[resource_type] = metadata.to_dict()
+                                # Override namespaces with top 5 for display
+                                resource_counts[resource_type]["namespaces"] = (
+                                    top_namespaces
+                                )
+
+                    stats["resources"] = resource_counts
+                except Exception as e:
+                    logger.warning(f"Failed to collect resource statistics: {e}")
+                    stats["resources"] = {}
+
+            # Extract template stats
+            if (
+                hasattr(self.memo, "haproxy_config_context")
+                and self.memo.haproxy_config_context
+            ):
+                template_stats = {}
+                rendered_content = getattr(
+                    self.memo.haproxy_config_context, "rendered_content", []
+                )
+
+                # Handle both list and dict formats of rendered_content
+                if isinstance(rendered_content, list):
+                    for content in rendered_content:
+                        if isinstance(content, dict):
+                            filename = content.get(
+                                "filename", content.get("name", "unknown")
+                            )
+                            content_data = content.get("content", "")
+                            template_stats[filename] = {
+                                "name": filename,
+                                "type": content.get("content_type", "unknown"),
+                                "size": len(content_data),
+                                "status": "valid" if content_data else "empty",
+                            }
+                elif isinstance(rendered_content, dict):
+                    # If it's a dict, iterate over values
+                    for content in rendered_content.values():
+                        if isinstance(content, dict):
+                            filename = content.get(
+                                "filename", content.get("name", "unknown")
+                            )
+                            content_data = content.get("content", "")
+                            template_stats[filename] = {
+                                "name": filename,
+                                "type": content.get("content_type", "unknown"),
+                                "size": len(content_data),
+                                "status": "valid" if content_data else "empty",
+                            }
+
+                # Add main haproxy.cfg if it exists
+                rendered_config = getattr(
+                    self.memo.haproxy_config_context, "rendered_config", None
+                )
+                if (
+                    rendered_config
+                    and hasattr(rendered_config, "content")
+                    and rendered_config.content
+                ):
+                    template_stats["haproxy.cfg"] = {
+                        "name": "haproxy.cfg",
+                        "type": "config",
+                        "size": len(rendered_config.content),
+                        "status": "valid",
+                    }
+
+                # Ensure template_stats only has string keys by filtering out None keys
+                filtered_template_stats: Dict[str, Any] = {
+                    k: v for k, v in template_stats.items() if k is not None
+                }
+                stats["templates"] = filtered_template_stats
+
+            # Extract sync stats from deployment history
+            deployment_data = self._dump_deployments().get("deployment_history", {})
+
+            success_count = 0
+            failure_count = 0
+            last_sync_time = None
+
+            for endpoint_data in deployment_data.values():
+                if isinstance(endpoint_data, dict):
+                    if endpoint_data.get("success"):
+                        success_count += 1
+                    else:
+                        failure_count += 1
+
+                    # Track most recent sync
+                    timestamp = endpoint_data.get("timestamp")
+                    if timestamp and (not last_sync_time or timestamp > last_sync_time):
+                        last_sync_time = timestamp
+
+            stats["sync_stats"] = {
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "last_sync_time": last_sync_time,
+            }
+
+            return stats
+
+        except Exception as e:
+            return {"error": f"Failed to generate stats: {e}"}
+
+    def _dump_activity(self) -> Dict[str, Any]:
+        """Dump recent activity stream."""
+        try:
+            # Get activity buffer from memo
+            if hasattr(self.memo, "activity_buffer") and self.memo.activity_buffer:
+                # Get recent events (increased from 50 to 1000 for better history)
+                recent_events = self.memo.activity_buffer.get_recent_sync(
+                    count=DEFAULT_ACTIVITY_QUERY_LIMIT
+                )
+
+                return {
+                    "activity": recent_events,
+                    "total_events": self.memo.activity_buffer.total_count,
+                    "current_count": self.memo.activity_buffer.current_count,
+                    "max_size": self.memo.activity_buffer.max_size,
+                    "message": f"Retrieved {len(recent_events)} recent activity events",
+                }
+            else:
+                return {"activity": [], "message": "Activity buffer not initialized"}
+        except Exception as e:
+            logger.error(f"Failed to dump activity: {e}")
+            return {"activity": [], "error": f"Failed to retrieve activity data: {e}"}
+
+    def _dump_pods(self) -> Dict[str, Any]:
+        """Dump HAProxy pod details with sync status."""
+        try:
+            pods_info = {"pods": [], "total_count": 0, "ready_count": 0}
+            pod_data = []
+
+            # Get ALL discovered HAProxy pods from Kopf index
+            if (
+                hasattr(self.memo, "indices")
+                and HAPROXY_PODS_INDEX in self.memo.indices
+            ):
+                logger.debug(
+                    f"Found HAProxy pod index with {len(self.memo.indices[HAPROXY_PODS_INDEX])} entries"
+                )
+
+                # Convert Kopf index to serializable format
+                pod_collection = IndexedResourceCollection.from_kopf_index(
+                    self.memo.indices[HAPROXY_PODS_INDEX]
+                )
+
+                # Extract pod info from each discovered pod
+                for (namespace, name), pod_data_dict in pod_collection.items():
+                    status = pod_data_dict.get("status", {})
+                    metadata = pod_data_dict.get("metadata", {})
+
+                    pod_ip = status.get("podIP", "N/A")
+                    pod_phase = status.get("phase", "Unknown")
+                    creation_timestamp = metadata.get("creationTimestamp")
+
+                    # Store creation timestamp for PodInfo start_time
+                    start_time = creation_timestamp
+
+                    # Create PodInfo object with proper start_time datetime
+                    start_time_dt = None
+                    if start_time:
+                        try:
+                            start_time_dt = datetime.fromisoformat(
+                                start_time.replace("Z", "+00:00")
+                            )
+                        except Exception:
+                            start_time_dt = None
+
+                    pod_info = PodInfo(
+                        name=name,
+                        ip=pod_ip,
+                        status=pod_phase,
+                        start_time=start_time_dt,
+                        # Default sync status - will be enhanced below
+                        last_sync=None,
+                        sync_success=False,
+                    )
+
+                    pod_data.append(pod_info)
+                    logger.debug(f"Added pod {namespace}/{name} with IP {pod_ip}")
+
+            # Enhance pods with sync status from activity events
+            if hasattr(self.memo, "activity_buffer") and self.memo.activity_buffer:
+                logger.debug("Enhancing pods with sync status from activity events")
+                recent_events = self.memo.activity_buffer.get_recent_sync(
+                    count=DEFAULT_ACTIVITY_QUERY_LIMIT
+                )
+
+                # Create mapping of pod IP to latest sync status
+                pod_sync_status = {}
+                for event_data in recent_events:
+                    if isinstance(event_data, dict):
+                        event_type = event_data.get("type")
+                        metadata = event_data.get("metadata", {})
+
+                        # Try to get pod_ip from metadata, or extract from endpoint
+                        pod_ip = metadata.get("pod_ip")
+                        if not pod_ip:
+                            endpoint = metadata.get("endpoint")
+                            if endpoint and "://" in endpoint:
+                                # Extract IP from endpoint URL like "http://10.244.0.8:5555"
+                                pod_ip = endpoint.split("://")[1].split(":")[0]
+
+                        if pod_ip and event_type in [
+                            "DEPLOYMENT_SUCCESS",
+                            "DEPLOYMENT_FAILED",
+                            "SYNC",
+                            "RELOAD",
+                        ]:
+                            # Use the most recent event for each pod IP
+                            if pod_ip not in pod_sync_status:
+                                is_success = event_type in [
+                                    "DEPLOYMENT_SUCCESS",
+                                    "SYNC",
+                                ]
+                                pod_sync_status[pod_ip] = {
+                                    "last_sync": event_data.get("timestamp"),
+                                    "sync_success": is_success,
+                                    "sync_version": metadata.get("version"),
+                                    "last_error": None
+                                    if is_success
+                                    else metadata.get("error"),
+                                }
+
+                # Apply sync status to pods
+                for pod_info in pod_data:
+                    pod_ip = pod_info.ip
+                    if pod_ip in pod_sync_status:
+                        sync_info = pod_sync_status[pod_ip]
+                        # Parse last_sync timestamp if it's a string
+                        last_sync = sync_info.get("last_sync")
+                        if isinstance(last_sync, str):
+                            try:
+                                last_sync = datetime.fromisoformat(
+                                    last_sync.replace("Z", "+00:00")
+                                )
+                            except Exception:
+                                last_sync = None
+
+                        # Update the PodInfo object with sync status
+                        pod_info.last_sync = last_sync
+                        pod_info.sync_success = sync_info.get("sync_success", False)
+                        logger.debug(
+                            f"Enhanced pod {pod_info.name} with sync status: success={sync_info['sync_success']}"
+                        )
+
+            # Serialize PodInfo objects to dictionaries for JSON compatibility
+            pods_info["pods"] = [pod.model_dump(mode="json") for pod in pod_data]
+            pods_info["total_count"] = len(pod_data)
+            pods_info["ready_count"] = len([p for p in pod_data if p.sync_success])
+
+            logger.debug(
+                f"Returning {len(pod_data)} pods, {pods_info['ready_count']} synced"
+            )
+            return pods_info
+
+        except Exception as e:
+            logger.error(f"Failed to generate pod info: {e}", exc_info=True)
+            return {"error": f"Failed to generate pod info: {e}"}
+
+    def _dump_dashboard(self) -> Dict[str, Any]:
+        """Dump all dashboard data in optimized format."""
+        try:
+            # Combine all dashboard-relevant data
+            dashboard_data: Dict[str, Any] = {
+                "operator": {},
+                "pods": [],
+                "resources": {},
+                "templates": {},
+                "performance": {},
+                "activity": [],
+                "errors": [],
+            }
+
+            # Get stats data
+            stats = self._dump_stats()
+            if "error" not in stats:
+                dashboard_data["operator"] = stats.get("operator", {})
+                dashboard_data["resources"] = stats.get("resources", {})
+                dashboard_data["templates"] = stats.get("templates", {})
+                dashboard_data["performance"] = stats.get("performance", {})
+
+                # Enhance operator info with additional details
+                operator_data = dashboard_data["operator"]
+                # Try to get namespace from various sources
+                namespace = "unknown"
+                if hasattr(self.memo, "namespace") and self.memo.namespace:
+                    namespace = self.memo.namespace
+                elif (
+                    hasattr(self.memo, "config")
+                    and self.memo.config
+                    and hasattr(self.memo.config, "namespace")
+                ):
+                    namespace = self.memo.config.namespace
+                else:
+                    # Try to detect from environment or use service account namespace
+                    namespace = os.environ.get("POD_NAMESPACE") or "unknown"
+                    if namespace == "unknown":
+                        try:
+                            # Read namespace from service account token
+                            with open(
+                                "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
+                                "r",
+                            ) as f:
+                                namespace = f.read().strip()
+                        except Exception:
+                            namespace = "unknown"
+
+                operator_data["namespace"] = namespace
+                operator_data["configmap_name"] = (
+                    getattr(self.memo.cli_options, "configmap_name", "unknown")
+                    if hasattr(self.memo, "cli_options") and self.memo.cli_options
+                    else "unknown"
+                )
+
+                # Add timing information for dashboard title bar
+                try:
+                    # Get pod start time from Kubernetes
+                    pod_name = os.environ.get(
+                        "HOSTNAME"
+                    )  # Pod name is the hostname in Kubernetes
+                    if pod_name:
+                        operator_data["controller_pod_name"] = pod_name
+
+                        # Try to get pod start time
+                        try:
+                            # Use kr8s to get pod start time
+
+                            pod = Pod.get(pod_name, namespace=namespace)
+                            if pod and pod.status and pod.status.get("startTime"):
+                                operator_data["controller_pod_start_time"] = pod.status[
+                                    "startTime"
+                                ]
+                        except Exception as e:
+                            # Silently continue if pod info unavailable
+                            logger.debug(
+                                f"Non-critical error fetching controller pod info: {e}"
+                            )
+
+                    # Get last deployment time from deployment history
+                    try:
+                        deployments_data = self._dump_deployments()
+                        if "deployment_history" in deployments_data:
+                            most_recent_timestamp = None
+                            for endpoint, deployment_info in deployments_data[
+                                "deployment_history"
+                            ].items():
+                                if deployment_info.get("success"):
+                                    timestamp = deployment_info.get("timestamp")
+                                    if timestamp and (
+                                        not most_recent_timestamp
+                                        or timestamp > most_recent_timestamp
+                                    ):
+                                        most_recent_timestamp = timestamp
+
+                            if most_recent_timestamp:
+                                operator_data["last_deployment_time"] = (
+                                    most_recent_timestamp
+                                )
+                    except Exception as e:
+                        # Silently continue if deployment history unavailable
+                        logger.debug(
+                            f"Non-critical error fetching deployment history: {e}"
+                        )
+
+                except Exception as e:
+                    # Silently continue if timing info unavailable
+                    logger.debug(f"Non-critical error fetching timing info: {e}")
+
+            # Get pod data
+            pods = self._dump_pods()
+            if "error" not in pods:
+                dashboard_data["pods"] = pods.get("pods", [])
+
+            # Get activity data
+            activity = self._dump_activity()
+            if "error" not in activity:
+                dashboard_data["activity"] = activity.get("activity", [])
+
+            # Get config data (includes both actual config and rendered context)
+            config_data = self._dump_config()
+            if "error" not in config_data:
+                dashboard_data.update(
+                    config_data
+                )  # This adds both "config" and "haproxy_config_context"
+
+            # Add metadata
+            dashboard_data["metadata"] = {
+                "generated_at": __import__("datetime")
+                .datetime.now(__import__("datetime").timezone.utc)
+                .isoformat(),
+                "version": self._handle_version_command().get("version", "unknown"),
+            }
+
+            return dashboard_data
+
+        except Exception as e:
+            return {"error": f"Failed to generate dashboard data: {e}"}
+
+    def _get_performance_stats(self) -> Dict[str, Any]:
+        """Get performance statistics for the dashboard."""
+        try:
+            performance = get_performance_metrics()
+
+            # Calculate sync success rate from sync_stats
+            sync_stats = self._get_sync_stats()
+            success_count = sync_stats.get("success_count", 0)
+            failure_count = sync_stats.get("failure_count", 0)
+            total_syncs = success_count + failure_count
+
+            if total_syncs > 0:
+                success_rate = success_count / total_syncs
+                performance["sync_success_rate"] = success_rate
+            elif success_count > 0:
+                # If we have successful syncs but no recorded failures, assume 100% success
+                performance["sync_success_rate"] = 1.0
+
+            return performance
+        except Exception as e:
+            logger.debug(f"Error getting performance stats: {e}")
+            return {}
+
+    def _get_sync_stats(self) -> Dict[str, Any]:
+        """Get synchronization statistics from deployment history."""
+        sync_stats = {"success_count": 0, "failure_count": 0, "last_sync_time": None}
+
+        try:
+            # Get sync stats from deployment history
+            history = self._dump_deployments().get("deployment_history", {})
+            success_count = 0
+            failure_count = 0
+            latest_time = None
+
+            for endpoint_history in history.values():
+                if isinstance(endpoint_history, dict):
+                    if endpoint_history.get("success"):
+                        success_count += 1
+                    else:
+                        failure_count += 1
+
+                    timestamp = endpoint_history.get("timestamp")
+                    if timestamp and (not latest_time or timestamp > latest_time):
+                        latest_time = timestamp
+
+            sync_stats.update(
+                {
+                    "success_count": success_count,
+                    "failure_count": failure_count,
+                    "last_sync_time": latest_time,
+                }
+            )
+
+        except Exception as e:
+            logger.debug(f"Error getting sync stats: {e}")
+
+        return sync_stats
 
     def _get_template_source(self, template_name: str) -> Dict[str, Any]:
         """Get the source template content (Jinja2) for a given template."""
@@ -1228,7 +1957,6 @@ class ManagementSocketServer:
             self.logger.error(
                 f"❌ Management socket server (path {self.socket_path}) error: {e}"
             )
-            import traceback
 
             logger.error(traceback.format_exc())
             # Don't re-raise other exceptions to avoid crashing the operator

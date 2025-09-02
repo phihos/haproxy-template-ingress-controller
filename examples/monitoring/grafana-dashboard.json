@@ -12,7 +12,7 @@
         "type": "stat",
         "targets": [
           {
-            "expr": "rate(haproxy_template_ic_template_renders_total[5m])",
+            "expr": "rate(haproxy_template_ic_rendered_templates_total[5m])",
             "legendFormat": "Templates/sec"
           }
         ],
@@ -24,7 +24,7 @@
         "type": "stat",
         "targets": [
           {
-            "expr": "rate(haproxy_template_ic_config_reloads_total[5m])",
+            "expr": "rate(haproxy_template_ic_config_reload_duration_seconds_count[5m])",
             "legendFormat": "Reloads/sec"
           }
         ],

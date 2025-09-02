@@ -5,13 +5,10 @@
 ### haproxy-template-ic
 
 ```bash
-haproxy-template-ic [OPTIONS] COMMAND
+haproxy-template-ic COMMAND [OPTIONS]
 ```
 
-Global options:
-- `--verbose` - Logging level (0=WARNING, 1=INFO, 2=DEBUG)
-- `--structured-logging` - Enable JSON logging
-- `--help` - Show help
+**Note**: Runtime settings (logging, tracing, ports, etc.) are now configured via ConfigMap rather than CLI options.
 
 ### run
 
@@ -22,11 +19,27 @@ haproxy-template-ic run [OPTIONS]
 ```
 
 Options:
-- `--configmap-name` - ConfigMap containing configuration (required)
-- `--healthz-port` - Health check port (default: 8080)
-- `--metrics-port` - Prometheus metrics port (default: 9090)
-- `--socket-path` - Management socket path (default: /run/haproxy-template-ic/management.sock)
-- `--tracing-enabled` - Enable OpenTelemetry tracing
+- `--configmap-name` / `-c` - ConfigMap containing configuration (required)
+- `--secret-name` / `-s` - Secret containing HAProxy credentials (required)
+
+Environment variables:
+- `CONFIGMAP_NAME` - ConfigMap name (alternative to --configmap-name)
+- `SECRET_NAME` - Secret name (alternative to --secret-name)
+
+### tui
+
+Launch Terminal User Interface dashboard:
+
+```bash
+haproxy-template-ic tui [OPTIONS]
+```
+
+Options:
+- `--namespace` / `-n` - Kubernetes namespace to monitor (defaults to current kubectl context)
+- `--context` - Kubernetes context to use
+- `--refresh` / `-r` - Refresh interval in seconds (default: 5)
+- `--deployment-name` - Name of the operator deployment (default: haproxy-template-ic)
+- `--socket-path` - Path to management socket for direct connection
 
 ### version
 
@@ -38,28 +51,45 @@ haproxy-template-ic version
 
 ## Environment Variables
 
-### Required
+### Required (Bootstrap Only)
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CONFIGMAP_NAME` | ConfigMap name | - |
+| `CONFIGMAP_NAME` | ConfigMap name containing all runtime configuration | - |
+| `SECRET_NAME` | Secret name containing HAProxy credentials | - |
 
-### Optional
+### Runtime Configuration
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VERBOSE` | Log level (0/1/2) | 0 |
-| `STRUCTURED_LOGGING` | JSON logging | false |
-| `HEALTHZ_PORT` | Health port | 8080 |
-| `METRICS_PORT` | Metrics port | 9090 |
-| `SOCKET_PATH` | Socket path | /run/haproxy-template-ic/management.sock |
-| `WEBHOOK_ENABLED` | Enable webhooks | false |
-| `WEBHOOK_PORT` | Webhook port | 9443 |
-| `WEBHOOK_CERT_DIR` | TLS cert directory | /etc/webhook/certs |
-| `TRACING_ENABLED` | Enable tracing | false |
-| `JAEGER_ENDPOINT` | Jaeger collector | http://localhost:14268/api/traces |
-| `TRACING_SAMPLE_RATE` | Sample rate (0-1) | 1.0 |
-| `TRACING_CONSOLE_EXPORT` | Console export | false |
+**Important**: All runtime settings (logging, tracing, ports, etc.) are now configured via the ConfigMap specified by `CONFIGMAP_NAME`. Environment variables are only used for bootstrap parameters.
+
+Example ConfigMap structure for runtime settings:
+```yaml
+data:
+  config: |
+    # Operator runtime settings
+    operator:
+      healthz_port: 8080
+      metrics_port: 9090
+      socket_path: /run/haproxy-template-ic/management.sock
+
+    # Logging configuration
+    logging:
+      verbose: 1                # Log level (0=WARNING, 1=INFO, 2=DEBUG)
+      structured: false         # Enable JSON structured logging
+
+    # Distributed tracing configuration
+    tracing:
+      enabled: false            # Enable OpenTelemetry tracing
+      service_name: haproxy-template-ic
+      jaeger_endpoint: ""       # e.g., "jaeger-collector:14268"
+      sample_rate: 1.0         # Tracing sample rate (0.0 to 1.0)
+      console_export: false    # Export traces to console
+
+    # Validation sidecar configuration
+    validation:
+      dataplane_host: localhost
+      dataplane_port: 5555
+```
 
 ## HTTP Endpoints
 
@@ -84,15 +114,21 @@ GET /metrics
 
 Metrics:
 - `haproxy_template_ic_info` - Version info
-- `haproxy_template_ic_reconciliations_total` - Reconciliation count
-- `haproxy_template_ic_reconciliation_duration_seconds` - Reconciliation time
+- `haproxy_template_ic_rendered_templates_total` - Template render count by status
 - `haproxy_template_ic_template_render_duration_seconds` - Template render time
-- `haproxy_template_ic_dataplane_sync_duration_seconds` - Dataplane sync time
-- `haproxy_template_ic_watched_resources_total` - Resource count by type
-- `haproxy_template_ic_errors_total` - Error count by type
-- `haproxy_template_ic_haproxy_pods_total` - HAProxy pod count
-- `haproxy_template_ic_config_reloads_total` - Config reload count
-- `haproxy_template_ic_validation_failures_total` - Validation failure count
+- `haproxy_template_ic_config_reload_duration_seconds` - Configuration reload time
+- `haproxy_template_ic_dataplane_api_requests_total` - Dataplane API request count by operation and status
+- `haproxy_template_ic_dataplane_api_duration_seconds` - Dataplane API operation time
+- `haproxy_template_ic_watched_resources_total` - Resource count by type and namespace
+- `haproxy_template_ic_haproxy_instances_total` - HAProxy instance count by type
+- `haproxy_template_ic_haproxy_sync_results_total` - HAProxy sync results by outcome
+- `haproxy_template_ic_webhook_requests_total` - Webhook validation request count
+- `haproxy_template_ic_webhook_request_duration_seconds` - Webhook processing time
+- `haproxy_template_ic_errors_total` - Error count by type and component
+- `haproxy_template_ic_management_socket_connections_total` - Management socket connections
+- `haproxy_template_ic_management_socket_commands_total` - Management socket commands
+- `haproxy_template_ic_debouncer_triggers_total` - Debouncer trigger events
+- `haproxy_template_ic_debouncer_renders_total` - Template renders by trigger type
 
 ### Webhook Validation
 
@@ -398,13 +434,15 @@ PUT /v3/services/haproxy/actions/reload
 ### Operator
 
 ```python
-from haproxy_template_ic.operator import run_operator
+from haproxy_template_ic.operator import run_operator_loop
 
-await run_operator(
+# Runtime settings are now configured via ConfigMap, not function parameters
+cli_options = CliOptions(
     configmap_name="haproxy-config",
-    verbose=1,
-    structured_logging=False
+    secret_name="haproxy-credentials"
 )
+
+run_operator_loop(cli_options)
 ```
 
 ### Configuration

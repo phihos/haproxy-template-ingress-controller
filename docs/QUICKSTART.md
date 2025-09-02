@@ -23,72 +23,7 @@ kind load docker-image haproxy-template-ic:dev --name haproxy-ic
 kubectl apply -k deploy/overlays/dev
 ```
 
-### 3. Deploy Controller
-
-First deploy the controller that will manage HAProxy configurations:
-
-```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: haproxy-template-ic
-spec:
-  selector:
-    matchLabels:
-      app: haproxy-template-ic
-  template:
-    metadata:
-      labels:
-        app: haproxy-template-ic
-    spec:
-      serviceAccountName: haproxy-template-ic
-      containers:
-      - name: controller
-        image: haproxy-template-ic:dev
-        env:
-        - name: CONFIGMAP_NAME
-          value: haproxy-config
-        - name: VERBOSE
-          value: "1"
-        command: ["haproxy-template-ic", "run", "--configmap-name=haproxy-config"]
-        ports:
-        - containerPort: 8080
-        - containerPort: 9090
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: haproxy-template-ic
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: haproxy-template-ic
-rules:
-- apiGroups: [""]
-  resources: ["configmaps", "services", "endpoints", "pods", "secrets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: haproxy-template-ic
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: haproxy-template-ic
-subjects:
-- kind: ServiceAccount
-  name: haproxy-template-ic
-  namespace: default
-EOF
-```
-
-### 4. Deploy HAProxy Instances
+### 3. Deploy HAProxy Instances
 
 Now deploy the HAProxy instances that will be managed:
 
@@ -152,7 +87,10 @@ spec:
 EOF
 ```
 
-### 5. Configure Controller
+
+### 4. Create Configuration
+
+Apply the configuration that tells the controller what to watch and how to configure HAProxy:
 
 ```bash
 cat <<EOF | kubectl apply -f -
@@ -163,48 +101,51 @@ metadata:
 data:
   config: |
     pod_selector:
-      match_labels: 
+      match_labels:
         app: haproxy
+        component: loadbalancer
     
     watched_resources:
       services:
         api_version: v1
         kind: Service
+        index_by: ["metadata.name"]
     
     haproxy_config:
       template: |
         global
             daemon
-        
         defaults
             mode http
             timeout connect 5s
-            timeout client 30s
-            timeout server 30s
-        
         frontend health
             bind *:8404
             http-request return status 200 if { path /healthz }
-        
         frontend main
             bind *:80
-            # Simple routing - use first service found
-            {% set first_svc = resources.get('services', {}).values() | first %}
-            {% if first_svc %}
-            default_backend {{ first_svc.metadata.name }}
-            {% endif %}
-        
-        {% for _, svc in resources.get('services', {}).items() %}
-        backend {{ svc.metadata.name }}
+            default_backend services
+        backend services
             balance roundrobin
+            {% for _, svc in resources.get('services', {}).items() %}
             {% for port in svc.spec.ports %}
             server {{ svc.metadata.name }}-{{ port.port }} {{ svc.spec.clusterIP }}:{{ port.port }} check
             {% endfor %}
-        {% endfor %}
+            {% endfor %}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: haproxy-credentials
+type: Opaque
+data:
+  dataplane_username: YWRtaW4=  # admin
+  dataplane_password: YWRtaW5wYXNz  # adminpass
+  validation_username: YWRtaW4=  # admin  
+  validation_password: dmFsaWRhdGlvbnBhc3M=  # validationpass
 EOF
 ```
 
-### 6. Verify
+### 5. Verify
 
 ```bash
 # Check controller logs

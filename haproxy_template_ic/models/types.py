@@ -8,9 +8,7 @@ for validation, providing better maintainability and standardized error messages
 from typing import Annotated
 from pydantic.types import StringConstraints
 
-# =============================================================================
 # Type Aliases for Common Validation Patterns
-# =============================================================================
 
 # Non-empty string validation
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]

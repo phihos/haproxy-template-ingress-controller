@@ -7,25 +7,18 @@ operator-specific behavior and error handling.
 
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from haproxy_template_ic.activity import ActivityBuffer
 
 from haproxy_template_ic.constants import NAMESPACE_FILE_PATH
 from haproxy_template_ic.k8s import (
     _compile_jsonpath as k8s_compile_jsonpath,
-)
-from haproxy_template_ic.k8s import (
     _is_valid_dict_resource as k8s_is_valid_dict_resource,
-)
-from haproxy_template_ic.k8s import (
     _is_valid_object_resource as k8s_is_valid_object_resource,
-)
-from haproxy_template_ic.k8s import (
     _is_valid_resource as k8s_is_valid_resource,
-)
-from haproxy_template_ic.k8s import (
     _is_valid_sequence_resource as k8s_is_valid_sequence_resource,
-)
-from haproxy_template_ic.k8s import (
     extract_nested_field as k8s_extract_nested_field,
 )
 
@@ -35,12 +28,27 @@ __all__ = [
     "get_current_namespace",
     "extract_nested_field",
     "trigger_reload",
+    "get_memo_activity_buffer",
     "_compile_jsonpath",
     "_is_valid_resource",
     "_is_valid_dict_resource",
     "_is_valid_sequence_resource",
     "_is_valid_object_resource",
 ]
+
+
+def get_memo_activity_buffer(memo: Any) -> Optional["ActivityBuffer"]:
+    """Get activity buffer from memo if available.
+
+    Args:
+        memo: Kopf memo object
+
+    Returns:
+        ActivityBuffer if available and valid, None otherwise
+    """
+    if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+        return memo.activity_buffer
+    return None
 
 
 def get_current_namespace() -> str:

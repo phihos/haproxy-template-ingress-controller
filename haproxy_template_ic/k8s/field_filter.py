@@ -181,6 +181,6 @@ def validate_ignore_fields(ignore_fields: List[str]) -> List[str]:
 __all__ = [
     "remove_fields_from_resource",
     "validate_ignore_fields",
-    "_remove_field_at_path",  # Private function for tests
-    "_compile_jsonpath_filter",  # Also needed for tests
+    "_remove_field_at_path",
+    "_compile_jsonpath_filter",
 ]

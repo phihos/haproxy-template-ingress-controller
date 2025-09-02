@@ -438,8 +438,8 @@ install_metrics_server() {
 	
 	# Verify metrics are available (may take a few more seconds)
 	log INFO "Verifying metrics availability..."
-	local attempts=0
-	while [[ $attempts -lt 6 ]]; do
+	attempts=0
+	while [[ $attempts -lt 10 ]]; do
 		if kubectl top nodes >/dev/null 2>&1; then
 			ok "Metrics-server is collecting node metrics successfully."
 			return 0

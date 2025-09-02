@@ -26,9 +26,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
 # Metric Definitions
-# =============================================================================
 
 # Application info
 app_info = Info(
@@ -174,9 +172,7 @@ debouncer_time_since_last_render = Gauge(
 )
 
 
-# =============================================================================
 # Metric Collection Helpers
-# =============================================================================
 
 
 class MetricsCollector:
@@ -412,9 +408,7 @@ class MetricsCollector:
             webhook_request_duration_seconds.observe(duration)
 
 
-# =============================================================================
 # Decorators
-# =============================================================================
 
 
 def timed_operation(
@@ -451,9 +445,7 @@ def timed_operation(
     return decorator
 
 
-# =============================================================================
 # Global Metrics Instance
-# =============================================================================
 
 # Global metrics collector instance
 metrics = MetricsCollector()

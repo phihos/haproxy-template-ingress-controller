@@ -11,7 +11,7 @@ from typing import Any, Dict, Tuple
 import kopf
 from haproxy_template_ic.activity import EventType
 from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
-from haproxy_template_ic.structured_logging import autolog
+from haproxy_template_ic.core.logging import autolog
 
 logger = logging.getLogger(__name__)
 

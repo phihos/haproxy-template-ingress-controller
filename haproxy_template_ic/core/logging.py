@@ -371,6 +371,6 @@ __all__ = [
     "autolog",
     "observe",
     "add_emoji_prefix",
-    "_extract_context_from_parameters",  # Private function for tests
-    "_get_function_signature",  # Private function for tests
+    "_extract_context_from_parameters",
+    "_get_function_signature",
 ]

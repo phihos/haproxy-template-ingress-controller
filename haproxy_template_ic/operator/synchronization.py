@@ -6,19 +6,20 @@ via the Dataplane API, including validation and deployment.
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from haproxy_template_ic.activity import EventType
+from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
 from haproxy_template_ic.models import IndexedResourceCollection
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
     DataplaneAPIError,
-    DeploymentHistory,
     ValidationError,
     get_production_urls_from_index,
 )
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import trace_async_function
+from .utils import get_current_namespace, get_memo_activity_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,8 @@ def _validate_sync_prerequisites(memo: Any) -> bool:
     return True
 
 
-def _get_haproxy_pod_collection(memo: Any) -> Any:
+def _get_haproxy_pod_collection(memo: Any) -> Optional[IndexedResourceCollection]:
     """Get HAProxy pod collection from indices."""
-    from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
-
     if not hasattr(memo, "indices") or HAPROXY_PODS_INDEX not in memo.indices:
         logger.warning("⚠️ No HAProxy pods index available")
         return None
@@ -152,15 +151,27 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
             haproxy_pods_store
         )
 
-        production_urls = get_production_urls_from_index(haproxy_pods_collection)
+        production_urls, url_to_pod_name = get_production_urls_from_index(
+            haproxy_pods_collection
+        )
         if not production_urls:
             logger.warning(
                 "⚠️ No production HAProxy pods found - skipping synchronization"
             )
             return
 
-        if not hasattr(memo, "deployment_history"):
-            memo.deployment_history = DeploymentHistory()
+        # Emit sync start event
+        if activity_buffer := get_memo_activity_buffer(memo):
+            activity_buffer.add_event_sync(
+                EventType.SYNC,
+                f"Starting configuration sync to {len(production_urls)} HAProxy instance{'s' if len(production_urls) > 1 else ''}",
+                source="synchronization",
+                metadata={
+                    "pod_count": len(production_urls),
+                    "namespace": get_current_namespace(),
+                    "sync_phase": "start",
+                },
+            )
 
         # Cache ConfigSynchronizer in memo to reuse HTTP connections across sync operations
         if not hasattr(memo, "config_synchronizer"):
@@ -170,12 +181,15 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
                 production_urls=production_urls,
                 validation_url=validation_url,
                 credentials=memo.credentials,
-                deployment_history=memo.deployment_history,
+                activity_buffer=memo.activity_buffer,
+                url_to_pod_name=url_to_pod_name,
             )
             logger.debug("🔄 Created new ConfigSynchronizer instance")
         else:
             # Update production URLs in case there were missed pod events
-            memo.config_synchronizer._update_production_clients(production_urls)
+            memo.config_synchronizer._update_production_clients(
+                production_urls, url_to_pod_name
+            )
             logger.debug("♻️  Reusing cached ConfigSynchronizer instance")
 
         synchronizer = memo.config_synchronizer
@@ -190,32 +204,51 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
             metrics, successful_count, failed_count, len(production_urls)
         )
 
-        # Record activity events for sync results
-        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
-            if successful_count > 0:
-                memo.activity_buffer.add_event_sync(
-                    EventType.SUCCESS,
-                    f"Synchronized {successful_count}/{len(production_urls)} HAProxy instances",
+        # Record activity events for sync completion
+        if activity_buffer := get_memo_activity_buffer(memo):
+            # Always emit sync completion event
+            if failed_count == 0:
+                # All successful
+                activity_buffer.add_event_sync(
+                    EventType.SYNC,
+                    f"Configuration sync complete: {successful_count}/{len(production_urls)} instances updated",
                     source="synchronization",
                     metadata={
                         "successful": successful_count,
                         "failed": failed_count,
                         "total_urls": len(production_urls),
+                        "sync_phase": "complete",
+                        "status": "success",
                     },
                 )
-
-            if failed_count > 0:
+            elif successful_count > 0:
+                # Partial success
                 memo.activity_buffer.add_event_sync(
-                    EventType.ERROR,
-                    f"Failed to sync {failed_count}/{len(production_urls)} HAProxy instances",
+                    EventType.SYNC,
+                    f"Configuration sync partial: {successful_count} successful, {failed_count} failed",
                     source="synchronization",
                     metadata={
                         "successful": successful_count,
                         "failed": failed_count,
                         "total_urls": len(production_urls),
-                        "errors": [
-                            str(error) for error in errors[:3]
-                        ],  # First 3 errors
+                        "sync_phase": "complete",
+                        "status": "partial",
+                        "errors": [str(error) for error in errors[:3]],
+                    },
+                )
+            else:
+                # All failed
+                memo.activity_buffer.add_event_sync(
+                    EventType.ERROR,
+                    f"Configuration sync failed: {failed_count}/{len(production_urls)} instances failed",
+                    source="synchronization",
+                    metadata={
+                        "successful": successful_count,
+                        "failed": failed_count,
+                        "total_urls": len(production_urls),
+                        "sync_phase": "complete",
+                        "status": "failed",
+                        "errors": [str(error) for error in errors[:3]],
                     },
                 )
 

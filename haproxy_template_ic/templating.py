@@ -29,18 +29,9 @@ from .models import (
     TemplateSnippetCollection,
 )
 from .constants import (
-    ERROR_TEMPLATE_COMPILATION,
-    ERROR_TEMPLATE_GENERIC,
-    ERROR_TEMPLATE_INVALID_SYNTAX,
-    ERROR_TEMPLATE_RENDER,
-    ERROR_TEMPLATE_SNIPPET_NOT_FOUND,
-    ERROR_TEMPLATE_SYNTAX,
+    MAX_TEMPLATE_FRAMES,
     TEMPLATE_CACHE_SIZE,
 )
-
-# -----------------------------------------------------------------------------
-# Constants and patterns
-# -----------------------------------------------------------------------------
 
 # Regex pattern for extracting snippet names from include statements
 INCLUDE_PATTERN = re.compile(r'{%\s*include\s+["\']([^"\']+)["\']\s*%}')
@@ -48,10 +39,6 @@ INCLUDE_PATTERN = re.compile(r'{%\s*include\s+["\']([^"\']+)["\']\s*%}')
 # Context lines to show around errors
 CONTEXT_LINES_BEFORE = 2
 CONTEXT_LINES_AFTER = 3
-
-# -----------------------------------------------------------------------------
-# Jinja2 setup and template functionality
-# -----------------------------------------------------------------------------
 
 
 def b64decode_filter(value: str) -> str:
@@ -408,12 +395,10 @@ def format_template_error(
     exc_type, exc_value, tb = sys.exc_info()
 
     # Performance optimization: limit traceback depth to avoid excessive processing
-    MAX_FRAMES = 10  # Reasonable limit for template nesting
-
     if tb:
         # Traverse traceback to find template frames (with early termination)
         frame_count = 0
-        while tb and frame_count < MAX_FRAMES:
+        while tb and frame_count < MAX_TEMPLATE_FRAMES:
             frame = tb.tb_frame
             # Jinja2 templates have special filenames
             if frame.f_code.co_filename and (
@@ -476,7 +461,7 @@ def format_template_error(
                 context_lines = _get_context_lines(lines, line_idx, line_no)
                 if context_lines:
                     error_parts.append(
-                        "\n\n  Template context:\n" + "\n".join(context_lines)
+                        f"\n\n  Template context:\n{'\n'.join(context_lines)}"
                     )
     else:
         # No line number available
@@ -561,11 +546,6 @@ class TemplateCompiler:
         return self.environment.from_string(template_string)
 
 
-# -----------------------------------------------------------------------------
-# Template compilation and caching
-# -----------------------------------------------------------------------------
-
-
 @lru_cache(maxsize=TEMPLATE_CACHE_SIZE)
 def compile_template(
     template_str: str, snippets_tuple: Optional[tuple] = None
@@ -578,7 +558,7 @@ def compile_template(
     try:
         return env.from_string(template_str)
     except TemplateSyntaxError as e:
-        raise ValueError(ERROR_TEMPLATE_SYNTAX.format(error=e)) from e
+        raise ValueError(f"Template syntax error: {e}") from e
 
 
 def render_template(
@@ -594,12 +574,7 @@ def render_template(
         template = compile_template(template_str, snippets_tuple)
         return template.render(**context)
     except (jinja2.TemplateError, ValueError, TypeError) as e:
-        raise ValueError(ERROR_TEMPLATE_RENDER.format(error=e)) from e
-
-
-# -----------------------------------------------------------------------------
-# Template Renderer with Caching
-# -----------------------------------------------------------------------------
+        raise ValueError(f"Template rendering failed: {e}") from e
 
 
 class TemplateRenderer:
@@ -688,7 +663,7 @@ class TemplateRenderer:
                     self._compiler.compile_template(template_str)
                 )
             except Exception as e:
-                raise ValueError(ERROR_TEMPLATE_COMPILATION.format(error=e)) from e
+                raise ValueError(f"Template compilation failed: {e}") from e
 
         return self._compiled_templates[template_str]
 
@@ -720,11 +695,11 @@ class TemplateRenderer:
             # Try to render with empty context to catch TemplateNotFound errors
             compiled_template.render({})
         except TemplateSyntaxError as e:
-            warnings.append(ERROR_TEMPLATE_INVALID_SYNTAX.format(error=e))
+            warnings.append(f"Invalid template syntax: {e}")
         except TemplateNotFound as e:
-            warnings.append(ERROR_TEMPLATE_SNIPPET_NOT_FOUND.format(error=e))
+            warnings.append(f"Template snippet not found: {e}")
         except Exception as e:
-            warnings.append(ERROR_TEMPLATE_GENERIC.format(error=e))
+            warnings.append(f"Template error: {e}")
         return warnings
 
 

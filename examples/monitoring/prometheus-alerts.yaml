@@ -20,22 +20,13 @@ groups:
       description: "95th percentile template render latency is {{ $value }}s, which is above 10s threshold."
 
   - alert: FrequentConfigReloads
-    expr: rate(haproxy_template_ic_config_reloads_total[5m]) > 0.1
+    expr: rate(haproxy_template_ic_rendered_templates_total[5m]) > 0.1
     for: 10m
     labels:
       severity: warning
     annotations:
-      summary: "Frequent configuration reloads"
-      description: "Configuration is being reloaded {{ $value }} times per second, which may indicate instability."
-
-  - alert: CircuitBreakerOpen
-    expr: haproxy_template_ic_circuit_breaker_state{state="open"} == 1
-    for: 2m
-    labels:
-      severity: warning
-    annotations:
-      summary: "Circuit breaker {{ $labels.circuit_name }} is open"
-      description: "Circuit breaker {{ $labels.circuit_name }} has been open for more than 2 minutes."
+      summary: "Frequent template renders"
+      description: "Templates are being rendered {{ $value }} times per second, which may indicate configuration instability."
 
   - alert: HighErrorRate
     expr: rate(haproxy_template_ic_errors_total[5m]) > 0.01
@@ -47,7 +38,7 @@ groups:
       description: "Error rate is {{ $value }} errors per second for error type: {{ $labels.error_type }}"
 
   - alert: TemplateRenderFailures
-    expr: rate(haproxy_template_ic_template_renders_total{status="error"}[5m]) > 0
+    expr: rate(haproxy_template_ic_rendered_templates_total{status="error"}[5m]) > 0
     for: 1m
     labels:
       severity: critical

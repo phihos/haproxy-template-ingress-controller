@@ -8,7 +8,7 @@ across multiple instances with validation-first deployment and structured compar
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from haproxy_template_ic.credentials import Credentials
@@ -16,17 +16,18 @@ if TYPE_CHECKING:
 from haproxy_template_ic.models import HAProxyConfigContext
 from .client import DataplaneClient, _SECTION_ELEMENTS
 from .errors import DataplaneAPIError, ValidationError
-from .models import ConfigChange, DeploymentHistory
+from .models import ConfigChange
 from .types import ConfigChangeType, ConfigElementType, ConfigSectionType
 from .utils import (
     parse_validation_error_details,
+    extract_hostname_from_url,
     _check_early_exit_condition,
     _to_dict_safe,
     _natural_sort_key,
     MAX_CONFIG_COMPARISON_CHANGES,
 )
 from haproxy_template_ic.metrics import get_metrics_collector
-from haproxy_template_ic.activity import EventType, get_activity_buffer
+from haproxy_template_ic.activity import EventType, get_activity_buffer, ActivityBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +40,15 @@ class ConfigSynchronizer:
         production_urls: List[str],
         validation_url: str,
         credentials: "Credentials",
-        deployment_history: Optional[DeploymentHistory] = None,
+        activity_buffer: Optional[ActivityBuffer] = None,
+        url_to_pod_name: Optional[Dict[str, str]] = None,
     ):
         self.production_urls = production_urls
         self.validation_url = validation_url
         self.credentials = credentials
-        self.deployment_history = deployment_history or DeploymentHistory()
+        self.activity_buffer = activity_buffer or get_activity_buffer()
+        self.url_to_pod_name = url_to_pod_name or {}
 
-        # Initialize client references (will be created lazily)
         self._validation_client: Optional[DataplaneClient] = None
         self._production_clients: Dict[str, DataplaneClient] = {}
 
@@ -93,7 +95,9 @@ class ConfigSynchronizer:
 
         return template_hashes
 
-    def _update_production_clients(self, new_urls: List[str]) -> None:
+    def _update_production_clients(
+        self, new_urls: List[str], url_to_pod_name: Optional[Dict[str, str]] = None
+    ) -> None:
         """Update production clients based on current URLs.
 
         This method handles dynamic HAProxy pod lifecycle by:
@@ -103,6 +107,7 @@ class ConfigSynchronizer:
 
         Args:
             new_urls: Current list of production HAProxy URLs
+            url_to_pod_name: Optional mapping from URLs to pod names
         """
         # Remove clients for URLs that are no longer present
         removed_urls = set(self._production_clients.keys()) - set(new_urls)
@@ -129,6 +134,10 @@ class ConfigSynchronizer:
 
         # Update the production URLs list
         self.production_urls = new_urls
+
+        # Update pod name mapping if provided
+        if url_to_pod_name is not None:
+            self.url_to_pod_name = url_to_pod_name
 
     def add_production_url(self, url: str) -> None:
         """Add a single production URL and create its client.
@@ -671,6 +680,139 @@ class ConfigSynchronizer:
 
         return changes
 
+    def _safe_compare_sections(
+        self,
+        section_name: str,
+        current: Dict[str, Any],
+        new: Dict[str, Any],
+        changes: List[str],
+        max_changes: int,
+        comparison_func: Callable[
+            [str, Dict[str, Any], Dict[str, Any], List[str]], bool
+        ],
+    ) -> bool:
+        """Safely compare configuration sections with error handling."""
+        try:
+            return comparison_func(section_name, current, new, changes)
+        except Exception as e:
+            logger.debug(f"Error comparing {section_name}: {type(e).__name__}: {e}")
+            changes.append(f"error comparing {section_name}: {type(e).__name__}")
+            return _check_early_exit_condition(changes, max_changes)
+
+    def _compare_named_sections_impl(
+        self,
+        section_name: str,
+        current: Dict[str, Any],
+        new: Dict[str, Any],
+        changes: List[str],
+    ) -> bool:
+        """Implementation for comparing named configuration sections."""
+        current_sections = {
+            s.name: _to_dict_safe(s)
+            for s in current.get(section_name, [])
+            if hasattr(s, "name") and s.name
+        }
+        new_sections = {
+            s.name: _to_dict_safe(s)
+            for s in new.get(section_name, [])
+            if hasattr(s, "name") and s.name
+        }
+
+        current_names = set(current_sections.keys())
+        new_names = set(new_sections.keys())
+        section_type = section_name[:-1]  # Remove 's' from plural
+
+        changes.extend(
+            f"remove {section_type} {name}" for name in current_names - new_names
+        )
+        changes.extend(
+            f"add {section_type} {name}" for name in new_names - current_names
+        )
+        changes.extend(
+            f"modify {section_type} {name}"
+            for name in current_names & new_names
+            if current_sections[name] != new_sections[name]
+        )
+        return False  # Never early exit from implementation
+
+    def _compare_list_sections_impl(
+        self,
+        section_name: str,
+        current: Dict[str, Any],
+        new: Dict[str, Any],
+        changes: List[str],
+    ) -> bool:
+        """Implementation for comparing list configuration sections."""
+        current_list = [_to_dict_safe(s) for s in current.get(section_name, [])]
+        new_list = [_to_dict_safe(s) for s in new.get(section_name, [])]
+
+        if len(current_list) != len(new_list):
+            changes.append(
+                f"{section_name} count changed from {len(current_list)} to {len(new_list)}"
+            )
+        else:
+            changes.extend(
+                f"modify {section_name} section {i}"
+                for i, (curr, new_item) in enumerate(zip(current_list, new_list))
+                if curr != new_item
+            )
+        return False  # Never early exit from implementation
+
+    def _compare_named_config_sections(
+        self,
+        section_name: str,
+        current: Dict[str, Any],
+        new: Dict[str, Any],
+        changes: List[str],
+        max_changes: int,
+    ) -> bool:
+        """Compare named configuration sections and return True if early exit needed."""
+        if self._safe_compare_sections(
+            section_name,
+            current,
+            new,
+            changes,
+            max_changes,
+            self._compare_named_sections_impl,
+        ):
+            return True
+        return _check_early_exit_condition(changes, max_changes)
+
+    def _compare_list_config_sections(
+        self,
+        section_name: str,
+        current: Dict[str, Any],
+        new: Dict[str, Any],
+        changes: List[str],
+        max_changes: int,
+    ) -> bool:
+        """Compare list configuration sections and return True if early exit needed."""
+        if self._safe_compare_sections(
+            section_name,
+            current,
+            new,
+            changes,
+            max_changes,
+            self._compare_list_sections_impl,
+        ):
+            return True
+        return _check_early_exit_condition(changes, max_changes)
+
+    def _compare_global_section(
+        self, current: Dict[str, Any], new: Dict[str, Any], changes: List[str]
+    ) -> None:
+        """Compare global configuration section."""
+        current_global = _to_dict_safe(current.get("global"))
+        new_global = _to_dict_safe(new.get("global"))
+
+        if current_global and new_global:
+            if current_global != new_global:
+                changes.append("modify global")
+        elif new_global and not current_global:
+            changes.append("add global")
+        elif current_global and not new_global:
+            changes.append("remove global")
+
     def _compare_structured_configs(
         self, current: Dict[str, Any], new: Dict[str, Any]
     ) -> List[str]:
@@ -918,6 +1060,18 @@ class ConfigSynchronizer:
         Returns:
             Dict with keys: method, version
         """
+        # Record deployment start event
+        pod_name = self.url_to_pod_name.get(url)
+        self.activity_buffer.add_event_sync(
+            EventType.DEPLOYMENT_START,
+            f"Starting deployment to {url}",
+            source="synchronizer",
+            metadata={
+                "endpoint": url,
+                "pod_name": pod_name,
+            },
+        )
+
         client = self._production_clients[url]
 
         # Sync auxiliary content first (maps, certs, files)
@@ -1017,8 +1171,22 @@ class ConfigSynchronizer:
         self, url: str, error: Exception, config: str, results: Dict[str, Any]
     ) -> None:
         """Handle deployment error with enhanced logging."""
-        self.deployment_history.record(
-            url, "unknown", False, str(error), reload_triggered=False
+        # Get pod name for this URL
+        pod_name = self.url_to_pod_name.get(url)
+
+        # Record deployment failure event
+        self.activity_buffer.add_event_sync(
+            EventType.DEPLOYMENT_FAILED,
+            f"Deployment failed to {url}: {str(error)[:100]}",
+            source="synchronizer",
+            metadata={
+                "endpoint": url,
+                "version": "unknown",
+                "success": False,
+                "error": str(error),
+                "reload_triggered": False,
+                "pod_name": pod_name,
+            },
         )
         results["failed"] += 1
         results["errors"].append(f"{url}: {error}")
@@ -1148,8 +1316,9 @@ class ConfigSynchronizer:
                         "fallback": "🔄",
                     }
                     method_emoji = method_emojis.get(result["method"], "✅")
+                    pod_info = self._extract_pod_info_from_url(url)
                     logger.info(
-                        f"{method_emoji} Deployed to {url} ({result['method']}), version: {result['version']}"
+                        f"{method_emoji} Deployed to {pod_info['pod_name']} ({url}) ({result['method']}), version: {result['version']}"
                     )
 
                 # Use actual reload information from dataplane API response
@@ -1161,40 +1330,88 @@ class ConfigSynchronizer:
                     f"reload_id={reload_id}, method={result.get('method')}, version={result.get('version')}"
                 )
 
-                # Emit activity event for reloads
-                if reload_triggered:
-                    activity_buffer = get_activity_buffer()
-                    logger.debug(
-                        f"📊 Activity buffer status: current={activity_buffer.current_count}, total={activity_buffer.total_count}"
-                    )
-                    logger.debug(
-                        f"🚀 Emitting RELOAD activity event for {url} with reload_id={reload_id}"
-                    )
+                # Get activity buffer and pod info for all deployment events
+                activity_buffer = get_activity_buffer()
+                pod_info = self._extract_pod_info_from_url(url)
+
+                # Emit activity events for all deployment types
+                if result["method"] == "skipped":
+                    # Configuration unchanged - emit INFO event (no last_update change)
                     activity_buffer.add_event_sync(
-                        EventType.RELOAD,
-                        f"HAProxy configuration reloaded on {url}",
+                        EventType.INFO,
+                        f"Configuration unchanged on {pod_info['pod_name']} ({url})",
                         source="dataplane",
                         metadata={
                             "endpoint": url,
+                            "pod_ip": pod_info["pod_ip"],
+                            "pod_name": pod_info["pod_name"],
                             "version": result["version"],
-                            "method": result["method"],
-                            "reload_id": reload_id,
+                            "method": "skipped",
+                            "config_changed": False,
                         },
                     )
                     logger.debug(
-                        f"✅ Successfully emitted RELOAD activity event for {url}"
+                        f"ℹ️  Configuration unchanged on {pod_info['pod_name']} ({url})"
                     )
                 else:
+                    # Configuration was deployed - emit SYNC event (updates last_update)
+                    activity_buffer.add_event_sync(
+                        EventType.SYNC,
+                        f"Configuration updated on {pod_info['pod_name']} ({url}) ({result['method']})",
+                        source="dataplane",
+                        metadata={
+                            "endpoint": url,
+                            "pod_ip": pod_info["pod_ip"],
+                            "pod_name": pod_info["pod_name"],
+                            "version": result["version"],
+                            "method": result["method"],
+                            "config_changed": True,
+                        },
+                    )
                     logger.debug(
-                        f"⏭️  No reload event emitted for {url} (reload_triggered=False)"
+                        f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result['method']}"
                     )
 
-                self.deployment_history.record(
-                    url,
-                    result["version"],
-                    True,
-                    template_hashes=template_hashes,
-                    reload_triggered=reload_triggered,
+                # Additionally emit RELOAD event for reloads (provides extra detail)
+                if reload_triggered:
+                    logger.debug(
+                        f"🚀 Emitting additional RELOAD activity event for {pod_info['pod_name']} ({url}) with reload_id={reload_id}"
+                    )
+
+                    activity_buffer.add_event_sync(
+                        EventType.RELOAD,
+                        f"HAProxy process reloaded on {pod_info['pod_name']} ({url})",
+                        source="dataplane",
+                        metadata={
+                            "endpoint": url,
+                            "pod_ip": pod_info["pod_ip"],
+                            "pod_name": pod_info["pod_name"],
+                            "version": result["version"],
+                            "method": result["method"],
+                            "reload_id": reload_id,
+                            "config_changed": True,
+                        },
+                    )
+                    logger.debug(
+                        f"✅ Successfully emitted RELOAD activity event for {pod_info['pod_name']} ({url})"
+                    )
+
+                # Get pod name for this URL
+                pod_name = self.url_to_pod_name.get(url)
+
+                # Record deployment success event
+                self.activity_buffer.add_event_sync(
+                    EventType.DEPLOYMENT_SUCCESS,
+                    f"Deployment successful to {url} (version: {result['version']})",
+                    source="synchronizer",
+                    metadata={
+                        "endpoint": url,
+                        "version": result["version"],
+                        "success": True,
+                        "template_hashes": template_hashes,
+                        "reload_triggered": reload_triggered,
+                        "pod_name": pod_name,
+                    },
                 )
             else:
                 # Unexpected result type
@@ -1226,3 +1443,28 @@ class ConfigSynchronizer:
             )
 
         return results
+
+    def _extract_pod_info_from_url(self, url: str) -> Dict[str, str]:
+        """Extract pod information from dataplane URL.
+
+        Args:
+            url: Dataplane URL in format http://pod_ip:port
+
+        Returns:
+            Dictionary with 'pod_ip' and 'pod_name' keys
+        """
+        try:
+            # Parse URL to extract IP address
+            pod_ip = extract_hostname_from_url(url)
+
+            if not pod_ip:
+                return {"pod_ip": "unknown", "pod_name": "unknown"}
+
+            # Use actual pod name from mapping if available, otherwise fallback to IP-based name
+            pod_name = self.url_to_pod_name.get(url, f"pod-{pod_ip.replace('.', '-')}")
+
+            return {"pod_ip": pod_ip, "pod_name": pod_name}
+
+        except Exception as e:
+            logger.debug(f"Error extracting pod info from URL {url}: {e}")
+            return {"pod_ip": "unknown", "pod_name": "unknown"}

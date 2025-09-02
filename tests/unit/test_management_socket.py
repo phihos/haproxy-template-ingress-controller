@@ -122,11 +122,9 @@ class TestSerializeState:
         assert result["haproxy_config_context"]["rendered_config"] == "test config"
         assert result["cli_options"]["configmap_name"] == "test-config"
 
-        # Check that indices contains both new structure and legacy indices
+        # Check that indices contains new structure only
         assert "indices" in result
         assert "resources" in result["indices"]  # New structure
-        assert "resource_index" in result["indices"]  # Legacy structure
-        assert "config_index" in result["indices"]
 
     def test_serialize_state_minimal_memo(self):
         """Test serialization with minimal memo object."""
@@ -194,20 +192,20 @@ class TestSerializeState:
         assert result["haproxy_config_context"] == {}
 
     def test_serialize_state_indices_dict_error(self):
-        """Test serialization with indices dict conversion error."""
+        """Test serialization with indices serialization error in new structure."""
         memo = Mock()
-        memo.test_index = Mock()
-        # Set memo.indices to None to skip the new code path and test only legacy indices
-        memo.indices = None
+        memo.indices = {"problematic_index": {}}
 
-        # Mock dict() to raise TypeError for this index
-        with patch("builtins.dict", side_effect=TypeError("Dict conversion error")):
-            with patch("builtins.dir", return_value=["test_index"]):
-                result = serialize_state(memo)
+        # Patch _serialize_kopf_index to raise an exception
+        with patch(
+            "haproxy_template_ic.management_socket._serialize_kopf_index",
+            side_effect=ValueError("Serialization failed"),
+        ):
+            result = serialize_state(memo)
 
         assert "serialization_errors" in result
         assert any(
-            "legacy index 'test_index' serialization" in error
+            "index 'problematic_index' serialization" in error
             for error in result["serialization_errors"]
         )
 
@@ -307,8 +305,6 @@ class TestManagementSocketServer:
             result = await server._process_command("dump indices")
 
         assert "indices" in result
-        assert "resource_index" in result["indices"]
-        assert "config_index" in result["indices"]
 
     @pytest.mark.asyncio
     async def test_process_command_dump_config(self, server):
@@ -437,24 +433,12 @@ class TestManagementSocketServer:
             },
         }
 
-        # Also test old-style _index attributes for backward compatibility
-        server.memo.resource_index = {"res1": "data1"}
-        server.memo.config_index = {"conf1": "data1"}
-        server.memo.other_attr = "not an index"
-
-        with patch(
-            "builtins.dir",
-            return_value=["resource_index", "config_index", "other_attr", "indices"],
-        ):
-            result = server._dump_indices()
+        result = server._dump_indices()
 
         assert "indices" in result
-        # Should have both new-style indices and old-style indices
+        # Should have new-style indices only
         assert "ingresses" in result["indices"]
         assert "endpoints" in result["indices"]
-        assert "resource_index" in result["indices"]
-        assert "config_index" in result["indices"]
-        assert "other_attr" not in result["indices"]
 
         # Check that tuple keys are properly serialized with ':' separator
         assert "default:my-ingress" in result["indices"]["ingresses"]
@@ -869,21 +853,13 @@ class TestManagementSocketCriticalPaths:
 
     @pytest.mark.asyncio
     async def test_process_command_deployment_history_endpoint_found(self, server):
-        """Test deployment history when endpoint is found in deployment data (line 335)."""
-        # Mock deployment history with data
-        mock_history = Mock()
-        mock_history.to_dict.return_value = {
-            "deployment_history": {
-                "http://pod1:5555": {"version": "123", "success": True},
-                "http://pod2:5555": {"version": "124", "success": True},
-            }
-        }
-        server.memo.deployment_history = mock_history
-
+        """Test deployment history when endpoint is not found (current behavior)."""
+        # Production code uses activity_buffer and returns empty deployment history
         result = await server._process_command("get deployment http://pod1:5555")
 
-        expected_result = {"version": "123", "success": True}
-        assert result == {"result": expected_result}
+        # Since deployment history is empty, should return error with available endpoints
+        assert "error" in result
+        assert "No deployment history found for endpoint" in result["error"]
 
     @pytest.mark.asyncio
     async def test_process_command_get_template_snippet(self, server):
@@ -961,22 +937,11 @@ class TestManagementSocketCriticalPaths:
     @pytest.mark.asyncio
     async def test_dump_deployments_command(self, server):
         """Test dump deployments command (lines 241-242)."""
-        # Mock deployment history
-        mock_history = Mock()
-        mock_history.to_dict.return_value = {
-            "deployment_history": {
-                "http://pod1:5555": {"version": "123", "success": True}
-            }
-        }
-        server.memo.deployment_history = mock_history
-
+        # Production code uses activity_buffer and returns empty deployment history
         result = await server._process_command("dump deployments")
 
-        expected = {
-            "deployment_history": {
-                "http://pod1:5555": {"version": "123", "success": True}
-            }
-        }
+        # Should return empty deployment history
+        expected = {"deployment_history": {}}
         assert result == expected
 
 

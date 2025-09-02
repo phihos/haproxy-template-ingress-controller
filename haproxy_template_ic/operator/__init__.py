@@ -2,7 +2,6 @@
 # This package contains the main operator functionality split by concern:
 # resource watching, template rendering, pod management, and synchronization
 
-# Re-export for test mocking compatibility
 from kubernetes import config
 from kr8s.objects import Secret, ConfigMap
 from kr8s.objects import Pod
