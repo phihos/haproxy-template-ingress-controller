@@ -11,7 +11,7 @@ import sys
 import time
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Deque
 
 from prompt_toolkit.input import create_input
 from prompt_toolkit.keys import Keys
@@ -70,7 +70,7 @@ class DashboardLauncher:
         # State
         self.compatibility_level = CompatibilityLevel.BASIC
         self.running = False
-        self.last_update = None
+        self.last_update: Optional[datetime] = None
         self.manual_refresh = False
         self.show_help = False
         self.show_debug = False
@@ -78,7 +78,7 @@ class DashboardLauncher:
         # Template inspection state
         self.show_template_inspector = False
         self.template_inspector_mode = "list"  # "list", "inspect"
-        self.current_template_data = None
+        self.current_template_data: Optional[Dict[str, Any]] = None
 
         # Loading state
         self.loading = True
@@ -92,12 +92,12 @@ class DashboardLauncher:
         self.debug_total_logs = 0
 
         # Scroll acceleration and debouncing
-        self.last_scroll_time = 0
-        self.scroll_velocity = 0
+        self.last_scroll_time: float = 0.0
+        self.scroll_velocity: int = 0
         self.active_scrolling = False
 
         # Keyboard input handling
-        self.key_queue = asyncio.Queue()
+        self.key_queue: asyncio.Queue[str] = asyncio.Queue()
         self.input_handler = None  # prompt-toolkit input handler
         self.input_thread = None  # Thread for input handling
         self._stop_input = False  # Flag to stop input thread
@@ -108,7 +108,7 @@ class DashboardLauncher:
         self._event_loop = None
 
         # Debug logging infrastructure
-        self.debug_logs = deque(maxlen=200)
+        self.debug_logs: Deque[Dict[str, Any]] = deque(maxlen=200)
         self._setup_debug_logging()
 
         # Set up signal handler for clean exit
@@ -141,8 +141,9 @@ class DashboardLauncher:
                                 "message": record.getMessage(),
                             }
                         )
-                    except Exception:
-                        pass  # Don't let logging errors crash the dashboard
+                    except Exception as e:
+                        # Don't let logging errors crash the dashboard
+                        logger.debug(f"Non-critical error in debug log handler: {e}")
 
         # Set up logging configuration to ensure DEBUG logs are captured
         root_logger = logging.getLogger()
@@ -416,7 +417,7 @@ class DashboardLauncher:
                         transient=False,  # Keep output after exit for debugging
                     ) as live
                 ):
-                    last_refresh = 0
+                    last_refresh = 0.0
                     loop_count = 0
                     max_loops_without_tty = 50  # For non-TTY environments, limit loops
 
@@ -1026,8 +1027,9 @@ class DashboardLauncher:
                         border_style="red",
                     )
                 )
-            except Exception:
-                pass  # If even error display fails, just continue
+            except Exception as e:
+                # If even error display fails, just continue
+                logger.debug(f"Non-critical error in fallback error display: {e}")
 
     def _create_footer_text(self) -> str:
         """Create footer text with controls and status."""

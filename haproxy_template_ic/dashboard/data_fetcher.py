@@ -7,7 +7,7 @@ and Kubernetes resources via the kr8s Kubernetes API client.
 
 import asyncio
 import json
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, cast
 from datetime import datetime, timezone
 import logging
 
@@ -40,7 +40,7 @@ class DashboardDataFetcher:
         self._cache_ttl = 2  # seconds
 
         # Cache for pod raw sync data to prevent toggling on fallback
-        self._last_successful_pod_data = {}
+        self._last_successful_pod_data: Dict[str, Any] = {}
 
         # Controller pod name and timing info for display in UI
         self._controller_pod_name: Optional[str] = None
@@ -134,7 +134,12 @@ class DashboardDataFetcher:
         logger.debug(
             f"All {max_retries + 1} attempts failed for command '{command}', raising: {last_error}"
         )
-        raise last_error
+        if last_error:
+            raise last_error
+        else:
+            raise Exception(
+                f"Failed to execute command '{command}' after {max_retries + 1} attempts"
+            )
 
     async def initialize(self) -> CompatibilityLevel:
         """Initialize the data fetcher and check compatibility."""
@@ -424,7 +429,8 @@ class DashboardDataFetcher:
 
                 # Fallback to kubectl with context support
                 logger.debug("Falling back to kubectl with context support")
-                import subprocess
+                # Safe: Only runs system kubectl command with controlled arguments
+                import subprocess  # nosec B404
 
                 # Build kubectl command with context if specified
                 kubectl_cmd = [
@@ -441,7 +447,8 @@ class DashboardDataFetcher:
 
                 logger.debug(f"Running command: {' '.join(kubectl_cmd)}")
 
-                result = subprocess.run(
+                # Safe: kubectl command with controlled arguments, no user input
+                result = subprocess.run(  # nosec B603, B607
                     kubectl_cmd, capture_output=True, text=True, timeout=10
                 )
 
@@ -842,13 +849,12 @@ class DashboardDataFetcher:
         }
 
         # Add controller pod timing info to operator data
+        operator_info = cast(Dict[str, Any], processed["operator"])
         if self._controller_pod_name:
-            processed["operator"]["controller_pod_name"] = self._controller_pod_name
+            operator_info["controller_pod_name"] = self._controller_pod_name
 
         if self._controller_pod_start_time:
-            processed["operator"]["controller_pod_start_time"] = (
-                self._controller_pod_start_time
-            )
+            operator_info["controller_pod_start_time"] = self._controller_pod_start_time
 
         # Legacy mode doesn't have deployment data, so last_deployment_time won't be available
 
@@ -884,7 +890,7 @@ class DashboardDataFetcher:
         }
 
     def _extract_pod_info(
-        self, k8s_pods: Dict[str, Any], pod_metrics: Dict[str, Any] = None
+        self, k8s_pods: Dict[str, Any], pod_metrics: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """Extract HAProxy pod information."""
         pods = []
@@ -900,15 +906,15 @@ class DashboardDataFetcher:
             status = pod.get("status", {})
 
             pod_name = metadata.get("name", "unknown")
-            pod_metrics = metrics.get(pod_name, {})
+            pod_metrics_data = metrics.get(pod_name, {}) if metrics else {}
 
             pods.append(
                 {
                     "name": pod_name,
                     "status": status.get("phase", "Unknown"),
                     "ip": status.get("podIP", "N/A"),
-                    "cpu": pod_metrics.get("cpu", "N/A"),
-                    "memory": pod_metrics.get("memory", "N/A"),
+                    "cpu": pod_metrics_data.get("cpu", "N/A"),
+                    "memory": pod_metrics_data.get("memory", "N/A"),
                     "synced": "Unknown",  # Would come from deployment history
                     "start_time": status.get(
                         "startTime"
@@ -1145,7 +1151,7 @@ class DashboardDataFetcher:
             ):
                 try:
                     # This handles kopf index structure where we need to iterate properly
-                    namespaces = {}
+                    namespaces: Dict[str, int] = {}
                     total_count = 0
 
                     # Iterate through the kopf index
@@ -1210,7 +1216,7 @@ class DashboardDataFetcher:
         from datetime import datetime, timezone
 
         # Track the most recent timestamp for each resource type
-        last_changes = {}
+        last_changes: Dict[str, datetime] = {}
 
         # Process activity events to find resource-related changes
         for event in activity:
@@ -1362,7 +1368,7 @@ class DashboardDataFetcher:
         history_data = deployment_history.get("deployment_history", {})
 
         # Find the most recent actual change timestamp for each template across all endpoints
-        template_timestamps = {}
+        template_timestamps: Dict[str, str] = {}
 
         for endpoint, deployment_info in history_data.items():
             if deployment_info.get("success"):
@@ -1452,7 +1458,7 @@ class DashboardDataFetcher:
                 source_task, rendered_task
             )
 
-            response = {
+            response: Dict[str, Any] = {
                 "template_name": template_name,
                 "source": None,
                 "rendered": None,

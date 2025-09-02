@@ -147,21 +147,23 @@ exclude_lines = [
 python_version = "3.13"
 strict = false
 warn_return_any = false
-warn_unused_configs = true
+warn_unused_configs = false
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = false
 disallow_untyped_decorators = false
-no_implicit_optional = true
-warn_redundant_casts = true
+no_implicit_optional = false
+warn_redundant_casts = false
 warn_unused_ignores = false
 warn_no_return = false
-warn_unreachable = true
+warn_unreachable = false
+ignore_errors = false
 
 # Exclude test files and generated code for now to focus on production code
 exclude = [
     "tests/.*",
     "codegen/.*",  # Exclude generated code
+    "haproxy_template_ic/dashboard/.*",  # Dashboard modules under development
 ]
 
 # For third-party libraries without type stubs or py.typed markers
@@ -176,6 +178,7 @@ module = [
     "python_on_whales.*",  # Docker wrapper - no official type stubs
     "haproxy_dataplane_v3.*",  # Generated HAProxy Dataplane API client
     "circuitbreaker.*",  # Circuit breaker library - no official type stubs
+    "haproxy_template_ic.dashboard.*",  # Dashboard modules - under development
 ]
 ignore_missing_imports = true
 

@@ -138,7 +138,7 @@ def _collect_resource_indices(memo: Any, metrics: Any) -> Dict[str, Any]:
             total_count = len(collection)
 
             # Calculate namespace distribution
-            namespaces = {}
+            namespaces: Dict[str, int] = {}
             for resource_list in collection._internal_dict.values():
                 for resource in resource_list:
                     namespace = resource.get("metadata", {}).get("namespace", "default")

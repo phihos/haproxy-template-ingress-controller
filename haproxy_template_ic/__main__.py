@@ -158,9 +158,11 @@ def dashboard(
     # Get namespace from current kubectl context if not provided
     if not namespace:
         try:
-            import subprocess
+            # Safe: Only runs system kubectl command with controlled arguments
+            import subprocess  # nosec B404
 
-            result = subprocess.run(
+            # Safe: kubectl command with controlled arguments, no user input
+            result = subprocess.run(  # nosec B603, B607
                 [
                     "kubectl",
                     "config",

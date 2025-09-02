@@ -724,16 +724,11 @@ class ManagementSocketServer:
     def _handle_version_command(self) -> Dict[str, Any]:
         """Handle version command for compatibility checking."""
         try:
-            from haproxy_template_ic import __version__
+            from importlib import metadata
 
-            app_version = __version__
-        except ImportError:
-            try:
-                from importlib import metadata
-
-                app_version = metadata.version("haproxy-template-ic")
-            except Exception:
-                app_version = "development"
+            app_version = metadata.version("haproxy-template-ic")
+        except Exception:
+            app_version = "development"
 
         return {
             "version": app_version,
@@ -985,7 +980,7 @@ class ManagementSocketServer:
         """Dump all dashboard data in optimized format."""
         try:
             # Combine all dashboard-relevant data
-            dashboard_data = {
+            dashboard_data: Dict[str, Any] = {
                 "operator": {},
                 "pods": [],
                 "resources": {},
@@ -1019,8 +1014,8 @@ class ManagementSocketServer:
                     # Try to detect from environment or use service account namespace
                     import os
 
-                    namespace = os.environ.get("POD_NAMESPACE")
-                    if not namespace:
+                    namespace = os.environ.get("POD_NAMESPACE") or "unknown"
+                    if namespace == "unknown":
                         try:
                             # Read namespace from service account token
                             with open(
@@ -1059,8 +1054,11 @@ class ManagementSocketServer:
                                 operator_data["controller_pod_start_time"] = pod.status[
                                     "startTime"
                                 ]
-                        except Exception:
-                            pass  # Silently continue if pod info unavailable
+                        except Exception as e:
+                            # Silently continue if pod info unavailable
+                            logger.debug(
+                                f"Non-critical error fetching controller pod info: {e}"
+                            )
 
                     # Get last deployment time from deployment history
                     try:
@@ -1082,11 +1080,15 @@ class ManagementSocketServer:
                                 operator_data["last_deployment_time"] = (
                                     most_recent_timestamp
                                 )
-                    except Exception:
-                        pass  # Silently continue if deployment history unavailable
+                    except Exception as e:
+                        # Silently continue if deployment history unavailable
+                        logger.debug(
+                            f"Non-critical error fetching deployment history: {e}"
+                        )
 
-                except Exception:
-                    pass  # Silently continue if timing info unavailable
+                except Exception as e:
+                    # Silently continue if timing info unavailable
+                    logger.debug(f"Non-critical error fetching timing info: {e}")
 
             # Get pod data
             pods = self._dump_pods()

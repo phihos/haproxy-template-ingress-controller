@@ -555,7 +555,7 @@ def get_performance_metrics() -> Dict[str, Any]:
     Returns:
         Dictionary containing template_render, dataplane_api, and sync_success_rate metrics with historical data
     """
-    performance = {}
+    performance: Dict[str, Any] = {}
 
     try:
         # Template render metrics

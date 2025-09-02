@@ -5,7 +5,7 @@ Provides helper functions for formatting various types of data
 for display in the Rich UI components.
 """
 
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 from datetime import datetime, timezone
 import re
 
@@ -307,7 +307,7 @@ def create_sparkline(values: List[Union[int, float]], width: int = 16) -> str:
         return "▁" * width
 
 
-def format_status(status: str, status_map: Dict[str, tuple] = None) -> tuple:
+def format_status(status: str, status_map: Optional[Dict[str, tuple]] = None) -> tuple:
     """Format status with appropriate emoji and color.
 
     Args:
