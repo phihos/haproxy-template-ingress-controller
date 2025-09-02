@@ -355,7 +355,16 @@ class DashboardLauncher:
                         elif key_press.key == Keys.End:
                             key_name = "END"
                         elif key_press.key == Keys.Escape:
-                            key_name = "ESC"
+                            key_name = "\x1b"
+                        elif (
+                            key_press.key == Keys.Enter
+                            or key_press.key == Keys.ControlM
+                        ):
+                            key_name = "\r"
+                        elif (
+                            key_press.key == Keys.Tab or key_press.key == Keys.ControlI
+                        ):
+                            key_name = "\t"
                         elif (
                             hasattr(key_press.key, "value")
                             and len(key_press.key.value) == 1
@@ -797,7 +806,7 @@ class DashboardLauncher:
                 self.template_inspector_mode = "list"
                 self.current_template_data = None
                 return True
-            elif key.lower() == "\t":  # Tab key - cycle view modes
+            elif key == "\t":  # Tab key - cycle view modes
                 self.template_inspector.cycle_view_mode()
                 return True
             else:
@@ -806,7 +815,9 @@ class DashboardLauncher:
                 if self.current_template_data:
                     if self.template_inspector.view_mode == "template":
                         content = self.current_template_data.get("source")
-                    else:
+                    elif self.template_inspector.view_mode == "rendered":
+                        content = self.current_template_data.get("rendered")
+                    else:  # split mode doesn't need scrolling, handled separately
                         content = self.current_template_data.get("rendered")
                 return self.template_inspector.handle_content_navigation(key, content)
 

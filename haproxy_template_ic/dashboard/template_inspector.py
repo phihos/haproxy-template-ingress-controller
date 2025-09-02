@@ -147,17 +147,11 @@ class TemplateInspectorPanel:
                 )
             )
 
-        # Calculate terminal height for split view
-        terminal_height = None
-        if self.console:
-            terminal_height = self.console.size.height
-
         return Panel(
             layout,
             title=f"📋 {template_name} - Split View",
             subtitle="[dim]Tab to switch views | ↑↓ scroll | ESC to return[/dim]",
             border_style="blue",
-            height=terminal_height,
             expand=True,
         )
 
@@ -169,11 +163,6 @@ class TemplateInspectorPanel:
         template_type: str,
     ) -> Panel:
         """Render single view of template or rendered content."""
-        # Calculate terminal height for panel
-        terminal_height = None
-        if self.console:
-            terminal_height = self.console.size.height
-
         if not content:
             content_text = f"[dim]{view_type.title()} content not available[/dim]"
             return Panel(
@@ -181,7 +170,6 @@ class TemplateInspectorPanel:
                 title=f"📋 {template_name} - {view_type.title()} View",
                 subtitle="[dim]Tab to switch views | ESC to return[/dim]",
                 border_style="dim",
-                height=terminal_height,
                 expand=True,
             )
 
@@ -225,7 +213,6 @@ class TemplateInspectorPanel:
                 title=f"📋 {template_name} - {view_type.title()} View ({template_type})",
                 subtitle=f"[dim]Tab to switch views | ↑↓ scroll | {scroll_info} | ESC to return[/dim]",
                 border_style="blue",
-                height=terminal_height,
                 expand=True,
             )
         except Exception as e:
@@ -238,7 +225,6 @@ class TemplateInspectorPanel:
                 title=f"📋 {template_name} - {view_type.title()} View ({template_type})",
                 subtitle=f"[dim]Tab to switch views | ↑↓ scroll | Lines: {len(visible_content.splitlines())} | ESC to return[/dim]",
                 border_style="blue",
-                height=terminal_height,
                 expand=True,
             )
 
