@@ -172,6 +172,7 @@ COMMANDS:
     status      Show deployment status
     clean       Clean up and reset environment
     test        Test ingress controller functionality
+    dashboard   Launch live status dashboard for monitoring
     port-forward Setup port forwarding for HAProxy services
     debug       Enable debug mode (sleeps controller, creates dev config)
     no-debug    Disable debug mode (restores normal operation)
@@ -197,6 +198,7 @@ EXAMPLES:
     $0 restart              # Rebuild image and restart controller
     $0 restart --skip-build # Restart controller without rebuilding
     $0 test                 # Test ingress controller functionality
+    $0 dashboard            # Launch live monitoring dashboard
     $0 logs                 # Follow controller logs
     $0 port-forward         # Setup port forwarding for testing
     $0 down                 # Delete cluster
@@ -401,6 +403,55 @@ ensure_cluster() {
 	fi
 	kubectl config use-context "$ctx" >/dev/null
 	ok "Context configured."
+}
+
+install_metrics_server() {
+	log INFO "Installing metrics-server for pod resource monitoring..."
+	
+	# Install the latest metrics-server components
+	if run_with_spinner "Installing metrics-server v0.8.0" \
+		kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.8.0/components.yaml; then
+		ok "Metrics-server manifest applied."
+	else
+		warn "Failed to apply metrics-server manifest"
+		return 1
+	fi
+	
+	# Apply the required patch for kind clusters (disable TLS verification)
+	log INFO "Configuring metrics-server for kind cluster..."
+	if kubectl patch -n kube-system deployment metrics-server --type=json \
+		-p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]' >/dev/null 2>&1; then
+		ok "Metrics-server configured for kind cluster."
+	else
+		warn "Failed to patch metrics-server configuration"
+		return 1
+	fi
+	
+	# Wait for metrics-server to be ready
+	log INFO "Waiting for metrics-server to become ready..."
+	if kubectl -n kube-system rollout status deployment/metrics-server --timeout=60s >/dev/null 2>&1; then
+		ok "Metrics-server is ready."
+	else
+		warn "Metrics-server rollout did not complete in 60s"
+		return 1
+	fi
+	
+	# Verify metrics are available (may take a few more seconds)
+	log INFO "Verifying metrics availability..."
+	local attempts=0
+	while [[ $attempts -lt 6 ]]; do
+		if kubectl top nodes >/dev/null 2>&1; then
+			ok "Metrics-server is collecting node metrics successfully."
+			return 0
+		fi
+		debug "Metrics not ready yet, waiting 10 seconds... (attempt $((attempts + 1))/6)"
+		sleep 10
+		((attempts++))
+	done
+	
+	warn "Metrics-server installed but metrics may not be immediately available"
+	warn "This is normal and metrics should be available within a few minutes"
+	return 0
 }
 
 install_telepresence_traffic_manager() {
@@ -837,6 +888,53 @@ test_ingress() {
     fi
 }
 
+launch_dashboard() {
+    print_section "📊 Launching Live Status Dashboard"
+    
+    # Check if haproxy-template-ic CLI is available
+    if ! command -v haproxy-template-ic >/dev/null 2>&1; then
+        warn "haproxy-template-ic CLI not found. Installing from current directory..."
+        log INFO "Installing haproxy-template-ic CLI..."
+        if command -v uv >/dev/null 2>&1; then
+            uv pip install -e "${REPO_ROOT}"
+        else
+            pip install -e "${REPO_ROOT}"
+        fi
+    fi
+    
+    # Check if cluster exists
+    if ! kind get clusters 2>/dev/null | grep -q "$CLUSTER_NAME"; then
+        err "Cluster '$CLUSTER_NAME' not found. Start environment first with: $0 up"
+        return 1
+    fi
+    
+    # Check if controller is deployed
+    if ! kubectl -n "$CTRL_NAMESPACE" get deployment haproxy-template-ic >/dev/null 2>&1; then
+        err "Controller not found in namespace '$CTRL_NAMESPACE'. Deploy it first with: $0 up"
+        return 1
+    fi
+    
+    # Set kubectl context
+    kubectl config use-context "kind-${CLUSTER_NAME}" >/dev/null
+    
+    # Launch dashboard with appropriate parameters
+    log INFO "Starting dashboard for cluster '${CLUSTER_NAME}' namespace '${CTRL_NAMESPACE}'..."
+    echo
+    ok "Dashboard is starting with:"
+    echo "  - Context: kind-${CLUSTER_NAME}"
+    echo "  - Namespace: ${CTRL_NAMESPACE}"
+    echo "  - Refresh interval: 5 seconds"
+    echo
+    echo "Press 'q' to quit, 'r' to refresh, 'h' for help"
+    echo
+    
+    # Run the dashboard command
+    uv run haproxy-template-ic dashboard \
+        --namespace "${CTRL_NAMESPACE}" \
+        --context "kind-${CLUSTER_NAME}" \
+        --refresh 5
+}
+
 
 port_forward_haproxy() {
     print_section "🔄 Setting up Port Forwarding"
@@ -908,6 +1006,13 @@ post_deploy_tips() {
 	echo "  - Browser test: Add '127.0.0.1 echo.localdev.me' to /etc/hosts, visit http://echo.localdev.me:30080"
 	echo "  - Port forwarding: $0 port-forward"
 	echo
+	
+	ok "📊 Live Monitoring:"
+	echo "  - Dashboard: $0 dashboard"
+	echo "  - Dashboard help: $0 dashboard --help"
+	echo "  - Pod resource usage: kubectl top pods -A"
+	echo "  - Node resource usage: kubectl top nodes"
+	echo
 	ok "Monitoring & Observability:"
 	echo "  - Metrics (Prometheus): kubectl -n ${CTRL_NAMESPACE} port-forward svc/haproxy-template-ic-metrics 9090:9090"
 	echo "    Access at: http://localhost:9090/metrics"
@@ -967,6 +1072,8 @@ dev_up() {
 
     ensure_cluster
     
+    install_metrics_server
+    
     install_telepresence_traffic_manager
 
     deploy_controller "${overlay_mode}" || { 
@@ -1006,6 +1113,9 @@ main() {
             ;;
         test)
             test_ingress
+            ;;
+        dashboard)
+            launch_dashboard
             ;;
         port-forward)
             port_forward_haproxy

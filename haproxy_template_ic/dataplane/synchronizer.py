@@ -26,6 +26,7 @@ from .utils import (
     MAX_CONFIG_COMPARISON_CHANGES,
 )
 from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.activity import EventType, get_activity_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,26 @@ class ConfigSynchronizer:
             {rc.filename: rc.content for rc in config_context.rendered_acls},
             {rc.filename: rc.content for rc in config_context.rendered_files},
         )
+
+    def _compute_template_hashes(
+        self, config_context: HAProxyConfigContext
+    ) -> Dict[str, str]:
+        """Compute hashes for all rendered templates."""
+        from .models import compute_content_hash
+
+        template_hashes = {}
+
+        # Add main HAProxy config
+        if config_context.rendered_config:
+            template_hashes["haproxy.cfg"] = compute_content_hash(
+                config_context.rendered_config.content
+            )
+
+        # Add all rendered content (maps, certificates, ACLs, files)
+        for content in config_context.rendered_content:
+            template_hashes[content.filename] = compute_content_hash(content.content)
+
+        return template_hashes
 
     def _update_production_clients(self, new_urls: List[str]) -> None:
         """Update production clients based on current URLs.
@@ -916,7 +937,12 @@ class ConfigSynchronizer:
             if not config_changes:
                 # No changes needed - skip deployment
                 logger.debug(f"⏭️  No structural changes for {url}, skipping deployment")
-                return {"method": "skipped", "version": "unchanged"}
+                return {
+                    "method": "skipped",
+                    "version": "unchanged",
+                    "reload_triggered": False,
+                    "reload_id": None,
+                }
             else:
                 # Changes detected - use structured deployment
                 change_descriptions = [str(change) for change in config_changes]
@@ -925,10 +951,15 @@ class ConfigSynchronizer:
                 )
 
                 try:
-                    version = await client.deploy_structured_configuration(
+                    deploy_result = await client.deploy_structured_configuration(
                         config_changes
                     )
-                    return {"method": "structured", "version": version}
+                    return {
+                        "method": "structured",
+                        "version": deploy_result["version"],
+                        "reload_triggered": deploy_result["reload_triggered"],
+                        "reload_id": deploy_result.get("reload_id"),
+                    }
                 except DataplaneAPIError as structured_error:
                     # If structured deployment fails, fall back to raw deployment
                     logger.warning(
@@ -939,8 +970,13 @@ class ConfigSynchronizer:
                     metrics = get_metrics_collector()
                     metrics.increment_dataplane_fallback("structured_to_raw")
 
-                    version = await client.deploy_configuration(config)
-                    return {"method": "raw_fallback", "version": version}
+                    deploy_result = await client.deploy_configuration(config)
+                    return {
+                        "method": "raw_fallback",
+                        "version": deploy_result["version"],
+                        "reload_triggered": deploy_result["reload_triggered"],
+                        "reload_id": deploy_result.get("reload_id"),
+                    }
 
         except Exception as fetch_error:
             # Fallback to conditional deployment if structured comparison fails
@@ -953,8 +989,13 @@ class ConfigSynchronizer:
             metrics.increment_dataplane_fallback("structured_to_conditional")
 
             try:
-                version = await client.deploy_configuration_conditionally(config)
-                return {"method": "conditional", "version": version}
+                deploy_result = await client.deploy_configuration_conditionally(config)
+                return {
+                    "method": "conditional",
+                    "version": deploy_result["version"],
+                    "reload_triggered": deploy_result["reload_triggered"],
+                    "reload_id": deploy_result.get("reload_id"),
+                }
             except Exception as conditional_error:
                 # Final fallback to regular deployment
                 logger.warning(
@@ -964,14 +1005,21 @@ class ConfigSynchronizer:
                 # Record double fallback metrics
                 metrics.increment_dataplane_fallback("conditional_to_regular")
 
-                version = await client.deploy_configuration(config)
-                return {"method": "fallback", "version": version}
+                deploy_result = await client.deploy_configuration(config)
+                return {
+                    "method": "fallback",
+                    "version": deploy_result["version"],
+                    "reload_triggered": deploy_result["reload_triggered"],
+                    "reload_id": deploy_result.get("reload_id"),
+                }
 
     def _handle_deployment_error(
         self, url: str, error: Exception, config: str, results: Dict[str, Any]
     ) -> None:
         """Handle deployment error with enhanced logging."""
-        self.deployment_history.record(url, "unknown", False, str(error))
+        self.deployment_history.record(
+            url, "unknown", False, str(error), reload_triggered=False
+        )
         results["failed"] += 1
         results["errors"].append(f"{url}: {error}")
 
@@ -1020,6 +1068,9 @@ class ConfigSynchronizer:
         maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync = (
             self._prepare_sync_content(config_context)
         )
+
+        # Compute template hashes for deployment history tracking
+        template_hashes = self._compute_template_hashes(config_context)
 
         # Update production clients to handle dynamic URL changes
         self._update_production_clients(self.production_urls)
@@ -1101,7 +1152,50 @@ class ConfigSynchronizer:
                         f"{method_emoji} Deployed to {url} ({result['method']}), version: {result['version']}"
                     )
 
-                self.deployment_history.record(url, result["version"], True)
+                # Use actual reload information from dataplane API response
+                reload_triggered = result.get("reload_triggered", False)
+                reload_id = result.get("reload_id")
+
+                logger.debug(
+                    f"🔍 Processing deployment result for {url}: reload_triggered={reload_triggered}, "
+                    f"reload_id={reload_id}, method={result.get('method')}, version={result.get('version')}"
+                )
+
+                # Emit activity event for reloads
+                if reload_triggered:
+                    activity_buffer = get_activity_buffer()
+                    logger.debug(
+                        f"📊 Activity buffer status: current={activity_buffer.current_count}, total={activity_buffer.total_count}"
+                    )
+                    logger.debug(
+                        f"🚀 Emitting RELOAD activity event for {url} with reload_id={reload_id}"
+                    )
+                    activity_buffer.add_event_sync(
+                        EventType.RELOAD,
+                        f"HAProxy configuration reloaded on {url}",
+                        source="dataplane",
+                        metadata={
+                            "endpoint": url,
+                            "version": result["version"],
+                            "method": result["method"],
+                            "reload_id": reload_id,
+                        },
+                    )
+                    logger.debug(
+                        f"✅ Successfully emitted RELOAD activity event for {url}"
+                    )
+                else:
+                    logger.debug(
+                        f"⏭️  No reload event emitted for {url} (reload_triggered=False)"
+                    )
+
+                self.deployment_history.record(
+                    url,
+                    result["version"],
+                    True,
+                    template_hashes=template_hashes,
+                    reload_triggered=reload_triggered,
+                )
             else:
                 # Unexpected result type
                 error_msg = f"Unexpected result type from deployment: {type(result)}"

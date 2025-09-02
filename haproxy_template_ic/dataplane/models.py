@@ -131,7 +131,13 @@ class DeploymentHistory:
         self._history: Dict[str, Dict[str, Any]] = {}
 
     def record(
-        self, endpoint: str, version: str, success: bool, error: Optional[str] = None
+        self,
+        endpoint: str,
+        version: str,
+        success: bool,
+        error: Optional[str] = None,
+        template_hashes: Optional[Dict[str, str]] = None,
+        reload_triggered: bool = False,
     ) -> None:
         """Record a deployment attempt."""
         # Keep current version only if this deployment succeeded
@@ -139,13 +145,60 @@ class DeploymentHistory:
             self._history.get(endpoint, {}).get("version") if not success else version
         )
 
-        self._history[endpoint] = {
+        current_timestamp = datetime.now(UTC).isoformat()
+        entry = {
             "version": current_version,  # What's actually running
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": current_timestamp,
             "success": success,
             "last_attempt": version,  # What was attempted
             "error": error,
+            "reload_triggered": reload_triggered,  # Whether this deployment triggered a HAProxy reload
         }
+
+        # Track reload timestamp separately for successful deployments that triggered reloads
+        previous_entry = self._history.get(endpoint, {})
+        if success and reload_triggered:
+            entry["last_reload_timestamp"] = current_timestamp
+        else:
+            # Keep previous reload timestamp if this deployment didn't trigger a reload
+            entry["last_reload_timestamp"] = previous_entry.get("last_reload_timestamp")
+
+        # Only add template hashes if deployment succeeded
+        if success and template_hashes:
+            # Get previous deployment info for this endpoint to compare hashes
+            previous_entry = self._history.get(endpoint, {})
+            previous_hashes = previous_entry.get("template_hashes", {})
+
+            # Store all template hashes
+            entry["template_hashes"] = template_hashes
+
+            # Track which templates actually changed by comparing hashes
+            changed_templates = {}
+            previous_timestamps = previous_entry.get("template_change_timestamps", {})
+
+            for template_name, template_hash in template_hashes.items():
+                previous_hash = previous_hashes.get(template_name)
+                # Template changed if it's new or hash is different
+                if previous_hash is None or previous_hash != template_hash:
+                    changed_templates[template_name] = current_timestamp
+                else:
+                    # Template didn't change, keep previous timestamp if available
+                    # If no previous timestamp exists, use the earliest timestamp we have for this endpoint
+                    if template_name in previous_timestamps:
+                        changed_templates[template_name] = previous_timestamps[
+                            template_name
+                        ]
+                    else:
+                        # First time tracking this template, use deployment timestamp as baseline
+                        # This ensures all templates have timestamps for consistent tracking
+                        changed_templates[template_name] = previous_entry.get(
+                            "timestamp", current_timestamp
+                        )
+
+            # Store individual template change timestamps
+            entry["template_change_timestamps"] = changed_templates
+
+        self._history[endpoint] = entry
 
     def to_dict(self) -> Dict[str, Any]:
         """Get deployment history as dict."""

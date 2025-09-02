@@ -8,6 +8,7 @@ via the Dataplane API, including validation and deployment.
 import logging
 from typing import Any
 
+from haproxy_template_ic.activity import EventType
 from haproxy_template_ic.models import IndexedResourceCollection
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
@@ -189,6 +190,35 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
             metrics, successful_count, failed_count, len(production_urls)
         )
 
+        # Record activity events for sync results
+        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+            if successful_count > 0:
+                memo.activity_buffer.add_event_sync(
+                    EventType.SUCCESS,
+                    f"Synchronized {successful_count}/{len(production_urls)} HAProxy instances",
+                    source="synchronization",
+                    metadata={
+                        "successful": successful_count,
+                        "failed": failed_count,
+                        "total_urls": len(production_urls),
+                    },
+                )
+
+            if failed_count > 0:
+                memo.activity_buffer.add_event_sync(
+                    EventType.ERROR,
+                    f"Failed to sync {failed_count}/{len(production_urls)} HAProxy instances",
+                    source="synchronization",
+                    metadata={
+                        "successful": successful_count,
+                        "failed": failed_count,
+                        "total_urls": len(production_urls),
+                        "errors": [
+                            str(error) for error in errors[:3]
+                        ],  # First 3 errors
+                    },
+                )
+
         for error in errors:
             logger.error(f"   - {error}")
 
@@ -197,6 +227,15 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
         logger.error(f"❌ Configuration validation failed: {e}")
         _log_haproxy_error_hints(e, memo)
 
+        # Record validation failure activity
+        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+            memo.activity_buffer.add_event_sync(
+                EventType.ERROR,
+                f"Configuration validation failed: {str(e)[:100]}",
+                source="synchronization",
+                metadata={"error": str(e)[:500], "type": "validation_error"},
+            )
+
     except DataplaneAPIError as e:
         metrics.record_error("dataplane_api_failed", "dataplane")
         logger.error(f"❌ Dataplane API error: {e}")
@@ -204,6 +243,24 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
 
         logger.error(traceback.format_exc())
 
+        # Record dataplane API failure activity
+        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+            memo.activity_buffer.add_event_sync(
+                EventType.ERROR,
+                f"Dataplane API error: {str(e)[:100]}",
+                source="synchronization",
+                metadata={"error": str(e)[:500], "type": "dataplane_api_error"},
+            )
+
     except Exception as e:
         metrics.record_error("sync_unexpected_error", "dataplane")
         logger.error(f"❌ Unexpected error during synchronization: {e}")
+
+        # Record unexpected sync error activity
+        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
+            memo.activity_buffer.add_event_sync(
+                EventType.ERROR,
+                f"Unexpected sync error: {str(e)[:100]}",
+                source="synchronization",
+                metadata={"error": str(e)[:500], "type": "unexpected_error"},
+            )

@@ -6,6 +6,7 @@ with support for custom indexing patterns.
 """
 
 import logging
+import sys
 import unicodedata
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 from collections import defaultdict
@@ -166,6 +167,46 @@ class IndexedResourceCollection(BaseModel):
             return "<unknown>"
         except Exception:
             return "<error>"
+
+    def get_memory_size(self) -> int:
+        """Calculate the memory size of all indexed resources in bytes.
+
+        Returns:
+            Memory size in bytes of the internal dictionary structure
+        """
+        try:
+            # Calculate size of the internal dictionary and all its contents
+            total_size = sys.getsizeof(self._internal_dict)
+
+            # Add size of all keys and values
+            for key, resource_list in self._internal_dict.items():
+                total_size += sys.getsizeof(key)
+                total_size += sys.getsizeof(resource_list)
+
+                # Add size of each resource in the list
+                for resource in resource_list:
+                    total_size += self._calculate_dict_size(resource)
+
+            return total_size
+        except Exception as e:
+            logger.warning(f"Error calculating memory size: {e}")
+            return 0
+
+    def _calculate_dict_size(self, obj: Any) -> int:
+        """Recursively calculate size of nested dictionary structures."""
+        if isinstance(obj, dict):
+            size = sys.getsizeof(obj)
+            for key, value in obj.items():
+                size += sys.getsizeof(key)
+                size += self._calculate_dict_size(value)
+            return size
+        elif isinstance(obj, (list, tuple)):
+            size = sys.getsizeof(obj)
+            for item in obj:
+                size += self._calculate_dict_size(item)
+            return size
+        else:
+            return sys.getsizeof(obj)
 
 
 __all__ = [

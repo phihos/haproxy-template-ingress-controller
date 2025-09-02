@@ -478,6 +478,23 @@ class TestManagementSocketServer:
         assert "haproxy_config_context" in result
         assert result["haproxy_config_context"]["rendered_config"] is None
 
+    def test_dump_stats_basic(self, server):
+        """Test that _dump_stats method runs without errors."""
+        # Just test that the method doesn't crash - integration tests will test the full functionality
+        result = server._dump_stats()
+
+        # Should return a dictionary (either with stats or an error)
+        assert isinstance(result, dict)
+
+        # If there's an error, it should be properly formatted
+        if "error" in result:
+            assert isinstance(result["error"], str)
+        else:
+            # If successful, should have the expected structure
+            assert (
+                "operator" in result or "resources" in result or "templates" in result
+            )
+
     @pytest.mark.asyncio
     async def test_handle_client_success(self, server):
         """Test successful client handling."""
