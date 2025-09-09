@@ -444,7 +444,7 @@ install_metrics_server() {
 			ok "Metrics-server is collecting node metrics successfully."
 			return 0
 		fi
-		debug "Metrics not ready yet, waiting 10 seconds... (attempt $((attempts + 1))/6)"
+		debug "Metrics not ready yet, waiting 10 seconds... (attempt $((attempts + 1))/10)"
 		sleep 10
 		((attempts++))
 	done
