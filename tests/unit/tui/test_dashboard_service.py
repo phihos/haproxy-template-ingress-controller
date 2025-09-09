@@ -562,3 +562,120 @@ class TestDashboardServiceTemplates:
         # Should use most recent timestamp
         assert templates["haproxy.cfg"].last_modified is not None
         assert templates["host.map"].last_modified is not None
+
+
+class TestDashboardServiceEnhanced:
+    """Enhanced tests for DashboardService coverage improvement."""
+
+    @pytest.fixture
+    def dashboard_service(self):
+        """Create a DashboardService instance."""
+        return DashboardService(
+            namespace="test-namespace",
+            context="test-context",
+            deployment_name="test-deployment",
+        )
+
+    @pytest.fixture
+    def mock_socket_client(self):
+        """Mock socket client."""
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_get_template_content_error_handling(
+        self, dashboard_service, mock_socket_client
+    ):
+        """Test template content retrieval with various error conditions."""
+        dashboard_service.socket_client = mock_socket_client
+
+        # Test source error
+        mock_socket_client.execute_command.side_effect = [
+            {"error": "Source not found"},  # Source command fails
+            {"result": {"content": "rendered content"}},  # Rendered succeeds
+        ]
+
+        result = await dashboard_service.get_template_content("test.cfg")
+
+        assert result is not None
+        assert "Source: Source not found" in result["errors"]
+        assert result["rendered"] == "rendered content"
+
+    @pytest.mark.asyncio
+    async def test_get_template_content_rendered_error(
+        self, dashboard_service, mock_socket_client
+    ):
+        """Test template content retrieval when rendered content fails."""
+        dashboard_service.socket_client = mock_socket_client
+
+        mock_socket_client.execute_command.side_effect = [
+            {
+                "result": {"source": "source content", "type": "haproxy_config"}
+            },  # Source succeeds
+            {"error": "Rendering failed"},  # Rendered fails
+        ]
+
+        result = await dashboard_service.get_template_content("test.cfg")
+
+        assert result is not None
+        assert result["source"] == "source content"
+        assert "Rendered: Rendering failed" in result["errors"]
+
+    @pytest.mark.asyncio
+    async def test_get_template_content_snippet_type(
+        self, dashboard_service, mock_socket_client
+    ):
+        """Test template content retrieval for snippet templates."""
+        dashboard_service.socket_client = mock_socket_client
+
+        mock_socket_client.execute_command.side_effect = [
+            {
+                "result": {"source": "snippet content", "type": "snippet"}
+            },  # Source succeeds with snippet type
+        ]
+
+        result = await dashboard_service.get_template_content("test-snippet")
+
+        assert result is not None
+        assert result["source"] == "snippet content"
+        assert result["type"] == "snippet"
+        # Should not have called for rendered content (snippets don't have rendered versions)
+        assert mock_socket_client.execute_command.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_template_content_unknown_type_from_rendered(
+        self, dashboard_service, mock_socket_client
+    ):
+        """Test template content type determination from rendered result."""
+        dashboard_service.socket_client = mock_socket_client
+
+        mock_socket_client.execute_command.side_effect = [
+            {"result": {"source": "source content"}},  # Source without type
+            {
+                "result": {"content": "rendered content", "type": "map"}
+            },  # Rendered with type
+        ]
+
+        result = await dashboard_service.get_template_content("test.map")
+
+        assert result is not None
+        assert result["type"] == "map"  # Should get type from rendered result
+
+    def test_service_initialization_parameters(self, dashboard_service):
+        """Test service initialization with parameters."""
+        # Test that service can be initialized with correct parameters
+        assert dashboard_service.namespace == "test-namespace"
+        assert dashboard_service.context == "test-context"
+        assert dashboard_service.deployment_name == "test-deployment"
+
+    @pytest.mark.asyncio
+    async def test_socket_client_error_handling(
+        self, dashboard_service, mock_socket_client
+    ):
+        """Test socket client error handling."""
+        dashboard_service.socket_client = mock_socket_client
+        mock_socket_client.execute_command.side_effect = Exception("Socket error")
+
+        # Should handle socket errors gracefully in get_template_content
+        result = await dashboard_service.get_template_content("test.cfg")
+        assert result is not None
+        assert len(result["errors"]) > 0
