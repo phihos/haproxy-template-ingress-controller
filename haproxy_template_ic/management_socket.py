@@ -22,14 +22,14 @@ from haproxy_template_ic.constants import (
     SOCKET_BUFFER_SIZE,
     DEFAULT_ACTIVITY_QUERY_LIMIT,
 )
+from haproxy_template_ic.core.error_handling import handle_exceptions, safe_operation
+from haproxy_template_ic.k8s.kopf_utils import get_resource_collection_from_memo
 from haproxy_template_ic.deployment_state import DeploymentStateTracker
 from haproxy_template_ic.metrics import get_metrics_collector, get_performance_metrics
-from haproxy_template_ic.models import IndexedResourceCollection
 from haproxy_template_ic.tui.models import PodInfo
 from haproxy_template_ic.operator.k8s_resources import (
     _collect_resource_indices,
 )
-from haproxy_template_ic.core.error_handling import safe_operation
 
 logger = logging.getLogger(__name__)
 
@@ -411,21 +411,21 @@ class ManagementSocketServer:
 
         return result
 
+    @handle_exceptions(
+        default_return={"error": "Failed to get deployment history"},
+        context="deployment_history",
+    )
     def _dump_deployments(self) -> Dict[str, Any]:
         """Dump all deployment history using DeploymentStateTracker."""
         # Use DeploymentStateTracker with activity_buffer
         if hasattr(self.memo, "activity_buffer") and self.memo.activity_buffer:
             tracker = DeploymentStateTracker(self.memo.activity_buffer)
             try:
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(tracker.to_dict())
-                    return {"deployment_history": {}}
-                except RuntimeError:
-                    return asyncio.run(tracker.to_dict())
-            except Exception as e:
-                logger.error(f"Failed to get deployment history: {e}")
-                return {"error": f"Failed to get deployment history: {e}"}
+                loop = asyncio.get_running_loop()
+                loop.create_task(tracker.to_dict())
+                return {"deployment_history": {}}
+            except RuntimeError:
+                return asyncio.run(tracker.to_dict())
 
         return {"deployment_history": {}}
 
@@ -448,6 +448,7 @@ class ManagementSocketServer:
                 "available_endpoints": list(deployment_data.keys()),
             }
 
+    @safe_operation("template extraction")
     def _extract_template_from_collection(
         self,
         collection,
@@ -458,23 +459,33 @@ class ManagementSocketServer:
         """Extract template source from a configuration collection."""
         if template_name in collection:
             template_obj = collection[template_name]
-            try:
-                source = (
-                    template_obj.template
-                    if hasattr(template_obj, "template")
-                    else str(template_obj)
-                )
-                template_sources.append(
-                    {
-                        "type": collection_type,
-                        "source": source,
-                        "filename": template_name,
-                    }
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to extract {collection_type} template source for {template_name}: {e}"
-                )
+            source = (
+                template_obj.template
+                if hasattr(template_obj, "template")
+                else str(template_obj)
+            )
+            template_sources.append(
+                {
+                    "type": collection_type,
+                    "source": source,
+                    "filename": template_name,
+                }
+            )
+
+    @safe_operation("HAProxy config template extraction")
+    def _extract_haproxy_config_template(
+        self, template_sources: List[Dict[str, Any]]
+    ) -> None:
+        """Extract HAProxy config template source."""
+        config_template = self.memo.config.haproxy_config
+        source = (
+            config_template.template
+            if hasattr(config_template, "template")
+            else str(config_template)
+        )
+        template_sources.append(
+            {"type": "config", "source": source, "filename": "haproxy.cfg"}
+        )
 
     def _get_template_source(self, template_name: str) -> Dict[str, Any]:
         """Get the source template content (Jinja2) for a given template."""
@@ -502,21 +513,7 @@ class ManagementSocketServer:
         # HAProxy config template
         if template_name == "haproxy.cfg":
             if hasattr(self.memo.config, "haproxy_config"):
-                config_template = self.memo.config.haproxy_config
-                try:
-                    source = (
-                        config_template.template
-                        if hasattr(config_template, "template")
-                        else str(config_template)
-                    )
-                    template_sources.append(
-                        {"type": "config", "source": source, "filename": "haproxy.cfg"}
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Failed to extract haproxy_config template source: {e}"
-                    )
-                    logger.error(f"config_template attributes: {dir(config_template)}")
+                self._extract_haproxy_config_template(template_sources)
             else:
                 logger.debug("haproxy_config not found in memo.config")
                 logger.debug(f"memo.config attributes: {dir(self.memo.config)}")
@@ -869,8 +866,8 @@ class ManagementSocketServer:
                 )
 
                 # Convert Kopf index to serializable format
-                pod_collection = IndexedResourceCollection.from_kopf_index(
-                    self.memo.indices[HAPROXY_PODS_INDEX]
+                pod_collection = get_resource_collection_from_memo(
+                    self.memo, HAPROXY_PODS_INDEX
                 )
 
                 # Extract pod info from each discovered pod
@@ -987,6 +984,90 @@ class ManagementSocketServer:
             logger.error(f"Failed to generate pod info: {e}", exc_info=True)
             return {"error": f"Failed to generate pod info: {e}"}
 
+    def _get_namespace(self) -> str:
+        """Get the current namespace from various sources."""
+        if hasattr(self.memo, "namespace") and self.memo.namespace:
+            return self.memo.namespace
+        elif (
+            hasattr(self.memo, "config")
+            and self.memo.config
+            and hasattr(self.memo.config, "namespace")
+        ):
+            return self.memo.config.namespace
+        else:
+            # Try to detect from environment or use service account namespace
+            namespace = os.environ.get("POD_NAMESPACE") or "unknown"
+            if namespace == "unknown":
+                try:
+                    # Read namespace from service account token
+                    with open(
+                        "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
+                        "r",
+                    ) as f:
+                        namespace = f.read().strip()
+                except Exception:
+                    namespace = "unknown"
+            return namespace
+
+    def _enhance_operator_data(self, operator_data: Dict[str, Any]) -> None:
+        """Enhance operator data with additional details."""
+        namespace = self._get_namespace()
+        operator_data["namespace"] = namespace
+        operator_data["configmap_name"] = (
+            getattr(self.memo.cli_options, "configmap_name", "unknown")
+            if hasattr(self.memo, "cli_options") and self.memo.cli_options
+            else "unknown"
+        )
+
+        # Add timing information for dashboard title bar
+        try:
+            # Get pod start time from Kubernetes
+            pod_name = os.environ.get(
+                "HOSTNAME"
+            )  # Pod name is the hostname in Kubernetes
+            if pod_name:
+                operator_data["controller_pod_name"] = pod_name
+
+                # Try to get pod start time
+                try:
+                    # Use kr8s to get pod start time
+                    pod = Pod.get(pod_name, namespace=namespace)
+                    if pod and pod.status and pod.status.get("startTime"):
+                        operator_data["controller_pod_start_time"] = pod.status[
+                            "startTime"
+                        ]
+                except Exception as e:
+                    # Silently continue if pod info unavailable
+                    logger.debug(
+                        f"Non-critical error fetching controller pod info: {e}"
+                    )
+
+            # Get last deployment time from deployment history
+            try:
+                deployments_data = self._dump_deployments()
+                if "deployment_history" in deployments_data:
+                    most_recent_timestamp = None
+                    for endpoint, deployment_info in deployments_data[
+                        "deployment_history"
+                    ].items():
+                        if deployment_info.get("success"):
+                            timestamp = deployment_info.get("timestamp")
+                            if timestamp and (
+                                not most_recent_timestamp
+                                or timestamp > most_recent_timestamp
+                            ):
+                                most_recent_timestamp = timestamp
+
+                    if most_recent_timestamp:
+                        operator_data["last_deployment_time"] = most_recent_timestamp
+            except Exception as e:
+                # Silently continue if deployment history unavailable
+                logger.debug(f"Non-critical error fetching deployment history: {e}")
+
+        except Exception as e:
+            # Silently continue if timing info unavailable
+            logger.debug(f"Non-critical error fetching timing info: {e}")
+
     def _dump_dashboard(self) -> Dict[str, Any]:
         """Dump all dashboard data in optimized format."""
         try:
@@ -1011,90 +1092,7 @@ class ManagementSocketServer:
 
                 # Enhance operator info with additional details
                 operator_data = dashboard_data["operator"]
-                # Try to get namespace from various sources
-                namespace = "unknown"
-                if hasattr(self.memo, "namespace") and self.memo.namespace:
-                    namespace = self.memo.namespace
-                elif (
-                    hasattr(self.memo, "config")
-                    and self.memo.config
-                    and hasattr(self.memo.config, "namespace")
-                ):
-                    namespace = self.memo.config.namespace
-                else:
-                    # Try to detect from environment or use service account namespace
-                    namespace = os.environ.get("POD_NAMESPACE") or "unknown"
-                    if namespace == "unknown":
-                        try:
-                            # Read namespace from service account token
-                            with open(
-                                "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
-                                "r",
-                            ) as f:
-                                namespace = f.read().strip()
-                        except Exception:
-                            namespace = "unknown"
-
-                operator_data["namespace"] = namespace
-                operator_data["configmap_name"] = (
-                    getattr(self.memo.cli_options, "configmap_name", "unknown")
-                    if hasattr(self.memo, "cli_options") and self.memo.cli_options
-                    else "unknown"
-                )
-
-                # Add timing information for dashboard title bar
-                try:
-                    # Get pod start time from Kubernetes
-                    pod_name = os.environ.get(
-                        "HOSTNAME"
-                    )  # Pod name is the hostname in Kubernetes
-                    if pod_name:
-                        operator_data["controller_pod_name"] = pod_name
-
-                        # Try to get pod start time
-                        try:
-                            # Use kr8s to get pod start time
-
-                            pod = Pod.get(pod_name, namespace=namespace)
-                            if pod and pod.status and pod.status.get("startTime"):
-                                operator_data["controller_pod_start_time"] = pod.status[
-                                    "startTime"
-                                ]
-                        except Exception as e:
-                            # Silently continue if pod info unavailable
-                            logger.debug(
-                                f"Non-critical error fetching controller pod info: {e}"
-                            )
-
-                    # Get last deployment time from deployment history
-                    try:
-                        deployments_data = self._dump_deployments()
-                        if "deployment_history" in deployments_data:
-                            most_recent_timestamp = None
-                            for endpoint, deployment_info in deployments_data[
-                                "deployment_history"
-                            ].items():
-                                if deployment_info.get("success"):
-                                    timestamp = deployment_info.get("timestamp")
-                                    if timestamp and (
-                                        not most_recent_timestamp
-                                        or timestamp > most_recent_timestamp
-                                    ):
-                                        most_recent_timestamp = timestamp
-
-                            if most_recent_timestamp:
-                                operator_data["last_deployment_time"] = (
-                                    most_recent_timestamp
-                                )
-                    except Exception as e:
-                        # Silently continue if deployment history unavailable
-                        logger.debug(
-                            f"Non-critical error fetching deployment history: {e}"
-                        )
-
-                except Exception as e:
-                    # Silently continue if timing info unavailable
-                    logger.debug(f"Non-critical error fetching timing info: {e}")
+                self._enhance_operator_data(operator_data)
 
             # Get pod data
             pods = self._dump_pods()

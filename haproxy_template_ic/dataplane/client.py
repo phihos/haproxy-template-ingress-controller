@@ -10,6 +10,7 @@ import base64
 import io
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
 import httpx
@@ -275,6 +276,16 @@ from haproxy_template_ic.tracing import (
     set_span_error,
     trace_dataplane_operation,
 )
+
+
+@dataclass
+class MapChange:
+    """Represents a change in map file entries."""
+
+    operation: str
+    key: str
+    value: str = ""
+
 
 logger = logging.getLogger(__name__)
 
@@ -1112,14 +1123,6 @@ class DataplaneClient:
         Returns:
             List of change objects with operation, key, and data attributes
         """
-        from dataclasses import dataclass
-
-        @dataclass
-        class MapChange:
-            operation: str
-            key: str
-            value: str = ""
-            data: str = ""  # Keep for backward compatibility
 
         changes = []
         old_keys = set(old_entries.keys())
@@ -1136,7 +1139,6 @@ class DataplaneClient:
                     operation="add",
                     key=key,
                     value=new_entries[key],
-                    data=f"{key} {new_entries[key]}".strip(),
                 )
             )
 
@@ -1148,7 +1150,6 @@ class DataplaneClient:
                         operation="replace",
                         key=key,
                         value=new_entries[key],
-                        data=f"{key} {new_entries[key]}".strip(),
                     )
                 )
 

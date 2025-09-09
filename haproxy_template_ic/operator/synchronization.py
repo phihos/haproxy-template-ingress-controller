@@ -11,6 +11,7 @@ from typing import Any, Optional
 from haproxy_template_ic.activity import EventType
 from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
 from haproxy_template_ic.models import IndexedResourceCollection
+from haproxy_template_ic.k8s.kopf_utils import get_resource_collection_from_memo
 from haproxy_template_ic.dataplane import (
     ConfigSynchronizer,
     DataplaneAPIError,
@@ -147,8 +148,8 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
             return
 
         # Convert kopf Store to IndexedResourceCollection
-        haproxy_pods_collection = IndexedResourceCollection.from_kopf_index(
-            haproxy_pods_store
+        haproxy_pods_collection = get_resource_collection_from_memo(
+            memo, HAPROXY_PODS_INDEX
         )
 
         production_urls, url_to_pod_name = get_production_urls_from_index(

@@ -5,6 +5,7 @@ Tests model validation, field validators, properties, and edge cases.
 """
 
 import pytest
+import datetime as dt
 from datetime import datetime, timezone, timedelta
 from pydantic import ValidationError
 
@@ -61,7 +62,6 @@ class TestPodInfo:
     def test_uptime_calculation_with_timezone_aware_start_time(self):
         """Test uptime calculation with timezone-aware start_time."""
         # 2 hours and 30 minutes ago
-        import datetime as dt
 
         start_time = datetime.now(timezone.utc) - dt.timedelta(hours=2, minutes=30)
         pod = PodInfo(name="test-pod", start_time=start_time)
@@ -72,7 +72,6 @@ class TestPodInfo:
     def test_uptime_calculation_with_naive_datetime(self):
         """Test uptime calculation with naive datetime."""
         # 45 minutes ago
-        import datetime as dt
 
         start_time = datetime.now() - dt.timedelta(minutes=45)
         pod = PodInfo(name="test-pod", start_time=start_time)
@@ -82,7 +81,6 @@ class TestPodInfo:
     def test_uptime_calculation_with_days(self):
         """Test uptime calculation spanning days."""
         # 2 days, 3 hours, 15 minutes ago
-        import datetime as dt
 
         start_time = datetime.now(timezone.utc) - dt.timedelta(
             days=2, hours=3, minutes=15
@@ -98,7 +96,6 @@ class TestPodInfo:
 
     def test_full_pod_creation(self):
         """Test PodInfo with all fields."""
-        import datetime as dt
 
         pod = PodInfo(
             name="haproxy-pod-1",

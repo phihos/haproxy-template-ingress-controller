@@ -6,9 +6,12 @@ Tests widget data binding, user interactions, and rendering behavior.
 
 import pytest
 from unittest.mock import patch, PropertyMock, Mock
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Tree, Static
+from textual.widgets._data_table import RowKey
+from textual.containers import ScrollableContainer
+from textual.reactive import Reactive
 
 from haproxy_template_ic.tui.models import (
     DashboardData,
@@ -16,6 +19,7 @@ from haproxy_template_ic.tui.models import (
     TemplateInfo,
     ResourceInfo,
     PerformanceInfo,
+    PerformanceMetric,
     ActivityEvent,
     OperatorInfo,
     ErrorInfo,
@@ -241,8 +245,6 @@ class TestTemplatesWidget:
                 return_value=["haproxy.cfg", "config", "1.0KB", "45", "valid", "-"],
             ):
                 # Simulate selection event
-                from textual.widgets import DataTable
-                from textual.widgets._data_table import RowKey
 
                 row_key = RowKey("test-row")
                 DataTable.RowSelected(
@@ -332,7 +334,6 @@ class TestPerformanceWidget:
     @pytest.fixture
     def sample_performance_data(self):
         """Sample performance data."""
-        from haproxy_template_ic.tui.models import PerformanceMetric
 
         return PerformanceInfo(
             template_render=PerformanceMetric(p50=50.0, p95=100.0, p99=200.0),
@@ -346,7 +347,6 @@ class TestPerformanceWidget:
     @pytest.fixture
     def performance_data_with_history(self):
         """Sample performance data with history for sparklines."""
-        from haproxy_template_ic.tui.models import PerformanceMetric
 
         return PerformanceInfo(
             template_render=PerformanceMetric(
@@ -374,7 +374,6 @@ class TestPerformanceWidget:
         compose_list = list(composed)
 
         assert len(compose_list) == 1
-        from textual.widgets import Static
 
         assert isinstance(compose_list[0], Static)
         assert compose_list[0].id == "performance-content"
@@ -408,7 +407,6 @@ class TestPerformanceWidget:
 
     def test_performance_widget_format_percentiles(self, performance_widget):
         """Test _format_percentiles method."""
-        from haproxy_template_ic.tui.models import PerformanceMetric
 
         # Test with valid metric
         metric = PerformanceMetric(p50=50.0, p95=100.0, p99=200.0)
@@ -434,7 +432,6 @@ class TestPerformanceWidget:
         self, performance_widget
     ):
         """Test _get_performance_status for template metrics."""
-        from haproxy_template_ic.tui.models import PerformanceMetric
 
         # Test different template performance levels
         test_cases = [
@@ -451,7 +448,6 @@ class TestPerformanceWidget:
 
     def test_performance_widget_get_performance_status_api(self, performance_widget):
         """Test _get_performance_status for API metrics."""
-        from haproxy_template_ic.tui.models import PerformanceMetric
 
         # Test different API performance levels
         test_cases = [
@@ -475,7 +471,6 @@ class TestPerformanceWidget:
         assert status == "❓ Unknown"
 
         # Test with metric with no p50
-        from haproxy_template_ic.tui.models import PerformanceMetric
 
         metric = PerformanceMetric(p50=None, p95=100.0, p99=200.0)
         status = performance_widget._get_performance_status(metric, "template")
@@ -516,7 +511,6 @@ class TestPerformanceWidget:
 
     def test_performance_widget_calculate_throughput(self, performance_widget):
         """Test _calculate_throughput method."""
-        from haproxy_template_ic.tui.models import PerformanceMetric
 
         # Test with no history
         metric = PerformanceMetric(p50=50.0)
@@ -536,7 +530,6 @@ class TestPerformanceWidget:
 
     def test_performance_widget_calculate_uptime(self, performance_widget):
         """Test _calculate_uptime method."""
-        from datetime import datetime, timezone, timedelta
 
         # Test with no start time
         performance_widget.dashboard_data = DashboardData()
@@ -917,7 +910,6 @@ class TestActivityWidget:
 
     def test_activity_widget_add_activity_entry_time_formatting(self, activity_widget):
         """Test _add_activity_entry with time formatting."""
-        from datetime import datetime, timezone
 
         # Use a specific timestamp for testing
         timestamp = datetime(2023, 1, 1, 12, 30, 45, tzinfo=timezone.utc)
@@ -1063,7 +1055,6 @@ class TestHeaderWidget:
 
     def test_header_widget_render_with_last_update_datetime(self, header_widget):
         """Test rendering with last_update as datetime."""
-        from datetime import datetime, timezone
 
         last_update = datetime.now(timezone.utc)
         operator = OperatorInfo(status="RUNNING", namespace="test")
@@ -1086,7 +1077,6 @@ class TestHeaderWidget:
 
     def test_header_widget_render_with_all_fields(self, header_widget):
         """Test rendering with all possible fields."""
-        from datetime import datetime, timezone
 
         operator = OperatorInfo(
             status="RUNNING",
@@ -1171,7 +1161,6 @@ class TestWidgetIntegration:
             # Check that dashboard_data is defined as a class attribute (reactive property)
             assert hasattr(widget_class, "dashboard_data")
             # Check that it's a reactive descriptor
-            from textual.reactive import Reactive
 
             assert isinstance(widget_class.dashboard_data, Reactive)
 
@@ -1262,7 +1251,6 @@ class TestInspectorWidget:
     @pytest.fixture
     def inspector_widget(self):
         """Create a TemplateInspectorWidget instance."""
-        from haproxy_template_ic.tui.widgets.inspector import TemplateInspectorWidget
 
         return TemplateInspectorWidget()
 
@@ -1312,7 +1300,6 @@ class TestInspectorWidget:
 
     def test_inspector_widget_initialization(self, inspector_widget):
         """Test TemplateInspectorWidget initialization."""
-        from haproxy_template_ic.tui.widgets.inspector import TemplateInspectorWidget
 
         assert isinstance(inspector_widget, TemplateInspectorWidget)
         assert inspector_widget.templates_data == {}
@@ -1416,7 +1403,6 @@ class TestInspectorWidget:
 
     def test_inspector_widget_update_template_tree_empty(self, inspector_widget):
         """Test _update_template_tree with no templates."""
-        from textual.widgets import Tree
 
         mock_tree = Mock(spec=Tree)
         mock_tree.root = Mock()
@@ -1432,7 +1418,6 @@ class TestInspectorWidget:
         self, inspector_widget, sample_templates_data
     ):
         """Test _update_template_tree with template data."""
-        from textual.widgets import Tree
 
         mock_tree = Mock(spec=Tree)
         mock_tree.root = Mock()
@@ -1460,7 +1445,6 @@ class TestInspectorWidget:
 
     def test_inspector_widget_highlight_template_in_tree(self, inspector_widget):
         """Test _highlight_template_in_tree method."""
-        from textual.widgets import Tree
 
         # Mock tree and nodes
         mock_tree = Mock(spec=Tree)
@@ -1532,7 +1516,6 @@ class TestInspectorWidget:
 
     def test_inspector_widget_update_content_display_empty(self, inspector_widget):
         """Test _update_content_display with empty content."""
-        from textual.containers import ScrollableContainer
 
         mock_scroll_container = Mock(spec=ScrollableContainer)
 
@@ -1549,7 +1532,6 @@ class TestInspectorWidget:
         self, inspector_widget, sample_template_content
     ):
         """Test _update_content_display with template content."""
-        from textual.containers import ScrollableContainer
 
         mock_scroll_container = Mock(spec=ScrollableContainer)
         inspector_widget.selected_template = "haproxy.cfg"
@@ -1569,7 +1551,6 @@ class TestInspectorWidget:
         self, inspector_widget
     ):
         """Test _update_content_display with errors."""
-        from textual.containers import ScrollableContainer
 
         mock_scroll_container = Mock(spec=ScrollableContainer)
         inspector_widget.selected_template = "haproxy.cfg"
@@ -1592,7 +1573,6 @@ class TestInspectorWidget:
 
     def test_inspector_widget_update_content_display_snippet(self, inspector_widget):
         """Test _update_content_display with snippet type."""
-        from textual.containers import ScrollableContainer
 
         mock_scroll_container = Mock(spec=ScrollableContainer)
         inspector_widget.selected_template = "globals.snippet"
@@ -1637,7 +1617,6 @@ class TestInspectorWidget:
 
     def test_inspector_widget_different_template_types(self):
         """Test TemplateInspectorWidget with different template types."""
-        from haproxy_template_ic.tui.widgets.inspector import TemplateInspectorWidget
 
         template_types = ["haproxy_config", "map", "certificate", "snippet"]
         templates_data = {}
@@ -2002,8 +1981,6 @@ class TestTemplatesWidgetEnhanced:
         with patch.object(templates_widget, "clear"):
             with patch.object(templates_widget, "add_row") as mock_add_row:
                 with patch.object(templates_widget, "refresh"):
-                    from haproxy_template_ic.tui.models import DashboardData
-
                     dashboard_data = DashboardData(
                         templates={t.name: t for t in sample_templates}
                     )
@@ -2067,7 +2044,6 @@ class TestInspectorWidgetCoverageEnhancement:
 
     def test_inspector_widget_highlight_template_selected_check(self, inspector_widget):
         """Test _update_template_tree with selected template to cover line 139."""
-        from textual.widgets import Tree
 
         # Mock tree and setup selected template
         mock_tree = Mock(spec=Tree)
@@ -2086,7 +2062,6 @@ class TestInspectorWidgetCoverageEnhancement:
 
     def test_inspector_widget_highlight_template_node_not_found(self, inspector_widget):
         """Test _highlight_template_in_tree when node not found to cover line 160."""
-        from textual.widgets import Tree
 
         # Mock tree with no matching nodes
         mock_tree = Mock(spec=Tree)
@@ -2100,7 +2075,6 @@ class TestInspectorWidgetCoverageEnhancement:
 
     def test_inspector_widget_highlight_template_warning_log(self, inspector_widget):
         """Test _highlight_template_in_tree warning log to cover line 179."""
-        from textual.widgets import Tree
 
         # Mock tree with no matching nodes to trigger warning
         mock_tree = Mock(spec=Tree)
@@ -2172,7 +2146,6 @@ class TestInspectorWidgetCoverageEnhancement:
         self, inspector_widget
     ):
         """Test _update_content_display source section to cover lines 296-298."""
-        from textual.containers import ScrollableContainer
 
         mock_scroll_container = Mock(spec=ScrollableContainer)
         inspector_widget.selected_template = "test.cfg"
@@ -2197,7 +2170,6 @@ class TestInspectorWidgetCoverageEnhancement:
         self, inspector_widget
     ):
         """Test _update_content_display rendered section to cover lines 337-339."""
-        from textual.containers import ScrollableContainer
 
         mock_scroll_container = Mock(spec=ScrollableContainer)
         inspector_widget.selected_template = "test.cfg"
@@ -2223,7 +2195,6 @@ class TestInspectorWidgetCoverageEnhancement:
         self, inspector_widget
     ):
         """Test _update_content_display for snippet without rendered to cover line 341."""
-        from textual.containers import ScrollableContainer
 
         mock_scroll_container = Mock(spec=ScrollableContainer)
         inspector_widget.selected_template = "snippet.cfg"
@@ -2249,7 +2220,6 @@ class TestInspectorWidgetCoverageEnhancement:
         self, inspector_widget
     ):
         """Test _update_content_display errors section to cover lines 356-357."""
-        from textual.containers import ScrollableContainer
 
         mock_scroll_container = Mock(spec=ScrollableContainer)
         inspector_widget.selected_template = "test.cfg"

@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, Tuple
 
 from haproxy_template_ic.models import IndexedResourceCollection, ResourceTypeMetadata
+from haproxy_template_ic.k8s.kopf_utils import get_resource_collection_from_memo
 from .utils import extract_nested_field
 
 logger = logging.getLogger(__name__)
@@ -114,13 +115,9 @@ def _collect_resource_indices(memo: Any, metrics: Any) -> Dict[str, Any]:
 
     for resource_id in memo.config.watched_resources:
         try:
-            if resource_id in memo.indices:
-                index_data = memo.indices[resource_id]
-                indices[resource_id] = IndexedResourceCollection.from_kopf_index(
-                    index_data, ignore_fields=ignore_fields
-                )
-            else:
-                indices[resource_id] = IndexedResourceCollection()
+            indices[resource_id] = get_resource_collection_from_memo(
+                memo, resource_id, ignore_fields=ignore_fields
+            )
 
             # Initialize metadata for this resource type if not exists
             if resource_id not in memo.resource_metadata:

@@ -7,9 +7,12 @@ These utilities should only be used within IndexedResourceCollection.from_kopf_i
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from .field_filter import remove_fields_from_resource
+
+if TYPE_CHECKING:
+    from haproxy_template_ic.models import IndexedResourceCollection
 
 logger = logging.getLogger(__name__)
 
@@ -115,3 +118,29 @@ def is_valid_kubernetes_resource(resource_dict: Any) -> bool:
         return False
 
     return True
+
+
+def get_resource_collection_from_memo(
+    memo: Any, resource_id: str, ignore_fields: Optional[List[str]] = None
+) -> "IndexedResourceCollection":
+    """
+    Get an IndexedResourceCollection from a memo object for a specific resource type.
+
+    This consolidates the common pattern of getting an index from memo.indices
+    and converting it to an IndexedResourceCollection.
+
+    Args:
+        memo: Memo object containing indices
+        resource_id: Resource identifier/type to retrieve
+        ignore_fields: Optional list of JSONPath expressions for fields to remove
+
+    Returns:
+        IndexedResourceCollection for the specified resource type
+    """
+    from haproxy_template_ic.models import IndexedResourceCollection
+
+    if hasattr(memo, "indices") and resource_id in memo.indices:
+        return IndexedResourceCollection.from_kopf_index(
+            memo.indices[resource_id], ignore_fields=ignore_fields
+        )
+    return IndexedResourceCollection()
