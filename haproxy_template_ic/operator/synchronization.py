@@ -8,7 +8,7 @@ via the Dataplane API, including validation and deployment.
 import logging
 from typing import Any, Optional
 
-from haproxy_template_ic.activity import EventType
+from haproxy_template_ic.activity import EventType, ActivityEventMetadata
 from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
 from haproxy_template_ic.models import IndexedResourceCollection
 from haproxy_template_ic.k8s.kopf_utils import get_resource_collection_from_memo
@@ -20,7 +20,7 @@ from haproxy_template_ic.dataplane import (
 )
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import trace_async_function
-from .utils import get_current_namespace, get_memo_activity_buffer
+from .utils import get_memo_activity_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -167,11 +167,7 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
                 EventType.SYNC,
                 f"Starting configuration sync to {len(production_urls)} HAProxy instance{'s' if len(production_urls) > 1 else ''}",
                 source="synchronization",
-                metadata={
-                    "pod_count": len(production_urls),
-                    "namespace": get_current_namespace(),
-                    "sync_phase": "start",
-                },
+                metadata=ActivityEventMetadata(),
             )
 
         # Cache ConfigSynchronizer in memo to reuse HTTP connections across sync operations
@@ -214,13 +210,7 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
                     EventType.SYNC,
                     f"Configuration sync complete: {successful_count}/{len(production_urls)} instances updated",
                     source="synchronization",
-                    metadata={
-                        "successful": successful_count,
-                        "failed": failed_count,
-                        "total_urls": len(production_urls),
-                        "sync_phase": "complete",
-                        "status": "success",
-                    },
+                    metadata=ActivityEventMetadata(),
                 )
             elif successful_count > 0:
                 # Partial success
@@ -228,14 +218,7 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
                     EventType.SYNC,
                     f"Configuration sync partial: {successful_count} successful, {failed_count} failed",
                     source="synchronization",
-                    metadata={
-                        "successful": successful_count,
-                        "failed": failed_count,
-                        "total_urls": len(production_urls),
-                        "sync_phase": "complete",
-                        "status": "partial",
-                        "errors": [str(error) for error in errors[:3]],
-                    },
+                    metadata=ActivityEventMetadata(),
                 )
             else:
                 # All failed
@@ -243,14 +226,7 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
                     EventType.ERROR,
                     f"Configuration sync failed: {failed_count}/{len(production_urls)} instances failed",
                     source="synchronization",
-                    metadata={
-                        "successful": successful_count,
-                        "failed": failed_count,
-                        "total_urls": len(production_urls),
-                        "sync_phase": "complete",
-                        "status": "failed",
-                        "errors": [str(error) for error in errors[:3]],
-                    },
+                    metadata=ActivityEventMetadata(),
                 )
 
         for error in errors:
@@ -267,7 +243,7 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
                 EventType.ERROR,
                 f"Configuration validation failed: {str(e)[:100]}",
                 source="synchronization",
-                metadata={"error": str(e)[:500], "type": "validation_error"},
+                metadata=ActivityEventMetadata(error=str(e)[:500]),
             )
 
     except DataplaneAPIError as e:
@@ -283,7 +259,7 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
                 EventType.ERROR,
                 f"Dataplane API error: {str(e)[:100]}",
                 source="synchronization",
-                metadata={"error": str(e)[:500], "type": "dataplane_api_error"},
+                metadata=ActivityEventMetadata(error=str(e)[:500]),
             )
 
     except Exception as e:
@@ -296,5 +272,5 @@ async def synchronize_with_haproxy_instances(memo: Any, force: bool = False) -> 
                 EventType.ERROR,
                 f"Unexpected sync error: {str(e)[:100]}",
                 source="synchronization",
-                metadata={"error": str(e)[:500], "type": "unexpected_error"},
+                metadata=ActivityEventMetadata(error=str(e)[:500]),
             )

@@ -6,7 +6,7 @@ Contains screen definitions for Main, Help, Debug, and TemplateInspector views.
 
 import logging
 from collections import deque
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Deque
 
 from textual import on
 from textual.app import ComposeResult
@@ -25,10 +25,12 @@ __all__ = ["HelpScreen", "DebugScreen", "TemplateInspectorScreen", "TuiLogHandle
 class TuiLogHandler(logging.Handler):
     """Custom logging handler that captures logs for the TUI debug screen."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.logs = deque(maxlen=TUI_LOG_BUFFER_SIZE)  # Keep last N log entries
-        self.log_records = deque(
+        self.logs: Deque[str] = deque(
+            maxlen=TUI_LOG_BUFFER_SIZE
+        )  # Keep last N log entries
+        self.log_records: Deque[logging.LogRecord] = deque(
             maxlen=TUI_LOG_BUFFER_SIZE
         )  # Keep raw log records for filtering
         self.debug_screen: Optional["DebugScreen"] = None
@@ -279,7 +281,7 @@ class DebugScreen(Screen):
 
     screen_name = "debug"
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.log_widget: Optional[Log] = None
         self.log_level_select: Optional[Select] = None
@@ -408,11 +410,11 @@ class TemplateInspectorScreen(Screen):
 
     def __init__(
         self,
-        data_provider=None,
-        templates_data: Dict[str, Any] = None,
-        selected_template: str = None,
-        **kwargs,
-    ):
+        data_provider: Any = None,
+        templates_data: Optional[Dict[str, Any]] = None,
+        selected_template: Optional[str] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.data_provider = data_provider
         self.templates_data = templates_data or {}

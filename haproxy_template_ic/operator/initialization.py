@@ -25,7 +25,7 @@ from haproxy_template_ic.activity import get_activity_buffer
 from haproxy_template_ic.core.logging import setup_structured_logging
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.debouncer import TemplateRenderDebouncer
-from haproxy_template_ic.management_socket import run_management_socket_server
+from haproxy_template_ic.management.server import run_management_socket_server
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.tracing import (

@@ -65,8 +65,15 @@ from .initialization import (
 
 from .utils import (
     get_current_namespace,
-    extract_nested_field,
     trigger_reload,
+    get_memo_activity_buffer,
+    get_memo_attr_safe,
+    has_memo_attr,
+    get_effective_namespace,
+)
+
+from haproxy_template_ic.k8s import (
+    extract_nested_field,
     _compile_jsonpath,
     _is_valid_resource,
     _is_valid_dict_resource,
@@ -125,8 +132,13 @@ __all__ = [
     "run_operator_loop",
     # Utilities
     "get_current_namespace",
-    "extract_nested_field",
     "trigger_reload",
+    "get_memo_activity_buffer",
+    "get_memo_attr_safe",
+    "has_memo_attr",
+    "get_effective_namespace",
+    # K8s utilities
+    "extract_nested_field",
     "_compile_jsonpath",
     "_is_valid_resource",
     "_is_valid_dict_resource",

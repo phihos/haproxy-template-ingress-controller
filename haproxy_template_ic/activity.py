@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "EventType",
     "ActivityEvent",
+    "ActivityEventMetadata",
     "ActivityBuffer",
     "PriorityActivityBuffer",
     "get_activity_buffer",
@@ -83,6 +84,30 @@ LOW_PRIORITY_EVENT_TYPES = {
 
 
 @dataclass
+class ActivityEventMetadata:
+    """Metadata for activity events."""
+
+    endpoint: Optional[str] = None
+    version: Optional[str] = None
+    pod_name: Optional[str] = None
+    error: Optional[str] = None
+    last_attempt: Optional[str] = None
+    pod_ip: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ActivityEventMetadata":
+        """Create metadata from dictionary for backward compatibility."""
+        return cls(
+            endpoint=data.get("endpoint"),
+            version=data.get("version"),
+            pod_name=data.get("pod_name"),
+            error=data.get("error"),
+            last_attempt=data.get("last_attempt"),
+            pod_ip=data.get("pod_ip"),
+        )
+
+
+@dataclass
 class ActivityEvent:
     """Represents a single activity event."""
 
@@ -90,7 +115,7 @@ class ActivityEvent:
     message: str
     timestamp: str
     source: str = "unknown"
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[ActivityEventMetadata] = None
 
     @classmethod
     def create(
@@ -98,7 +123,7 @@ class ActivityEvent:
         event_type: EventType,
         message: str,
         source: str = "unknown",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ActivityEventMetadata] = None,
     ) -> "ActivityEvent":
         """Create a new activity event with current timestamp."""
         return cls(
@@ -106,7 +131,7 @@ class ActivityEvent:
             message=message,
             timestamp=datetime.now(timezone.utc).isoformat(),
             source=source,
-            metadata=metadata or {},
+            metadata=metadata,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -135,7 +160,7 @@ class ActivityBuffer:
         event_type: EventType,
         message: str,
         source: str = "unknown",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ActivityEventMetadata] = None,
     ) -> ActivityEvent:
         """Shared implementation for adding events."""
         event = ActivityEvent.create(event_type, message, source, metadata)
@@ -149,7 +174,7 @@ class ActivityBuffer:
         event_type: EventType,
         message: str,
         source: str = "unknown",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ActivityEventMetadata] = None,
     ) -> None:
         """Add a new event to the buffer."""
         async with self._lock:
@@ -160,7 +185,7 @@ class ActivityBuffer:
         event_type: EventType,
         message: str,
         source: str = "unknown",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ActivityEventMetadata] = None,
     ) -> None:
         """Add event synchronously (for use in non-async contexts)."""
         # Note: This is not thread-safe, but needed for synchronous contexts
@@ -221,7 +246,7 @@ class ActivityBuffer:
             if event.type in event_types:
                 if endpoint is None:
                     filtered_events.append(event)
-                elif event.metadata and event.metadata.get("endpoint") == endpoint:
+                elif event.metadata and event.metadata.endpoint == endpoint:
                     filtered_events.append(event)
 
         recent_events = filtered_events[-count:] if count > 0 else filtered_events
@@ -240,6 +265,7 @@ class ActivityBuffer:
         """Get events filtered by event type."""
         async with self._lock:
             return self._filter_events_by_types(set(event_types), None, count)
+
 
 class PriorityActivityBuffer(ActivityBuffer):
     """Priority-based activity buffer that ensures important events are retained.
@@ -379,7 +405,7 @@ class PriorityActivityBuffer(ActivityBuffer):
         event_type: EventType,
         message: str,
         source: str = "unknown",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ActivityEventMetadata] = None,
     ) -> None:
         """Shared implementation for adding events to appropriate priority tier."""
         event = ActivityEvent.create(event_type, message, source, metadata)
@@ -400,7 +426,7 @@ class PriorityActivityBuffer(ActivityBuffer):
         event_type: EventType,
         message: str,
         source: str = "unknown",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ActivityEventMetadata] = None,
     ) -> None:
         """Add a new event to the appropriate priority tier."""
         async with self._lock:
@@ -411,7 +437,7 @@ class PriorityActivityBuffer(ActivityBuffer):
         event_type: EventType,
         message: str,
         source: str = "unknown",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ActivityEventMetadata] = None,
     ) -> None:
         """Add event synchronously to appropriate priority tier."""
         self._add_event_to_tier(event_type, message, source, metadata)

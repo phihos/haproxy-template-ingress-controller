@@ -21,6 +21,7 @@ from prometheus_client import (
 )
 
 from haproxy_template_ic.constants import DEFAULT_METRICS_PORT
+from haproxy_template_ic.core.error_handling import handle_exceptions
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -183,32 +184,28 @@ class MetricsCollector:
         self.start_time = time.time()
         self._server_started = False
 
+    @handle_exceptions(logger=logger, context="metrics server startup")
     async def start_metrics_server(self, port: int = DEFAULT_METRICS_PORT) -> None:
         """Start the Prometheus metrics HTTP server using asyncio."""
         if self._server_started:
             logger.warning("Metrics server already started")
             return
 
-        try:
-            await aio.web.start_http_server(port=port)
-            self._server_started = True
-            logger.info(f"📊 Metrics server started on port {port}")
-        except Exception as e:
-            logger.error(f"❌ Failed to start metrics server: {e}")
+        await aio.web.start_http_server(port=port)
+        self._server_started = True
+        logger.info(f"📊 Metrics server started on port {port}")
 
+    @handle_exceptions(logger=logger, context="metrics server shutdown")
     async def stop_metrics_server(self) -> None:
         """Stop the Prometheus metrics HTTP server."""
         if not self._server_started:
             logger.debug("Metrics server not running, nothing to stop")
             return
 
-        try:
-            # Note: prometheus_async doesn't provide a direct stop method
-            # The server will be stopped when the event loop shuts down
-            self._server_started = False
-            logger.debug("📊 Metrics server stopped")
-        except Exception as e:
-            logger.error(f"❌ Failed to stop metrics server: {e}")
+        # Note: prometheus_async doesn't provide a direct stop method
+        # The server will be stopped when the event loop shuts down
+        self._server_started = False
+        logger.debug("📊 Metrics server stopped")
 
     def set_app_info(self, version: str = "development") -> None:
         """Set application information metrics."""
@@ -461,6 +458,9 @@ def export_metrics() -> str:
     return generate_latest().decode("utf-8")
 
 
+@handle_exceptions(
+    logger=logger, default_return={}, context="histogram percentiles calculation"
+)
 def calculate_histogram_percentiles(
     histogram, percentiles: list = [50, 95, 99]
 ) -> Dict[str, Any]:
@@ -475,72 +475,66 @@ def calculate_histogram_percentiles(
     """
     result = {}
 
-    try:
-        # Get all samples from the histogram
-        samples = []
-        for sample in histogram.collect():
-            for metric in sample.samples:
-                if metric.name.endswith("_bucket"):
-                    # Extract bucket upper bound and count
-                    le = metric.labels.get("le", "")
-                    if le and le != "+Inf":
-                        try:
-                            bucket_upper_bound = float(le)
-                            count = metric.value
-                            samples.append((bucket_upper_bound, count))
-                        except ValueError:
-                            continue
+    # Get all samples from the histogram
+    samples = []
+    for sample in histogram.collect():
+        for metric in sample.samples:
+            if metric.name.endswith("_bucket"):
+                # Extract bucket upper bound and count
+                le = metric.labels.get("le", "")
+                if le and le != "+Inf":
+                    try:
+                        bucket_upper_bound = float(le)
+                        count = metric.value
+                        samples.append((bucket_upper_bound, count))
+                    except ValueError:
+                        continue
 
-        if not samples:
-            # No samples, return N/A for all percentiles
-            return {f"p{p}": "N/A" for p in percentiles}
-
-        # Sort by bucket upper bound
-        samples.sort(key=lambda x: x[0])
-
-        # Calculate total count
-        total_count = max(count for _, count in samples) if samples else 0
-
-        if total_count == 0:
-            return {f"p{p}": "N/A" for p in percentiles}
-
-        # Calculate percentiles
-        for percentile in percentiles:
-            target_count = (percentile / 100.0) * total_count
-
-            # Find the bucket where this percentile falls
-            percentile_value = 0.0
-            for i, (bucket_bound, cumulative_count) in enumerate(samples):
-                if cumulative_count >= target_count:
-                    if i == 0:
-                        # First bucket, use 0 as lower bound
-                        percentile_value = bucket_bound * (
-                            target_count / cumulative_count
-                        )
-                    else:
-                        # Linear interpolation between buckets
-                        prev_bound, prev_count = samples[i - 1]
-                        ratio = (target_count - prev_count) / (
-                            cumulative_count - prev_count
-                        )
-                        percentile_value = prev_bound + ratio * (
-                            bucket_bound - prev_bound
-                        )
-                    break
-            else:
-                # If we get here, use the highest bucket
-                percentile_value = samples[-1][0] if samples else 0.0
-
-            # Convert from seconds to milliseconds and round
-            result[f"p{percentile}"] = round(percentile_value * 1000, 1)
-
-    except Exception as e:
-        logger.debug(f"Error calculating histogram percentiles: {e}")
+    if not samples:
+        # No samples, return N/A for all percentiles
         return {f"p{p}": "N/A" for p in percentiles}
+
+    # Sort by bucket upper bound
+    samples.sort(key=lambda x: x[0])
+
+    # Calculate total count
+    total_count = max(count for _, count in samples) if samples else 0
+
+    for percentile in percentiles:
+        target_count = (percentile / 100.0) * total_count
+
+        # Find the bucket that contains this percentile
+        percentile_value = 0.0
+
+        for i, (bucket_bound, count) in enumerate(samples):
+            cumulative_count = count
+
+            if cumulative_count >= target_count:
+                # Found the bucket containing the percentile
+                if i == 0:
+                    # First bucket, use simple estimate
+                    percentile_value = bucket_bound * (target_count / cumulative_count)
+                else:
+                    # Linear interpolation between buckets
+                    prev_bound, prev_count = samples[i - 1]
+                    ratio = (target_count - prev_count) / (
+                        cumulative_count - prev_count
+                    )
+                    percentile_value = prev_bound + ratio * (bucket_bound - prev_bound)
+                break
+        else:
+            # If we get here, use the highest bucket
+            percentile_value = samples[-1][0] if samples else 0.0
+
+        # Convert from seconds to milliseconds and round
+        result[f"p{percentile}"] = round(percentile_value * 1000, 1)
 
     return result
 
 
+@handle_exceptions(
+    logger=logger, default_return={}, context="performance metrics calculation"
+)
 def get_performance_metrics() -> Dict[str, Any]:
     """Get performance metrics for dashboard display.
 
@@ -549,39 +543,31 @@ def get_performance_metrics() -> Dict[str, Any]:
     """
     performance: Dict[str, Any] = {}
 
-    try:
-        # Template render metrics
-        template_percentiles = calculate_histogram_percentiles(
-            template_render_duration_seconds
+    # Template render metrics
+    template_percentiles = calculate_histogram_percentiles(
+        template_render_duration_seconds
+    )
+    if template_percentiles:
+        template_render_data = template_percentiles.copy()
+        # Add historical data for sparklines
+        template_render_data["history"] = _metrics_history.get_template_render_values()
+        performance["template_render"] = template_render_data
+
+    # Dataplane API metrics
+    api_percentiles = calculate_histogram_percentiles(dataplane_api_duration_seconds)
+    if api_percentiles:
+        dataplane_api_data = api_percentiles.copy()
+        # Add historical data for sparklines
+        dataplane_api_data["history"] = _metrics_history.get_dataplane_api_values()
+        performance["dataplane_api"] = dataplane_api_data
+
+    # Add sync pattern and recent success rate from history
+    sync_pattern = _metrics_history.get_sync_success_pattern()
+    if sync_pattern:
+        performance["sync_pattern"] = sync_pattern
+        performance["recent_sync_success_rate"] = (
+            _metrics_history.get_recent_sync_success_rate()
         )
-        if template_percentiles:
-            template_render_data = template_percentiles.copy()
-            # Add historical data for sparklines
-            template_render_data["history"] = (
-                _metrics_history.get_template_render_values()
-            )
-            performance["template_render"] = template_render_data
-
-        # Dataplane API metrics
-        api_percentiles = calculate_histogram_percentiles(
-            dataplane_api_duration_seconds
-        )
-        if api_percentiles:
-            dataplane_api_data = api_percentiles.copy()
-            # Add historical data for sparklines
-            dataplane_api_data["history"] = _metrics_history.get_dataplane_api_values()
-            performance["dataplane_api"] = dataplane_api_data
-
-        # Add sync pattern and recent success rate from history
-        sync_pattern = _metrics_history.get_sync_success_pattern()
-        if sync_pattern:
-            performance["sync_pattern"] = sync_pattern
-            performance["recent_sync_success_rate"] = (
-                _metrics_history.get_recent_sync_success_rate()
-            )
-
-    except Exception as e:
-        logger.debug(f"Error calculating performance metrics: {e}")
 
     return performance
 

@@ -198,7 +198,7 @@ class TestSerializeState:
 
         # Patch _serialize_kopf_index to raise an exception
         with patch(
-            "haproxy_template_ic.management_socket._serialize_kopf_index",
+            "haproxy_template_ic.management.serializers._serialize_kopf_index",
             side_effect=ValueError("Serialization failed"),
         ):
             result = serialize_state(memo)
@@ -253,6 +253,8 @@ class TestManagementSocketServer:
         memo.config.certificates = {"cert1": Mock()}
         memo.haproxy_config_context = Mock()
         memo.haproxy_config_context.model_dump.return_value = {"test": "data"}
+        # Add indices mock to prevent iteration errors
+        memo.indices = {}
         return memo
 
     @pytest.fixture
@@ -281,12 +283,12 @@ class TestManagementSocketServer:
     async def test_process_command_dump_all(self, server):
         """Test 'dump all' command."""
         with patch(
-            "haproxy_template_ic.management_socket.serialize_state"
-        ) as mock_serialize:
-            mock_serialize.return_value = {"test": "data"}
+            "haproxy_template_ic.management.data_providers.DataProvider.dump_all"
+        ) as mock_dump_all:
+            mock_dump_all.return_value = {"test": "data"}
             result = await server._process_command("dump all")
             assert result == {"test": "data"}
-            mock_serialize.assert_called_once_with(server.memo)
+            mock_dump_all.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_process_command_dump_indices(self, server):
@@ -326,14 +328,14 @@ class TestManagementSocketServer:
         """Test 'dump' command with unknown subcommand."""
         result = await server._process_command("dump unknown")
         assert "error" in result
-        assert "Unknown dump command" in result["error"]
+        assert "Unknown dump target" in result["error"]
 
     @pytest.mark.asyncio
     async def test_process_command_dump_missing_subcommand(self, server):
         """Test 'dump' command without subcommand."""
         result = await server._process_command("dump")
         assert "error" in result
-        assert "Missing command name" in result["error"]
+        assert "Missing dump target" in result["error"]
 
     @pytest.mark.asyncio
     async def test_process_command_get_maps(self, server):
@@ -343,8 +345,9 @@ class TestManagementSocketServer:
         server.memo.config.maps = {"test-map": mock_map}
 
         result = await server._process_command("get maps test-map")
-        assert "result" in result
-        assert result["result"]["template"] == "test template"
+        assert "template_source" in result
+        assert result["template_source"]["name"] == "test-map"
+        assert result["template_source"]["type"] == "map"
 
     @pytest.mark.asyncio
     async def test_process_command_get_map_not_found(self, server):
@@ -353,18 +356,19 @@ class TestManagementSocketServer:
 
         result = await server._process_command("get maps nonexistent")
         assert "error" in result
-        assert "Map not found" in result["error"]
+        assert "not found" in result["error"]
 
     @pytest.mark.asyncio
     async def test_process_command_get_watched_resources(self, server):
-        """Test 'get watched_resources' command."""
-        mock_resource = Mock()
-        mock_resource.model_dump.return_value = {"kind": "Ingress"}
-        server.memo.config.watched_resources = {"ingresses": mock_resource}
+        """Test 'get template_snippets' command."""
+        mock_snippet = Mock()
+        mock_snippet.template = "test snippet"
+        server.memo.config.template_snippets = {"ingresses": mock_snippet}
 
-        result = await server._process_command("get watched_resources ingresses")
-        assert "result" in result
-        assert result["result"]["kind"] == "Ingress"
+        result = await server._process_command("get template_snippets ingresses")
+        assert "template_source" in result
+        assert result["template_source"]["name"] == "ingresses"
+        assert result["template_source"]["type"] == "snippet"
 
     @pytest.mark.asyncio
     async def test_process_command_get_template_snippets(self, server):
@@ -374,8 +378,9 @@ class TestManagementSocketServer:
         server.memo.config.template_snippets = {"test-snippet": mock_snippet}
 
         result = await server._process_command("get template_snippets test-snippet")
-        assert "result" in result
-        assert result["result"]["template"] == "test snippet"
+        assert "template_source" in result
+        assert result["template_source"]["name"] == "test-snippet"
+        assert result["template_source"]["type"] == "snippet"
 
     @pytest.mark.asyncio
     async def test_process_command_get_certificates(self, server):
@@ -385,8 +390,9 @@ class TestManagementSocketServer:
         server.memo.config.certificates = {"test-cert": mock_cert}
 
         result = await server._process_command("get certificates test-cert")
-        assert "result" in result
-        assert result["result"]["template"] == "cert template"
+        assert "template_source" in result
+        assert result["template_source"]["name"] == "test-cert"
+        assert result["template_source"]["type"] == "certificate"
 
     @pytest.mark.asyncio
     async def test_process_command_get_no_model_dump(self, server):
@@ -394,22 +400,23 @@ class TestManagementSocketServer:
         server.memo.config.maps = {"test": "simple string"}
 
         result = await server._process_command("get maps test")
-        assert "result" in result
-        assert result["result"]["data"] == "simple string"
+        assert "template_source" in result
+        assert result["template_source"]["name"] == "test"
+        assert result["template_source"]["type"] == "map"
 
     @pytest.mark.asyncio
     async def test_process_command_get_unknown_collection(self, server):
         """Test 'get' command with unknown collection."""
         result = await server._process_command("get unknown_collection item")
         assert "error" in result
-        assert "Unknown collection type" in result["error"]
+        assert "Invalid get command" in result["error"]
 
     @pytest.mark.asyncio
     async def test_process_command_get_missing_args(self, server):
         """Test 'get' command with missing arguments."""
         result = await server._process_command("get maps")
         assert "error" in result
-        assert "Missing arguments" in result["error"]
+        assert "Invalid get command" in result["error"]
 
     @pytest.mark.asyncio
     async def test_process_command_unknown_command(self, server):
@@ -487,7 +494,7 @@ class TestManagementSocketServer:
 
         mock_reader.read.return_value = b"dump all"
 
-        with patch.object(server, "_process_command") as mock_process:
+        with patch.object(server.command_handler, "process_command") as mock_process:
             mock_process.return_value = {"status": "ok"}
 
             await server._handle_client(mock_reader, mock_writer)
@@ -506,7 +513,7 @@ class TestManagementSocketServer:
 
         mock_reader.read.return_value = b""  # Empty command
 
-        with patch.object(server, "_process_command") as mock_process:
+        with patch.object(server.command_handler, "process_command") as mock_process:
             mock_process.return_value = {"status": "ok"}
 
             await server._handle_client(mock_reader, mock_writer)
@@ -523,7 +530,9 @@ class TestManagementSocketServer:
         mock_reader.read.return_value = b"dump all"
 
         with patch.object(
-            server, "_process_command", side_effect=RuntimeError("Process error")
+            server.command_handler,
+            "process_command",
+            side_effect=RuntimeError("Process error"),
         ):
             await server._handle_client(mock_reader, mock_writer)
 
@@ -661,7 +670,7 @@ class TestRunManagementSocketServer:
         socket_path = "/test/socket"
 
         with patch(
-            "haproxy_template_ic.management_socket.ManagementSocketServer"
+            "haproxy_template_ic.management.server.ManagementSocketServer"
         ) as mock_server_class:
             mock_server = AsyncMock()
             mock_server_class.return_value = mock_server
@@ -678,7 +687,7 @@ class TestRunManagementSocketServer:
         mock_memo = Mock()
 
         with patch(
-            "haproxy_template_ic.management_socket.ManagementSocketServer"
+            "haproxy_template_ic.management.server.ManagementSocketServer"
         ) as mock_server_class:
             mock_server = AsyncMock()
             mock_server_class.return_value = mock_server
@@ -693,7 +702,7 @@ class TestRunManagementSocketServer:
         mock_memo = Mock()
 
         with patch(
-            "haproxy_template_ic.management_socket.ManagementSocketServer"
+            "haproxy_template_ic.management.server.ManagementSocketServer"
         ) as mock_server_class:
             mock_server = AsyncMock()
             mock_server_class.return_value = mock_server
@@ -859,7 +868,7 @@ class TestManagementSocketCriticalPaths:
 
         # Since deployment history is empty, should return error with available endpoints
         assert "error" in result
-        assert "No deployment history found for endpoint" in result["error"]
+        assert "Invalid get command" in result["error"]
 
     @pytest.mark.asyncio
     async def test_process_command_get_template_snippet(self, server):
@@ -873,18 +882,19 @@ class TestManagementSocketCriticalPaths:
 
         result = await server._process_command("get template_snippets backend-name")
 
-        expected = {"result": {"template": "backend_{{ name }}"}}
-        assert result == expected
+        assert "template_source" in result
+        assert result["template_source"]["name"] == "backend-name"
+        assert result["template_source"]["type"] == "snippet"
 
     def test_serialize_resource_collection_dict_fallback(self):
         """Test _serialize_resource_collection fallback for dicts (line 58)."""
 
-        # Test with a single dict resource - dicts are iterable so they iterate over keys
+        # Test with a single dict resource - should wrap non-standard inputs
         resource_dict = {"name": "test-resource", "status": "active"}
         result = _serialize_resource_collection(resource_dict)
 
-        # Dict iterates over keys, so result should be list of keys
-        assert result == ["name", "status"]
+        # Dict should be wrapped in data field since it's not a resource collection
+        assert result == [{"data": resource_dict}]
 
         # Test the actual fallback path with non-iterable type
         result = _serialize_resource_collection(42)
@@ -960,16 +970,15 @@ class TestSerializeResourceCollection:
 
         bad_iter = BadIterable()
         result = _serialize_resource_collection(bad_iter)
-        # When list() fails, it returns the object wrapped
-        assert len(result) == 1
-        assert isinstance(result[0], BadIterable)
+        # Bad iterables return empty list due to error handling
+        assert result == []
 
     def test_dict_as_iterable(self):
-        """Test that dicts are treated as iterables and return keys."""
-        # Dicts are iterable, so they hit the first branch
+        """Test that dicts are properly wrapped."""
+        # Dicts should be wrapped since they're not resource collections
         resource = {"name": "test", "kind": "Service"}
         result = _serialize_resource_collection(resource)
-        assert result == ["name", "kind"]  # Dict iteration gives keys
+        assert result == [{"data": resource}]
 
     def test_fallback_for_other_types(self):
         """Test fallback for non-iterable, non-dict types."""

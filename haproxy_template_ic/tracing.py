@@ -25,6 +25,8 @@ from opentelemetry.trace import Status, StatusCode
 
 import structlog
 
+from haproxy_template_ic.core.error_handling import handle_exceptions
+
 logger = structlog.get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -104,48 +106,48 @@ class TracingManager:
 
         # Jaeger exporter for production
         if self.config.jaeger_endpoint:
-            try:
-                jaeger_exporter = JaegerExporter(
-                    agent_host_name=self.config.jaeger_endpoint.split(":")[0],
-                    agent_port=int(self.config.jaeger_endpoint.split(":")[1])
-                    if ":" in self.config.jaeger_endpoint
-                    else 14268,
-                )
-                jaeger_processor = BatchSpanProcessor(jaeger_exporter)
-                self.tracer_provider.add_span_processor(jaeger_processor)
-                logger.info(
-                    "Added Jaeger span exporter", endpoint=self.config.jaeger_endpoint
-                )
-            except Exception as e:
-                logger.warning("Failed to configure Jaeger exporter", error=str(e))
+            self._setup_jaeger_exporter()
 
+    @handle_exceptions(logger=logger, context="jaeger exporter configuration")
+    def _setup_jaeger_exporter(self) -> None:
+        """Set up Jaeger exporter with error handling."""
+        if not self.config.jaeger_endpoint:
+            return
+
+        jaeger_endpoint = self.config.jaeger_endpoint
+        jaeger_exporter = JaegerExporter(
+            agent_host_name=jaeger_endpoint.split(":")[0],
+            agent_port=int(jaeger_endpoint.split(":")[1])
+            if ":" in jaeger_endpoint
+            else 14268,
+        )
+        jaeger_processor = BatchSpanProcessor(jaeger_exporter)
+        if self.tracer_provider:
+            self.tracer_provider.add_span_processor(jaeger_processor)
+        logger.info("Added Jaeger span exporter", endpoint=jaeger_endpoint)
+
+    @handle_exceptions(logger=logger, context="auto-instrumentation setup")
     def _setup_auto_instrumentation(self) -> None:
         """Set up automatic instrumentation for common libraries."""
         if self._instrumented:
             return
 
-        try:
-            # Instrument HTTPX for Dataplane API calls
-            HTTPXClientInstrumentor().instrument()
-            logger.debug("HTTPX instrumentation enabled")
+        # Instrument HTTPX for Dataplane API calls
+        HTTPXClientInstrumentor().instrument()
+        logger.debug("HTTPX instrumentation enabled")
 
-            # Instrument asyncio for async operation tracing
-            AsyncioInstrumentor().instrument()
-            logger.debug("Asyncio instrumentation enabled")
+        # Instrument asyncio for async operation tracing
+        AsyncioInstrumentor().instrument()
+        logger.debug("Asyncio instrumentation enabled")
 
-            self._instrumented = True
+        self._instrumented = True
 
-        except Exception as e:
-            logger.warning("Failed to setup auto-instrumentation", error=str(e))
-
+    @handle_exceptions(logger=logger, context="tracing shutdown")
     def shutdown(self) -> None:
         """Shutdown tracing and flush any pending spans."""
         if self.tracer_provider:
-            try:
-                self.tracer_provider.shutdown()
-                logger.info("Distributed tracing shutdown complete")
-            except Exception as e:
-                logger.error("Error during tracing shutdown", error=str(e))
+            self.tracer_provider.shutdown()
+            logger.info("Distributed tracing shutdown complete")
 
 
 # Global tracing manager instance

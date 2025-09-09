@@ -11,7 +11,7 @@ import io
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 from tenacity import (
@@ -1505,6 +1505,133 @@ class DataplaneClient:
             result = await self.deploy_configuration(new_config_normalized)
             return result
 
+    def _separate_server_changes(
+        self, changes: List[ConfigChange]
+    ) -> Tuple[List[ConfigChange], List[ConfigChange]]:
+        """Separate server changes from other changes for runtime API optimization.
+
+        Args:
+            changes: List of configuration changes
+
+        Returns:
+            Tuple of (server_changes, other_changes)
+        """
+        server_changes = [
+            c
+            for c in changes
+            if c.element_type == ConfigElementType.SERVER
+            and c.section_type == ConfigSectionType.BACKEND
+        ]
+        other_changes = [c for c in changes if c not in server_changes]
+
+        # Sort server changes by name for consistent ordering (SRV_1, SRV_2, ..., SRV_10)
+        server_changes.sort(key=lambda c: _natural_sort_key(c.element_id or ""))
+
+        return server_changes, other_changes
+
+    async def _apply_server_changes_runtime(
+        self, client, server_changes: List[ConfigChange]
+    ) -> List[ConfigChange]:
+        """Apply server changes via runtime API, returning failed changes.
+
+        Args:
+            client: HTTP client for API calls
+            server_changes: List of server changes to apply
+
+        Returns:
+            List of server changes that failed runtime API (need transaction fallback)
+        """
+        if not server_changes:
+            return []
+
+        logger.info(
+            f"🏃 Applying {len(server_changes)} server changes via runtime-eligible path"
+        )
+
+        runtime_failed_servers = []
+        for i, change in enumerate(server_changes):
+            logger.debug(
+                f"🏃 Applying server change {i + 1}/{len(server_changes)}: {change}"
+            )
+            try:
+                await self._apply_server_without_transaction(client, change)
+            except Exception as server_error:
+                logger.warning(
+                    f"⚠️  Runtime API failed for server {change.element_id}, will retry via transaction: {server_error}"
+                )
+                runtime_failed_servers.append(change)
+
+        # Log results
+        if runtime_failed_servers:
+            logger.info(
+                f"🔄 {len(runtime_failed_servers)} server changes failed runtime API, will retry via transaction"
+            )
+
+        successful_runtime_servers = len(server_changes) - len(runtime_failed_servers)
+        if successful_runtime_servers > 0:
+            logger.info(
+                f"✅ {successful_runtime_servers} server changes applied via runtime API"
+            )
+
+        return runtime_failed_servers
+
+    def _sort_other_changes(self, other_changes: List[ConfigChange]) -> None:
+        """Sort changes to ensure consistent ordering, especially for initial server creation.
+
+        Args:
+            other_changes: List of changes to sort in-place
+        """
+        other_changes.sort(
+            key=lambda c: (
+                c.section_type.value if c.section_type else "",
+                c.section_name or "",
+                c.element_type.value if c.element_type else "",
+                _natural_sort_key(c.element_id or ""),
+            )
+        )
+
+    async def _handle_runtime_only_deployment(
+        self, client, server_changes: List[ConfigChange]
+    ) -> Dict[str, Any]:
+        """Handle the case where all changes were applied via runtime API.
+
+        Args:
+            client: HTTP client for API calls
+            server_changes: List of server changes that were applied
+
+        Returns:
+            Deployment result dictionary
+        """
+        logger.info(
+            "✅ All changes were server changes applied via runtime API - no transaction needed"
+        )
+
+        # Get current version for return
+        try:
+            version_response = await _get_configuration_version(client)
+            new_version = str(version_response) if version_response else "runtime-only"
+
+            record_span_event(
+                "runtime_only_deployment_successful",
+                {
+                    "server_changes_count": len(server_changes),
+                    "version": new_version,
+                },
+            )
+
+            return {
+                "version": new_version,
+                "reload_triggered": False,
+                "reload_id": None,
+            }
+        except Exception:
+            # Runtime-only fallback - no reload
+            return {
+                "version": "runtime-only",
+                "reload_triggered": False,
+                "reload_id": None,
+            }
+
     async def deploy_structured_configuration(
         self, changes: List[ConfigChange]
     ) -> Dict[str, Any]:
@@ -1542,16 +1669,7 @@ class DataplaneClient:
             client = self._get_client()
 
             # Separate server changes from other changes for runtime API optimization
-            server_changes = [
-                c
-                for c in changes
-                if c.element_type == ConfigElementType.SERVER
-                and c.section_type == ConfigSectionType.BACKEND
-            ]
-            other_changes = [c for c in changes if c not in server_changes]
-
-            # Sort server changes by name for consistent ordering (SRV_1, SRV_2, ..., SRV_10)
-            server_changes.sort(key=lambda c: _natural_sort_key(c.element_id or ""))
+            server_changes, other_changes = self._separate_server_changes(changes)
 
             logger.debug(
                 f"🔄 Separated changes: {len(server_changes)} server changes (runtime-eligible), "
@@ -1559,81 +1677,22 @@ class DataplaneClient:
             )
 
             # Apply server changes first WITHOUT transaction to enable runtime API
-            runtime_failed_servers = []
-            if server_changes:
-                logger.info(
-                    f"🏃 Applying {len(server_changes)} server changes via runtime-eligible path"
-                )
-                for i, change in enumerate(server_changes):
-                    logger.debug(
-                        f"🏃 Applying server change {i + 1}/{len(server_changes)}: {change}"
-                    )
-                    try:
-                        await self._apply_server_without_transaction(client, change)
-                    except Exception as server_error:
-                        logger.warning(
-                            f"⚠️  Runtime API failed for server {change.element_id}, will retry via transaction: {server_error}"
-                        )
-                        runtime_failed_servers.append(change)
+            runtime_failed_servers = await self._apply_server_changes_runtime(
+                client, server_changes
+            )
 
-                # If some servers failed runtime API, add them to other_changes for transaction
-                if runtime_failed_servers:
-                    logger.info(
-                        f"🔄 {len(runtime_failed_servers)} server changes failed runtime API, will retry via transaction"
-                    )
-                    other_changes.extend(runtime_failed_servers)
-
-                # Update success count
-                successful_runtime_servers = len(server_changes) - len(
-                    runtime_failed_servers
-                )
-                if successful_runtime_servers > 0:
-                    logger.info(
-                        f"✅ {successful_runtime_servers} server changes applied via runtime API"
-                    )
+            # If some servers failed runtime API, add them to other_changes for transaction
+            if runtime_failed_servers:
+                other_changes.extend(runtime_failed_servers)
 
             # Only use transaction if there are non-server changes
             if not other_changes:
-                logger.info(
-                    "✅ All changes were server changes applied via runtime API - no transaction needed"
+                return await self._handle_runtime_only_deployment(
+                    client, server_changes
                 )
-                # Get current version for return
-                try:
-                    version_response = await _get_configuration_version(client)
-                    new_version = (
-                        str(version_response) if version_response else "runtime-only"
-                    )
-                    record_span_event(
-                        "runtime_only_deployment_successful",
-                        {
-                            "server_changes_count": len(server_changes),
-                            "version": new_version,
-                        },
-                    )
 
-                    # Runtime-only deployments don't trigger reloads
-                    return {
-                        "version": new_version,
-                        "reload_triggered": False,
-                        "reload_id": None,
-                    }
-                except Exception:
-                    # Runtime-only fallback - no reload
-                    return {
-                        "version": "runtime-only",
-                        "reload_triggered": False,
-                        "reload_id": None,
-                    }
-
-            # Sort other_changes to ensure consistent ordering, especially for initial server creation
-            other_changes.sort(
-                key=lambda c: (
-                    c.section_type.value if c.section_type else "",
-                    c.section_name or "",
-                    c.element_type.value if c.element_type else "",
-                    _natural_sort_key(c.element_id or ""),
-                )
-            )
+            # Sort other_changes to ensure consistent ordering
+            self._sort_other_changes(other_changes)
 
             # Start a transaction to batch remaining changes atomically
             try:

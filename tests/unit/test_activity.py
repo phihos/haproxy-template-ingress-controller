@@ -268,7 +268,7 @@ class TestActivityEvent:
         assert event_dict["message"] == "Error message"
         assert event_dict["source"] == "test"
         assert "timestamp" in event_dict
-        assert event_dict["metadata"] == {}
+        assert event_dict["metadata"] is None
 
 
 @pytest.mark.asyncio

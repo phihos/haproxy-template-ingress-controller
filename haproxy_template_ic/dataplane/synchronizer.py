@@ -27,7 +27,12 @@ from .utils import (
     MAX_CONFIG_COMPARISON_CHANGES,
 )
 from haproxy_template_ic.metrics import get_metrics_collector
-from haproxy_template_ic.activity import EventType, get_activity_buffer, ActivityBuffer
+from haproxy_template_ic.activity import (
+    EventType,
+    get_activity_buffer,
+    ActivityBuffer,
+    ActivityEventMetadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +421,84 @@ class ConfigSynchronizer:
                     )
                 )
 
+    def _compare_section_configs(
+        self,
+        current: Dict[str, Any],
+        new: Dict[str, Any],
+        section_key: str,
+        section_type: ConfigSectionType,
+        changes: List[ConfigChange],
+    ) -> None:
+        """Compare configuration sections and append changes to the changes list.
+
+        Args:
+            current: Current configuration
+            new: New configuration
+            section_key: Key in the config dict (e.g., "backends", "frontends")
+            section_type: ConfigSectionType for this section
+            changes: List to append changes to
+        """
+        # Build name-indexed dictionaries
+        current_items = {
+            item.name: item
+            for item in current.get(section_key, [])
+            if hasattr(item, "name")
+        }
+        new_items = {
+            item.name: item
+            for item in new.get(section_key, [])
+            if hasattr(item, "name")
+        }
+
+        current_names = set(current_items.keys())
+        new_names = set(new_items.keys())
+
+        # Deletions
+        for name in current_names - new_names:
+            changes.append(
+                ConfigChange(
+                    change_type=ConfigChangeType.DELETE,
+                    section_type=section_type,
+                    section_name=name,
+                    old_config=current_items[name],
+                )
+            )
+
+        # Additions
+        for name in new_names - current_names:
+            changes.append(
+                ConfigChange(
+                    change_type=ConfigChangeType.CREATE,
+                    section_type=section_type,
+                    section_name=name,
+                    new_config=new_items[name],
+                )
+            )
+
+        # Modifications
+        for name in current_names & new_names:
+            if _to_dict_safe(current_items[name]) != _to_dict_safe(new_items[name]):
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.UPDATE,
+                        section_type=section_type,
+                        section_name=name,
+                        new_config=new_items[name],
+                        old_config=current_items[name],
+                    )
+                )
+
+            # Compare nested elements within existing sections
+            current_nested = (
+                current.get("nested_elements", {}).get(section_key, {}).get(name, {})
+            )
+            new_nested = (
+                new.get("nested_elements", {}).get(section_key, {}).get(name, {})
+            )
+            self._compare_nested_elements(
+                current_nested, new_nested, section_type, name, changes
+            )
+
     def _analyze_config_changes(
         self, current: Dict[str, Any], new: Dict[str, Any]
     ) -> List[ConfigChange]:
@@ -434,122 +517,14 @@ class ConfigSynchronizer:
         changes: List[ConfigChange] = []
 
         # Compare backends
-        current_backends = {
-            b.name: b for b in current.get("backends", []) if hasattr(b, "name")
-        }
-        new_backends = {
-            b.name: b for b in new.get("backends", []) if hasattr(b, "name")
-        }
-
-        current_names = set(current_backends.keys())
-        new_names = set(new_backends.keys())
-
-        # Backend deletions
-        for name in current_names - new_names:
-            changes.append(
-                ConfigChange(
-                    change_type=ConfigChangeType.DELETE,
-                    section_type=ConfigSectionType.BACKEND,
-                    section_name=name,
-                    old_config=current_backends[name],
-                )
-            )
-
-        # Backend additions
-        for name in new_names - current_names:
-            changes.append(
-                ConfigChange(
-                    change_type=ConfigChangeType.CREATE,
-                    section_type=ConfigSectionType.BACKEND,
-                    section_name=name,
-                    new_config=new_backends[name],
-                )
-            )
-
-        # Backend modifications
-        for name in current_names & new_names:
-            if _to_dict_safe(current_backends[name]) != _to_dict_safe(
-                new_backends[name]
-            ):
-                changes.append(
-                    ConfigChange(
-                        change_type=ConfigChangeType.UPDATE,
-                        section_type=ConfigSectionType.BACKEND,
-                        section_name=name,
-                        new_config=new_backends[name],
-                        old_config=current_backends[name],
-                    )
-                )
-
-            # Compare nested elements within existing backends
-            current_nested = (
-                current.get("nested_elements", {}).get("backends", {}).get(name, {})
-            )
-            new_nested = (
-                new.get("nested_elements", {}).get("backends", {}).get(name, {})
-            )
-            self._compare_nested_elements(
-                current_nested, new_nested, ConfigSectionType.BACKEND, name, changes
-            )
+        self._compare_section_configs(
+            current, new, "backends", ConfigSectionType.BACKEND, changes
+        )
 
         # Compare frontends
-        current_frontends = {
-            f.name: f for f in current.get("frontends", []) if hasattr(f, "name")
-        }
-        new_frontends = {
-            f.name: f for f in new.get("frontends", []) if hasattr(f, "name")
-        }
-
-        current_names = set(current_frontends.keys())
-        new_names = set(new_frontends.keys())
-
-        # Frontend deletions
-        for name in current_names - new_names:
-            changes.append(
-                ConfigChange(
-                    change_type=ConfigChangeType.DELETE,
-                    section_type=ConfigSectionType.FRONTEND,
-                    section_name=name,
-                    old_config=current_frontends[name],
-                )
-            )
-
-        # Frontend additions
-        for name in new_names - current_names:
-            changes.append(
-                ConfigChange(
-                    change_type=ConfigChangeType.CREATE,
-                    section_type=ConfigSectionType.FRONTEND,
-                    section_name=name,
-                    new_config=new_frontends[name],
-                )
-            )
-
-        # Frontend modifications
-        for name in current_names & new_names:
-            if _to_dict_safe(current_frontends[name]) != _to_dict_safe(
-                new_frontends[name]
-            ):
-                changes.append(
-                    ConfigChange(
-                        change_type=ConfigChangeType.UPDATE,
-                        section_type=ConfigSectionType.FRONTEND,
-                        section_name=name,
-                        new_config=new_frontends[name],
-                        old_config=current_frontends[name],
-                    )
-                )
-
-            # Compare nested elements within existing frontends
-            current_nested = (
-                current.get("nested_elements", {}).get("frontends", {}).get(name, {})
-            )
-            new_nested = (
-                new.get("nested_elements", {}).get("frontends", {}).get(name, {})
-            )
-            self._compare_nested_elements(
-                current_nested, new_nested, ConfigSectionType.FRONTEND, name, changes
-            )
+        self._compare_section_configs(
+            current, new, "frontends", ConfigSectionType.FRONTEND, changes
+        )
 
         # Compare defaults sections
         current_defaults = current.get("defaults", [])
@@ -1066,10 +1041,10 @@ class ConfigSynchronizer:
             EventType.DEPLOYMENT_START,
             f"Starting deployment to {url}",
             source="synchronizer",
-            metadata={
-                "endpoint": url,
-                "pod_name": pod_name,
-            },
+            metadata=ActivityEventMetadata(
+                endpoint=url,
+                pod_name=pod_name,
+            ),
         )
 
         client = self._production_clients[url]
@@ -1179,14 +1154,12 @@ class ConfigSynchronizer:
             EventType.DEPLOYMENT_FAILED,
             f"Deployment failed to {url}: {str(error)[:100]}",
             source="synchronizer",
-            metadata={
-                "endpoint": url,
-                "version": "unknown",
-                "success": False,
-                "error": str(error),
-                "reload_triggered": False,
-                "pod_name": pod_name,
-            },
+            metadata=ActivityEventMetadata(
+                endpoint=url,
+                version="unknown",
+                error=str(error),
+                pod_name=pod_name,
+            ),
         )
         results["failed"] += 1
         results["errors"].append(f"{url}: {error}")
@@ -1238,7 +1211,7 @@ class ConfigSynchronizer:
         )
 
         # Compute template hashes for deployment history tracking
-        template_hashes = self._compute_template_hashes(config_context)
+        _ = self._compute_template_hashes(config_context)
 
         # Update production clients to handle dynamic URL changes
         self._update_production_clients(self.production_urls)
@@ -1341,14 +1314,12 @@ class ConfigSynchronizer:
                         EventType.INFO,
                         f"Configuration unchanged on {pod_info['pod_name']} ({url})",
                         source="dataplane",
-                        metadata={
-                            "endpoint": url,
-                            "pod_ip": pod_info["pod_ip"],
-                            "pod_name": pod_info["pod_name"],
-                            "version": result["version"],
-                            "method": "skipped",
-                            "config_changed": False,
-                        },
+                        metadata=ActivityEventMetadata(
+                            endpoint=url,
+                            pod_ip=pod_info["pod_ip"],
+                            pod_name=pod_info["pod_name"],
+                            version=result["version"],
+                        ),
                     )
                     logger.debug(
                         f"ℹ️  Configuration unchanged on {pod_info['pod_name']} ({url})"
@@ -1359,14 +1330,12 @@ class ConfigSynchronizer:
                         EventType.SYNC,
                         f"Configuration updated on {pod_info['pod_name']} ({url}) ({result['method']})",
                         source="dataplane",
-                        metadata={
-                            "endpoint": url,
-                            "pod_ip": pod_info["pod_ip"],
-                            "pod_name": pod_info["pod_name"],
-                            "version": result["version"],
-                            "method": result["method"],
-                            "config_changed": True,
-                        },
+                        metadata=ActivityEventMetadata(
+                            endpoint=url,
+                            pod_ip=pod_info["pod_ip"],
+                            pod_name=pod_info["pod_name"],
+                            version=result["version"],
+                        ),
                     )
                     logger.debug(
                         f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result['method']}"
@@ -1382,15 +1351,12 @@ class ConfigSynchronizer:
                         EventType.RELOAD,
                         f"HAProxy process reloaded on {pod_info['pod_name']} ({url})",
                         source="dataplane",
-                        metadata={
-                            "endpoint": url,
-                            "pod_ip": pod_info["pod_ip"],
-                            "pod_name": pod_info["pod_name"],
-                            "version": result["version"],
-                            "method": result["method"],
-                            "reload_id": reload_id,
-                            "config_changed": True,
-                        },
+                        metadata=ActivityEventMetadata(
+                            endpoint=url,
+                            pod_ip=pod_info["pod_ip"],
+                            pod_name=pod_info["pod_name"],
+                            version=result["version"],
+                        ),
                     )
                     logger.debug(
                         f"✅ Successfully emitted RELOAD activity event for {pod_info['pod_name']} ({url})"
@@ -1404,14 +1370,11 @@ class ConfigSynchronizer:
                     EventType.DEPLOYMENT_SUCCESS,
                     f"Deployment successful to {url} (version: {result['version']})",
                     source="synchronizer",
-                    metadata={
-                        "endpoint": url,
-                        "version": result["version"],
-                        "success": True,
-                        "template_hashes": template_hashes,
-                        "reload_triggered": reload_triggered,
-                        "pod_name": pod_name,
-                    },
+                    metadata=ActivityEventMetadata(
+                        endpoint=url,
+                        version=result["version"],
+                        pod_name=pod_name,
+                    ),
                 )
             else:
                 # Unexpected result type

@@ -10,7 +10,7 @@ from typing import Any, Dict, Tuple
 
 from haproxy_template_ic.models import IndexedResourceCollection, ResourceTypeMetadata
 from haproxy_template_ic.k8s.kopf_utils import get_resource_collection_from_memo
-from .utils import extract_nested_field
+from haproxy_template_ic.k8s import extract_nested_field
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,11 @@ async def update_resource_index(
             f"⏰ Triggered template rendering due to {param} resource change: {namespace}/{name}"
         )
 
-    return {tuple(index_values): body_dict}
+    # Ensure index_values only contains strings for proper tuple creation
+    str_index_values = [
+        str(value) if value is not None else "" for value in index_values
+    ]
+    return {tuple(str_index_values): body_dict}
 
 
 def _collect_resource_indices(memo: Any, metrics: Any) -> Dict[str, Any]:
