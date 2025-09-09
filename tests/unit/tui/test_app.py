@@ -7,9 +7,10 @@ keyboard bindings, and data update handling.
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, patch
+import time
+import logging
+from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime, timezone
-
 
 from haproxy_template_ic.tui.app import TuiApp
 from haproxy_template_ic.tui.models import (
@@ -18,9 +19,12 @@ from haproxy_template_ic.tui.models import (
     PodInfo,
     TemplateInfo,
     PerformanceInfo,
+    ResourceInfo,
+    ErrorInfo,
 )
 from haproxy_template_ic.activity import ActivityEvent
 from haproxy_template_ic.tui.widgets.templates import TemplateSelected
+from haproxy_template_ic.constants import SECONDS_PER_MINUTE
 
 
 # Create simple fixture functions since they're not in fixtures.py
@@ -51,6 +55,12 @@ def sample_dashboard_data():
                 last_modified=datetime.now(timezone.utc),
             )
         },
+        resources=ResourceInfo(
+            total=10,
+            watched=5,
+            healthy=5,
+            errors=0,
+        ),
         performance=PerformanceInfo(
             requests_per_second=100,
             response_time_avg=20.5,
@@ -65,6 +75,7 @@ def sample_dashboard_data():
                 source="test",
             )
         ],
+        error_infos=[],
     )
 
 
@@ -446,7 +457,6 @@ class TestTuiApp:
 
     def test_app_console_handler_removal(self):
         """Test console handler removal in __init__."""
-        import logging
         import sys
 
         # Add a console handler to test removal
@@ -496,3 +506,268 @@ class TestTuiApp:
         # These should not crash
         assert tui_app.operator_data is None
         assert tui_app.pods_data is None
+
+    # Tests for missing coverage lines
+    def test_compose_method_coverage(self, tui_app):
+        """Test the compose method to cover lines 136-153."""
+        # Test that compose method exists and can be called
+        assert hasattr(tui_app, "compose")
+        assert callable(tui_app.compose)
+
+        # Verify compose result is iterable (actual widget creation requires Textual app context)
+        compose_generator = tui_app.compose()
+        assert hasattr(compose_generator, "__iter__")
+
+    @pytest.mark.asyncio
+    async def test_initialize_success_path(self, tui_app):
+        """Test _initialize method success path to cover lines 172-174."""
+        with patch.object(tui_app.data_provider, "initialize") as mock_init:
+            with patch.object(tui_app, "refresh_data") as mock_refresh:
+                await tui_app._initialize()
+
+                mock_init.assert_called_once()
+                mock_refresh.assert_called_once()
+                assert tui_app.loading is False
+
+    @pytest.mark.asyncio
+    async def test_refresh_data_with_error_infos(self, tui_app):
+        """Test refresh_data with error_infos to cover lines 204-206."""
+        error_info = ErrorInfo(
+            type="TEST_ERROR",
+            message="Test error message",
+            details="Test error details",
+            suggestions=["Test suggestion"],
+        )
+
+        dashboard_data = sample_dashboard_data()
+        dashboard_data.error_infos = [error_info]
+
+        with patch.object(
+            tui_app.data_provider, "fetch_all_data", return_value=dashboard_data
+        ):
+            with patch.object(tui_app, "_show_error_toast") as mock_toast:
+                with patch.object(tui_app, "_set_connection_status") as mock_status:
+                    with patch.object(tui_app, "_update_widgets"):
+                        with patch.object(tui_app, "refresh"):
+                            await tui_app.refresh_data()
+
+                            mock_toast.assert_called_once_with(error_info)
+                            mock_status.assert_any_call("DISCONNECTED")
+
+    @pytest.mark.asyncio
+    async def test_update_widgets_exception_handling(self, tui_app):
+        """Test _update_widgets exception handling to cover line 258."""
+        tui_app.dashboard_data = sample_dashboard_data()
+
+        # Mock query_one to raise exception for one widget
+        def mock_query_one_side_effect(selector, expect_type=None):
+            if selector == "#header":
+                raise Exception("Mock widget error")
+            # Return a mock widget for other selectors
+            mock_widget = MagicMock()
+            return mock_widget
+
+        with patch.object(tui_app, "query_one", side_effect=mock_query_one_side_effect):
+            with patch("haproxy_template_ic.tui.app.logger") as mock_logger:
+                tui_app._update_widgets()
+
+                # Should log warning about failed widget update
+                mock_logger.warning.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_action_help_when_already_on_help_screen(self, tui_app):
+        """Test action_help when already on help screen to cover lines 276-277."""
+        tui_app.current_screen = "help"
+
+        with patch.object(tui_app, "action_back") as mock_back:
+            await tui_app.action_help()
+            mock_back.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_action_debug_when_already_on_debug_screen(self, tui_app):
+        """Test action_debug when already on debug screen to cover lines 284-285."""
+        tui_app.current_screen = "debug"
+
+        with patch.object(tui_app, "action_back") as mock_back:
+            await tui_app.action_debug()
+            mock_back.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_action_template_inspector_when_already_on_inspector(self, tui_app):
+        """Test action_template_inspector when already on inspector to cover lines 292-293."""
+        tui_app.current_screen = "template_inspector"
+
+        with patch.object(tui_app, "action_back") as mock_back:
+            await tui_app.action_template_inspector()
+            mock_back.assert_called_once()
+
+    def test_on_screen_suspend_and_resume(self, tui_app):
+        """Test screen suspend/resume handlers to cover lines 304-306, 310, 315-318."""
+        # Test screen suspend
+        mock_screen = MagicMock()
+        tui_app.on_screen_suspend(mock_screen)
+        # Should not raise exception
+
+        # Test screen resume with screen_name attribute
+        mock_screen_with_name = MagicMock()
+        mock_screen_with_name.screen_name = "test_screen"
+        tui_app.on_screen_resume(mock_screen_with_name)
+        assert tui_app.current_screen == "test_screen"
+
+        # Test screen resume without screen_name attribute
+        mock_screen_without_name = MagicMock(spec=[])
+        tui_app.on_screen_resume(mock_screen_without_name)
+        assert tui_app.current_screen == "main"
+
+    def test_show_error_toast_duplicate_prevention(self, tui_app):
+        """Test error toast duplicate prevention to cover lines 344-352."""
+        error_info = ErrorInfo(
+            type="TEST_ERROR",
+            message="Test error",
+            details="Details",
+            suggestions=["Fix it"],
+        )
+
+        current_time = time.time()
+        toast_message = f"⚠️ {error_info.type}: {error_info.message}"
+
+        # Set up a recent duplicate toast
+        tui_app.last_error_toast_time = (
+            toast_message,
+            current_time - 30,
+        )  # 30 seconds ago
+
+        with patch.object(tui_app, "notify") as mock_notify:
+            with patch("haproxy_template_ic.tui.app.logger") as mock_logger:
+                tui_app._show_error_toast(error_info)
+
+                # Should skip notification due to recent duplicate
+                mock_notify.assert_not_called()
+                mock_logger.debug.assert_called_once()
+                assert "Skipping duplicate error toast" in str(
+                    mock_logger.debug.call_args
+                )
+
+    def test_show_error_toast_exception_handling(self, tui_app):
+        """Test error toast exception handling to cover lines 366-369."""
+        error_info = ErrorInfo(
+            type="TEST_ERROR",
+            message="Test error",
+            details="Details",
+            suggestions=["Fix it"],
+        )
+
+        # Mock notify to raise exception on first call, succeed on second (fallback)
+        mock_notify_calls = [Exception("Notification failed"), None]
+
+        with patch.object(
+            tui_app, "notify", side_effect=mock_notify_calls
+        ) as mock_notify:
+            with patch("haproxy_template_ic.tui.app.logger") as mock_logger:
+                tui_app._show_error_toast(error_info)
+
+                # Should log error and try fallback notification
+                mock_logger.error.assert_called()
+                assert "Failed to show error toast" in str(mock_logger.error.call_args)
+                # Should attempt both original and fallback notifications
+                assert mock_notify.call_count == 2
+
+    def test_set_connection_status_exception_handling(self, tui_app):
+        """Test _set_connection_status exception handling to cover line 381."""
+        tui_app.operator_status = OperatorInfo(
+            status="RUNNING",
+            namespace="test",
+        )
+
+        # Mock query_one to raise exception
+        with patch.object(
+            tui_app, "query_one", side_effect=Exception("Widget not found")
+        ):
+            with patch("haproxy_template_ic.tui.app.logger") as mock_logger:
+                tui_app._set_connection_status("CONNECTED")
+
+                # Should log warning about failed status update
+                mock_logger.warning.assert_called_once()
+                assert "Failed to update connection status" in str(
+                    mock_logger.warning.call_args
+                )
+
+    @pytest.mark.asyncio
+    async def test_action_back_from_non_main_screen(self, tui_app):
+        """Test action_back when not on main screen."""
+        tui_app.current_screen = "help"
+
+        with patch.object(tui_app, "pop_screen") as mock_pop:
+            await tui_app.action_back()
+
+            mock_pop.assert_called_once()
+            assert tui_app.current_screen == "main"
+
+    @pytest.mark.asyncio
+    async def test_action_back_from_main_screen(self, tui_app):
+        """Test action_back when already on main screen."""
+        tui_app.current_screen = "main"
+
+        with patch.object(tui_app, "pop_screen") as mock_pop:
+            await tui_app.action_back()
+
+            # Should not pop screen if already on main
+            mock_pop.assert_not_called()
+            assert tui_app.current_screen == "main"
+
+    def test_show_error_toast_with_old_duplicate(self, tui_app):
+        """Test error toast with old duplicate that should not be skipped."""
+        error_info = ErrorInfo(
+            type="TEST_ERROR",
+            message="Test error",
+            details="Details",
+            suggestions=["Fix it"],
+        )
+
+        current_time = time.time()
+        toast_message = f"⚠️ {error_info.type}: {error_info.message}"
+
+        # Set up an old duplicate toast (older than SECONDS_PER_MINUTE)
+        tui_app.last_error_toast_time = (
+            toast_message,
+            current_time - SECONDS_PER_MINUTE - 10,
+        )
+
+        with patch.object(tui_app, "notify") as mock_notify:
+            with patch("time.time", return_value=current_time):
+                tui_app._show_error_toast(error_info)
+
+                # Should show notification since old duplicate is beyond threshold
+                mock_notify.assert_called_once_with(
+                    toast_message, severity="error", timeout=10.0
+                )
+
+                # Should update last_error_toast_time
+                assert tui_app.last_error_toast_time == (toast_message, current_time)
+
+    def test_show_error_toast_no_previous_toast(self, tui_app):
+        """Test error toast with no previous toast."""
+        error_info = ErrorInfo(
+            type="TEST_ERROR",
+            message="Test error",
+            details="Details",
+            suggestions=["Fix it"],
+        )
+
+        current_time = time.time()
+        toast_message = f"⚠️ {error_info.type}: {error_info.message}"
+
+        # Ensure no previous toast
+        tui_app.last_error_toast_time = None
+
+        with patch.object(tui_app, "notify") as mock_notify:
+            with patch("time.time", return_value=current_time):
+                tui_app._show_error_toast(error_info)
+
+                # Should show notification
+                mock_notify.assert_called_once_with(
+                    toast_message, severity="error", timeout=10.0
+                )
+
+                # Should set last_error_toast_time
+                assert tui_app.last_error_toast_time == (toast_message, current_time)

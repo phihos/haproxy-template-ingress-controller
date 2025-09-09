@@ -28,6 +28,7 @@ from haproxy_template_ic.tui.widgets import (
     ActivityWidget,
     HeaderWidget,
 )
+from haproxy_template_ic.tui.widgets.inspector import TemplateInspectorWidget
 
 
 class TestPodsWidget:
@@ -2010,3 +2011,277 @@ class TestTemplatesWidgetEnhanced:
 
                     # Should add row for each template
                     assert mock_add_row.call_count == len(sample_templates)
+
+
+class TestInspectorWidgetCoverageEnhancement:
+    """Enhanced coverage tests for TemplateInspectorWidget missing lines."""
+
+    @pytest.fixture
+    def inspector_widget(self):
+        """Create a TemplateInspectorWidget instance."""
+        return TemplateInspectorWidget()
+
+    def test_inspector_widget_compose_coverage(self, inspector_widget):
+        """Test compose method to cover lines 49-56."""
+        # Mock Vertical and Static widgets to test composition without Textual context
+        with (
+            patch(
+                "haproxy_template_ic.tui.widgets.inspector.Vertical"
+            ) as mock_vertical,
+            patch("haproxy_template_ic.tui.widgets.inspector.Static") as mock_static,
+            patch("haproxy_template_ic.tui.widgets.inspector.Tree") as mock_tree,
+            patch(
+                "haproxy_template_ic.tui.widgets.inspector.ScrollableContainer"
+            ) as mock_scroll,
+        ):
+            # Mock context managers
+            mock_vertical.return_value.__enter__ = lambda self: self
+            mock_vertical.return_value.__exit__ = lambda self, *args: None
+            mock_scroll.return_value.__enter__ = lambda self: self
+            mock_scroll.return_value.__exit__ = lambda self, *args: None
+
+            # Call compose to trigger widget creation
+            list(inspector_widget.compose())
+
+            # Should create two vertical panels
+            assert mock_vertical.call_count >= 2
+            # Should create header static widgets
+            mock_static.assert_any_call("Templates", classes="panel-header")
+            mock_static.assert_any_call("Content", classes="panel-header")
+            # Should create tree widget
+            mock_tree.assert_called_once_with("Templates", id="template-tree")
+            # Should create scrollable container
+            mock_scroll.assert_called_once_with(id="template-scroll")
+
+    def test_inspector_widget_detect_template_type_fallback(self, inspector_widget):
+        """Test _detect_template_type fallback to cover line 102."""
+        # Test template info without type attribute
+        mock_template_info = Mock(spec=[])  # No 'type' attribute
+
+        templates_data = {"test.unknown": mock_template_info}
+        inspector_widget.templates_data = templates_data
+
+        # Should call _detect_template_type for fallback
+        result = inspector_widget._detect_template_type("test.unknown")
+        assert result == "config"  # Default fallback
+
+    def test_inspector_widget_highlight_template_selected_check(self, inspector_widget):
+        """Test _update_template_tree with selected template to cover line 139."""
+        from textual.widgets import Tree
+
+        # Mock tree and setup selected template
+        mock_tree = Mock(spec=Tree)
+        mock_tree.root = Mock()
+        inspector_widget.selected_template = "test.cfg"
+        inspector_widget.templates_data = {"test.cfg": Mock()}
+
+        with patch.object(inspector_widget, "query_one", return_value=mock_tree):
+            with patch.object(
+                inspector_widget, "_highlight_template_in_tree"
+            ) as mock_highlight:
+                inspector_widget._update_template_tree()
+
+                # Should call highlight method when selected template is set
+                mock_highlight.assert_called_with("test.cfg")
+
+    def test_inspector_widget_highlight_template_node_not_found(self, inspector_widget):
+        """Test _highlight_template_in_tree when node not found to cover line 160."""
+        from textual.widgets import Tree
+
+        # Mock tree with no matching nodes
+        mock_tree = Mock(spec=Tree)
+        mock_root = Mock()
+        mock_root.children = []  # No children
+        mock_tree.root = mock_root
+
+        with patch.object(inspector_widget, "query_one", return_value=mock_tree):
+            # Should not raise exception when template node is not found
+            inspector_widget._highlight_template_in_tree("nonexistent.cfg")
+
+    def test_inspector_widget_highlight_template_warning_log(self, inspector_widget):
+        """Test _highlight_template_in_tree warning log to cover line 179."""
+        from textual.widgets import Tree
+
+        # Mock tree with no matching nodes to trigger warning
+        mock_tree = Mock(spec=Tree)
+        mock_root = Mock()
+        mock_root.children = []
+        mock_tree.root = mock_root
+
+        with patch.object(inspector_widget, "query_one", return_value=mock_tree):
+            with patch(
+                "haproxy_template_ic.tui.widgets.inspector.logger"
+            ) as mock_logger:
+                inspector_widget._highlight_template_in_tree("missing.cfg")
+
+                # Should log warning when template node is not found
+                assert mock_logger.warning.called
+
+    def test_inspector_widget_tree_node_highlighted_root_check(self, inspector_widget):
+        """Test on_tree_node_highlighted with root node to cover lines 223-224."""
+        # Mock event with root node
+        mock_event = Mock()
+        mock_event.node = Mock()
+        mock_event.node.is_root = True
+        mock_event.node.children = []
+
+        with patch.object(inspector_widget, "post_message") as mock_post:
+            inspector_widget.on_tree_node_highlighted(mock_event)
+
+            # Should not post message for root node
+            mock_post.assert_not_called()
+
+    def test_inspector_widget_tree_node_highlighted_message_post(
+        self, inspector_widget
+    ):
+        """Test on_tree_node_highlighted message posting to cover line 228."""
+        # Mock event with leaf node
+        mock_event = Mock()
+        mock_event.node = Mock()
+        mock_event.node.is_root = False
+        mock_event.node.children = []
+        mock_event.node.label = "test.cfg"
+
+        inspector_widget.templates_data = {"test.cfg": Mock()}
+
+        with patch.object(inspector_widget, "post_message") as mock_post:
+            inspector_widget.on_tree_node_highlighted(mock_event)
+
+            # Should post a message
+            assert mock_post.called
+
+    def test_inspector_widget_tree_node_highlighted_set_selected(
+        self, inspector_widget
+    ):
+        """Test on_tree_node_highlighted setting selected template to cover line 241."""
+        # Mock event with leaf node
+        mock_event = Mock()
+        mock_event.node = Mock()
+        mock_event.node.is_root = False
+        mock_event.node.children = []
+        mock_event.node.label = "selected.cfg"
+
+        inspector_widget.templates_data = {"selected.cfg": Mock()}
+
+        inspector_widget.on_tree_node_highlighted(mock_event)
+
+        # Should set selected_template
+        assert inspector_widget.selected_template == "selected.cfg"
+
+    def test_inspector_widget_update_content_display_source_section(
+        self, inspector_widget
+    ):
+        """Test _update_content_display source section to cover lines 296-298."""
+        from textual.containers import ScrollableContainer
+
+        mock_scroll_container = Mock(spec=ScrollableContainer)
+        inspector_widget.selected_template = "test.cfg"
+        inspector_widget.template_content = {
+            "source": "test source content",
+            "type": "config",
+            "errors": [],
+        }
+
+        with patch.object(
+            inspector_widget, "query_one", return_value=mock_scroll_container
+        ):
+            with patch(
+                "haproxy_template_ic.tui.widgets.inspector.Static"
+            ) as mock_static:
+                inspector_widget._update_content_display()
+
+                # Should create static widgets for source content
+                assert mock_static.call_count >= 2  # Header + content
+
+    def test_inspector_widget_update_content_display_rendered_section(
+        self, inspector_widget
+    ):
+        """Test _update_content_display rendered section to cover lines 337-339."""
+        from textual.containers import ScrollableContainer
+
+        mock_scroll_container = Mock(spec=ScrollableContainer)
+        inspector_widget.selected_template = "test.cfg"
+        inspector_widget.template_content = {
+            "source": "source content",
+            "rendered": "rendered content",
+            "type": "config",
+            "errors": [],
+        }
+
+        with patch.object(
+            inspector_widget, "query_one", return_value=mock_scroll_container
+        ):
+            with patch(
+                "haproxy_template_ic.tui.widgets.inspector.Static"
+            ) as mock_static:
+                inspector_widget._update_content_display()
+
+                # Should create static widgets including rendered section
+                assert mock_static.call_count >= 4  # Source + rendered sections
+
+    def test_inspector_widget_update_content_display_snippet_no_rendered(
+        self, inspector_widget
+    ):
+        """Test _update_content_display for snippet without rendered to cover line 341."""
+        from textual.containers import ScrollableContainer
+
+        mock_scroll_container = Mock(spec=ScrollableContainer)
+        inspector_widget.selected_template = "snippet.cfg"
+        inspector_widget.template_content = {
+            "source": "snippet content",
+            "rendered": "",  # Empty rendered for snippets
+            "type": "snippet",
+            "errors": [],
+        }
+
+        with patch.object(
+            inspector_widget, "query_one", return_value=mock_scroll_container
+        ):
+            with patch(
+                "haproxy_template_ic.tui.widgets.inspector.Static"
+            ) as mock_static:
+                inspector_widget._update_content_display()
+
+                # Should create static widgets but skip rendered section for snippets
+                mock_static.assert_called()
+
+    def test_inspector_widget_update_content_display_errors_section(
+        self, inspector_widget
+    ):
+        """Test _update_content_display errors section to cover lines 356-357."""
+        from textual.containers import ScrollableContainer
+
+        mock_scroll_container = Mock(spec=ScrollableContainer)
+        inspector_widget.selected_template = "test.cfg"
+        inspector_widget.template_content = {
+            "source": "source content",
+            "type": "config",
+            "errors": ["Error 1", "Error 2"],
+        }
+
+        with patch.object(
+            inspector_widget, "query_one", return_value=mock_scroll_container
+        ):
+            with patch(
+                "haproxy_template_ic.tui.widgets.inspector.Static"
+            ) as mock_static:
+                inspector_widget._update_content_display()
+
+                # Should create static widgets including errors section
+                assert mock_static.call_count >= 3  # Source + errors
+
+    def test_inspector_widget_update_content_display_exception_handling(
+        self, inspector_widget
+    ):
+        """Test _update_content_display exception handling to cover line 363."""
+        # Mock query_one to raise exception
+        with patch.object(
+            inspector_widget, "query_one", side_effect=Exception("Query error")
+        ):
+            with patch(
+                "haproxy_template_ic.tui.widgets.inspector.logger"
+            ) as mock_logger:
+                inspector_widget._update_content_display()
+
+                # Should log error when exception occurs (may be called multiple times due to reactivity)
+                assert mock_logger.error.called
