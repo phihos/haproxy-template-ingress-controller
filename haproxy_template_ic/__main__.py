@@ -98,7 +98,7 @@ def cli(ctx: click.Context) -> None:
 
     Use 'run' subcommand to start the operator.
 
-    NOTE: Logging, tracing, and other runtime settings are now configured
+    Logging, tracing, and other runtime settings are configured
     via ConfigMap rather than CLI options or environment variables.
     """
     ctx.ensure_object(dict)

@@ -234,25 +234,12 @@ class ActivityBuffer:
         async with self._lock:
             return self._filter_events_by_types(DEPLOYMENT_EVENT_TYPES, endpoint, count)
 
-    def get_deployment_events_sync(
-        self, endpoint: Optional[str] = None, count: int = DEFAULT_ACTIVITY_QUERY_LIMIT
-    ) -> List[Dict[str, Any]]:
-        """Get deployment-related events synchronously."""
-        return self._filter_events_by_types(DEPLOYMENT_EVENT_TYPES, endpoint, count)
-
     async def get_events_by_type(
         self, event_types: List[EventType], count: int = DEFAULT_ACTIVITY_QUERY_LIMIT
     ) -> List[Dict[str, Any]]:
         """Get events filtered by event type."""
         async with self._lock:
             return self._filter_events_by_types(set(event_types), None, count)
-
-    def get_events_by_type_sync(
-        self, event_types: List[EventType], count: int = DEFAULT_ACTIVITY_QUERY_LIMIT
-    ) -> List[Dict[str, Any]]:
-        """Get events filtered by event type synchronously."""
-        return self._filter_events_by_types(set(event_types), None, count)
-
 
 class PriorityActivityBuffer(ActivityBuffer):
     """Priority-based activity buffer that ensures important events are retained.

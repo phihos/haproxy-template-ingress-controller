@@ -13,6 +13,7 @@ from typing import Any, Callable, Coroutine, Optional
 import structlog
 
 from haproxy_template_ic.models import TriggerContext
+from haproxy_template_ic.metrics import get_metrics_collector
 
 logger = structlog.get_logger(__name__)
 
@@ -79,8 +80,6 @@ class TemplateRenderDebouncer:
     def _get_metrics_collector(self):
         """Get metrics collector instance if available."""
         try:
-            from haproxy_template_ic.metrics import get_metrics_collector
-
             return get_metrics_collector()
         except ImportError:
             return None

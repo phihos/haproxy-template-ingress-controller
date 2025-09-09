@@ -4,7 +4,7 @@ import base64
 import binascii
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 import click
 
@@ -66,22 +66,25 @@ class Credentials(BaseModel):
         if missing_fields:
             raise ValueError(f"Missing/invalid credential fields: {missing_fields}")
 
-        # Type narrowing: After validation, these fields are guaranteed to be non-None strings
-        # Using explicit checks for production safety (assertions get removed with -O)
-        if (
-            dataplane_username is None
-            or dataplane_password is None
-            or validation_username is None
-            or validation_password is None
+        # Create auth objects with validated fields
+        # Type safety: These fields are guaranteed non-None after validation above
+        if not all(
+            [
+                dataplane_username,
+                dataplane_password,
+                validation_username,
+                validation_password,
+            ]
         ):
             raise RuntimeError("Internal error: validated fields should not be None")
 
-        # Create auth objects with validated fields
         dataplane_auth = DataplaneAuth(
-            username=dataplane_username, password=SecretStr(dataplane_password)
+            username=cast(str, dataplane_username),
+            password=SecretStr(cast(str, dataplane_password)),
         )
         validation_auth = DataplaneAuth(
-            username=validation_username, password=SecretStr(validation_password)
+            username=cast(str, validation_username),
+            password=SecretStr(cast(str, validation_password)),
         )
 
         return cls(dataplane=dataplane_auth, validation=validation_auth)

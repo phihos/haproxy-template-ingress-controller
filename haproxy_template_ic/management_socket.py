@@ -26,6 +26,10 @@ from haproxy_template_ic.deployment_state import DeploymentStateTracker
 from haproxy_template_ic.metrics import get_metrics_collector, get_performance_metrics
 from haproxy_template_ic.models import IndexedResourceCollection
 from haproxy_template_ic.tui.models import PodInfo
+from haproxy_template_ic.operator.k8s_resources import (
+    _collect_resource_indices,
+)
+from haproxy_template_ic.core.error_handling import safe_operation
 
 logger = logging.getLogger(__name__)
 
@@ -372,10 +376,14 @@ class ManagementSocketServer:
         # Handle new memo.indices dictionary structure
         if hasattr(self.memo, "indices") and self.memo.indices:
             for name, index_data in self.memo.indices.items():
-                try:
-                    indices[name] = _serialize_kopf_index(index_data)
-                except Exception as e:
-                    indices[name] = {"error": f"Failed to serialize: {e}"}
+                @safe_operation("index serialization", logger)
+                def serialize_index():
+                    return _serialize_kopf_index(index_data)
+
+                result = serialize_index()
+                indices[name] = (
+                    result if result is not None else {"error": "Failed to serialize"}
+                )
 
         return {"indices": indices}
 
@@ -692,10 +700,6 @@ class ManagementSocketServer:
 
             # Extract resource counts from resource metadata
             if hasattr(self.memo, "indices") and self.memo.indices:
-                from haproxy_template_ic.operator.k8s_resources import (
-                    _collect_resource_indices,
-                )
-
                 # Collect normalized resource indices (same method used by operator)
                 # This updates the resource_metadata with current statistics
                 try:

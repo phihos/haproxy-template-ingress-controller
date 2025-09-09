@@ -10,7 +10,7 @@ import base64
 import io
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 import httpx
 from tenacity import (
@@ -20,8 +20,6 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-if TYPE_CHECKING:
-    pass
 
 # HAProxy Dataplane API v3 client
 from haproxy_dataplane_v3 import AuthenticatedClient
@@ -308,7 +306,6 @@ _SECTION_ELEMENTS = {
         ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
         ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
         ("tcp_request_rules", ConfigElementType.TCP_REQUEST_RULE, False),  # Ordered
-        # NOTE: TCP response rules are not supported for frontends
         ("acls", ConfigElementType.ACL, True),  # Named
         ("filters", ConfigElementType.FILTER, False),  # Ordered
         ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
@@ -533,7 +530,6 @@ _SECTION_ELEMENTS = {
         ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
         ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
         ("tcp_request_rules", ConfigElementType.TCP_REQUEST_RULE, False),  # Ordered
-        # NOTE: TCP response rules are not supported for frontends
         ("acls", ConfigElementType.ACL, True),  # Named
         ("filters", ConfigElementType.FILTER, False),  # Ordered
         ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
@@ -1919,7 +1915,6 @@ class DataplaneClient:
             # Extract just the filename from the full path for the API
             map_filename = os.path.basename(map_file_path)
 
-            # NOTE: Map operations are always runtime in the dataplane API
             # The API endpoints automatically use runtime operations
             for change in map_changes:
                 if hasattr(change, "operation"):
@@ -1981,7 +1976,6 @@ class DataplaneClient:
             acl_changes: List of ACL entry changes to apply
         """
         try:
-            # NOTE: ACL operations are always runtime in the dataplane API
             for change in acl_changes:
                 if hasattr(change, "operation"):
                     if change.operation == "add":

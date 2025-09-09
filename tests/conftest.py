@@ -6,6 +6,7 @@
 import hashlib
 import logging
 import os
+import socket
 import subprocess
 import time
 from collections import namedtuple
@@ -543,7 +544,6 @@ OperatorPorts = namedtuple("OperatorPorts", ["healthz", "metrics"])
 
 def find_free_port() -> int:
     """Find a free port on the local system."""
-    import socket
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
