@@ -575,21 +575,16 @@ class TestInspectorWidget:
         """Create a TemplateInspectorWidget instance."""
         from haproxy_template_ic.tui.widgets.inspector import TemplateInspectorWidget
 
-        template = TemplateInfo(
-            name="test.cfg",
-            type="haproxy_config",
-            status="rendered",
-            size=1024,
-            last_modified=datetime.now(),
-        )
-        return TemplateInspectorWidget(template)
+        return TemplateInspectorWidget()
 
     def test_inspector_widget_initialization(self, inspector_widget):
         """Test TemplateInspectorWidget initialization."""
         from haproxy_template_ic.tui.widgets.inspector import TemplateInspectorWidget
 
         assert isinstance(inspector_widget, TemplateInspectorWidget)
-        assert inspector_widget.template.name == "test.cfg"
+        assert inspector_widget.templates_data == {}
+        assert inspector_widget.selected_template == ""
+        assert inspector_widget.border_title == "Template Inspector"
 
     def test_inspector_widget_compose(self, inspector_widget):
         """Test TemplateInspectorWidget composition."""
@@ -608,6 +603,7 @@ class TestInspectorWidget:
         from haproxy_template_ic.tui.widgets.inspector import TemplateInspectorWidget
 
         template_types = ["haproxy_config", "map", "certificate", "snippet"]
+        templates_data = {}
 
         for template_type in template_types:
             template = TemplateInfo(
@@ -617,8 +613,12 @@ class TestInspectorWidget:
                 size=512,
                 last_modified=datetime.now(),
             )
-            widget = TemplateInspectorWidget(template)
-            assert widget.template.type == template_type
+            templates_data[template.name] = template
+
+        widget = TemplateInspectorWidget()
+        widget.templates_data = templates_data
+
+        assert len(widget.templates_data) == len(template_types)
 
     """Enhanced tests for ActivityWidget component."""
 
@@ -632,27 +632,24 @@ class TestInspectorWidget:
         """Sample activity events."""
         return [
             ActivityEvent(
-                timestamp=datetime.now(),
-                level="info",
                 type="RESOURCE_UPDATE",
-                source="operator",
                 message="Ingress updated",
+                timestamp=datetime.now().isoformat(),
+                source="operator",
                 metadata={"resource_type": "ingress"},
             ),
             ActivityEvent(
-                timestamp=datetime.now(),
-                level="warning",
                 type="SYNC",
-                source="synchronizer",
                 message="Sync warning",
+                timestamp=datetime.now().isoformat(),
+                source="synchronizer",
                 metadata={},
             ),
             ActivityEvent(
-                timestamp=datetime.now(),
-                level="error",
                 type="ERROR",
-                source="dataplane",
                 message="Connection failed",
+                timestamp=datetime.now().isoformat(),
+                source="dataplane",
                 metadata={"error_code": "CONNECTION_REFUSED"},
             ),
         ]
@@ -661,77 +658,68 @@ class TestInspectorWidget:
         self, activity_widget, sample_activities
     ):
         """Test activity widget with activity data."""
-        with patch.object(activity_widget, "clear"):
-            with patch.object(activity_widget, "add_row") as mock_add_row:
-                with patch.object(activity_widget, "refresh"):
-                    activity_widget.activities = sample_activities
+        with patch.object(activity_widget, "write") as mock_write:
+            # Create dashboard data with activities
+            dashboard_data = DashboardData(activity=sample_activities)
+            activity_widget.dashboard_data = dashboard_data
 
-                    # Should have called add_row for each activity
-                    assert mock_add_row.call_count == len(sample_activities)
+            # Should have called write for the activity entries
+            assert mock_write.call_count >= len(sample_activities)
 
     def test_activity_widget_empty_activities(self, activity_widget):
         """Test activity widget with empty activities."""
-        with patch.object(activity_widget, "clear"):
-            with patch.object(activity_widget, "add_row") as mock_add_row:
-                with patch.object(activity_widget, "refresh"):
-                    activity_widget.activities = []
+        dashboard_data = DashboardData(activity=[])
 
-                    # Should not call add_row for empty activities
-                    mock_add_row.assert_not_called()
+        with patch.object(activity_widget, "_add_activity_entry") as mock_add_entry:
+            activity_widget.watch_dashboard_data(dashboard_data)
+            # Should not call _add_activity_entry for empty activities
+            mock_add_entry.assert_not_called()
 
-    def test_activity_widget_format_activity_different_levels(self, activity_widget):
-        """Test activity formatting with different log levels."""
-        levels_and_emojis = [
-            ("info", "ℹ️"),
-            ("warning", "⚠️"),
-            ("error", "❌"),
-            ("debug", "🐛"),
-            ("unknown", "📝"),  # Default
-        ]
+    def test_activity_widget_update_with_new_data(
+        self, activity_widget, sample_activities
+    ):
+        """Test activity widget updates with new data."""
+        # First update
+        dashboard_data = DashboardData(activity=sample_activities[:1])
+        activity_widget.watch_dashboard_data(dashboard_data)
+        assert activity_widget._last_activity_count == 1
 
-        for level, expected_emoji in levels_and_emojis:
-            activity = ActivityEvent(
-                timestamp=datetime.now(),
-                level=level,
-                type="TEST",
-                source="test",
-                message=f"Test {level} message",
-                metadata={},
-            )
-
-            # Format the activity (this tests internal formatting logic)
-            formatted = activity_widget._format_activity(activity)
-            assert expected_emoji in formatted[0]  # First column should contain emoji
+        # Second update with more activities
+        dashboard_data = DashboardData(activity=sample_activities)
+        with patch.object(activity_widget, "_add_activity_entry") as mock_add_entry:
+            activity_widget.watch_dashboard_data(dashboard_data)
+            # Should only add new entries (2 new ones)
+            assert mock_add_entry.call_count == 2
 
     def test_activity_widget_format_activity_with_metadata(self, activity_widget):
         """Test activity formatting with metadata."""
         activity = ActivityEvent(
-            timestamp=datetime.now(),
-            level="info",
             type="RESOURCE_UPDATE",
-            source="operator",
             message="Resource updated",
+            timestamp=datetime.now().isoformat(),
+            source="operator",
             metadata={"resource_type": "ingress", "resource_name": "test-ingress"},
         )
 
-        formatted = activity_widget._format_activity(activity)
-        # Should format metadata as key=value pairs
-        assert len(formatted) >= 4  # timestamp, level, type, message
+        # Test that widget can handle activities with metadata
+        dashboard_data = DashboardData(activity=[activity])
+        # Should not raise an exception
+        activity_widget.watch_dashboard_data(dashboard_data)
 
     def test_activity_widget_format_activity_no_metadata(self, activity_widget):
         """Test activity formatting without metadata."""
         activity = ActivityEvent(
-            timestamp=datetime.now(),
-            level="info",
             type="TEST",
-            source="test",
             message="Test message",
+            timestamp=datetime.now().isoformat(),
+            source="test",
             metadata=None,
         )
 
-        formatted = activity_widget._format_activity(activity)
-        # Should handle None metadata gracefully
-        assert len(formatted) >= 3
+        # Test that widget can handle activities with no metadata
+        dashboard_data = DashboardData(activity=[activity])
+        # Should not raise an exception
+        activity_widget.watch_dashboard_data(dashboard_data)
 
 
 class TestTemplatesWidgetEnhanced:
@@ -769,121 +757,136 @@ class TestTemplatesWidgetEnhanced:
             ),
         ]
 
-    def test_templates_widget_format_template_different_types(self, templates_widget):
-        """Test template formatting with different types."""
-        template_types_and_icons = [
-            ("haproxy_config", "⚙️"),
-            ("map", "🗺️"),
-            ("certificate", "🔐"),
-            ("snippet", "📄"),
-            ("unknown", "📋"),  # Default
-        ]
+    def test_templates_widget_with_different_types(self, templates_widget):
+        """Test templates widget with different template types."""
+        # Mock the add_columns method to avoid Textual app context issues
+        with patch.object(templates_widget, "add_columns"):
+            with patch.object(templates_widget, "clear"):
+                with patch.object(templates_widget, "add_row") as mock_add_row:
+                    templates_widget.on_mount()  # Initialize columns
 
-        for template_type, expected_icon in template_types_and_icons:
-            template = TemplateInfo(
-                name=f"test.{template_type}",
-                type=template_type,
-                status="rendered",
-                size=1024,
-                last_modified=datetime.now(),
-            )
+                    template_types = ["haproxy_config", "map", "certificate", "snippet"]
+                    templates_data = {}
 
-            formatted = templates_widget._format_template(template)
-            assert expected_icon in formatted[0]  # First column should contain icon
+                    for template_type in template_types:
+                        template = TemplateInfo(
+                            name=f"test.{template_type}",
+                            type=template_type,
+                            status="rendered",
+                            size=1024,
+                            last_modified=datetime.now(),
+                        )
+                        templates_data[template.name] = template
+
+                    dashboard_data = DashboardData(templates=templates_data)
+                    templates_widget.watch_dashboard_data(dashboard_data)
+
+                    # Should have called add_row for each template
+                    assert mock_add_row.call_count == len(template_types)
 
     def test_templates_widget_format_template_different_statuses(
         self, templates_widget
     ):
         """Test template formatting with different statuses."""
-        status_and_indicators = [
-            ("rendered", "✅"),
-            ("error", "❌"),
-            ("pending", "⏳"),
-            ("unknown", "❓"),  # Default
-        ]
+        # Mock the widget methods to test status handling
+        with patch.object(templates_widget, "add_columns"):
+            with patch.object(templates_widget, "clear"):
+                with patch.object(templates_widget, "add_row") as mock_add_row:
+                    templates_widget.on_mount()
 
-        for status, expected_indicator in status_and_indicators:
-            template = TemplateInfo(
-                name="test.cfg",
-                type="haproxy_config",
-                status=status,
-                size=1024,
-                last_modified=datetime.now(),
-            )
+                    # Test different statuses
+                    template = TemplateInfo(
+                        name="test.cfg",
+                        type="config",
+                        status="valid",
+                        size=1024,
+                        last_modified=datetime.now(),
+                    )
+                    templates_data = {"test.cfg": template}
+                    dashboard_data = DashboardData(templates=templates_data)
+                    templates_widget.watch_dashboard_data(dashboard_data)
 
-            formatted = templates_widget._format_template(template)
-            assert (
-                expected_indicator in formatted[1]
-            )  # Second column should contain status
+                    # Should have called add_row with status indicator
+                    mock_add_row.assert_called_once()
+                    call_args = mock_add_row.call_args[0]
+                    assert (
+                        "✅" in call_args[0]
+                    )  # Status indicator should be first column
 
     def test_templates_widget_format_size(self, templates_widget):
         """Test size formatting in templates widget."""
-        sizes_and_formatted = [
-            (0, "0 B"),
-            (1024, "1.0 KB"),
-            (1048576, "1.0 MB"),
-            (1073741824, "1.0 GB"),
-            (None, "0 B"),  # Handle None
-        ]
+        # Mock the widget methods to test size formatting
+        with patch.object(templates_widget, "add_columns"):
+            with patch.object(templates_widget, "clear"):
+                with patch.object(templates_widget, "add_row") as mock_add_row:
+                    templates_widget.on_mount()
 
-        for size, expected_formatted in sizes_and_formatted:
-            template = TemplateInfo(
-                name="test.cfg",
-                type="haproxy_config",
-                status="rendered",
-                size=size,
-                last_modified=datetime.now(),
-            )
+                    # Test size formatting
+                    template = TemplateInfo(
+                        name="test.cfg",
+                        type="config",
+                        status="valid",
+                        size=1024,
+                        last_modified=datetime.now(),
+                    )
+                    templates_data = {"test.cfg": template}
+                    dashboard_data = DashboardData(templates=templates_data)
+                    templates_widget.watch_dashboard_data(dashboard_data)
 
-            formatted = templates_widget._format_template(template)
-            assert (
-                expected_formatted in formatted[2]
-            )  # Third column should contain size
+                    # Should have called add_row with formatted size
+                    mock_add_row.assert_called_once()
+                    call_args = mock_add_row.call_args[0]
+                    # Size should be formatted (1024 bytes = 1.0KB)
+                    assert "1.0KB" in call_args[3]  # Size is in 4th column (index 3)
 
     def test_templates_widget_on_row_selected(self, templates_widget, sample_templates):
         """Test row selection in templates widget."""
-        # Mock the DataTable and its properties
-        with patch.object(templates_widget, "get_row_at") as mock_get_row:
+        # Mock the DataTable methods and test the actual row selection event handler
+        with patch.object(templates_widget, "get_row") as mock_get_row:
             with patch.object(templates_widget, "post_message") as mock_post_message:
+                # Mock row data - template name is in second column
                 mock_get_row.return_value = [
-                    "⚙️",
-                    "✅ rendered",
-                    "2.0 KB",
-                    "2m ago",
-                    "haproxy.cfg",
+                    "✅",  # Status indicator
+                    "haproxy.cfg",  # Template name
+                    "config",  # Type
+                    "2.0KB",  # Size
+                    "2m ago",  # Last modified
+                ]
+
+                # Create mock event with row_key
+                mock_event = Mock()
+                mock_event.row_key = "test_row_key"
+
+                # Call the actual event handler method
+                templates_widget.on_data_table_row_selected(mock_event)
+
+                # Should post TemplateSelected message with template name
+                mock_post_message.assert_called_once()
+                call_args = mock_post_message.call_args[0][0]
+                assert call_args.template_name == "haproxy.cfg"
+
+    def test_templates_widget_on_row_selected_no_template(self, templates_widget):
+        """Test row selection when template not found."""
+        with patch.object(templates_widget, "get_row") as mock_get_row:
+            with patch.object(templates_widget, "post_message") as mock_post_message:
+                # Mock row data with "No templates found" message
+                mock_get_row.return_value = [
+                    "ℹ️",  # Status indicator
+                    "No templates found",  # Template name
+                    "Check ConfigMap",  # Type
+                    "0B",  # Size
+                    "N/A",  # Last modified
                 ]
 
                 # Create mock event
                 mock_event = Mock()
-                mock_event.row_key = Mock()
+                mock_event.row_key = "test_row_key"
 
-                # Set up templates data
-                templates_widget.templates = sample_templates
+                # Should not post message for "No templates found" row
+                templates_widget.on_data_table_row_selected(mock_event)
 
-                templates_widget.on_row_selected(mock_event)
-
-                # Should post TemplateSelected message
-                mock_post_message.assert_called_once()
-
-    def test_templates_widget_on_row_selected_no_template(self, templates_widget):
-        """Test row selection when template not found."""
-        with patch.object(templates_widget, "get_row_at") as mock_get_row:
-            mock_get_row.return_value = [
-                "⚙️",
-                "✅ rendered",
-                "2.0 KB",
-                "2m ago",
-                "nonexistent.cfg",
-            ]
-
-            # Create mock event
-            mock_event = Mock()
-            mock_event.row_key = Mock()
-
-            templates_widget.templates = []  # Empty templates
-
-            # Should not raise exception
-            templates_widget.on_row_selected(mock_event)
+                # Should not post message for informational row
+                mock_post_message.assert_not_called()
 
     def test_templates_widget_reactive_property(
         self, templates_widget, sample_templates

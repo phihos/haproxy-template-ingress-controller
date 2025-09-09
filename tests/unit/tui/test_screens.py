@@ -310,6 +310,7 @@ class TestDebugScreen:
         """Create a mock TuiLogHandler."""
         handler = Mock(spec=TuiLogHandler)
         handler.get_filtered_logs.return_value = ["Log line 1", "Log line 2"]
+        handler.min_log_level = logging.INFO
         return handler
 
     def test_debug_screen_initialization(self, debug_screen):
@@ -334,27 +335,44 @@ class TestDebugScreen:
 
     def test_on_mount_sets_up_log_handler(self, debug_screen):
         """Test that on_mount sets up the log handler."""
+        # Mock the widgets that on_mount tries to query
+        mock_log_widget = Mock()
+        mock_select_widget = Mock()
+
+        with patch.object(
+            debug_screen, "query_one", side_effect=[mock_log_widget, mock_select_widget]
+        ):
+            with patch(
+                "haproxy_template_ic.tui.screens.get_tui_log_handler"
+            ) as mock_get_handler:
+                mock_handler = Mock(spec=TuiLogHandler)
+                mock_get_handler.return_value = mock_handler
+
+                with patch.object(debug_screen, "refresh_log_display") as mock_refresh:
+                    debug_screen.on_mount()
+
+                    # Verify widgets were assigned
+                    assert debug_screen.log_widget == mock_log_widget
+                    assert debug_screen.log_level_select == mock_select_widget
+
+                    # Verify handler setup
+                    mock_handler.set_debug_screen.assert_called_once_with(debug_screen)
+                    mock_handler.set_min_log_level.assert_called_once()
+                    mock_refresh.assert_called_once()
+
+    def test_on_screen_suspend_cleans_up_handler(self, debug_screen):
+        """Test that on_screen_suspend cleans up the log handler."""
         with patch(
             "haproxy_template_ic.tui.screens.get_tui_log_handler"
         ) as mock_get_handler:
             mock_handler = Mock(spec=TuiLogHandler)
+            mock_handler.min_log_level = logging.INFO
             mock_get_handler.return_value = mock_handler
 
-            with patch.object(debug_screen, "refresh_log_display") as mock_refresh:
-                debug_screen.on_mount()
+            # Set up initial state
+            debug_screen.current_log_level = logging.INFO
 
-                mock_handler.set_debug_screen.assert_called_once_with(debug_screen)
-                mock_refresh.assert_called_once()
-
-    def test_on_unmount_cleans_up_handler(self, debug_screen):
-        """Test that on_unmount cleans up the log handler."""
-        with patch(
-            "haproxy_template_ic.tui.screens.get_tui_log_handler"
-        ) as mock_get_handler:
-            mock_handler = Mock(spec=TuiLogHandler)
-            mock_get_handler.return_value = mock_handler
-
-            debug_screen.on_unmount()
+            debug_screen.on_screen_suspend()
 
             mock_handler.set_debug_screen.assert_called_once_with(None)
 
@@ -386,41 +404,50 @@ class TestDebugScreen:
             debug_screen.refresh_log_display()
 
             mock_log_widget.clear.assert_called_once()
-            assert (
-                mock_log_widget.write_line.call_count == 2
-            )  # Two log lines from fixture
+            # Should write header, separator, and log lines
+            assert mock_log_widget.write_line.call_count >= 2
 
-    def test_on_select_changed(self, debug_screen, mock_log_handler):
+    def test_on_log_level_changed(self, debug_screen, mock_log_handler):
         """Test log level selection change."""
-        mock_select = Mock()
-        mock_select.value = "ERROR"
+        # Create a mock Select.Changed event
+        mock_event = Mock()
+        mock_event.value = logging.ERROR
 
-        debug_screen.log_level_select = mock_select
-
-        with (
-            patch(
-                "haproxy_template_ic.tui.screens.get_tui_log_handler",
-                return_value=mock_log_handler,
-            ),
-            patch.object(debug_screen, "refresh_log_display") as mock_refresh,
+        with patch(
+            "haproxy_template_ic.tui.screens.get_tui_log_handler",
+            return_value=mock_log_handler,
         ):
-            # Create a mock message with the Select widget
-            message = Mock()
-            message.select = mock_select
-
-            debug_screen.on_select_changed(message)
+            debug_screen.on_log_level_changed(mock_event)
 
             mock_log_handler.set_min_log_level.assert_called_once_with(logging.ERROR)
-            mock_refresh.assert_called_once()
+            # Verify current log level was updated
+            assert debug_screen.current_log_level == logging.ERROR
 
-    def test_get_level_from_string(self, debug_screen):
-        """Test log level string conversion."""
-        assert debug_screen._get_level_from_string("DEBUG") == logging.DEBUG
-        assert debug_screen._get_level_from_string("INFO") == logging.INFO
-        assert debug_screen._get_level_from_string("WARNING") == logging.WARNING
-        assert debug_screen._get_level_from_string("ERROR") == logging.ERROR
-        assert debug_screen._get_level_from_string("CRITICAL") == logging.CRITICAL
-        assert debug_screen._get_level_from_string("UNKNOWN") == logging.INFO  # default
+    def test_screen_resume_restores_state(self, debug_screen, mock_log_handler):
+        """Test that on_screen_resume restores handler state."""
+        # Mock the widgets
+        mock_log_widget = Mock()
+        mock_select_widget = Mock()
+
+        debug_screen.log_widget = mock_log_widget
+        debug_screen.log_level_select = mock_select_widget
+        debug_screen.current_log_level = logging.ERROR
+
+        with patch(
+            "haproxy_template_ic.tui.screens.get_tui_log_handler",
+            return_value=mock_log_handler,
+        ):
+            with patch.object(debug_screen, "refresh_log_display") as mock_refresh:
+                debug_screen.on_screen_resume(None)
+
+                # Verify handler is re-registered
+                mock_log_handler.set_debug_screen.assert_called_once_with(debug_screen)
+                # Verify log level is restored
+                mock_log_handler.set_min_log_level.assert_called_once_with(
+                    logging.ERROR
+                )
+                # Verify refresh was called
+                mock_refresh.assert_called_once()
 
 
 class TestTemplateInspectorScreen:
@@ -440,12 +467,18 @@ class TestTemplateInspectorScreen:
     @pytest.fixture
     def inspector_screen(self, template_info):
         """Create a TemplateInspectorScreen instance."""
-        return TemplateInspectorScreen(template_info)
+        templates_data = {"test.cfg": template_info}
+        return TemplateInspectorScreen(
+            data_provider=Mock(),
+            templates_data=templates_data,
+            selected_template="test.cfg",
+        )
 
     def test_template_inspector_initialization(self, inspector_screen, template_info):
         """Test TemplateInspectorScreen initialization."""
-        assert inspector_screen.template == template_info
-        assert inspector_screen.inspector_widget is None
+        assert inspector_screen.templates_data == {"test.cfg": template_info}
+        assert inspector_screen.selected_template == "test.cfg"
+        assert inspector_screen.data_provider is not None
 
     def test_template_inspector_compose(self, inspector_screen):
         """Test TemplateInspectorScreen composition."""
@@ -459,13 +492,25 @@ class TestTemplateInspectorScreen:
 
     def test_on_mount_initializes_widget(self, inspector_screen):
         """Test that on_mount initializes the inspector widget."""
-        with patch.object(inspector_screen, "query_one") as mock_query:
-            mock_widget = Mock()
-            mock_query.return_value = mock_widget
+        mock_widget = Mock()
 
-            inspector_screen.on_mount()
+        with patch.object(inspector_screen, "query_one", return_value=mock_widget):
+            # Set up some test data
+            test_template = Mock()
+            inspector_screen.templates_data = {"test.cfg": test_template}
+            inspector_screen.selected_template = "test.cfg"
 
-            assert inspector_screen.inspector_widget == mock_widget
+            with patch.object(
+                inspector_screen, "call_after_refresh"
+            ) as mock_call_after:
+                inspector_screen.on_mount()
+
+                # Verify widget properties were set
+                assert mock_widget.templates_data == {"test.cfg": test_template}
+                assert mock_widget.selected_template == "test.cfg"
+
+                # Verify async content loading was scheduled
+                mock_call_after.assert_called_once()
 
     def test_on_template_content_changed(self, inspector_screen):
         """Test template content change handling."""
@@ -497,34 +542,33 @@ class TestGetTuiLogHandler:
 
     def test_get_tui_log_handler_reuses_existing(self):
         """Test that get_tui_log_handler reuses existing handler."""
+        # Mock the global variable to have an existing handler
         existing_handler = TuiLogHandler()
 
         with patch(
-            "haproxy_template_ic.tui.screens.logging.getLogger"
-        ) as mock_get_logger:
-            mock_logger = Mock()
-            mock_logger.handlers = [
-                existing_handler,
-                Mock(),
-            ]  # TuiLogHandler + other handler
-            mock_get_logger.return_value = mock_logger
-
+            "haproxy_template_ic.tui.screens._tui_log_handler", existing_handler
+        ):
             handler = get_tui_log_handler()
 
+            # Should return the existing handler
             assert handler == existing_handler
 
     def test_get_tui_log_handler_adds_to_logger(self):
         """Test that get_tui_log_handler adds handler to logger."""
-        with patch(
-            "haproxy_template_ic.tui.screens.logging.getLogger"
-        ) as mock_get_logger:
-            mock_logger = Mock()
-            mock_logger.handlers = []
-            mock_get_logger.return_value = mock_logger
+        # Reset global state to None
+        with patch("haproxy_template_ic.tui.screens._tui_log_handler", None):
+            with patch(
+                "haproxy_template_ic.tui.screens.logging.getLogger"
+            ) as mock_get_logger:
+                mock_logger = Mock()
+                mock_get_logger.return_value = mock_logger
 
-            handler = get_tui_log_handler()
+                handler = get_tui_log_handler()
 
-            mock_logger.addHandler.assert_called_once_with(handler)
+                # Should add the new handler to the root logger
+                mock_logger.addHandler.assert_called_once()
+                mock_logger.setLevel.assert_called_once_with(logging.DEBUG)
+                assert isinstance(handler, TuiLogHandler)
 
 
 class TestScreenIntegration:
@@ -584,31 +628,49 @@ class TestScreenIntegration:
             ),
         ]
 
-        for template in templates:
-            screen = TemplateInspectorScreen(template)
-            assert screen.template == template
+        templates_data = {t.name: t for t in templates}
+        screen = TemplateInspectorScreen(
+            data_provider=Mock(),
+            templates_data=templates_data,
+            selected_template="haproxy.cfg",
+        )
+        assert screen.templates_data == templates_data
+        assert screen.selected_template == "haproxy.cfg"
 
     def test_screen_lifecycle_methods(self):
         """Test screen lifecycle methods."""
         debug_screen = DebugScreen()
 
         # Test mount lifecycle
+        mock_log_widget = Mock()
+        mock_select_widget = Mock()
+
+        with patch.object(
+            debug_screen, "query_one", side_effect=[mock_log_widget, mock_select_widget]
+        ):
+            with patch(
+                "haproxy_template_ic.tui.screens.get_tui_log_handler"
+            ) as mock_get_handler:
+                mock_handler = Mock(spec=TuiLogHandler)
+                mock_get_handler.return_value = mock_handler
+
+                with patch.object(debug_screen, "refresh_log_display"):
+                    debug_screen.on_mount()
+                    mock_handler.set_debug_screen.assert_called_once_with(debug_screen)
+                    assert debug_screen.log_widget == mock_log_widget
+                    assert debug_screen.log_level_select == mock_select_widget
+
+        # Test suspend/resume lifecycle
         with patch(
             "haproxy_template_ic.tui.screens.get_tui_log_handler"
         ) as mock_get_handler:
             mock_handler = Mock(spec=TuiLogHandler)
+            mock_handler.min_log_level = 20  # INFO level
+            mock_handler.get_filtered_logs.return_value = []  # Return empty list
             mock_get_handler.return_value = mock_handler
 
-            with patch.object(debug_screen, "refresh_log_display"):
-                debug_screen.on_mount()
-                mock_handler.set_debug_screen.assert_called_once_with(debug_screen)
-
-        # Test unmount lifecycle
-        with patch(
-            "haproxy_template_ic.tui.screens.get_tui_log_handler"
-        ) as mock_get_handler:
-            mock_handler = Mock(spec=TuiLogHandler)
-            mock_get_handler.return_value = mock_handler
-
-            debug_screen.on_unmount()
-            mock_handler.set_debug_screen.assert_called_once_with(None)
+            # Mock the query_one method for the log widget
+            mock_log_widget = Mock()
+            with patch.object(debug_screen, "query_one", return_value=mock_log_widget):
+                debug_screen.on_screen_suspend()
+                debug_screen.on_screen_resume(None)

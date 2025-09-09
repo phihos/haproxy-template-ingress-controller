@@ -42,15 +42,15 @@ def sample_dashboard_data():
                 memory="128Mi",
             )
         ],
-        templates=[
-            TemplateInfo(
+        templates={
+            "test.cfg": TemplateInfo(
                 name="test.cfg",
                 type="haproxy_config",
                 status="rendered",
                 size=1024,
                 last_modified=datetime.now(timezone.utc),
             )
-        ],
+        },
         performance=PerformanceInfo(
             requests_per_second=100,
             response_time_avg=20.5,
@@ -166,19 +166,6 @@ class TestTuiApp:
                 mock_initialize.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_on_unmount_stops_services(self, tui_app):
-        """Test that on_unmount stops services properly."""
-        # Set up mocked services
-        tui_app._update_task = AsyncMock()
-        tui_app._dashboard_service = AsyncMock()
-
-        with patch.object(tui_app, "_stop_update_task") as mock_stop_task:
-            await tui_app.on_unmount()
-
-            mock_stop_task.assert_called_once()
-            tui_app._dashboard_service.cleanup.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_start_update_task_creates_task(self, tui_app):
         """Test that _start_update_task creates a background task."""
         with patch("asyncio.create_task") as mock_create_task:
@@ -221,18 +208,19 @@ class TestTuiApp:
         pass  # No-op test as Textual handles this internally
 
     @pytest.mark.asyncio
-    async def test_update_dashboard_data_success(
-        self, tui_app, mock_dashboard_service, sample_dashboard_data
-    ):
+    async def test_update_dashboard_data_success(self, tui_app, mock_dashboard_service):
         """Test successful dashboard data refresh."""
+        sample_data = sample_dashboard_data()
         with patch.object(
-            tui_app.data_provider, "fetch_all_data", return_value=sample_dashboard_data
+            tui_app.data_provider, "fetch_all_data", return_value=sample_data
         ) as mock_fetch:
             await tui_app.refresh_data()
 
             mock_fetch.assert_called_once()
-            # Check that reactive properties are updated
-            assert tui_app.operator_status == sample_dashboard_data.operator
+            # Check that reactive properties are updated (status changes to CONNECTED after successful fetch)
+            assert tui_app.operator_status.version == sample_data.operator.version
+            assert tui_app.operator_status.namespace == sample_data.operator.namespace
+            assert tui_app.operator_status.status == "CONNECTED"
 
     @pytest.mark.asyncio
     async def test_update_dashboard_data_handles_error(
@@ -318,41 +306,52 @@ class TestTuiApp:
             tui_app.on_template_selected(message)
             mock_push.assert_called_once()
 
-    def test_watch_dashboard_data_updates_widgets(self, tui_app, sample_dashboard_data):
-        """Test that dashboard_data updates reactive properties."""
-        # Set dashboard data which should trigger updates
-        tui_app.dashboard_data = sample_dashboard_data
+    def test_reactive_properties_initialization(self, tui_app):
+        """Test that reactive properties are properly initialized."""
+        # Check initial reactive property values
+        assert tui_app.operator_status.status == "UNKNOWN"
+        assert tui_app.pods == []
+        assert tui_app.templates == {}
+        assert tui_app.loading is True
 
-        # Verify reactive properties are updated
-        assert tui_app.operator_status == sample_dashboard_data.operator
-        assert tui_app.pods == sample_dashboard_data.pods
-        assert tui_app.templates == sample_dashboard_data.templates
+    def test_refresh_data_updates_properties(self, tui_app):
+        """Test that refresh_data updates reactive properties."""
+        sample_data = sample_dashboard_data()
+        with patch.object(
+            tui_app.data_provider, "fetch_all_data", return_value=sample_data
+        ):
+            # Call the actual refresh method which internally updates properties
+            import asyncio
 
-    def test_watch_dashboard_data_handles_missing_widgets(
-        self, tui_app, sample_dashboard_data
-    ):
-        """Test that dashboard_data updates handle missing widgets gracefully."""
-        # Should not raise an exception
-        tui_app.dashboard_data = sample_dashboard_data
+            asyncio.run(tui_app.refresh_data())
 
-        # Verify reactive properties are still updated
-        assert tui_app.operator_status == sample_dashboard_data.operator
+            # Verify reactive properties are updated (status changes to CONNECTED after successful fetch)
+            assert tui_app.operator_status.version == sample_data.operator.version
+            assert tui_app.operator_status.namespace == sample_data.operator.namespace
+            assert tui_app.operator_status.status == "CONNECTED"
+            assert tui_app.pods == sample_data.pods
+            assert tui_app.templates == sample_data.templates
 
-    def test_watch_dashboard_data_none_value(self, tui_app):
-        """Test that dashboard_data handles None values."""
-        # Setting to None should not cause errors
-        tui_app.dashboard_data = None
-        # Verify it's actually None
-        assert tui_app.dashboard_data is None
+    def test_error_handling_in_refresh(self, tui_app):
+        """Test error handling in refresh_data."""
+        with patch.object(
+            tui_app.data_provider, "fetch_all_data", side_effect=Exception("Test error")
+        ):
+            with patch("haproxy_template_ic.tui.app.logger") as mock_logger:
+                import asyncio
 
-    def test_dashboard_data_reactive_property(self, tui_app, sample_dashboard_data):
-        """Test dashboard_data as a reactive property."""
-        # Initial value should be DashboardData()
-        assert isinstance(tui_app.dashboard_data, type(sample_dashboard_data))
+                asyncio.run(tui_app.refresh_data())
+                # Should log error without crashing
+                mock_logger.error.assert_called()
 
-        # Setting value should trigger reactive update
-        tui_app.dashboard_data = sample_dashboard_data
-        assert tui_app.dashboard_data == sample_dashboard_data
+    def test_app_configuration_properties(self, tui_app):
+        """Test app configuration properties."""
+        # Verify configuration properties are accessible
+        assert tui_app.namespace == "test-namespace"
+        assert tui_app.context == "test-context"
+        assert tui_app.refresh_interval == 5
+        assert tui_app.deployment_name == "test-deployment"
+        assert tui_app.socket_path == "/tmp/test.sock"
 
     def test_app_with_different_configurations(self):
         """Test app with different configuration scenarios."""

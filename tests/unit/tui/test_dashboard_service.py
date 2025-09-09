@@ -333,10 +333,10 @@ class TestDashboardServiceDataExtraction:
 
         activity_events = [
             ActivityEvent(
-                timestamp=datetime.now(),
                 type="SYNC",
-                source="dataplane",
                 message="Sync completed",
+                timestamp=datetime.now().isoformat(),
+                source="dataplane",
                 metadata={"pod_ip": "10.0.0.1", "config_changed": True},
             )
         ]
