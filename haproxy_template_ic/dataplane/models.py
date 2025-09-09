@@ -6,8 +6,7 @@ and utility functions for content hashing and validation.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar
 
 import xxhash
 
@@ -18,14 +17,19 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ConfigChange",
-    "DeploymentHistory",
     "compute_content_hash",
     "extract_hash_from_description",
     "get_production_urls_from_index",
 ]
 
-# Default dataplane port for HAProxy instances
 DEFAULT_DATAPLANE_PORT = 5555
+
+T = TypeVar("T")
+
+
+def _safe_dict_get(obj: Any, key: str, default: Optional[T] = None) -> Optional[T]:
+    """Safely get value from dict-like object."""
+    return obj.get(key, default) if isinstance(obj, dict) else default
 
 
 @dataclass
@@ -124,87 +128,6 @@ class ConfigChange:
         )
 
 
-class DeploymentHistory:
-    """Simple deployment tracking per endpoint with thread-safe operations."""
-
-    def __init__(self) -> None:
-        self._history: Dict[str, Dict[str, Any]] = {}
-
-    def record(
-        self,
-        endpoint: str,
-        version: str,
-        success: bool,
-        error: Optional[str] = None,
-        template_hashes: Optional[Dict[str, str]] = None,
-        reload_triggered: bool = False,
-    ) -> None:
-        """Record a deployment attempt."""
-        # Keep current version only if this deployment succeeded
-        current_version = (
-            self._history.get(endpoint, {}).get("version") if not success else version
-        )
-
-        current_timestamp = datetime.now(UTC).isoformat()
-        entry = {
-            "version": current_version,  # What's actually running
-            "timestamp": current_timestamp,
-            "success": success,
-            "last_attempt": version,  # What was attempted
-            "error": error,
-            "reload_triggered": reload_triggered,  # Whether this deployment triggered a HAProxy reload
-        }
-
-        # Track reload timestamp separately for successful deployments that triggered reloads
-        previous_entry = self._history.get(endpoint, {})
-        if success and reload_triggered:
-            entry["last_reload_timestamp"] = current_timestamp
-        else:
-            # Keep previous reload timestamp if this deployment didn't trigger a reload
-            entry["last_reload_timestamp"] = previous_entry.get("last_reload_timestamp")
-
-        # Only add template hashes if deployment succeeded
-        if success and template_hashes:
-            # Get previous deployment info for this endpoint to compare hashes
-            previous_entry = self._history.get(endpoint, {})
-            previous_hashes = previous_entry.get("template_hashes", {})
-
-            # Store all template hashes
-            entry["template_hashes"] = template_hashes
-
-            # Track which templates actually changed by comparing hashes
-            changed_templates = {}
-            previous_timestamps = previous_entry.get("template_change_timestamps", {})
-
-            for template_name, template_hash in template_hashes.items():
-                previous_hash = previous_hashes.get(template_name)
-                # Template changed if it's new or hash is different
-                if previous_hash is None or previous_hash != template_hash:
-                    changed_templates[template_name] = current_timestamp
-                else:
-                    # Template didn't change, keep previous timestamp if available
-                    # If no previous timestamp exists, use the earliest timestamp we have for this endpoint
-                    if template_name in previous_timestamps:
-                        changed_templates[template_name] = previous_timestamps[
-                            template_name
-                        ]
-                    else:
-                        # First time tracking this template, use deployment timestamp as baseline
-                        # This ensures all templates have timestamps for consistent tracking
-                        changed_templates[template_name] = previous_entry.get(
-                            "timestamp", current_timestamp
-                        )
-
-            # Store individual template change timestamps
-            entry["template_change_timestamps"] = changed_templates
-
-        self._history[endpoint] = entry
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Get deployment history as dict."""
-        return {"deployment_history": self._history}
-
-
 def compute_content_hash(content: str) -> str:
     """Compute xxHash64 of content for fast change detection.
 
@@ -242,38 +165,44 @@ def extract_hash_from_description(description: Optional[str]) -> Optional[str]:
 
 def get_production_urls_from_index(
     indexed_pods: "IndexedResourceCollection",
-) -> List[str]:
-    """Extract dataplane URLs from indexed HAProxy pods."""
+) -> Tuple[List[str], Dict[str, str]]:
+    """Extract dataplane URLs and pod names from indexed HAProxy pods.
+
+    Returns:
+        Tuple of (urls, url_to_pod_name_mapping) where:
+        - urls: List of dataplane URLs
+        - url_to_pod_name_mapping: Dict mapping URLs to pod names
+    """
     import logging
 
     logger = logging.getLogger(__name__)
-    urls = []
+    urls: List[str] = []
+    url_to_pod_name: Dict[str, str] = {}
 
-    # IndexedResourceCollection has already converted all Kopf objects to regular dicts
-    # We can iterate through all resources directly
     for pod_dict in indexed_pods.values():
-        # Extract pod status information
-        status = pod_dict.get("status", {})
-        phase = status.get("phase") if isinstance(status, dict) else None
-        pod_ip = status.get("podIP") if isinstance(status, dict) else None
+        status: Dict[str, Any] = _safe_dict_get(pod_dict, "status", {}) or {}
+        phase = _safe_dict_get(status, "phase")
+        pod_ip = _safe_dict_get(status, "podIP")
 
         logger.debug(f"🔍 Pod phase: {phase}, IP: {pod_ip}")
 
         if phase == "Running" and pod_ip:
-            metadata = pod_dict.get("metadata", {})
-            annotations = (
-                metadata.get("annotations", {}) if isinstance(metadata, dict) else {}
+            metadata = _safe_dict_get(pod_dict, "metadata", {})
+            pod_name = _safe_dict_get(
+                metadata, "name", f"pod-{pod_ip.replace('.', '-')}"
             )
-            port = (
-                annotations.get(
-                    "haproxy-template-ic/dataplane-port", str(DEFAULT_DATAPLANE_PORT)
-                )
-                if isinstance(annotations, dict)
-                else str(DEFAULT_DATAPLANE_PORT)
+
+            annotations = _safe_dict_get(metadata, "annotations", {})
+            port = _safe_dict_get(
+                annotations,
+                "haproxy-template-ic/dataplane-port",
+                str(DEFAULT_DATAPLANE_PORT),
             )
+
             url = f"http://{pod_ip}:{port}"
             urls.append(url)
-            logger.debug(f"🔍 Found production URL: {url}")
+            url_to_pod_name[url] = pod_name
+            logger.debug(f"🔍 Found production URL: {url} for pod: {pod_name}")
 
     logger.debug(f"🔍 Found {len(urls)} production URLs: {urls}")
-    return urls
+    return urls, url_to_pod_name

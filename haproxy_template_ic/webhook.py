@@ -57,16 +57,6 @@ def _extract_config_data(configmap_data: Dict[str, Any]) -> Optional[str]:
     return configmap_data.get("data", {}).get("config")
 
 
-# =============================================================================
-# Dynamic Webhook Registration
-# =============================================================================
-
-
-# =============================================================================
-# Stateless Webhook Validation Functions
-# =============================================================================
-
-
 async def _validate_resource_structure(
     spec: Dict[str, Any], meta: Dict[str, Any], kind: str, warnings: List[str]
 ) -> None:
@@ -127,9 +117,7 @@ async def _validate_secret_specific(spec: Dict[str, Any], warnings: List[str]) -
         )
 
 
-# =============================================================================
 # Resource-Specific Validation (Configuration-Based Only)
-# =============================================================================
 
 # Note: We intentionally do NOT register a blanket ConfigMap webhook as that
 # would make all ConfigMap operations in the cluster dependent on this service.
@@ -138,11 +126,6 @@ async def _validate_secret_specific(spec: Dict[str, Any], warnings: List[str]) -
 # Webhook registration is handled by the kopf framework based on configuration
 # in the configure_webhook_server function in operator.py. This module provides
 # the stateless validation functions that can be called by webhook handlers.
-
-
-# =============================================================================
-# Stateless Webhook Configuration
-# =============================================================================
 
 
 def register_validation_webhooks_from_config(operator_config) -> None:

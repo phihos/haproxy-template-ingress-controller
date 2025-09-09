@@ -8,7 +8,7 @@ from typing import Any
 
 import click
 
-from haproxy_template_ic.constants import ERROR_MISSING_CREDENTIALS, MAX_K8S_NAME_LENGTH
+from haproxy_template_ic.constants import MAX_K8S_NAME_LENGTH
 from pydantic import BaseModel, Field, SecretStr
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ class Credentials(BaseModel):
             missing_fields.append("validation_password")
 
         if missing_fields:
-            raise ValueError(ERROR_MISSING_CREDENTIALS.format(fields=missing_fields))
+            raise ValueError(f"Missing/invalid credential fields: {missing_fields}")
 
         # Type narrowing: After validation, these fields are guaranteed to be non-None strings
         # Using explicit checks for production safety (assertions get removed with -O)

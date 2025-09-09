@@ -74,11 +74,27 @@ LOGGING_CACHE_SIZE: Final[int] = 128
 # Buffer Sizes
 SOCKET_BUFFER_SIZE: Final[int] = 1024
 
-# Error Message Templates
-ERROR_TEMPLATE_SYNTAX: Final[str] = "Template syntax error: {error}"
-ERROR_TEMPLATE_RENDER: Final[str] = "Template rendering failed: {error}"
-ERROR_TEMPLATE_COMPILATION: Final[str] = "Template compilation failed: {error}"
-ERROR_TEMPLATE_SNIPPET_NOT_FOUND: Final[str] = "Template snippet not found: {error}"
-ERROR_TEMPLATE_INVALID_SYNTAX: Final[str] = "Invalid template syntax: {error}"
-ERROR_TEMPLATE_GENERIC: Final[str] = "Template error: {error}"
+# Error Message Templates - unused constants removed for clean code
 ERROR_MISSING_CREDENTIALS: Final[str] = "Missing/invalid credential fields: {fields}"
+
+# Template Processing Limits
+MAX_TEMPLATE_FRAMES: Final[int] = 10  # Maximum traceback frames for template nesting
+
+# Activity Buffer Configuration
+DEFAULT_ACTIVITY_BUFFER_SIZE: Final[int] = 5000  # Maximum events in activity buffer
+DEFAULT_ACTIVITY_QUERY_LIMIT: Final[int] = 1000  # Default number of events to retrieve
+TUI_LOG_BUFFER_SIZE: Final[int] = 1000  # Maximum log entries in TUI screens
+
+# Time calculation constants
+SECONDS_PER_MINUTE: Final[int] = 60
+SECONDS_PER_HOUR: Final[int] = 3600
+MINUTES_PER_HOUR: Final[int] = 60
+
+# File size constants
+BYTES_PER_KB: Final[int] = 1024
+BYTES_PER_MB: Final[int] = 1024 * 1024
+BYTES_PER_GB: Final[int] = 1024 * 1024 * 1024
+
+# UI formatting constants
+LOG_SEPARATOR_WIDTH: Final[int] = 60
+INSPECTOR_SEPARATOR_WIDTH: Final[int] = 50

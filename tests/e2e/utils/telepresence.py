@@ -4,7 +4,7 @@ import logging
 import subprocess
 import time
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -67,17 +67,14 @@ class TelepresenceConnection:
         # Wait a moment for cleanup
         time.sleep(2)
 
-        # First install the traffic manager if needed
-        install_cmd = ["telepresence", "helm", "install"]
-        if self.kubeconfig:
-            install_cmd.extend(["--kubeconfig", self.kubeconfig])
-
+        # Try to install traffic manager, but continue if it fails
         try:
-            logger.info("Installing Telepresence traffic manager...")
-            subprocess.run(install_cmd, capture_output=True, text=True, timeout=60)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            # It's okay if this fails - it might already be installed
-            pass
+            self._install_traffic_manager()
+        except RuntimeError as e:
+            logger.warning(f"Traffic manager installation failed: {e}")
+            logger.info(
+                "Continuing without traffic manager - some features may be limited"
+            )
 
         # Connect to the cluster
         cmd = [
@@ -95,22 +92,168 @@ class TelepresenceConnection:
         if self.kubeconfig:
             cmd.extend(["--kubeconfig", self.kubeconfig])
 
+        # Retry connection with traffic manager startup time
+        max_retries = 3
+        retry_delay = 10
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(
+                    f"Attempting to connect to Telepresence (attempt {attempt + 1}/{max_retries})..."
+                )
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, check=True, timeout=30
+                )
+                logger.info(f"Telepresence connected: {result.stdout}")
+                self._connected = True
+
+                # Verify connection
+                self._verify_connection()
+                return
+
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Connection attempt {attempt + 1} failed: {e.stderr}")
+                if attempt < max_retries - 1:
+                    logger.info(f"Waiting {retry_delay} seconds before retry...")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(
+                        f"Failed to connect Telepresence after {max_retries} attempts"
+                    )
+                    raise RuntimeError(
+                        f"Telepresence connection failed: {e.stderr}"
+                    ) from e
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Connection attempt {attempt + 1} timed out")
+                if attempt < max_retries - 1:
+                    logger.info(f"Waiting {retry_delay} seconds before retry...")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error("Telepresence connection timed out after all retries")
+                    raise RuntimeError("Telepresence connection timed out")
+
+    def _install_traffic_manager(self) -> None:
+        """Install Telepresence traffic manager in the cluster."""
+        # Check if traffic manager is already running
+        if self._is_traffic_manager_ready():
+            logger.info("Traffic manager is already running")
+            return
+
+        # Create ambassador namespace if it doesn't exist
+        logger.info("Ensuring ambassador namespace exists...")
+        try:
+            create_cmd = ["kubectl", "create", "namespace", "ambassador"]
+            if self.kubeconfig:
+                create_cmd.extend(["--kubeconfig", self.kubeconfig])
+            subprocess.run(create_cmd, capture_output=True, text=True, timeout=10)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pass  # Namespace might already exist
+
+        # Configure Telepresence timeouts
+        self._configure_telepresence_timeout()
+
+        # Install traffic manager
+        logger.info("Installing Telepresence traffic manager...")
+        install_cmd = [
+            "telepresence",
+            "helm",
+            "install",
+            "--manager-namespace",
+            "ambassador",
+        ]
+        if self.kubeconfig:
+            install_cmd.extend(["--kubeconfig", self.kubeconfig])
+
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, timeout=30
+                install_cmd, capture_output=True, text=True, timeout=120
             )
-            logger.info(f"Telepresence connected: {result.stdout}")
-            self._connected = True
-
-            # Verify connection
-            self._verify_connection()
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to connect Telepresence: {e.stderr}")
-            raise RuntimeError(f"Telepresence connection failed: {e.stderr}") from e
+            if result.returncode != 0:
+                logger.warning(f"Traffic manager installation failed: {result.stderr}")
+                # Check if it's already installed
+                if "already exists" in result.stderr.lower():
+                    logger.info("Traffic manager already exists")
+                else:
+                    raise RuntimeError(
+                        f"Failed to install traffic manager: {result.stderr}"
+                    )
+            else:
+                logger.info("Traffic manager installed successfully")
         except subprocess.TimeoutExpired:
-            logger.error("Telepresence connection timed out")
-            raise RuntimeError("Telepresence connection timed out")
+            raise RuntimeError(
+                "Traffic manager installation timed out after 60 seconds"
+            )
+
+        # Wait for traffic manager to be ready
+        self._wait_for_traffic_manager()
+
+    def _configure_telepresence_timeout(self) -> None:
+        """Configure Telepresence timeout settings."""
+        import os
+        import yaml
+
+        config_dir = os.path.expanduser("~/.config/telepresence")
+        config_file = os.path.join(config_dir, "config.yml")
+
+        # Ensure config directory exists
+        os.makedirs(config_dir, exist_ok=True)
+
+        # Load existing config or create new one
+        config: Dict[str, Any] = {}
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, "r") as f:
+                    config = yaml.safe_load(f) or {}
+            except Exception:
+                config = {}
+
+        # Set longer timeout for helm operations
+        config.setdefault("timeouts", {})["helm"] = "120s"
+
+        # Write config back
+        try:
+            with open(config_file, "w") as f:
+                yaml.dump(config, f)
+            logger.info("Updated Telepresence timeout configuration")
+        except Exception as e:
+            logger.warning(f"Failed to update Telepresence config: {e}")
+
+    def _is_traffic_manager_ready(self) -> bool:
+        """Check if traffic manager is ready."""
+        try:
+            cmd = [
+                "kubectl",
+                "get",
+                "deployment",
+                "traffic-manager",
+                "-n",
+                "ambassador",
+            ]
+            if self.kubeconfig:
+                cmd.extend(["--kubeconfig", self.kubeconfig])
+            cmd.extend(["-o", "jsonpath={.status.readyReplicas}"])
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                ready_replicas = int(result.stdout.strip() or "0")
+                return ready_replicas > 0
+        except (subprocess.TimeoutExpired, ValueError):
+            pass
+        return False
+
+    def _wait_for_traffic_manager(self) -> None:
+        """Wait for traffic manager to be ready."""
+        logger.info("Waiting for traffic manager to be ready...")
+        max_wait = 30
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait:
+            if self._is_traffic_manager_ready():
+                logger.info("Traffic manager is ready")
+                return
+            time.sleep(2)
+
+        raise RuntimeError("Traffic manager did not become ready in 30 seconds")
 
     def _is_already_connected(self) -> bool:
         """Check if Telepresence is already connected to any cluster.

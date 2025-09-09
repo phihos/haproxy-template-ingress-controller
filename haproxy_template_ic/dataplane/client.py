@@ -9,6 +9,7 @@ common operations like validation, deployment, and storage synchronization.
 import base64
 import io
 import logging
+import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 import httpx
@@ -1916,8 +1917,6 @@ class DataplaneClient:
         """
         try:
             # Extract just the filename from the full path for the API
-            import os
-
             map_filename = os.path.basename(map_file_path)
 
             # NOTE: Map operations are always runtime in the dataplane API

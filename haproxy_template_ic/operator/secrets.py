@@ -12,7 +12,7 @@ import kopf
 import structlog
 from kr8s.objects import Secret
 
-from haproxy_template_ic.structured_logging import autolog
+from haproxy_template_ic.core.logging import autolog
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -28,7 +28,7 @@ __all__ = [
 @trace_async_function(
     span_name="fetch_secret", attributes={"operation.category": "kubernetes"}
 )
-async def fetch_secret(name: str, namespace: str) -> Any:
+async def fetch_secret(name: str, namespace: str) -> Secret:
     """Fetch Secret from Kubernetes cluster."""
     add_span_attributes(secret_name=name, secret_namespace=namespace)
     try:

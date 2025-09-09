@@ -9,7 +9,7 @@ import asyncio
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 import xxhash
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, computed_field
 
 from .resources import IndexedResourceCollection
 from .templates import RenderedContent, RenderedConfig
@@ -86,6 +86,7 @@ class HAProxyConfigContext(BaseModel):
         self._cache_version += 1
 
     # Convenience properties for backward compatibility (filters by content type with caching)
+    @computed_field  # type: ignore[misc]
     @property
     def rendered_maps(self) -> List[RenderedContent]:
         """Get rendered maps (cached)."""
@@ -95,6 +96,7 @@ class HAProxyConfigContext(BaseModel):
             ]
         return self._cached_maps
 
+    @computed_field  # type: ignore[misc]
     @property
     def rendered_certificates(self) -> List[RenderedContent]:
         """Get rendered certificates (cached)."""
@@ -104,6 +106,7 @@ class HAProxyConfigContext(BaseModel):
             ]
         return self._cached_certificates
 
+    @computed_field  # type: ignore[misc]
     @property
     def rendered_acls(self) -> List[RenderedContent]:
         """Get rendered ACLs (cached)."""
@@ -113,6 +116,7 @@ class HAProxyConfigContext(BaseModel):
             ]
         return self._cached_acls
 
+    @computed_field  # type: ignore[misc]
     @property
     def rendered_files(self) -> List[RenderedContent]:
         """Get rendered files (cached)."""

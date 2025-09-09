@@ -15,9 +15,9 @@ curl http://localhost:9090/metrics
 ```
 
 Key metrics:
-- `haproxy_template_ic_reconciliations_total` - Reconciliation count
+- `haproxy_template_ic_rendered_templates_total` - Template render count
 - `haproxy_template_ic_template_render_duration_seconds` - Render time
-- `haproxy_template_ic_dataplane_sync_duration_seconds` - Sync time
+- `haproxy_template_ic_dataplane_api_duration_seconds` - Dataplane API time
 - `haproxy_template_ic_errors_total` - Error count by type
 
 ### Health Check
@@ -51,14 +51,18 @@ kubectl exec -it deployment/haproxy-template-ic -- \
 
 ### Structured Logging
 
-Enable JSON logging for aggregation:
+Enable JSON logging in the ConfigMap:
 
 ```yaml
-env:
-- name: STRUCTURED_LOGGING
-  value: "true"
-- name: VERBOSE
-  value: "1"  # 0=WARNING, 1=INFO, 2=DEBUG
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-template-ic-config
+data:
+  config: |
+    logging:
+      structured: true  # Enable JSON structured logging
+      verbose: 1        # Log level (0=WARNING, 1=INFO, 2=DEBUG)
 ```
 
 View logs:
@@ -72,16 +76,20 @@ kubectl logs deployment/haproxy-template-ic | jq '.'
 
 ### OpenTelemetry Tracing
 
-Enable distributed tracing:
+Enable distributed tracing in the ConfigMap:
 
 ```yaml
-env:
-- name: TRACING_ENABLED
-  value: "true"
-- name: JAEGER_ENDPOINT
-  value: "http://jaeger:14268/api/traces"
-- name: TRACING_SAMPLE_RATE
-  value: "0.1"  # 10% sampling for production
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-template-ic-config
+data:
+  config: |
+    tracing:
+      enabled: true                             # Enable OpenTelemetry tracing
+      jaeger_endpoint: "jaeger:14268"          # Jaeger collector endpoint
+      sample_rate: 0.1                         # 10% sampling for production
+      console_export: false                    # Console export for debugging
 ```
 
 ## Troubleshooting
@@ -105,30 +113,23 @@ kubectl exec deployment/haproxy-template-ic -- \
 
 ### Debug Mode
 
-Enable debug logging:
+Enable debug logging in the ConfigMap:
 
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: debug-config
+  name: haproxy-template-ic-config
 data:
-  DEBUG: "true"
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: haproxy-template-ic
-spec:
-  template:
-    spec:
-      containers:
-      - name: controller
-        env:
-        - name: VERBOSE
-          value: "2"  # DEBUG level
-        - name: STRUCTURED_LOGGING
-          value: "false"  # Human readable
+  config: |
+    logging:
+      verbose: 2        # DEBUG level (0=WARNING, 1=INFO, 2=DEBUG)
+      structured: false # Human readable format for debugging
+
+    # Optional: Enable debug console tracing
+    tracing:
+      enabled: true
+      console_export: true  # Print traces to console for debugging
 ```
 
 ### Performance Issues

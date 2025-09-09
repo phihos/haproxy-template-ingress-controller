@@ -15,8 +15,8 @@ from deepdiff import DeepDiff
 from kr8s.objects import ConfigMap
 
 from haproxy_template_ic.activity import EventType
-from haproxy_template_ic.models import config_from_dict
-from haproxy_template_ic.structured_logging import autolog
+from haproxy_template_ic.models import config_from_dict, Config
+from haproxy_template_ic.core.logging import autolog
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -35,7 +35,7 @@ __all__ = [
     span_name="load_config_from_configmap",
     attributes={"operation.category": "configuration"},
 )
-async def load_config_from_configmap(configmap) -> Any:
+async def load_config_from_configmap(configmap) -> Config:
     """Load configuration from a Kubernetes ConfigMap."""
     # Handle both kr8s ConfigMap objects and dictionary representations
     if hasattr(configmap, "namespace"):
@@ -68,7 +68,7 @@ async def load_config_from_configmap(configmap) -> Any:
 @trace_async_function(
     span_name="fetch_configmap", attributes={"operation.category": "kubernetes"}
 )
-async def fetch_configmap(name: str, namespace: str) -> Any:
+async def fetch_configmap(name: str, namespace: str) -> ConfigMap:
     """Fetch ConfigMap from Kubernetes cluster."""
     add_span_attributes(configmap_name=name, configmap_namespace=namespace)
     try:

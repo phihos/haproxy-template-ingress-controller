@@ -5,22 +5,25 @@ This module provides the CLI interface with proper subcommand structure
 for clear separation between operator mode and utility commands.
 """
 
+import asyncio
+import logging
+import os
+import subprocess  # nosec B404
+import sys
 from dataclasses import dataclass
 from importlib import metadata
 from importlib.metadata import PackageNotFoundError
+from typing import Optional
 
 import click
 
-# Constants are now defined in the ConfigMap via the Config model
 from haproxy_template_ic.credentials import validate_k8s_name
+from haproxy_template_ic.core.logging import setup_structured_logging
+from haproxy_template_ic.k8s import get_current_namespace
 from haproxy_template_ic.operator import run_operator_loop
-from haproxy_template_ic.structured_logging import setup_structured_logging
-import haproxy_template_ic.webhook  # Import webhook handlers to register them with kopf  # noqa: F401
+from haproxy_template_ic.tui import TuiLauncher
 
-
-# =============================================================================
-# CLI Options
-# =============================================================================
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -31,9 +34,61 @@ class CliOptions:
     secret_name: str
 
 
-# =============================================================================
-# Command Line Interface
-# =============================================================================
+def _get_namespace_fallback() -> str:
+    """Get namespace from kubectl context as fallback."""
+    try:
+        result = subprocess.run(  # nosec B603, B607
+            [
+                "kubectl",
+                "config",
+                "view",
+                "--minify",
+                "--output",
+                "jsonpath={.contexts[0].context.namespace}",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip() or "default"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "default"
+
+
+def _detect_namespace(namespace: str) -> str:
+    """Detect the namespace using multiple fallback methods."""
+    if namespace:
+        return namespace
+
+    try:
+        return get_current_namespace()
+    except Exception:
+        return _get_namespace_fallback()
+
+
+def _cleanup_console_loggers() -> None:
+    """Remove console handlers from root logger."""
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        if isinstance(handler, logging.StreamHandler):
+            if handler.stream in (sys.stderr, sys.stdout):
+                root_logger.removeHandler(handler)
+
+
+def _detect_socket_path(socket_path: Optional[str]) -> Optional[str]:
+    """Detect management socket path with fallbacks."""
+    if socket_path:
+        return socket_path
+
+    socket_path = os.environ.get("MANAGEMENT_SOCKET_PATH")
+    if socket_path:
+        return socket_path
+
+    default_socket = "/run/haproxy-template-ic/management.sock"
+    if os.path.exists(default_socket):
+        return default_socket
+
+    return None
 
 
 @click.group()
@@ -46,10 +101,8 @@ def cli(ctx: click.Context) -> None:
     NOTE: Logging, tracing, and other runtime settings are now configured
     via ConfigMap rather than CLI options or environment variables.
     """
-    # Initialize context for subcommands
     ctx.ensure_object(dict)
 
-    # Basic logging setup (will be reconfigured from ConfigMap during operator startup)
     setup_structured_logging(verbose_level=0, use_json=False)
 
 
@@ -84,7 +137,6 @@ def run(
     All runtime settings (logging, tracing, ports, etc.) are now configured
     via the ConfigMap specified by --configmap-name.
     """
-    # Create CLI options object (bootstrap parameters only)
     cli_options = CliOptions(
         configmap_name=configmap_name,
         secret_name=secret_name,
@@ -107,99 +159,77 @@ def version() -> None:
 @click.option(
     "-n",
     "--namespace",
-    help="Kubernetes namespace where the operator is deployed. If not specified, uses current kubectl context default.",
+    default="",
+    help="Kubernetes namespace to monitor. Defaults to current kubectl context namespace.",
 )
 @click.option(
-    "--context", help="Kubectl context to use. If not specified, uses current context."
+    "--context",
+    default=None,
+    help="Kubernetes context to use. Defaults to current kubectl context.",
 )
 @click.option(
     "-r",
     "--refresh",
     default=5,
-    type=click.IntRange(1, 60),
-    help="Refresh interval in seconds (1-60). Default: 5",
+    help="Refresh interval in seconds. Default: 5",
 )
 @click.option(
     "--deployment-name",
     default="haproxy-template-ic",
     help="Name of the operator deployment. Default: haproxy-template-ic",
 )
+@click.option(
+    "--socket-path",
+    default=None,
+    help="Path to management socket for direct connection. Auto-detects if running in container.",
+)
 @click.pass_context
-def dashboard(
+def tui(
     ctx: click.Context,
     namespace: str,
     context: str,
     refresh: int,
     deployment_name: str,
+    socket_path: Optional[str],
 ) -> None:
-    """Launch live status dashboard for monitoring HAProxy Template IC.
+    """Launch Textual TUI dashboard for monitoring HAProxy Template IC.
 
-    The dashboard provides real-time monitoring of operator status, HAProxy pods,
-    template rendering, resource synchronization, and performance metrics.
+    The TUI dashboard provides a modern terminal user interface for real-time
+    monitoring of operator status, HAProxy pods, template rendering, resource
+    synchronization, and performance metrics.
 
-    The dashboard connects to your Kubernetes cluster using kubectl and displays
-    information in a beautiful terminal interface. It automatically detects the
-    operator version and adapts its functionality accordingly.
+    This is an alternative to the Rich-based dashboard with better interactivity,
+    reactive data updates, and a more organized widget-based architecture.
 
     Examples:
     \b
         # Basic usage with current context
-        haproxy-template-ic dashboard
+        haproxy-template-ic tui
 
         # Specific namespace and context
-        haproxy-template-ic dashboard -n production --context prod-cluster
+        haproxy-template-ic tui -n production --context prod-cluster
 
         # Custom refresh interval
-        haproxy-template-ic dashboard -r 3
+        haproxy-template-ic tui -r 3
     """
-    import asyncio
-    from haproxy_template_ic.dashboard import DashboardLauncher
+    namespace = _detect_namespace(namespace)
+    _cleanup_console_loggers()
+    socket_path = _detect_socket_path(socket_path)
 
-    # Get namespace from current kubectl context if not provided
-    if not namespace:
-        try:
-            # Safe: Only runs system kubectl command with controlled arguments
-            import subprocess  # nosec B404
-
-            # Safe: kubectl command with controlled arguments, no user input
-            result = subprocess.run(  # nosec B603, B607
-                [
-                    "kubectl",
-                    "config",
-                    "view",
-                    "--minify",
-                    "--output",
-                    "jsonpath={.contexts[0].context.namespace}",
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            namespace = result.stdout.strip() or "default"
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            namespace = "default"
-
-    # Launch the dashboard
-    launcher = DashboardLauncher(
+    launcher = TuiLauncher(
         namespace=namespace,
         context=context,
         refresh_interval=refresh,
         deployment_name=deployment_name,
+        socket_path=socket_path,
     )
 
     try:
         asyncio.run(launcher.launch())
     except KeyboardInterrupt:
-        click.echo("\nDashboard stopped by user.")
+        logger.info("TUI dashboard terminated by user")
     except Exception as e:
-        click.echo(f"\nDashboard error: {e}", err=True)
-        import traceback
-
-        if hasattr(ctx, "obj") and ctx.obj.get("debug", False):
-            traceback.print_exc()
-        click.echo(
-            "Please check your Kubernetes configuration and try again.", err=True
-        )
+        logger.error(f"TUI dashboard failed: {e}")
         ctx.exit(1)
 
 

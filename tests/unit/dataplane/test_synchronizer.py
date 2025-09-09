@@ -12,10 +12,11 @@ from haproxy_template_ic.dataplane import (
     ValidationError,
     DataplaneClient,
     ConfigSynchronizer,
-    DeploymentHistory,
     get_production_urls_from_index,
     normalize_dataplane_url,
 )
+from haproxy_template_ic.deployment_state import DeploymentStateTracker
+from haproxy_template_ic.activity import ActivityBuffer, EventType
 from haproxy_template_ic.credentials import Credentials, DataplaneAuth
 
 
@@ -58,19 +59,21 @@ class TestProductionUrlExtractionComplete:
 
     def test_empty_index(self):
         """Test with empty index."""
-        urls = get_production_urls_from_index({})
+        urls, url_to_pod_name = get_production_urls_from_index({})
         assert urls == []
+        assert url_to_pod_name == {}
 
     def test_single_running_pod(self):
         """Test with single running pod."""
         indexed_pods = {
             ("default", "haproxy-1"): {
                 "status": {"phase": "Running", "podIP": "192.168.1.10"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-1"},
             }
         }
-        urls = get_production_urls_from_index(indexed_pods)
+        urls, url_to_pod_name = get_production_urls_from_index(indexed_pods)
         assert urls == ["http://192.168.1.10:5555"]
+        assert url_to_pod_name == {"http://192.168.1.10:5555": "haproxy-1"}
 
     def test_custom_port_annotation(self):
         """Test with custom dataplane port."""
@@ -78,71 +81,81 @@ class TestProductionUrlExtractionComplete:
             ("default", "haproxy-1"): {
                 "status": {"phase": "Running", "podIP": "192.168.1.10"},
                 "metadata": {
-                    "annotations": {"haproxy-template-ic/dataplane-port": "8888"}
+                    "annotations": {"haproxy-template-ic/dataplane-port": "8888"},
+                    "name": "haproxy-custom",
                 },
             }
         }
-        urls = get_production_urls_from_index(indexed_pods)
+        urls, url_to_pod_name = get_production_urls_from_index(indexed_pods)
         assert urls == ["http://192.168.1.10:8888"]
+        assert url_to_pod_name == {"http://192.168.1.10:8888": "haproxy-custom"}
 
     def test_non_running_pods_excluded(self):
         """Test that non-running pods are excluded."""
         indexed_pods = {
             ("default", "haproxy-pending"): {
                 "status": {"phase": "Pending", "podIP": "192.168.1.10"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-pending"},
             },
             ("default", "haproxy-failed"): {
                 "status": {"phase": "Failed", "podIP": "192.168.1.11"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-failed"},
             },
             ("default", "haproxy-running"): {
                 "status": {"phase": "Running", "podIP": "192.168.1.12"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-running"},
             },
         }
-        urls = get_production_urls_from_index(indexed_pods)
+        urls, url_to_pod_name = get_production_urls_from_index(indexed_pods)
         assert urls == ["http://192.168.1.12:5555"]
+        assert url_to_pod_name == {"http://192.168.1.12:5555": "haproxy-running"}
 
     def test_pods_without_ip_excluded(self):
         """Test that pods without IP are excluded."""
         indexed_pods = {
             ("default", "haproxy-no-ip"): {
                 "status": {"phase": "Running"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-no-ip"},
             },
             ("default", "haproxy-with-ip"): {
                 "status": {"phase": "Running", "podIP": "192.168.1.10"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-with-ip"},
             },
         }
-        urls = get_production_urls_from_index(indexed_pods)
+        urls, url_to_pod_name = get_production_urls_from_index(indexed_pods)
         assert urls == ["http://192.168.1.10:5555"]
+        assert url_to_pod_name == {"http://192.168.1.10:5555": "haproxy-with-ip"}
 
     def test_multiple_pods_sorted_output(self):
         """Test multiple pods produce sorted output."""
         indexed_pods = {
             ("default", "haproxy-c"): {
                 "status": {"phase": "Running", "podIP": "192.168.1.13"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-c"},
             },
             ("default", "haproxy-a"): {
                 "status": {"phase": "Running", "podIP": "192.168.1.11"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-a"},
             },
             ("default", "haproxy-b"): {
                 "status": {"phase": "Running", "podIP": "192.168.1.12"},
-                "metadata": {"annotations": {}},
+                "metadata": {"annotations": {}, "name": "haproxy-b"},
             },
         }
 
-        urls = get_production_urls_from_index(indexed_pods)
+        urls, url_to_pod_name = get_production_urls_from_index(indexed_pods)
 
         # URLs should be deterministic (not necessarily sorted, but consistent)
         assert len(urls) == 3
         assert "http://192.168.1.11:5555" in urls
         assert "http://192.168.1.12:5555" in urls
         assert "http://192.168.1.13:5555" in urls
+
+        # Pod name mapping should be complete
+        assert len(url_to_pod_name) == 3
+        assert url_to_pod_name["http://192.168.1.11:5555"] == "haproxy-a"
+        assert url_to_pod_name["http://192.168.1.12:5555"] == "haproxy-b"
+        assert url_to_pod_name["http://192.168.1.13:5555"] == "haproxy-c"
 
 
 class TestDataplaneClientSimple:
@@ -227,73 +240,143 @@ class TestConfigSynchronizerSimple:
             await synchronizer.sync_configuration(context)
 
 
-class TestDeploymentHistoryComplete:
-    """Test DeploymentHistory comprehensive functionality."""
+class TestDeploymentStateTracker:
+    """Test DeploymentStateTracker functionality."""
 
-    def test_empty_history_initialization(self):
-        """Test empty history initialization."""
-        history = DeploymentHistory()
-        assert history._history == {}
+    @pytest.mark.asyncio
+    async def test_empty_tracker_initialization(self):
+        """Test empty tracker initialization."""
+        buffer = ActivityBuffer()
+        tracker = DeploymentStateTracker(buffer)
 
-        data = history.to_dict()
+        data = await tracker.to_dict()
         assert "deployment_history" in data
         assert data["deployment_history"] == {}
 
-    def test_record_successful_deployment(self):
-        """Test recording successful deployment."""
-        history = DeploymentHistory()
-        history.record("http://test:5555", "v1.0", True)
+    @pytest.mark.asyncio
+    async def test_deployment_success_tracking(self):
+        """Test tracking successful deployment events."""
+        buffer = ActivityBuffer()
+        tracker = DeploymentStateTracker(buffer)
 
-        data = history.to_dict()
-        entry = data["deployment_history"]["http://test:5555"]
-        assert entry["version"] == "v1.0"
-        assert entry["success"] is True
-        assert entry["last_attempt"] == "v1.0"
-        assert entry["error"] is None
+        # Add a deployment success event
+        await buffer.add_event(
+            EventType.DEPLOYMENT_SUCCESS,
+            "Deployment successful to http://test:5555",
+            source="synchronizer",
+            metadata={
+                "endpoint": "http://test:5555",
+                "version": "v1.0",
+                "success": True,
+                "pod_name": "test-pod",
+            },
+        )
 
-    def test_record_failed_deployment(self):
-        """Test recording failed deployment."""
-        history = DeploymentHistory()
-        history.record("http://test:5555", "v1.0", False, "Connection failed")
+        info = await tracker.get_deployment_info("http://test:5555")
+        assert info is not None
+        assert info.version == "v1.0"
+        assert info.success is True
+        assert info.pod_name == "test-pod"
 
-        data = history.to_dict()
-        entry = data["deployment_history"]["http://test:5555"]
-        assert entry["version"] is None  # No successful version yet
-        assert entry["success"] is False
-        assert entry["last_attempt"] == "v1.0"
-        assert entry["error"] == "Connection failed"
+    @pytest.mark.asyncio
+    async def test_deployment_failure_tracking(self):
+        """Test tracking failed deployment events."""
+        buffer = ActivityBuffer()
+        tracker = DeploymentStateTracker(buffer)
 
-    def test_record_failure_then_success(self):
-        """Test recording failure followed by success."""
-        history = DeploymentHistory()
+        # Add a deployment failure event
+        await buffer.add_event(
+            EventType.DEPLOYMENT_FAILED,
+            "Deployment failed to http://test:5555",
+            source="synchronizer",
+            metadata={
+                "endpoint": "http://test:5555",
+                "version": "v1.0",
+                "success": False,
+                "error": "Connection failed",
+                "pod_name": "test-pod",
+            },
+        )
 
-        # Record failure first
-        history.record("http://test:5555", "v1.0", False, "Deploy failed")
-        data = history.to_dict()
-        entry = data["deployment_history"]["http://test:5555"]
-        assert entry["version"] is None
-        assert entry["success"] is False
+        info = await tracker.get_deployment_info("http://test:5555")
+        assert info is not None
+        assert info.version is None  # No successful version
+        assert info.success is False
+        assert info.error == "Connection failed"
+        assert info.last_attempt == "v1.0"
 
-        # Then record success
-        history.record("http://test:5555", "v1.1", True)
-        data = history.to_dict()
-        entry = data["deployment_history"]["http://test:5555"]
-        assert entry["version"] == "v1.1"
-        assert entry["success"] is True
-        assert entry["error"] is None
+    @pytest.mark.asyncio
+    async def test_deployment_failure_then_success(self):
+        """Test tracking failure followed by success."""
+        buffer = ActivityBuffer()
+        tracker = DeploymentStateTracker(buffer)
 
-    def test_multiple_endpoints(self):
+        # Add failure event first
+        await buffer.add_event(
+            EventType.DEPLOYMENT_FAILED,
+            "Deployment failed",
+            source="synchronizer",
+            metadata={
+                "endpoint": "http://test:5555",
+                "version": "v1.0",
+                "success": False,
+                "error": "Deploy failed",
+            },
+        )
+
+        # Add success event
+        await buffer.add_event(
+            EventType.DEPLOYMENT_SUCCESS,
+            "Deployment successful",
+            source="synchronizer",
+            metadata={
+                "endpoint": "http://test:5555",
+                "version": "v1.1",
+                "success": True,
+            },
+        )
+
+        info = await tracker.get_deployment_info("http://test:5555")
+        assert info is not None
+        assert info.version == "v1.1"  # Current successful version
+        assert info.success is True
+        assert info.error is None
+
+    @pytest.mark.asyncio
+    async def test_multiple_endpoints(self):
         """Test tracking multiple endpoints."""
-        history = DeploymentHistory()
+        buffer = ActivityBuffer()
+        tracker = DeploymentStateTracker(buffer)
 
-        history.record("http://test1:5555", "v1.0", True)
-        history.record("http://test2:5555", "v1.0", False, "Network error")
+        # Add events for different endpoints
+        await buffer.add_event(
+            EventType.DEPLOYMENT_SUCCESS,
+            "Success endpoint 1",
+            source="synchronizer",
+            metadata={
+                "endpoint": "http://test1:5555",
+                "version": "v1.0",
+                "success": True,
+            },
+        )
 
-        data = history.to_dict()
-        assert len(data["deployment_history"]) == 2
+        await buffer.add_event(
+            EventType.DEPLOYMENT_FAILED,
+            "Failure endpoint 2",
+            source="synchronizer",
+            metadata={
+                "endpoint": "http://test2:5555",
+                "version": "v1.0",
+                "success": False,
+                "error": "Network error",
+            },
+        )
 
-        assert data["deployment_history"]["http://test1:5555"]["success"] is True
-        assert data["deployment_history"]["http://test2:5555"]["success"] is False
+        all_info = await tracker.get_all_deployment_info()
+        assert len(all_info) == 2
+
+        assert all_info["http://test1:5555"].success is True
+        assert all_info["http://test2:5555"].success is False
 
 
 class TestExceptionClasses:

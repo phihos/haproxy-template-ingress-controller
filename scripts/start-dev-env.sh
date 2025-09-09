@@ -342,7 +342,7 @@ retry_with_backoff() {
             delay=$((delay * 2))  # Exponential backoff
         fi
         
-        ((attempt++))
+        ((attempt++)) || true
     done
     
     err "Command failed after $max_attempts attempts: ${command[*]}"
@@ -438,15 +438,15 @@ install_metrics_server() {
 	
 	# Verify metrics are available (may take a few more seconds)
 	log INFO "Verifying metrics availability..."
-	local attempts=0
-	while [[ $attempts -lt 6 ]]; do
+	attempts=0
+	while [[ $attempts -lt 10 ]]; do
 		if kubectl top nodes >/dev/null 2>&1; then
 			ok "Metrics-server is collecting node metrics successfully."
 			return 0
 		fi
-		debug "Metrics not ready yet, waiting 10 seconds... (attempt $((attempts + 1))/6)"
+		debug "Metrics not ready yet, waiting 10 seconds... (attempt $((attempts + 1))/10)"
 		sleep 10
-		((attempts++))
+		((attempts++)) || true
 	done
 	
 	warn "Metrics-server installed but metrics may not be immediately available"

@@ -9,7 +9,7 @@ import asyncio
 import functools
 import logging
 import re
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -17,9 +17,15 @@ from haproxy_dataplane_v3 import errors
 from haproxy_dataplane_v3.api.configuration import get_configuration_version
 
 from .errors import DataplaneAPIError, ValidationError
+from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.tracing import (
+    record_span_event,
+    set_span_error,
+)
 
 __all__ = [
     "normalize_dataplane_url",
+    "extract_hostname_from_url",
     "parse_haproxy_error_line",
     "extract_config_context",
     "parse_validation_error_details",
@@ -109,6 +115,26 @@ def normalize_dataplane_url(base_url: str) -> str:
         if not base_url.endswith("/v3"):
             return f"{base_url.rstrip('/')}/v3"
         return base_url
+
+
+def extract_hostname_from_url(url: str) -> Optional[str]:
+    """Extract hostname from a URL.
+
+    Args:
+        url: The URL to parse
+
+    Returns:
+        Hostname/IP address from the URL, or None if parsing fails
+
+    Example:
+        >>> extract_hostname_from_url("http://192.168.1.10:5555/v3")
+        '192.168.1.10'
+    """
+    try:
+        parsed = urlparse(url)
+        return parsed.hostname
+    except ValueError:
+        return None
 
 
 def parse_haproxy_error_line(error_message: str) -> Optional[int]:
@@ -220,7 +246,7 @@ def parse_validation_error_details(
     return validation_details, error_line, error_context
 
 
-def _to_dict_safe(obj: Any) -> Any:
+def _to_dict_safe(obj: Any) -> Union[Dict[str, Any], Any]:
     """Safely convert an object to dictionary, handling serialization errors gracefully."""
     try:
         return obj.to_dict() if hasattr(obj, "to_dict") else obj
@@ -309,12 +335,6 @@ def handle_dataplane_errors(operation_name: Optional[str] = None):
     """
 
     def decorator(func):
-        from haproxy_template_ic.metrics import get_metrics_collector
-        from haproxy_template_ic.tracing import (
-            record_span_event,
-            set_span_error,
-        )
-
         @functools.wraps(func)
         async def async_wrapper(self, *args, **kwargs):
             op_name = operation_name or func.__name__
