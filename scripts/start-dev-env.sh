@@ -342,7 +342,7 @@ retry_with_backoff() {
             delay=$((delay * 2))  # Exponential backoff
         fi
         
-        ((attempt++))
+        ((attempt++)) || true
     done
     
     err "Command failed after $max_attempts attempts: ${command[*]}"
@@ -444,10 +444,9 @@ install_metrics_server() {
 			ok "Metrics-server is collecting node metrics successfully."
 			return 0
 		fi
-		set -x
 		debug "Metrics not ready yet, waiting 10 seconds... (attempt $((attempts + 1))/10)"
 		sleep 10
-		((attempts++))
+		((attempts++)) || true
 	done
 	
 	warn "Metrics-server installed but metrics may not be immediately available"
