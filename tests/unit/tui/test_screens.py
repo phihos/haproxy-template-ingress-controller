@@ -674,3 +674,127 @@ class TestScreenIntegration:
             with patch.object(debug_screen, "query_one", return_value=mock_log_widget):
                 debug_screen.on_screen_suspend()
                 debug_screen.on_screen_resume(None)
+
+    def test_log_handler_get_filtered_logs_edge_cases(self):
+        """Test get_filtered_logs method edge cases."""
+        log_handler = TuiLogHandler()
+
+        # Test with min_level=None (should use self.min_log_level) - line 84
+        log_handler.min_log_level = logging.WARNING
+        result = log_handler.get_filtered_logs(count=100, min_level=None)
+        assert result == []
+
+        # Test early break condition when count is reached - line 92
+        # Add some logs to test the break condition
+        for i in range(5):
+            record = logging.LogRecord(
+                name="test",
+                level=logging.INFO,
+                pathname="test.py",
+                lineno=1,
+                msg=f"Message {i}",
+                args=(),
+                exc_info=None,
+            )
+            log_handler.emit(record)
+
+        # Request only 2 logs to trigger the break condition
+        result = log_handler.get_filtered_logs(count=2, min_level=logging.INFO)
+        assert len(result) == 2
+
+    def test_log_handler_stack_trace_filtering(self):
+        """Test stack trace filtering edge cases."""
+        log_handler = TuiLogHandler()
+
+        # Test _should_add_stack_trace with expected errors - should skip stack trace
+        record = logging.LogRecord(
+            name="test",
+            level=logging.ERROR,
+            pathname="test.py",
+            lineno=1,
+            msg="Connection refused",
+            args=(),
+            exc_info=None,
+        )
+        result = log_handler._should_add_stack_trace(record)
+        assert result is False
+
+        # Test with unexpected error - should add stack trace
+        record = logging.LogRecord(
+            name="test",
+            level=logging.ERROR,
+            pathname="test.py",
+            lineno=1,
+            msg="Unexpected error occurred",
+            args=(),
+            exc_info=None,
+        )
+        result = log_handler._should_add_stack_trace(record)
+        assert result is True
+
+    def test_log_handler_traceback_formatting_edge_cases(self):
+        """Test traceback formatting edge cases."""
+        log_handler = TuiLogHandler()
+
+        # Test _format_filtered_traceback with no exc_info - line 167
+        record = logging.LogRecord(
+            name="test",
+            level=logging.ERROR,
+            pathname="test.py",
+            lineno=1,
+            msg="Error message",
+            args=(),
+            exc_info=None,
+        )
+        result = log_handler._format_filtered_traceback(record)
+        assert result == ""
+
+        # Test with real exception to cover more lines
+        try:
+            raise ValueError("Test exception")
+        except ValueError:
+            record = logging.LogRecord(
+                name="test",
+                level=logging.ERROR,
+                pathname="test.py",
+                lineno=1,
+                msg="Error with exception",
+                args=(),
+                exc_info=True,
+            )
+            # Get the exc_info for the record
+            import sys
+
+            record.exc_info = sys.exc_info()
+
+            result = log_handler._format_filtered_traceback(record)
+            # Should return something (empty string or formatted traceback)
+            assert isinstance(result, str)
+
+    def test_get_tui_log_handler_logger_configuration(self):
+        """Test that get_tui_log_handler properly configures logging."""
+        # Import the global variable
+        import haproxy_template_ic.tui.screens as screens_module
+
+        # Clear any existing handler
+        original_handler = screens_module._tui_log_handler
+        screens_module._tui_log_handler = None
+
+        try:
+            root_logger = logging.getLogger()
+
+            # Get the handler which should configure logging
+            handler = get_tui_log_handler()
+
+            # Verify logger configuration
+            assert root_logger.level == logging.DEBUG
+            assert handler in root_logger.handlers
+            assert handler.level == logging.DEBUG
+
+            # Calling again should return the same instance
+            handler2 = get_tui_log_handler()
+            assert handler is handler2
+
+        finally:
+            # Restore original state
+            screens_module._tui_log_handler = original_handler

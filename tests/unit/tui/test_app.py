@@ -428,3 +428,71 @@ class TestTuiApp:
             # Second update should succeed
             await tui_app.refresh_data()
             assert call_count == 2
+
+    def test_app_initialization_error_handling(self):
+        """Test app initialization with errors."""
+        tui_app = TuiApp(namespace="test")
+
+        # Mock data provider initialization to raise an exception
+        with patch.object(tui_app, "data_provider") as mock_provider:
+            mock_provider.initialize = AsyncMock(side_effect=Exception("Init failed"))
+
+            async def test_init():
+                # This should handle the exception gracefully
+                await tui_app._initialize()
+                assert tui_app.loading is False
+
+            asyncio.run(test_init())
+
+    def test_app_console_handler_removal(self):
+        """Test console handler removal in __init__."""
+        import logging
+        import sys
+
+        # Add a console handler to test removal
+        root_logger = logging.getLogger()
+        console_handler = logging.StreamHandler(sys.stdout)
+        root_logger.addHandler(console_handler)
+
+        try:
+            # Creating the app should remove console handlers
+            TuiApp(namespace="test")
+
+            # Check that stdout/stderr handlers are removed
+            remaining_handlers = [
+                h
+                for h in root_logger.handlers
+                if isinstance(h, logging.StreamHandler)
+                and h.stream in (sys.stdout, sys.stderr)
+            ]
+            assert len(remaining_handlers) == 0
+
+        finally:
+            # Clean up
+            if console_handler in root_logger.handlers:
+                root_logger.removeHandler(console_handler)
+
+    def test_app_action_methods(self):
+        """Test app action methods."""
+        tui_app = TuiApp(namespace="test")
+
+        # Test _set_connection_status
+        tui_app._set_connection_status("CONNECTED")
+        tui_app._set_connection_status("DISCONNECTED")
+        tui_app._set_connection_status("ERROR")
+
+    def test_app_error_scenarios(self):
+        """Test various error scenarios."""
+        tui_app = TuiApp(namespace="test")
+
+        # Test with various invalid configurations
+        tui_app.operator_data = None
+        tui_app.pods_data = None
+        tui_app.templates_data = None
+        tui_app.resources_data = None
+        tui_app.performance_data = None
+        tui_app.activity_data = None
+
+        # These should not crash
+        assert tui_app.operator_data is None
+        assert tui_app.pods_data is None

@@ -5,7 +5,7 @@ Tests model validation, field validators, properties, and edge cases.
 """
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pydantic import ValidationError
 
 from haproxy_template_ic.tui.models import (
@@ -344,3 +344,20 @@ class TestDashboardData:
         assert "operator" in dict_data
         assert "pods" in dict_data
         assert "templates" in dict_data
+
+    def test_pod_info_edge_cases(self):
+        """Test PodInfo edge cases to reach 100% coverage."""
+        # Test start_time validator with invalid input (line 39)
+        pod = PodInfo(
+            name="test-pod", start_time=123
+        )  # Invalid type, should return None
+        assert pod.start_time is None
+
+        # Test uptime calculation with minutes only (line 67)
+        now = datetime.now(timezone.utc)
+        start_time_minutes_ago = now - timedelta(minutes=30)
+        pod = PodInfo(name="test-pod", start_time=start_time_minutes_ago)
+        uptime = pod.uptime
+        assert "30m" in uptime  # Should show only minutes
+        assert "h" not in uptime  # No hours
+        assert "d" not in uptime  # No days
