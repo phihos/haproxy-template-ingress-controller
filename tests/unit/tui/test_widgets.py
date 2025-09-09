@@ -900,7 +900,12 @@ class TestTemplatesWidgetEnhanced:
         with patch.object(templates_widget, "clear"):
             with patch.object(templates_widget, "add_row") as mock_add_row:
                 with patch.object(templates_widget, "refresh"):
-                    templates_widget.watch_templates(sample_templates)
+                    from haproxy_template_ic.tui.models import DashboardData
+
+                    dashboard_data = DashboardData(
+                        templates={t.name: t for t in sample_templates}
+                    )
+                    templates_widget.watch_dashboard_data(dashboard_data)
 
                     # Should add row for each template
                     assert mock_add_row.call_count == len(sample_templates)

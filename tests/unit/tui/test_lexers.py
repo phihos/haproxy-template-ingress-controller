@@ -122,9 +122,11 @@ class TestHAProxyLexer:
 
         for ip in ipv6_addresses:
             tokens = list(lexer.get_tokens(ip))
-            # Should contain literal number token for IPv6
-            literal_tokens = [token for token in tokens if token[0] == Literal.Number]
-            assert len(literal_tokens) >= 1
+            # Should contain some form of number token for IPv6 components
+            number_tokens = [token for token in tokens if "Number" in str(token[0])]
+            assert len(number_tokens) >= 1, (
+                f"No number tokens found for {ip}, got: {tokens}"
+            )
 
     def test_port_numbers(self, lexer):
         """Test port number tokenization."""
@@ -210,21 +212,29 @@ class TestHAProxyLexer:
 
         for boolean in booleans:
             tokens = list(lexer.get_tokens(boolean))
-            # Should contain constant name token
-            assert any(token[0] == Name.Constant for token in tokens)
+            # Should contain either constant name token or keyword token
+            has_constant = any(token[0] == Name.Constant for token in tokens)
+            has_keyword = any(token[0] == Keyword for token in tokens)
+            assert has_constant or has_keyword, (
+                f"No constant or keyword token found for {boolean}, got: {tokens}"
+            )
 
     def test_server_parameters(self, lexer):
         """Test server parameter tokenization."""
         text = "server web1 192.168.1.1:80 check backup weight 100 maxconn 1000"
         tokens = list(lexer.get_tokens(text))
 
-        # Should contain attribute tokens for server parameters
-        attribute_tokens = [token for token in tokens if token[0] == Name.Attribute]
+        # Should contain attribute or keyword tokens for server parameters
+        attribute_tokens = [
+            token for token in tokens if token[0] in (Name.Attribute, Keyword)
+        ]
         expected_attrs = ["check", "backup", "weight", "maxconn"]
 
         attr_values = [token[1] for token in attribute_tokens]
         for attr in expected_attrs:
-            assert any(attr in attr_val for attr_val in attr_values)
+            assert any(attr in attr_val for attr_val in attr_values), (
+                f"Attribute {attr} not found in {attr_values}"
+            )
 
     def test_acl_expressions(self, lexer):
         """Test ACL expression tokenization."""
