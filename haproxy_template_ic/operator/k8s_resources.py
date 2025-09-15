@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Tuple
 import kopf
 from kopf._core.engines.indexing import OperatorIndices
 
+from haproxy_template_ic.core.validation import has_valid_attr, has_valid_nested_attr
 from haproxy_template_ic.k8s.kopf_utils import (
     IndexedResourceCollection,
     get_resource_collection_from_indices,
@@ -39,10 +40,10 @@ async def update_resource_index(
     logger.debug(f"📝 Updating index {param} for {namespace}/{name}...")
 
     # Convert kopf Body to dictionary if needed
-    body_dict = dict(body) if hasattr(body, "items") else body
+    body_dict = dict(body) if has_valid_attr(body, "items") else body
 
     # Get the watch config for this resource type
-    if memo and hasattr(memo, "config") and hasattr(memo.config, "watched_resources"):
+    if memo and has_valid_nested_attr(memo, "config", "watched_resources"):
         watch_config = memo.config.watched_resources.get(param)
     else:
         watch_config = None

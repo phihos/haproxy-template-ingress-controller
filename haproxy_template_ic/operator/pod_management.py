@@ -99,7 +99,7 @@ async def fetch_haproxy_pods(match_labels: Dict[str, str], namespace: str) -> Li
         # Filter for pods with assigned IPs (don't require Running phase during initialization)
         pods_with_ips = []
         for pod in all_pods:
-            if hasattr(pod.status, "podIP") and pod.status.podIP:
+            if pod.status.podIP:
                 pods_with_ips.append(pod)
 
         logger.info(

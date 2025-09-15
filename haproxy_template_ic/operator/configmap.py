@@ -15,6 +15,7 @@ from deepdiff import DeepDiff
 from kr8s.objects import ConfigMap
 
 from haproxy_template_ic.core.logging import autolog
+from haproxy_template_ic.core.validation import has_valid_attr
 from haproxy_template_ic.models.config import Config, config_from_dict
 from haproxy_template_ic.models.state import ApplicationState
 from haproxy_template_ic.tracing import (
@@ -38,7 +39,7 @@ __all__ = [
 async def load_config_from_configmap(configmap) -> Config:
     """Load configuration from a Kubernetes ConfigMap."""
     # Handle both kr8s ConfigMap objects and dictionary representations
-    if hasattr(configmap, "namespace"):
+    if has_valid_attr(configmap, "namespace"):
         # kr8s ConfigMap object
         add_span_attributes(
             configmap_namespace=configmap.namespace or "unknown",

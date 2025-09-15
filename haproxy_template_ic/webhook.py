@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 import kopf
 import yaml
 
+from haproxy_template_ic.core.validation import has_valid_attr
+
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +140,7 @@ def register_validation_webhooks_from_config(operator_config) -> None:
     This function logs the webhook configuration for visibility but does not
     perform actual webhook registration to avoid persistence across operator reloads.
     """
-    if not hasattr(operator_config, "watched_resources"):
+    if not has_valid_attr(operator_config, "watched_resources"):
         logger.debug("No watched_resources configuration found")
         return
 

@@ -22,6 +22,7 @@ from kopf._core.intents.registries import SmartOperatorRegistry
 from kubernetes import config
 
 from haproxy_template_ic.core.logging import setup_structured_logging
+from haproxy_template_ic.core.validation import has_valid_attr
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
 from haproxy_template_ic.debouncer import TemplateRenderDebouncer
@@ -270,7 +271,9 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
 
             # Load credentials from Secret
             secret = loop.run_until_complete(fetch_secret(secret_name, namespace))
-            secret_data = secret.data if hasattr(secret, "data") else secret["data"]
+            secret_data = (
+                secret.data if has_valid_attr(secret, "data") else secret["data"]
+            )
             loaded_credentials = Credentials.from_secret(secret_data)
 
             # Initialize with empty production URLs - pods will be discovered dynamically
