@@ -108,6 +108,10 @@ markers = [
 
 [tool.coverage.run]
 source = ["haproxy_template_ic"]
+parallel = true
+concurrency = ["thread"]
+sigterm = true
+patch = ["subprocess"]
 omit = [
     "tests/*",
     "*/tests/*",

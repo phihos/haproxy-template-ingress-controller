@@ -115,8 +115,12 @@ data:
           {#- Calculate required slots using mathematical approach #}
           {%- set active_count = active_endpoints|length %}
           # active count = {{ active_count }}
-          {%- set ratio = active_count / initial_slots %}
-          {%- set power_of_two = [0, ratio | log(2) | round(0, 'ceil')] | max %}
+          {%- if initial_slots > 0 and active_count > 0 %}
+            {%- set ratio = active_count / initial_slots %}
+            {%- set power_of_two = [0, ratio | log(2) | round(0, 'ceil')] | max %}
+          {%- else %}
+            {%- set power_of_two = 0 %}
+          {%- endif %}
           {%- set max_servers = initial_slots * (2 ** power_of_two) | int %}
           # max servers = {{ max_servers }}
     

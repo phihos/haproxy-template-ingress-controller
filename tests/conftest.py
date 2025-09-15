@@ -815,6 +815,26 @@ def operator(
     yield runner
     runner.stop()
 
+    # After stopping the operator, handle coverage collection if enabled
+    coverage_enabled = request.config.getoption("--coverage")
+    if coverage_enabled and hasattr(runner, "get_detected_coverage_file"):
+        coverage_file = runner.get_detected_coverage_file()
+
+        if coverage_file and os.path.exists(coverage_file):
+            # Validate that the coverage file has content and is readable
+            if _validate_coverage_file(coverage_file):
+                file_size = os.path.getsize(coverage_file)
+                print(f"Found e2e coverage data: {coverage_file} ({file_size} bytes)")
+
+                # Store the coverage file in the session for the pytest hook
+                if not hasattr(request.session, "_e2e_coverage_files"):
+                    request.session._e2e_coverage_files = []
+                request.session._e2e_coverage_files.append(coverage_file)
+            else:
+                print(f"Warning: Coverage file validation failed: {coverage_file}")
+        else:
+            print("No e2e coverage data found for this test")
+
 
 # =============================================================================
 # PRODUCTION HAPROXY FIXTURES
@@ -1741,13 +1761,76 @@ def validation_service(k8s_client, k8s_namespace, validation_deployment, telepre
 @pytest.fixture(scope="function")
 def collect_coverage(request, operator):
     """
-    Collect coverage data from the local operator if --coverage flag is enabled.
+    Coverage collection fixture - now handled directly in operator fixture.
 
-    The LocalOperatorRunner handles coverage collection automatically when
-    coverage is enabled, so this fixture just needs to exist for compatibility.
+    This fixture is kept for backward compatibility with existing tests
+    but the actual coverage collection logic has been moved to the operator
+    fixture to ensure proper timing after process termination.
     """
-    yield
-    # Coverage is handled by LocalOperatorRunner.stop() method
+    # Coverage collection is now handled in the operator fixture teardown
+    # This fixture just needs to exist for tests that reference it
+    return None
+
+
+def _validate_coverage_file(coverage_file: str) -> bool:
+    """
+    Validate that a coverage file is properly formatted and contains data.
+
+    Args:
+        coverage_file: Path to the coverage file to validate
+
+    Returns:
+        True if the file is valid, False otherwise
+    """
+    try:
+        # Check file exists and has size
+        if not os.path.exists(coverage_file):
+            print(f"Coverage file does not exist: {coverage_file}")
+            return False
+
+        file_size = os.path.getsize(coverage_file)
+        if file_size == 0:
+            print(f"Coverage file is empty: {coverage_file}")
+            return False
+
+        print(f"Validating coverage file: {coverage_file} ({file_size} bytes)")
+
+        # Try to read the file with coverage.py to ensure it's valid
+        try:
+            import coverage
+
+            # Create a temporary coverage instance to validate the file
+            cov = coverage.Coverage(data_file=coverage_file)
+
+            # Try to load the data - this will fail if the file is corrupted
+            cov.load()
+
+            # Get some basic info about the coverage data
+            data = cov.get_data()
+            measured_files = data.measured_files()
+
+            if not measured_files:
+                print(f"Coverage file contains no measured files: {coverage_file}")
+                return False
+
+            print(
+                f"Coverage file validation passed: {len(measured_files)} measured files"
+            )
+            return True
+
+        except ImportError:
+            print(
+                f"Warning: coverage module not available for validation, accepting file: {coverage_file}"
+            )
+            return True  # If coverage module isn't available, trust the file exists and has size
+
+        except Exception as e:
+            print(f"Coverage file validation failed - not readable by coverage.py: {e}")
+            return False
+
+    except Exception as e:
+        print(f"Coverage file validation error: {e}")
+        return False
 
 
 def pytest_runtest_teardown(item, nextitem):
@@ -1829,3 +1912,85 @@ def pytest_runtest_teardown(item, nextitem):
                 f"Unexpected error in pod log retrieval for test {item.name}: {e}"
             )
             print(f"⚠️ Failed to retrieve pod logs for debugging: {e}")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """
+    Combine e2e coverage data at the end of the test session.
+
+    This hook runs after all tests have completed and combines
+    any coverage data files from e2e tests that used LocalOperatorRunner.
+    """
+    # Check if coverage collection was enabled
+    if not hasattr(session.config, "getoption") or not session.config.getoption(
+        "--coverage", default=False
+    ):
+        return
+
+    # Check if we have any e2e coverage files to combine
+    e2e_coverage_files = getattr(session, "_e2e_coverage_files", [])
+    if not e2e_coverage_files:
+        print("No e2e coverage data to combine")
+        return
+
+    print(f"Combining {len(e2e_coverage_files)} e2e coverage files...")
+    print(f"E2E coverage files detected: {e2e_coverage_files}")
+
+    try:
+        # Use coverage combine to merge all e2e coverage files
+        import subprocess
+        import sys
+
+        # Find all coverage files (main + e2e)
+        all_coverage_files = []
+
+        # Look for main coverage file
+        if os.path.exists(".coverage"):
+            main_size = os.path.getsize(".coverage")
+            all_coverage_files.append(".coverage")
+            print(f"Found main coverage file: .coverage ({main_size} bytes)")
+        else:
+            print("No main coverage file found")
+
+        # Add e2e coverage files (with validation)
+        for coverage_file in e2e_coverage_files:
+            if os.path.exists(coverage_file):
+                file_size = os.path.getsize(coverage_file)
+                all_coverage_files.append(coverage_file)
+                print(f"Adding e2e coverage file: {coverage_file} ({file_size} bytes)")
+            else:
+                print(f"Warning: E2E coverage file missing: {coverage_file}")
+
+        if len(all_coverage_files) <= 1:
+            print("Only one coverage file found, no combining needed")
+            return
+
+        print(
+            f"Combining {len(all_coverage_files)} coverage files: {[os.path.basename(f) for f in all_coverage_files]}"
+        )
+
+        # Run coverage combine
+        result = subprocess.run(
+            [sys.executable, "-m", "coverage", "combine"] + all_coverage_files,
+            capture_output=True,
+            text=True,
+            cwd=os.getcwd(),
+        )
+
+        if result.returncode == 0:
+            print("✅ Successfully combined e2e coverage data")
+
+            # Clean up individual e2e coverage files
+            for coverage_file in e2e_coverage_files:
+                try:
+                    if os.path.exists(coverage_file) and coverage_file != ".coverage":
+                        os.remove(coverage_file)
+                        print(f"Cleaned up {coverage_file}")
+                except OSError as e:
+                    print(f"Warning: Could not remove {coverage_file}: {e}")
+        else:
+            print(f"❌ Failed to combine coverage data: {result.stderr}")
+            print(f"stdout: {result.stdout}")
+
+    except Exception as e:
+        print(f"❌ Error combining e2e coverage data: {e}")

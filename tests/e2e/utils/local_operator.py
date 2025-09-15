@@ -7,6 +7,7 @@ This approach dramatically improves test performance by eliminating
 container build/deploy cycles.
 """
 
+import glob
 import os
 import signal
 import subprocess
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from queue import Empty, Queue
 from typing import List, Optional, Tuple
 
@@ -67,12 +69,24 @@ class LocalOperatorRunner:
         else:
             self.temp_dir = None
 
+        self.coverage_file: Optional[str] = None
+
+        # Determine project root directory for coverage file operations
+        import haproxy_template_ic
+
+        self.project_root = os.path.dirname(
+            os.path.dirname(haproxy_template_ic.__file__)
+        )
+
         self.process: Optional[subprocess.Popen] = None
         self.log_queue: Queue = Queue()
         self.log_thread: Optional[threading.Thread] = None
         self.logs: List[Tuple[float, str]] = []  # (timestamp, log_line) pairs
         self.exit_code: Optional[int] = None
         self.exception: Optional[Exception] = None
+        self.detected_coverage_file: Optional[str] = (
+            None  # Coverage file found after termination
+        )
 
     def __enter__(self):
         """Start the operator process."""
@@ -104,6 +118,19 @@ class LocalOperatorRunner:
 
         # Build command
         if self.collect_coverage:
+            # Create unique coverage file name for this test run
+            test_id = str(uuid.uuid4())[:8]
+            self.coverage_file = os.path.join(
+                self.project_root, f".coverage.e2e.{test_id}"
+            )
+
+            # Set environment variables for coverage
+            env["COVERAGE_FILE"] = self.coverage_file
+            env["COVERAGE_PROCESS_START"] = os.path.join(
+                self.project_root, "pyproject.toml"
+            )
+
+            # Use coverage run with sigterm support
             cmd = [
                 sys.executable,
                 "-m",
@@ -134,11 +161,6 @@ class LocalOperatorRunner:
             configmap=self.configmap_name,
         )
 
-        # Determine project root directory
-        import haproxy_template_ic
-
-        project_root = os.path.dirname(os.path.dirname(haproxy_template_ic.__file__))
-
         # Start the process
         self.process = subprocess.Popen(
             cmd,
@@ -148,7 +170,7 @@ class LocalOperatorRunner:
             text=True,
             bufsize=1,  # Line buffered
             preexec_fn=os.setsid if os.name != "nt" else None,  # Create process group
-            cwd=project_root,  # Ensure correct working directory
+            cwd=self.project_root,  # Ensure correct working directory
         )
 
         # Start log reader thread
@@ -195,6 +217,17 @@ class LocalOperatorRunner:
             # Process already terminated
             pass
 
+        # After process termination, look for coverage file if coverage was enabled
+        if self.collect_coverage:
+            try:
+                self._detect_coverage_file_after_termination()
+            except Exception as e:
+                logger.error(
+                    f"Failed to detect coverage file after termination: {e}",
+                    exc_info=True,
+                )
+
+        # Coverage data is preserved in project root, don't clean it up here
         # Clean up temporary directory
         if self.temp_dir and os.path.exists(self.temp_dir):
             import shutil
@@ -307,6 +340,102 @@ class LocalOperatorRunner:
     def is_running(self) -> bool:
         """Check if the operator process is still running."""
         return self.process is not None and self.process.poll() is None
+
+    def _detect_coverage_file_after_termination(self):
+        """
+        Detect coverage file after process termination.
+
+        This method should be called immediately after process.wait() completes
+        to ensure the coverage file has been written by the subprocess.
+        """
+        if not self.collect_coverage or not self.coverage_file:
+            logger.debug("Coverage collection disabled or no coverage file configured")
+            return
+
+        try:
+            logger.info(
+                f"Detecting coverage file after process termination (project_root: {self.project_root})"
+            )
+
+            # First try exact pattern matching (most reliable)
+            base_name = self.coverage_file
+            pattern = f"{base_name}.*"
+            logger.debug(f"Searching for coverage files with pattern: {pattern}")
+
+            matching_files = glob.glob(pattern)
+            if matching_files:
+                # Sort by modification time to get the most recent
+                matching_files.sort(key=os.path.getmtime, reverse=True)
+                self.detected_coverage_file = matching_files[0]
+                file_size = os.path.getsize(self.detected_coverage_file)
+                logger.info(
+                    f"Found coverage file by pattern: {self.detected_coverage_file} ({file_size} bytes)"
+                )
+                return
+
+            # If no exact match, look for very recent e2e coverage files
+            # This is a fallback for when coverage.py doesn't use our exact naming
+            e2e_pattern = os.path.join(self.project_root, ".coverage.e2e.*")
+            logger.debug(
+                f"Fallback: searching for e2e files with pattern: {e2e_pattern}"
+            )
+
+            all_e2e_files = glob.glob(e2e_pattern)
+            logger.debug(
+                f"Found {len(all_e2e_files)} e2e coverage files: {all_e2e_files}"
+            )
+
+            if all_e2e_files:
+                # Sort by modification time to get the most recent files first
+                all_e2e_files.sort(key=os.path.getmtime, reverse=True)
+
+                # Only consider files created in the last 10 seconds (just terminated)
+                current_time = time.time()
+                for file_path in all_e2e_files:
+                    try:
+                        file_mtime = os.path.getmtime(file_path)
+                        age_seconds = current_time - file_mtime
+                        logger.debug(
+                            f"Checking file {file_path}: age {age_seconds:.1f}s"
+                        )
+
+                        if age_seconds < 10:  # Very recent file
+                            file_size = os.path.getsize(file_path)
+                            self.detected_coverage_file = file_path
+                            logger.info(
+                                f"Found recent coverage file: {self.detected_coverage_file} (age: {age_seconds:.1f}s, {file_size} bytes)"
+                            )
+                            return
+                    except OSError as e:
+                        logger.warning(f"Error checking file {file_path}: {e}")
+
+            # Check if the exact file exists (fallback)
+            if os.path.exists(self.coverage_file):
+                file_size = os.path.getsize(self.coverage_file)
+                self.detected_coverage_file = self.coverage_file
+                logger.info(
+                    f"Found exact coverage file: {self.detected_coverage_file} ({file_size} bytes)"
+                )
+                return
+
+            logger.warning(
+                f"No coverage file found after process termination (expected: {self.coverage_file})"
+            )
+
+        except Exception as e:
+            logger.error(f"Error during coverage file detection: {e}", exc_info=True)
+
+    def get_detected_coverage_file(self) -> Optional[str]:
+        """
+        Get the coverage file that was detected after process termination.
+
+        This should be called after the operator has been stopped to get
+        the coverage file that was definitely written by the terminated process.
+
+        Returns:
+            Path to the detected coverage file, or None if not found
+        """
+        return self.detected_coverage_file
 
 
 def wait_for_operator_ready(runner: LocalOperatorRunner, timeout: int = 60) -> None:
