@@ -8,15 +8,8 @@ object, eliminating defensive programming patterns throughout the codebase.
 import asyncio
 from typing import Any, Optional
 
+from kopf._core.engines.indexing import OperatorIndices
 from pydantic import BaseModel, Field
-
-# Import all types that will be used in model fields
-try:
-    from kopf._core.engines.indexing import OperatorIndices
-except ImportError:
-    # Fallback for when kopf is not available during testing or development
-    OperatorIndices = Any
-
 
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer

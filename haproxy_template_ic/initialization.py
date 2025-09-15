@@ -11,7 +11,7 @@ import logging
 import os
 import shutil
 import tempfile
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import kopf
 import structlog
@@ -23,12 +23,10 @@ from kubernetes import config
 
 from haproxy_template_ic.core.logging import setup_structured_logging
 from haproxy_template_ic.credentials import Credentials
-from haproxy_template_ic.dataplane.models import get_production_urls_from_index
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
 from haproxy_template_ic.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext, TemplateContext
-from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
 from haproxy_template_ic.models.state import (
     ApplicationState,
     ConfigurationState,
@@ -45,7 +43,6 @@ from haproxy_template_ic.operator.configmap import (
 )
 from haproxy_template_ic.operator.k8s_resources import setup_resource_watchers
 from haproxy_template_ic.operator.pod_management import (
-    fetch_haproxy_pods,
     setup_haproxy_pod_indexing,
 )
 from haproxy_template_ic.operator.secrets import fetch_secret, handle_secret_change
@@ -276,58 +273,9 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             secret_data = secret.data if hasattr(secret, "data") else secret["data"]
             loaded_credentials = Credentials.from_secret(secret_data)
 
-            # Try to discover HAProxy pods for production URLs, but don't fail if none found
-            logger.info(
-                "🔍 Attempting to discover HAProxy pods for initial configuration..."
-            )
-            try:
-                discovered_pods = loop.run_until_complete(
-                    fetch_haproxy_pods(
-                        match_labels=loaded_config.pod_selector.match_labels,
-                        namespace=namespace,
-                    )
-                )
-
-                # Convert pods to dict format for IndexedResourceCollection
-                pods_dict = {}
-                for pod in discovered_pods:
-                    # Create key similar to what kopf indexing would create
-                    key = (pod.metadata.namespace, pod.metadata.name)
-                    # Convert pod object to dict format
-                    pod_dict = {
-                        "metadata": {
-                            "name": pod.metadata.name,
-                            "namespace": pod.metadata.namespace,
-                            "annotations": getattr(pod.metadata, "annotations", {})
-                            or {},
-                        },
-                        "status": {
-                            "phase": getattr(pod.status, "phase", ""),
-                            "podIP": getattr(pod.status, "podIP", ""),
-                        },
-                    }
-                    pods_dict[key] = pod_dict
-
-                # Create indexed collection and extract production URLs
-                if pods_dict:
-                    pod_collection = IndexedResourceCollection.from_dict(pods_dict)
-                    production_urls, url_to_pod_name = get_production_urls_from_index(
-                        pod_collection
-                    )
-                    logger.info(
-                        f"✅ Discovered {len(production_urls)} HAProxy production URLs: {production_urls}"
-                    )
-                else:
-                    production_urls, url_to_pod_name = [], {}
-                    logger.info(
-                        "ℹ️ No HAProxy pods with IPs found during initialization - will discover dynamically"
-                    )
-
-            except Exception as e:
-                logger.info(
-                    f"ℹ️ Pod discovery during initialization failed: {e} - will discover dynamically"
-                )
-                production_urls, url_to_pod_name = [], {}
+            # Initialize with empty production URLs - pods will be discovered dynamically
+            production_urls: List[str] = []
+            url_to_pod_name: Dict[str, str] = {}
 
         except Exception as e:
             logger.error(f"❌ Failed to load configuration or credentials: {e}")
