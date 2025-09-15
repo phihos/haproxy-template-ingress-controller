@@ -31,14 +31,10 @@ curl http://localhost:8080/healthz
 
 ### Runtime Inspection
 
-Use the TUI dashboard for interactive monitoring:
+Check logs for detailed information:
 
 ```bash
-# Interactive dashboard
-kubectl exec -it deployment/haproxy-template-ic -- \
-  uv run haproxy-template-ic tui
-
-# Or check logs for detailed information
+# Check logs for detailed information
 kubectl logs -f deployment/haproxy-template-ic
 ```
 
@@ -81,7 +77,7 @@ data:
     tracing:
       enabled: true                             # Enable OpenTelemetry tracing
       jaeger_endpoint: "jaeger:14268"          # Jaeger collector endpoint
-      sample_rate: 0.1                         # 10% sampling for production
+      sample_rate: 0.1                         # 10% sampling for reduced overhead
       console_export: false                    # Console export for debugging
 ```
 

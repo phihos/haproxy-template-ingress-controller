@@ -35,20 +35,20 @@ tests/fixtures/    # Test data and configurations
 
 #### ⚡ Performance Optimization with --keep-cluster
 
-**IMPORTANT**: Use `--keep-cluster` to dramatically speed up repeated E2E test runs by avoiding expensive cluster recreation:
+**IMPORTANT**: Use `--keep-cluster` to reuse existing clusters for repeated E2E test runs:
 
 ```bash
-# First run: Creates cluster (~60-120s setup time)
+# First run: Creates cluster
 uv run pytest tests/e2e/test_core_operator.py::test_basic_init --keep-cluster
 
-# Subsequent runs: Reuses existing cluster (~5-10s setup time) 
+# Subsequent runs: Reuses existing cluster
 uv run pytest tests/e2e/test_config_management.py --keep-cluster
 
 # Manual cleanup when done
 kind delete cluster --name pytest-kind
 ```
 
-**Speed improvement**: 60-120 seconds saved per test run by reusing the Kind cluster.
+**Benefit**: Avoids cluster recreation overhead by reusing the existing Kind cluster.
 
 **How it works**: The `--keep-cluster` flag (provided by pytest-kind) prevents cluster deletion in the teardown phase, allowing subsequent test runs to reuse the existing cluster.
 
@@ -62,7 +62,7 @@ kind delete cluster --name pytest-kind
 
 #### E2E Test Features
 - **Real Kubernetes**: Creates temporary clusters for full system testing
-- **Telepresence integration**: LocalOperatorRunner runs operators locally via Telepresence for 60-80% faster iteration
+- **Telepresence integration**: LocalOperatorRunner runs operators locally via Telepresence for rapid iteration
 - **Time-based log analysis**: Millisecond-precision log searching with `since_milliseconds` parameter
 - **Resource lifecycle**: Tests ConfigMap updates, pod discovery, template rendering
 - **Webhook validation**: Tests admission controllers and error handling
@@ -86,19 +86,19 @@ kind delete cluster --name pytest-kind
 
 ### Docker Build Optimization
 
-The Dockerfile is optimized for fast iterative development and efficient CI/CD builds:
+The Dockerfile is optimized for iterative development and efficient CI/CD builds:
 
-#### Build Performance & Speed Features
+#### Build Optimization Features
 - **Multi-stage caching**: Separates system dependencies, Python dependencies, and application code for maximum cache reuse
 - **Optimized layer ordering**: Least frequently changed items first (system packages → Python deps → code)
 - **BuildKit cache mounts**: Shared caches across builds with proper cache IDs
-- **Minimized context**: Comprehensive `.dockerignore` excludes development files (~60% context reduction)
+- **Minimized context**: Comprehensive `.dockerignore` excludes development files
 
-**Speed Improvements:**
-- **First build**: ~10-20% faster due to parallelized stages
-- **Code changes only**: ~60-80% faster due to dependency layer caching
-- **Dependency updates**: ~30-40% faster due to optimized layer structure
-- **CI/CD builds**: ~40-50% faster with registry cache
+**Build Improvements:**
+- **Parallelized stages**: Multi-stage builds with concurrent execution
+- **Layer caching**: Code changes benefit from cached dependency layers
+- **Optimized structure**: Dependencies and application code in separate layers
+- **CI/CD optimization**: Registry cache support for shared builds
 
 #### Recommended Build Commands
 ```bash
@@ -142,7 +142,6 @@ docker build \
 
 ### Application
 - **Run operator**: `uv run haproxy-template-ic run --configmap-name=<name>` (or use `version` subcommand)
-- **Launch TUI dashboard**: `uv run haproxy-template-ic tui` (Terminal User Interface for monitoring)
 - **Monitoring endpoints** (require port-forward):
   - Metrics: `curl http://localhost:9090/metrics`
   - Health: `curl http://localhost:8080/healthz`
@@ -170,11 +169,6 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
   - `synchronizer.py`: Configuration deployment logic
   - `models.py`: Dataplane API models
   - `utils.py`: Dataplane utilities and helpers
-- **`haproxy_template_ic/tui/`**: Terminal User Interface dashboard
-  - `app.py`: Main TUI application
-  - `launcher.py`: TUI launcher and entry point
-  - `screens.py`: TUI screen definitions
-  - `widgets/`: Widget components for different views
 - **`haproxy_template_ic/core/`**: Core functionality (`logging.py`: Structured logging with context injection)
 - **`haproxy_template_ic/k8s/`**: Kubernetes integration utilities
   - `field_filter.py`: Resource field filtering
@@ -226,7 +220,7 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 
 ### Current Implementation Status
 
-✅ Complete: Watch arbitrary K8s resources, template HAProxy map/config/certificate files, template snippet system with `{% include %}` support, validating admission webhooks, dataplane API synchronization with validation/deployment, Prometheus metrics, reliable operations with error handling/recovery, distributed tracing with OpenTelemetry, high-performance resource indexing with O(1) lookups using IndexedResourceCollection
+✅ Complete: Watch arbitrary K8s resources, template HAProxy map/config/certificate files, template snippet system with `{% include %}` support, validating admission webhooks, dataplane API synchronization with validation/deployment, Prometheus metrics, reliable operations with error handling/recovery, distributed tracing with OpenTelemetry, resource indexing with O(1) lookups using IndexedResourceCollection
 
 ## Webhook Validation System
 
@@ -259,7 +253,7 @@ The `index_by` parameter in `watched_resources` configures custom indexing for O
 - Bracket notation: `metadata.labels['kubernetes.io/service-name']`
 - Array indexing: `spec.rules[0].host`, negative indexing: `spec.rules[-1].host`
 
-**Library Choice**: `python-jsonpath` selected for JSONPath compliance, active maintenance, comprehensive syntax, good performance (>10k ops/sec).
+**Library Choice**: `python-jsonpath` selected for JSONPath compliance, active maintenance, and comprehensive syntax support.
 
 **Advanced indexing examples:**
 - Service by name: `["metadata.labels['kubernetes.io/service-name']"]`
@@ -268,7 +262,7 @@ The `index_by` parameter in `watched_resources` configures custom indexing for O
 
 ### Field Filtering
 
-The `watched_resources_ignore_fields` configuration omits unnecessary fields from indexed resources to reduce memory usage and improve performance.
+The `watched_resources_ignore_fields` configuration omits unnecessary fields from indexed resources to reduce memory usage.
 
 **Configuration**: Add JSONPath expressions for fields to remove:
 ```yaml
@@ -287,7 +281,7 @@ watched_resources_ignore_fields:
 - `metadata.annotations['kubectl.kubernetes.io/last-applied-configuration']`: Last applied config (can be large)
 - `status`: Status information (if not used in templates)
 
-**Performance**: Field filtering during resource indexing. Deep copy preserves originals. JSONPath expressions compiled/cached (256 paths max). Same ignore_fields for all types. Invalid JSONPath validated at load.
+**Implementation**: Field filtering during resource indexing. Deep copy preserves originals. JSONPath expressions compiled/cached (256 paths max). Same ignore_fields for all types. Invalid JSONPath validated at load.
 
 ```yaml
 data:
@@ -353,10 +347,10 @@ data:
 
 ## Important Architectural Decisions
 
-### HAProxy Version Requirement: 3.1+ (Critical for Performance)
+### HAProxy Version Requirement: 3.1+ (Critical for Startup)
 **Decision**: All HAProxy containers MUST use `haproxytech/haproxy-alpine:3.1` or newer.
 
-**Rationale**: Version 3.0 dataplaneapi has 30-60s startup vs. 3.1+ starts in 3-5s (10x faster). HAProxy core unaffected - dataplaneapi issue only. Slow startup causes routing failures. **Do NOT use 3.0** despite LTS.
+**Rationale**: Version 3.0 dataplaneapi has slow startup (30-60s) vs. 3.1+ which starts in 3-5s. HAProxy core unaffected - dataplaneapi issue only. Slow startup causes routing failures. **Do NOT use 3.0** despite LTS.
 
 **Measured dataplaneapi startup times:**
 - Version 3.0: 30-60+ seconds (requires failureThreshold: 10)
@@ -395,7 +389,7 @@ haproxy:
 - Operation not within a transaction
 - Proper stats socket and master runtime configuration
 
-**Benefits**: Zero reloads for most server operations, instant updates for map/ACL entries, improved availability, better performance, smart fallback to transaction/reload for complex configurations.
+**Benefits**: Zero reloads for most server operations, instant updates for map/ACL entries, improved availability, smart fallback to transaction/reload for complex configurations.
 
 **Monitoring**: Look for "server added through runtime" log messages from dataplane API.
 
@@ -474,7 +468,7 @@ OpenTelemetry tracing for end-to-end observability across template rendering and
 **Configuration**: Tracing settings configured via ConfigMap
 **Operations traced**: Template rendering, dataplane API, Kubernetes operations, pod discovery
 **Development**: Set `tracing.console_export: true` in ConfigMap for console output
-**Production**: Use `tracing.sample_rate: 0.1` in ConfigMap for performance, deploy Jaeger collector
+**Production**: Use `tracing.sample_rate: 0.1` in ConfigMap for reduced overhead, deploy Jaeger collector
 
 ## Dataplane API Integration
 
@@ -486,51 +480,18 @@ Uses official OpenAPI-generated HAProxy Dataplane API v3 client (218 endpoints, 
 **Error handling**: Validation failures stop deployment, retry logic, version tracking
 **Resource Indexing**: IndexedResourceCollection provides O(1) resource lookups using `from_kopf_index()`
 
-## Terminal User Interface (TUI) Dashboard
-
-The TUI provides a modern, interactive terminal dashboard for monitoring the HAProxy Template IC operator in real-time.
-
-### Features & Usage
-
-- **Real-time monitoring**: Live updates of operator status, pod health, and performance metrics
-- **Widget-based architecture**: Organized views (HeaderWidget, ActivityWidget, PodsWidget, ResourcesWidget, TemplatesWidget, PerformanceWidget)
-- **Interactive navigation**: Keyboard shortcuts for efficient dashboard usage
-- **Template inspection**: Built-in template editor and renderer for debugging
-- **Activity tracking**: Visual timeline of operator events and resource changes
-
-```bash
-# Launch TUI dashboard
-uv run haproxy-template-ic tui
-
-# With custom options
-uv run haproxy-template-ic tui --namespace default --refresh 10 --deployment-name my-operator
-```
-
-### TUI Options & Shortcuts
-
-**Options:**
-- `--namespace`: Kubernetes namespace to monitor (defaults to current kubectl context)
-- `--context`: Kubernetes context to use
-- `--refresh`: Refresh interval in seconds (default: 5)
-- `--deployment-name`: Name of the operator deployment (default: haproxy-template-ic)
-
-**Keyboard Shortcuts:**
-- `q`: Quit the application, `r`: Force refresh all data, `t`: Open template inspector, `d`: Toggle debug mode, `h`: Show help screen, `Tab`/`Shift+Tab`: Navigate between widgets
-
-**Template Inspector**: Provides syntax highlighting for Jinja2 templates, live template rendering with current resource data, error highlighting and validation, resource context browser.
 
 ## Monitoring and Observability
 
 **Structured Logging**: Uses structlog with operation correlation, component context, JSON output (set `logging.structured: true` in ConfigMap)
 **Prometheus Metrics**: Port 9090, tracks application/resources/templates/dataplane/errors
-**TUI Dashboard**: Interactive terminal interface for real-time monitoring and debugging
 
 ## Reliability and Error Handling
 
 **Error recovery**: Graceful degradation, validation isolation, state consistency, operational visibility
 **Validation-first approach**: Configuration tested before production deployment
 **Robust deployment**: Smart change detection, version tracking, deployment rollback
-**Operational monitoring**: Comprehensive metrics for debugging and performance tracking
+**Operational monitoring**: Comprehensive metrics for debugging and operational tracking
 
 ## Configuration
 
@@ -632,7 +593,7 @@ auth = credentials.dataplane  # Clear and type-safe
 **Kind Development:**
 1. Setup: `bash ./scripts/start-dev-env.sh up`, optionally with `--skip-build` or `--verbose`
 2. Monitor: `bash ./scripts/start-dev-env.sh logs` or `status`
-3. Debug: Use TUI dashboard or check logs for debugging
+3. Debug: Check logs for debugging
 4. **CRITICAL: Code Changes**: `bash ./scripts/start-dev-env.sh restart` - MANDATORY after ANY code changes to rebuild Docker image and reload to kind cluster
 5. Clean: `bash ./scripts/start-dev-env.sh down` to remove cluster
 
@@ -658,12 +619,11 @@ No Docker rebuilds needed for code changes. Application runs locally with full c
 - **Time-based search**: `get_log_position_at_time(milliseconds_ago)` for precise log analysis
 
 **Other debugging tools:**
-- TUI Dashboard: `uv run haproxy-template-ic tui` for real-time interactive monitoring
 - Metrics: Port-forward 9090, `curl /metrics`
 - Tracing: Set `tracing.enabled: true` and `tracing.console_export: true` in ConfigMap
 - Logging: Set `logging.structured: true` in ConfigMap
 - Webhooks: Enable via ConfigMap webhook configuration, test with `kubectl apply`
-- Templates: Watch logs, use `dump config`, test incrementally, or use TUI template inspector
+- Templates: Watch logs, use `dump config`, test incrementally
 - Dataplane: Access via Telepresence networking (e.g., `haproxy-template-ic:5555`)
 
 ## Troubleshooting
@@ -706,7 +666,7 @@ No Docker rebuilds needed for code changes. Application runs locally with full c
 - Use `kubectl apply --dry-run=server` to test webhook validation
 - Check controller logs for template rendering errors
 - Validate Jinja2 syntax with `--webhook-enabled=true`
-- Check logs or use TUI template inspector to inspect rendered templates
+- Check logs to inspect rendered templates
 
 **ConfigMap Reload Issues:**
 - Configuration changes now properly trigger operator reload without infinite loops

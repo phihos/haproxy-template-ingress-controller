@@ -310,9 +310,9 @@ snippets = send_socket_command(operator, "get template_snippets backend-name")
 
 ### Performance Benefits
 
-**Development Speed:**
-- **60-80% faster iteration** - No Docker build/deploy cycles
-- **Real-time debugging** - Immediate code changes with restart
+**Development Benefits:**
+- **No build cycles** - Operator runs locally without Docker build/deploy
+- **Real-time debugging** - Immediate code changes with restart  
 - **Precise timing control** - Millisecond-level test timing
 - **Race condition detection** - Time-aware log analysis prevents flaky tests
 
