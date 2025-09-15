@@ -14,6 +14,7 @@ from kr8s.asyncio.objects import Pod
 from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
 from haproxy_template_ic.core.logging import autolog
 from haproxy_template_ic.models.state import ApplicationState
+from haproxy_template_ic.operator.utils import get_current_namespace
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -213,8 +214,6 @@ def setup_haproxy_pod_indexing(memo: ApplicationState) -> None:
     Args:
         memo: Kopf memo object containing configuration
     """
-    from haproxy_template_ic.operator.utils import get_current_namespace
-
     pod_selector = memo.config.pod_selector
     current_namespace = get_current_namespace()
 

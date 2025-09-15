@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from kopf._core.engines.indexing import OperatorIndices
 
-from haproxy_template_ic.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
 from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.models.config import Config
@@ -78,7 +78,8 @@ async def managed_debouncer(*args, **kwargs):
 def mock_render_haproxy_templates():
     """Mock the render_haproxy_templates function."""
     with patch(
-        "haproxy_template_ic.debouncer.render_haproxy_templates", new_callable=AsyncMock
+        "haproxy_template_ic.operator.debouncer.render_haproxy_templates",
+        new_callable=AsyncMock,
     ) as mock:
         # Make the mock return successfully without doing anything
         mock.return_value = None
@@ -212,7 +213,7 @@ class TestTemplateRenderDebouncer:
         first_task = debouncer._task
 
         # Starting again should not create a new task
-        with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
+        with patch("haproxy_template_ic.operator.debouncer.logger") as mock_logger:
             await debouncer.start()
             mock_logger.warning.assert_called_with("Debouncer already running")
 
@@ -316,7 +317,7 @@ class TestDebouncerWarnings:
     def test_warning_for_very_long_max_interval(self, mock_render_haproxy_templates):
         """Test that a warning is logged for max_interval > 3600."""
 
-        with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
+        with patch("haproxy_template_ic.operator.debouncer.logger") as mock_logger:
             _ = create_debouncer(
                 min_interval=60,
                 max_interval=7200,  # 2 hours
@@ -418,7 +419,7 @@ class TestDebouncerEdgeCases:
             return await original_wait_for(*args, **kwargs)
 
         with patch("asyncio.wait_for", mock_wait_for):
-            with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
+            with patch("haproxy_template_ic.operator.debouncer.logger") as mock_logger:
                 await debouncer.start()
 
                 try:
@@ -463,7 +464,7 @@ class TestDebouncerEdgeCases:
         await asyncio.sleep(0.005)
 
         # Now try to stop - it should timeout and cancel
-        with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
+        with patch("haproxy_template_ic.operator.debouncer.logger") as mock_logger:
             await debouncer.stop()
 
             # Should have warned about ungraceful stop

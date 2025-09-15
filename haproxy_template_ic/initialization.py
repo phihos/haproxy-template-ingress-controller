@@ -25,7 +25,7 @@ from haproxy_template_ic.core.logging import setup_structured_logging
 from haproxy_template_ic.core.validation import has_valid_attr
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
-from haproxy_template_ic.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext, TemplateContext
 from haproxy_template_ic.models.state import (

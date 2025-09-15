@@ -6,6 +6,7 @@ via the Dataplane API, including validation and deployment.
 """
 
 import logging
+import traceback
 from typing import Any
 
 from kopf._core.engines.indexing import Index, OperatorIndices
@@ -181,8 +182,6 @@ async def synchronize_with_haproxy_instances(
     except DataplaneAPIError as e:
         metrics.record_error("dataplane_api_failed", "dataplane")
         logger.error(f"❌ Dataplane API error: {e}")
-        import traceback
-
         logger.error(traceback.format_exc())
 
     except Exception as e:

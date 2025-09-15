@@ -42,6 +42,11 @@ watched_resources_total = Gauge(
     ["resource_type", "namespace"],
 )
 
+total_watched_resources = Gauge(
+    "haproxy_template_ic_total_watched_resources",
+    "Total number of all watched Kubernetes resources",
+)
+
 rendered_templates_total = Counter(
     "haproxy_template_ic_rendered_templates_total",
     "Total number of templates rendered",
@@ -222,6 +227,28 @@ class MetricsCollector:
                 watched_resources_total.labels(
                     resource_type=resource_type, namespace=namespace
                 ).set(count)
+
+    def record_resource_type_count(self, resource_type: str, count: int) -> None:
+        """Record the count of resources for a specific resource type.
+
+        Args:
+            resource_type: The type of resource (e.g., 'ingresses', 'services')
+            count: The total count of resources for this type
+        """
+        # Note: This is a simplified version that doesn't break down by namespace
+        # If namespace breakdown is needed, use record_watched_resources instead
+        # For now, we'll use a default namespace entry to maintain compatibility
+        watched_resources_total.labels(
+            resource_type=resource_type, namespace="all"
+        ).set(count)
+
+    def record_resource_count(self, total_count: int) -> None:
+        """Record the total count of all watched resources.
+
+        Args:
+            total_count: The total count of all resources across all types
+        """
+        total_watched_resources.set(total_count)
 
     def record_template_render(
         self, template_type: str, status: str = "success"

@@ -723,11 +723,11 @@ class DataplaneClient:
 
         # Convert the generated model to dict format expected by existing code
         result = {}
-        if hasattr(info_response, "haproxy") and info_response.haproxy:
+        if info_response.haproxy:
             result.update(info_response.haproxy.to_dict())
-        if hasattr(info_response, "api") and info_response.api:
+        if info_response.api:
             result.update(info_response.api.to_dict())
-        if hasattr(info_response, "system") and info_response.system:
+        if info_response.system:
             result.update(info_response.system.to_dict())
 
         return result
@@ -2412,7 +2412,7 @@ class DataplaneClient:
                     fetch_apis = _ELEMENT_FETCH_APIS.get(section_type, {})
 
                     for section in sections:
-                        if hasattr(section, "name") and section.name:
+                        if section.name:
                             section_name = section.name
                             nested_elements[section_key][section_name] = {}
 

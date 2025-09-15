@@ -8,6 +8,8 @@ memo object handling, and configuration management.
 import logging
 import os
 
+from kubernetes import config
+
 from haproxy_template_ic.constants import NAMESPACE_FILE_PATH
 from haproxy_template_ic.models.state import ApplicationState
 
@@ -43,8 +45,6 @@ def get_current_namespace() -> str:
 
     # Try kubeconfig context
     try:
-        from kubernetes import config
-
         contexts, active_context = config.list_kube_config_contexts()
         namespace = active_context["context"].get("namespace", "default")
         if isinstance(namespace, str) and namespace:

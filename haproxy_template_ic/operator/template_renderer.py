@@ -16,6 +16,7 @@ from haproxy_template_ic.constants import (
     CONTENT_TYPE_HAPROXY_CONFIG,
     CONTENT_TYPE_MAP,
 )
+from haproxy_template_ic.k8s.kopf_utils import get_resource_collection_from_indices
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -209,9 +210,29 @@ async def render_haproxy_templates(
 
     try:
         # Collect all current resource indices
-        from .k8s_resources import _collect_resource_indices
+        indices = {}
+        ignore_fields = config.watched_resources_ignore_fields
 
-        indices = _collect_resource_indices(config, kopf_indices, metrics)
+        for resource_id in config.watched_resources:
+            try:
+                indices[resource_id] = get_resource_collection_from_indices(
+                    kopf_indices, resource_id, ignore_fields=ignore_fields
+                )
+
+                # Record metrics for this resource type
+                collection = indices[resource_id]
+                metrics.record_resource_type_count(resource_id, len(collection))
+
+            except Exception as e:
+                logger.warning(f"Failed to collect indices for {resource_id}: {e}")
+                # Create empty collection as fallback
+                indices[resource_id] = get_resource_collection_from_indices(
+                    kopf_indices, resource_id, ignore_fields=[]
+                )
+
+        # Record total resource count
+        total_resources = sum(len(collection) for collection in indices.values())
+        metrics.record_resource_count(total_resources)
 
         # Prepare template context
         template_context, template_vars, validation_errors = _prepare_template_context(

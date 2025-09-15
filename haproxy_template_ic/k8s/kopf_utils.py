@@ -279,21 +279,25 @@ class IndexedResourceCollection(BaseModel):
         )
 
     def _validate_resource(self, resource: Any) -> bool:
-        if hasattr(resource, "metadata") and hasattr(resource.metadata, "name"):
-            return bool(getattr(resource.metadata, "name", None))
-        return (
-            isinstance(resource, dict)
-            and isinstance(resource.get("metadata", {}), dict)
-            and bool(resource.get("metadata", {}).get("name", "").strip())
-        )
-
-    def _extract_resource_id(self, resource: Dict[str, Any]) -> str:
         try:
-            if hasattr(resource, "metadata"):
+            return bool(resource.metadata.name)
+        except AttributeError:
+            return (
+                isinstance(resource, dict)
+                and isinstance(resource.get("metadata", {}), dict)
+                and bool(resource.get("metadata", {}).get("name", "").strip())
+            )
+
+    def _extract_resource_id(self, resource: Any) -> str:
+        try:
+            # Try object-style access first
+            try:
                 return f"{getattr(resource, 'kind', 'unknown')}:{getattr(resource.metadata, 'namespace', 'unknown')}/{resource.metadata.name}"
-            if isinstance(resource, dict) and "metadata" in resource:
-                metadata = resource["metadata"]
-                return f"{resource.get('kind', 'unknown')}:{metadata.get('namespace', 'unknown')}/{metadata.get('name', 'unknown')}"
-            return "<unknown>"
+            except AttributeError:
+                # Fall back to dict-style access
+                if isinstance(resource, dict) and "metadata" in resource:
+                    metadata = resource["metadata"]
+                    return f"{resource.get('kind', 'unknown')}:{metadata.get('namespace', 'unknown')}/{metadata.get('name', 'unknown')}"
+                return "<unknown>"
         except Exception:
             return "<error>"

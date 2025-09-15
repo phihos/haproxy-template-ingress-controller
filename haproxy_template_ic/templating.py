@@ -426,8 +426,9 @@ def format_template_error(
             frame_count += 1
 
     # For syntax errors, use the lineno attribute only if we don't have frames
-    if not template_frames and hasattr(e, "lineno") and e.lineno:
-        template_frames = [{"line": e.lineno, "frame": None, "filename": "<template>"}]
+    lineno = getattr(e, "lineno", None)
+    if not template_frames and lineno:
+        template_frames = [{"line": lineno, "frame": None, "filename": "<template>"}]
 
     # Determine if this is an include error (multiple template frames)
     # When there are multiple frames, it usually means we have an include

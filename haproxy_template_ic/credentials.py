@@ -7,9 +7,9 @@ import re
 from typing import Any, cast
 
 import click
+from pydantic import BaseModel, Field, SecretStr, ConfigDict
 
 from haproxy_template_ic.constants import MAX_K8S_NAME_LENGTH
-from pydantic import BaseModel, Field, SecretStr, ConfigDict
 
 logger = logging.getLogger(__name__)
 

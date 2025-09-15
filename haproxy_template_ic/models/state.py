@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
-from haproxy_template_ic.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.templating import TemplateRenderer
 

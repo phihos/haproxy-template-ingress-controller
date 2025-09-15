@@ -10,19 +10,18 @@ requests, and custom business logic spans.
 import functools
 import os
 from contextlib import contextmanager
-from typing import Any, Dict, Optional, Iterator, Callable, TypeVar, Awaitable, cast
 from dataclasses import dataclass
+from typing import Any, Dict, Optional, Iterator, Callable, TypeVar, Awaitable, cast
 
 from opentelemetry import trace
+from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry.trace import Status, StatusCode
-
 import structlog
 
 from haproxy_template_ic.core.error_handling import handle_exceptions

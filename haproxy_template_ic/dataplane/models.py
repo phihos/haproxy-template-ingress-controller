@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 import xxhash
 
+from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
+
 from .types import ConfigChangeType, ConfigElementType, ConfigSectionType
 
 
@@ -20,8 +22,6 @@ __all__ = [
     "extract_hash_from_description",
     "get_production_urls_from_index",
 ]
-
-from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
 
 DEFAULT_DATAPLANE_PORT = 5555
 

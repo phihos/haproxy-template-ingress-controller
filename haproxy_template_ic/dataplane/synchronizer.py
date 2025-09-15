@@ -10,12 +10,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
-from ..models.context import HAProxyConfigContext
-
-if TYPE_CHECKING:
-    from haproxy_template_ic.credentials import Credentials
-
 from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.models.context import HAProxyConfigContext
 
 from .client import _SECTION_ELEMENTS, DataplaneClient
 from .errors import DataplaneAPIError, ValidationError
@@ -29,6 +25,9 @@ from .utils import (
     extract_hostname_from_url,
     parse_validation_error_details,
 )
+
+if TYPE_CHECKING:
+    from haproxy_template_ic.credentials import Credentials
 
 logger = logging.getLogger(__name__)
 
@@ -305,16 +304,16 @@ class ConfigSynchronizer:
         # Build dictionaries by name for efficient comparison
         current_dict = {}
         for item in current_items:
-            if hasattr(item, "name") and item.name:
+            if item.name:
                 current_dict[item.name] = item
-            elif hasattr(item, "id") and item.id:
+            elif item.id:
                 current_dict[item.id] = item
 
         new_dict = {}
         for item in new_items:
-            if hasattr(item, "name") and item.name:
+            if item.name:
                 new_dict[item.name] = item
-            elif hasattr(item, "id") and item.id:
+            elif item.id:
                 new_dict[item.id] = item
 
         current_names = set(current_dict.keys())

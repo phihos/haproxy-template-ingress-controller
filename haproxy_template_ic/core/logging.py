@@ -6,9 +6,9 @@ metadata injection, operation correlation, and JSON output formatting
 using the industry-standard structlog library.
 """
 
-import logging
 import functools
 import inspect
+import logging
 from functools import lru_cache
 from typing import Any, Callable, TypeVar, Awaitable, Dict, Union, cast
 from uuid import uuid4

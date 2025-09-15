@@ -18,7 +18,7 @@ from haproxy_template_ic.metrics import MetricsCollector, get_metrics_collector
 from haproxy_template_ic.models.config import Config
 from haproxy_template_ic.models.context import HAProxyConfigContext
 from haproxy_template_ic.models.templates import TriggerContext
-from haproxy_template_ic.operator.template_renderer import render_haproxy_templates
+from .template_renderer import render_haproxy_templates
 from haproxy_template_ic.templating import TemplateRenderer
 
 logger = structlog.get_logger(__name__)
