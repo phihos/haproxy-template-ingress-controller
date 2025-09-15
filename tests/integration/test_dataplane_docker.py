@@ -221,7 +221,7 @@ class TestDataplaneClientIntegration:
             progress.phase("STRUCTURED_SUCCESS", "Structured deployment test completed")
 
 
-# NOTE: TestConfigSynchronizerIntegration class has been removed
+# TestConfigSynchronizerIntegration class has been removed
 # This class was testing the old complex architecture with HAProxyPodDiscovery
 # and HAProxyInstance classes that were removed during simplification.
 # The new simplified architecture is tested through unit tests and E2E tests.

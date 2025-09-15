@@ -11,7 +11,7 @@ import logging
 import os
 import shutil
 import tempfile
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import kopf
 import structlog
@@ -21,49 +21,48 @@ from kopf._core.engines.indexing import OperatorIndexers
 from kopf._core.intents.registries import SmartOperatorRegistry
 from kubernetes import config
 
-from haproxy_template_ic.activity import get_activity_buffer
 from haproxy_template_ic.core.logging import setup_structured_logging
+from haproxy_template_ic.core.validation import has_valid_attr
 from haproxy_template_ic.credentials import Credentials
-from haproxy_template_ic.debouncer import TemplateRenderDebouncer
-from haproxy_template_ic.management_socket import run_management_socket_server
+from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
+from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.metrics import get_metrics_collector
-from haproxy_template_ic.templating import TemplateRenderer
-from haproxy_template_ic.tracing import (
-    initialize_tracing,
-    create_tracing_config_from_env,
-    shutdown_tracing,
+from haproxy_template_ic.models.context import HAProxyConfigContext, TemplateContext
+from haproxy_template_ic.models.state import (
+    ApplicationState,
+    ConfigurationState,
+    OperationalState,
+    ResourceState,
+    RuntimeState,
 )
-from haproxy_template_ic.models.config import (
-    Config,
-    PodSelector,
-    TemplateConfig,
-)
-from haproxy_template_ic.models.context import (
-    HAProxyConfigContext,
-    TemplateContext,
-)
-# from haproxy_template_ic.webhook import start_webhook_server  # Function may not exist
 
-from .configmap import (
+# from haproxy_template_ic.webhook import start_webhook_server  # Function may not exist
+from haproxy_template_ic.operator.configmap import (
     fetch_configmap,
     handle_configmap_change,
     load_config_from_configmap,
 )
-from .secrets import fetch_secret, handle_secret_change
-from .k8s_resources import setup_resource_watchers
-from .template_renderer import render_haproxy_templates
-from .pod_management import setup_haproxy_pod_indexing
-from .utils import get_current_namespace
+from haproxy_template_ic.operator.k8s_resources import setup_resource_watchers
+from haproxy_template_ic.operator.pod_management import (
+    setup_haproxy_pod_indexing,
+)
+from haproxy_template_ic.operator.secrets import fetch_secret, handle_secret_change
+from haproxy_template_ic.operator.utils import get_current_namespace
+from haproxy_template_ic.templating import TemplateRenderer
+from haproxy_template_ic.tracing import (
+    create_tracing_config_from_env,
+    initialize_tracing,
+    shutdown_tracing,
+)
 
 if TYPE_CHECKING:
-    from haproxy_template_ic.__main__ import CliOptions
+    from haproxy_template_ic.models.cli import CliOptions
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "initialize_configuration",
+    "initialize_post_config",
     "init_watch_configmap",
-    "init_management_socket",
     "init_template_debouncer",
     "init_metrics_server",
     "cleanup_template_debouncer",
@@ -75,29 +74,12 @@ __all__ = [
 ]
 
 
-async def initialize_configuration(memo: Any) -> None:
-    """Initialize operator configuration from ConfigMap."""
+async def initialize_post_config(memo: ApplicationState) -> None:
+    """Initialize logging and tracing after configuration is loaded."""
     metrics = get_metrics_collector()
-
-    configmap_name = memo.cli_options.configmap_name
-    secret_name = memo.cli_options.secret_name
-    logger.info(
-        f"⚙️ Initializing config from configmap {configmap_name} and credentials from secret {secret_name}."
-    )
 
     try:
         with metrics.time_config_reload():
-            namespace = get_current_namespace() or "default"
-            # Load configuration from ConfigMap
-            configmap = await fetch_configmap(configmap_name, namespace)
-            memo.config = await load_config_from_configmap(configmap)
-            memo.template_renderer = TemplateRenderer.from_config(memo.config)
-
-            # Load credentials from Secret
-            secret = await fetch_secret(secret_name, namespace)
-            secret_data = secret.data if hasattr(secret, "data") else secret["data"]
-            memo.credentials = Credentials.from_secret(secret_data)
-
             # Reconfigure logging based on config
             setup_structured_logging(
                 verbose_level=memo.config.logging.verbose,
@@ -125,20 +107,16 @@ async def initialize_configuration(memo: Any) -> None:
                 )
                 initialize_tracing(tracing_config)
 
-        # Initialize activity buffer for event tracking
-        memo.activity_buffer = get_activity_buffer()
-        logger.debug("🔄 Activity buffer initialized")
-
         metrics.record_config_reload(success=True)
         logger.info("✅ Configuration and credentials loaded successfully.")
     except Exception as e:
         metrics.record_config_reload(success=False)
         metrics.record_error("config_load_failed", "operator")
-        logger.error(f"❌ Failed to load configuration or credentials: {e}")
+        logger.error(f"❌ Failed to initialize post-config settings: {e}")
         raise
 
 
-async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
+async def init_watch_configmap(memo: ApplicationState, **kwargs: Any) -> None:
     """Set up startup handlers after configuration is loaded."""
 
     configmap_name = memo.cli_options.configmap_name
@@ -160,89 +138,39 @@ async def init_watch_configmap(memo: Any, **kwargs: Any) -> None:
     )(handle_secret_change)  # type: ignore[arg-type]
 
 
-async def init_management_socket(memo: Any, **kwargs: Any) -> None:
-    """Initialize management socket server for state inspection."""
-    socket_path = memo.config.operator.socket_path
-    memo.socket_server_task = asyncio.create_task(
-        run_management_socket_server(memo, socket_path)
-    )
-
-
-async def init_template_debouncer(memo: Any, **kwargs: Any) -> None:
+async def init_template_debouncer(memo: ApplicationState, **kwargs: Any) -> None:
     """Initialize and start the template rendering debouncer."""
-    if hasattr(memo, "debouncer") and memo.debouncer:
-        # Stop existing debouncer if one exists
-        await memo.debouncer.stop()
-
-    # Get configuration values
-    config = memo.config
-    min_interval = config.template_rendering.min_render_interval
-    max_interval = config.template_rendering.max_render_interval
-
-    # Create and start debouncer
-    memo.debouncer = TemplateRenderDebouncer(
-        min_interval=min_interval,
-        max_interval=max_interval,
-        render_func=render_haproxy_templates,
-        memo=memo,
-    )
     await memo.debouncer.start()
 
 
-async def cleanup_template_debouncer(memo: Any, **kwargs: Any) -> None:
+async def cleanup_template_debouncer(memo: ApplicationState, **kwargs: Any) -> None:
     """Stop the template rendering debouncer on shutdown."""
-    if hasattr(memo, "debouncer") and memo.debouncer:
-        logger.info("Stopping template debouncer...")
-        await memo.debouncer.stop()
-        memo.debouncer = None
+    logger.info("Stopping template debouncer...")
+    await memo.debouncer.stop()
 
 
-async def cleanup_tracing(memo: Any, **kwargs: Any) -> None:
+async def cleanup_tracing(memo: ApplicationState, **kwargs: Any) -> None:
     """Clean up distributed tracing."""
     try:
-        if hasattr(memo, "config") and memo.config.tracing.enabled:
+        if memo.config.tracing.enabled:
             shutdown_tracing()
             logger.debug("🔍 Tracing shutdown complete")
     except Exception as e:
         logger.error(f"❌ Error shutting down tracing: {e}")
 
 
-async def cleanup_metrics_server(memo: Any, **kwargs: Any) -> None:
+async def cleanup_metrics_server(memo: ApplicationState, **kwargs: Any) -> None:
     """Clean up metrics server."""
     try:
-        if hasattr(memo, "metrics") and memo.metrics:
-            await memo.metrics.stop_metrics_server()
-            memo.metrics = None
-            logger.debug("📊 Metrics server shutdown complete")
+        await memo.metrics.stop_metrics_server()
+        logger.debug("📊 Metrics server shutdown complete")
     except Exception as e:
         logger.error(f"❌ Error shutting down metrics server: {e}")
 
 
-async def cleanup_management_socket(memo: Any, **kwargs: Any) -> None:
-    """Clean up management socket server."""
-    try:
-        if hasattr(memo, "socket_server_task") and memo.socket_server_task:
-            memo.socket_server_task.cancel()
-            try:
-                await memo.socket_server_task
-            except asyncio.CancelledError:
-                pass  # Expected when cancelling
-            memo.socket_server_task = None
-            logger.debug("🔌 Management socket server shutdown complete")
-    except Exception as e:
-        logger.error(f"❌ Error shutting down management socket server: {e}")
-
-
-async def init_metrics_server(memo: Any, **kwargs: Any) -> None:
+async def init_metrics_server(memo: ApplicationState, **kwargs: Any) -> None:
     """Start the metrics server."""
     metrics_port = memo.config.operator.metrics_port
-
-    # Check if metrics server is already initialized
-    if hasattr(memo, "metrics") and memo.metrics:
-        logger.warning("⚠️ Metrics server already started")
-        return
-
-    memo.metrics = get_metrics_collector()
     await memo.metrics.start_metrics_server(port=metrics_port)
     logger.info(f"📊 Metrics server started on port {metrics_port}")
 
@@ -320,38 +248,99 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         # When both are set the operator will be reinitialized with a fresh config
         config_reload_flag: asyncio.Future[None] = asyncio.Future(loop=loop)
 
-        # Explicitly create and prepopulate the memo object, that contains most of the shared state
-        memo = kopf.Memo(
-            stop_flag=stop_flag,
-            cli_options=cli_options,
-            config_reload_flag=config_reload_flag,
-            haproxy_config_context=HAProxyConfigContext(
-                config=Config(
-                    pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-                    haproxy_config=TemplateConfig(template="# Initial config"),
-                ),
-                template_context=TemplateContext(namespace="default"),
-                rendered_config=None,
-            ),
-            indices=indexers.indices,
-            template_renderer=None,  # Will be initialized when config is loaded
-        )
-
         asyncio.set_event_loop(loop)
 
+        # Load configuration and credentials before creating ApplicationState
+        namespace = get_current_namespace() or "default"
+        configmap_name = cli_options.configmap_name
+        secret_name = cli_options.secret_name
+
+        logger.info(
+            f"⚙️ Loading config from configmap {configmap_name} and credentials from secret {secret_name}."
+        )
+
         try:
-            # Fetch config from configmap, validate it and attach it to the memo
-            loop.run_until_complete(initialize_configuration(memo))
+            # Load configuration from ConfigMap
+            configmap = loop.run_until_complete(
+                fetch_configmap(configmap_name, namespace)
+            )
+            loaded_config = loop.run_until_complete(
+                load_config_from_configmap(configmap)
+            )
+            loaded_renderer = TemplateRenderer.from_config(loaded_config)
+
+            # Load credentials from Secret
+            secret = loop.run_until_complete(fetch_secret(secret_name, namespace))
+            secret_data = (
+                secret.data if has_valid_attr(secret, "data") else secret["data"]
+            )
+            loaded_credentials = Credentials.from_secret(secret_data)
+
+            # Initialize with empty production URLs - pods will be discovered dynamically
+            production_urls: List[str] = []
+            url_to_pod_name: Dict[str, str] = {}
+
+        except Exception as e:
+            logger.error(f"❌ Failed to load configuration or credentials: {e}")
+            raise
+
+        # Construct validation URL from configuration
+        validation_url = f"http://{loaded_config.validation.dataplane_host}:{loaded_config.validation.dataplane_port}"
+
+        config_synchronizer = ConfigSynchronizer(
+            production_urls=production_urls,
+            validation_url=validation_url,
+            credentials=loaded_credentials,
+            url_to_pod_name=url_to_pod_name,
+        )
+
+        haproxy_config_context = HAProxyConfigContext(
+            template_context=TemplateContext(),
+            rendered_config=None,
+        )
+
+        memo = ApplicationState(
+            runtime=RuntimeState(
+                stop_flag=stop_flag,
+                config_reload_flag=config_reload_flag,
+                cli_options=cli_options,
+            ),
+            configuration=ConfigurationState(
+                config=loaded_config,
+                haproxy_config_context=haproxy_config_context,
+                credentials=loaded_credentials,
+                template_renderer=loaded_renderer,
+            ),
+            resources=ResourceState(
+                indices=indexers.indices,
+            ),
+            operations=OperationalState(
+                debouncer=TemplateRenderDebouncer(
+                    min_interval=loaded_config.template_rendering.min_render_interval,
+                    max_interval=loaded_config.template_rendering.max_render_interval,
+                    config=loaded_config,
+                    haproxy_config_context=haproxy_config_context,
+                    template_renderer=loaded_renderer,
+                    config_synchronizer=config_synchronizer,
+                    kopf_indices=indexers.indices,
+                    metrics=get_metrics_collector(),
+                ),
+                metrics=get_metrics_collector(),
+                config_synchronizer=config_synchronizer,
+            ),
+        )
+
+        try:
+            # Initialize logging and tracing based on loaded config
+            loop.run_until_complete(initialize_post_config(memo))
 
             # Set up kopf indices
             # They must be set up before kopf.run or else they will not be initialized properly
-            setup_resource_watchers(memo)
+            setup_resource_watchers(memo.configuration.config)
             setup_haproxy_pod_indexing(memo)
 
             # Watch the configmap for any changes to reload when necessary
             kopf.on.startup()(init_watch_configmap)
-            # Start the management socket server to retrieve internal information and trigger actions
-            kopf.on.startup()(init_management_socket)
             # Initialize and start the template rendering debouncer
             kopf.on.startup()(init_template_debouncer)
             # Start the metrics server for Prometheus monitoring
@@ -361,7 +350,6 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             kopf.on.cleanup()(cleanup_template_debouncer)
             kopf.on.cleanup()(cleanup_tracing)
             kopf.on.cleanup()(cleanup_metrics_server)
-            kopf.on.cleanup()(cleanup_management_socket)
 
             # Run operator
             kopf.run(

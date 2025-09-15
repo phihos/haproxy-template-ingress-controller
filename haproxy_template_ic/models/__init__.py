@@ -2,104 +2,42 @@
 # This package contains all configuration models split by concern:
 # types, config, templates, resources, and context
 
-import logging
-
-from .types import (
-    NonEmptyStr,
-    NonEmptyStrictStr,
-    AbsolutePath,
-    Filename,
-    KubernetesKind,
-    ApiVersion,
-    SnippetName,
-)
-
-from .config import (
-    ResourceFilter,
-    WatchResourceConfig,
-    PodSelector,
-    TemplateRenderingConfig,
-    OperatorConfig,
-    LoggingConfig,
-    TracingConfig,
-    ValidationConfig,
-    Config,
-    config_from_dict,
-    # Type aliases for collections
-    WatchResourceCollection,
-    MapCollection,
-    TemplateSnippetCollection,
-    CertificateCollection,
-)
-
+# Export public API
+from .context import HAProxyConfigContext, TemplateContext
 from .templates import (
-    TemplateConfig,
     TemplateSnippet,
-    ContentType,
-    RenderedContent,
     TriggerContext,
     RenderedConfig,
+    RenderedContent,
+    ContentType,
+    TemplateConfig,
 )
-
-from .resources import (
-    IndexedResourceCollection,
+from .config import (
+    Config,
+    PodSelector,
+    ResourceFilter,
+    WatchResourceConfig,
+    config_from_dict,
 )
-
-from .resource_metadata import (
-    ResourceTypeMetadata,
-)
-
-from .context import (
-    TemplateContext,
-    HAProxyConfigContext,
-)
-
-logger = logging.getLogger(__name__)
-
-# Rebuild models with forward references after all imports are complete
-try:
-    HAProxyConfigContext.model_rebuild()
-except Exception as e:  # nosec B110 - Exception is logged and safe to ignore for backward compatibility
-    # If rebuilding fails, continue anyway for backward compatibility during development
-    # This can happen when Config import is not available or circular dependencies exist
-    logger.debug(f"Model rebuild failed (safe to ignore): {e}")
+from ..k8s.kopf_utils import IndexedResourceCollection
 
 __all__ = [
-    # Type aliases and validation
-    "NonEmptyStr",
-    "NonEmptyStrictStr",
-    "AbsolutePath",
-    "Filename",
-    "KubernetesKind",
-    "ApiVersion",
-    "SnippetName",
-    # Configuration models
-    "ResourceFilter",
-    "WatchResourceConfig",
-    "PodSelector",
-    "TemplateRenderingConfig",
-    "OperatorConfig",
-    "LoggingConfig",
-    "TracingConfig",
-    "ValidationConfig",
-    "Config",
-    "config_from_dict",
+    # Context models
+    "HAProxyConfigContext",
+    "TemplateContext",
     # Template models
-    "TemplateConfig",
     "TemplateSnippet",
-    "ContentType",
-    "RenderedContent",
     "TriggerContext",
     "RenderedConfig",
-    # Resource models
+    "RenderedContent",
+    "ContentType",
+    "TemplateConfig",
+    # Config models
+    "Config",
+    "PodSelector",
+    "ResourceFilter",
+    "WatchResourceConfig",
+    "config_from_dict",
+    # K8s utilities (commonly used with models)
     "IndexedResourceCollection",
-    "ResourceTypeMetadata",
-    # Context models
-    "TemplateContext",
-    "HAProxyConfigContext",
-    # Type aliases for collections
-    "WatchResourceCollection",
-    "MapCollection",
-    "TemplateSnippetCollection",
-    "CertificateCollection",
 ]

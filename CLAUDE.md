@@ -33,6 +33,25 @@ tests/fixtures/    # Test data and configurations
 - Use `-s` for real-time output, `-n 0` for serial execution with full progress
 - Serial debugging: `uv run pytest -n 0 -s -v` for step-by-step execution
 
+#### ⚡ Performance Optimization with --keep-cluster
+
+**IMPORTANT**: Use `--keep-cluster` to dramatically speed up repeated E2E test runs by avoiding expensive cluster recreation:
+
+```bash
+# First run: Creates cluster (~60-120s setup time)
+uv run pytest tests/e2e/test_core_operator.py::test_basic_init --keep-cluster
+
+# Subsequent runs: Reuses existing cluster (~5-10s setup time) 
+uv run pytest tests/e2e/test_config_management.py --keep-cluster
+
+# Manual cleanup when done
+kind delete cluster --name pytest-kind
+```
+
+**Speed improvement**: 60-120 seconds saved per test run by reusing the Kind cluster.
+
+**How it works**: The `--keep-cluster` flag (provided by pytest-kind) prevents cluster deletion in the teardown phase, allowing subsequent test runs to reuse the existing cluster.
+
 #### Integration Test Features
 - **Docker containers**: Automated HAProxy + Dataplane API setup with Alpine 3.1
 - **Progress reporting**: Visual indicators, container monitoring, port tracking
@@ -69,19 +88,19 @@ tests/fixtures/    # Test data and configurations
 
 The Dockerfile is optimized for fast iterative development and efficient CI/CD builds:
 
-#### **Build Performance Features**
+#### Build Performance & Speed Features
 - **Multi-stage caching**: Separates system dependencies, Python dependencies, and application code for maximum cache reuse
 - **Optimized layer ordering**: Least frequently changed items first (system packages → Python deps → code)
 - **BuildKit cache mounts**: Shared caches across builds with proper cache IDs
 - **Minimized context**: Comprehensive `.dockerignore` excludes development files (~60% context reduction)
 
-#### **Build Speed Improvements**
+**Speed Improvements:**
 - **First build**: ~10-20% faster due to parallelized stages
 - **Code changes only**: ~60-80% faster due to dependency layer caching
 - **Dependency updates**: ~30-40% faster due to optimized layer structure
 - **CI/CD builds**: ~40-50% faster with registry cache
 
-#### **Recommended Build Commands**
+#### Recommended Build Commands
 ```bash
 # Enable BuildKit (required for optimizations)
 export DOCKER_BUILDKIT=1
@@ -90,18 +109,15 @@ export DOCKER_BUILDKIT=1
 docker build \
   --cache-from type=local,src=/tmp/docker-cache \
   --cache-to type=local,dest=/tmp/docker-cache \
-  --target production \
-  -t haproxy-template-ic:dev .
+  --target production -t haproxy-template-ic:dev .
 
 # CI/CD with registry cache
 docker build \
   --cache-from type=registry,ref=ghcr.io/your-org/haproxy-template-ic:buildcache \
-  --cache-to type=inline \
-  --target production \
-  -t haproxy-template-ic:latest .
+  --cache-to type=inline --target production -t haproxy-template-ic:latest .
 ```
 
-#### **Optimization Details**
+**Optimization Details:**
 - System dependencies cached separately in `system-deps` stage
 - UV tool installation cached in `uv-base` stage  
 - Python dependencies installed in `dependencies` stage (independent of code changes)
@@ -109,44 +125,24 @@ docker build \
 - Runtime stages inherit from `system-deps` to avoid duplicate system setup
 
 ### Development Environment
-- **Main script**: `bash ./scripts/start-dev-env.sh [COMMAND] [OPTIONS]`
-  - `up`: Start development environment (default)
-  - `down`/`clean`: Delete the kind cluster
-  - `logs`: Follow controller logs
-  - `exec`: Execute shell in controller pod
-  - `restart`: Restart controller deployment
-  - `status`: Show deployment status
-  - Options: `--skip-build`, `--skip-echo`, `--force-rebuild`, `--verbose`, `--watch`, etc.
-- **Manual setup**:
-  - **Optimized builds** (recommended):
-    ```bash
-    # Enable BuildKit for faster builds
-    export DOCKER_BUILDKIT=1
-    
-    # Local development with maximum caching
-    docker build \
-      --cache-from type=local,src=/tmp/buildcache \
-      --cache-to type=local,dest=/tmp/buildcache \
-      --target production \
-      -t haproxy-template-ic:dev .
-    
-    # CI/CD with registry cache
-    docker build \
-      --cache-from type=registry,ref=ghcr.io/user/repo:buildcache \
-      --cache-to type=inline \
-      --target production \
-      -t haproxy-template-ic:dev .
-    ```
-  - **Basic builds**:
-    - Build production image: `docker build --target production -t haproxy-template-ic:dev .`
-    - Build coverage image: `docker build --target coverage -t haproxy-template-ic:coverage .`
-  - Create kind cluster: `kind create cluster --name haproxy-template-ic-dev`
-  - Load image to kind: `kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev`
+**Main script**: `bash ./scripts/start-dev-env.sh [COMMAND] [OPTIONS]`
+- `up`: Start development environment (default)
+- `down`/`clean`: Delete the kind cluster
+- `logs`: Follow controller logs
+- `exec`: Execute shell in controller pod
+- `restart`: Restart controller deployment
+- `status`: Show deployment status
+- Options: `--skip-build`, `--skip-echo`, `--force-rebuild`, `--verbose`, `--watch`, etc.
+
+**Manual setup** (basic builds):
+- Build production image: `docker build --target production -t haproxy-template-ic:dev .`
+- Build coverage image: `docker build --target coverage -t haproxy-template-ic:coverage .`
+- Create kind cluster: `kind create cluster --name haproxy-template-ic-dev`
+- Load image to kind: `kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev`
 
 ### Application
 - **Run operator**: `uv run haproxy-template-ic run --configmap-name=<name>` (or use `version` subcommand)
 - **Launch TUI dashboard**: `uv run haproxy-template-ic tui` (Terminal User Interface for monitoring)
-- **Management socket**: `socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock`
 - **Monitoring endpoints** (require port-forward):
   - Metrics: `curl http://localhost:9090/metrics`
   - Health: `curl http://localhost:8080/healthz`
@@ -179,24 +175,19 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
   - `launcher.py`: TUI launcher and entry point
   - `screens.py`: TUI screen definitions
   - `widgets/`: Widget components for different views
-- **`haproxy_template_ic/core/`**: Core functionality
-  - `logging.py`: Structured logging with context injection
+- **`haproxy_template_ic/core/`**: Core functionality (`logging.py`: Structured logging with context injection)
 - **`haproxy_template_ic/k8s/`**: Kubernetes integration utilities
   - `field_filter.py`: Resource field filtering
   - `kopf_utils.py`: Kopf framework utilities
   - `resource_utils.py`: Resource manipulation helpers
-- **`haproxy_template_ic/webhook.py`**: Validating admission webhook handlers using kopf framework
-- **`haproxy_template_ic/management_socket.py`**: Unix socket server for runtime state inspection
-- **`haproxy_template_ic/metrics.py`**: Prometheus metrics collection and exposure
-- **`haproxy_template_ic/tracing.py`**: OpenTelemetry distributed tracing implementation
-- **`haproxy_template_ic/templating.py`**: Jinja2 template rendering engine
-- **`haproxy_template_ic/activity.py`**: Activity tracking and monitoring
-- **`haproxy_template_ic/deployment_state.py`**: Deployment state management
+- **Other components**: `webhook.py` (validating admission webhook handlers), `metrics.py` (Prometheus metrics), `tracing.py` (OpenTelemetry tracing), `templating.py` (Jinja2 engine), `activity.py` (activity tracking), `deployment_state.py` (deployment state management)
 
 ### Key Technologies
 
 - **kopf**: Kubernetes operator framework for event handling
-- **kr8s**: Modern Kubernetes client library  
+- **kr8s**: Modern Kubernetes client library
+  - **IMPORTANT**: Use `from kr8s.asyncio.objects import Pod, ConfigMap, Secret` for async operations
+  - Never use `from kr8s.objects import ...` in async contexts - those are synchronous only
 - **jinja2**: Template engine for HAProxy configurations
 - **httpx**: Async HTTP client for Dataplane API integration
 - **click**: CLI interface framework
@@ -235,25 +226,14 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 
 ### Current Implementation Status
 
-- ✅ Watch arbitrary Kubernetes resources
-- ✅ Template HAProxy map files  
-- ✅ Template `haproxy.cfg` configuration files
-- ✅ Template certificate files from Kubernetes Secrets
-- ✅ Template snippet system with `{% include %}` support for reusable components
-- ✅ Validating admission webhooks for ConfigMaps and watched resources
-- ✅ Management socket for state inspection
-- ✅ Dataplane API synchronization with validation and deployment
-- ✅ Prometheus metrics collection for comprehensive monitoring
-- ✅ Reliable operations with error handling and recovery mechanisms
-- ✅ Distributed tracing with OpenTelemetry for end-to-end observability
-- ✅ High-performance resource indexing with O(1) lookups using IndexedResourceCollection
+✅ Complete: Watch arbitrary K8s resources, template HAProxy map/config/certificate files, template snippet system with `{% include %}` support, validating admission webhooks, dataplane API synchronization with validation/deployment, Prometheus metrics, reliable operations with error handling/recovery, distributed tracing with OpenTelemetry, high-performance resource indexing with O(1) lookups using IndexedResourceCollection
 
 ## Webhook Validation System
 
 Validating admission webhooks prevent faulty resources from being applied, providing immediate feedback on configuration errors.
 
 **Features**: ConfigMap/YAML/template validation, per-resource control, automatic certificate management
-**Configuration**: Webhook settings configured via ConfigMap (see Runtime Configuration section)
+**Configuration**: Webhook settings configured via ConfigMap (see Configuration section)
 **Certificates**: Uses mounted TLS or generates self-signed for development
 **Control**: Set `enable_validation_webhook: true/false` per watched resource type
 
@@ -264,7 +244,7 @@ Validating admission webhooks prevent faulty resources from being applied, provi
 
 ### Unified Dataplane Configuration
 
-All dataplane instances now use port 5555 with environment-specific authentication:
+All dataplane instances use port 5555 with environment-specific authentication:
 - **Production**: `admin`/`adminpass` (default)  
 - **Validation**: `admin`/`validationpass` (sidecar)
 
@@ -274,28 +254,23 @@ This simplifies configuration management and deployment templates across all env
 
 The `index_by` parameter in `watched_resources` configures custom indexing for O(1) resource lookups using JSONPath expressions. Default indexing is by `["metadata.namespace", "metadata.name"]`.
 
-**JSONPath Implementation**: The system uses `python-jsonpath` library for field extraction, supporting standard JSONPath syntax including:
+**JSONPath Implementation**: Uses `python-jsonpath` library supporting standard JSONPath syntax:
 - Dot notation: `metadata.name`
 - Bracket notation: `metadata.labels['kubernetes.io/service-name']`
-- Array indexing: `spec.rules[0].host`
-- Negative indexing: `spec.rules[-1].host`
+- Array indexing: `spec.rules[0].host`, negative indexing: `spec.rules[-1].host`
 
-**Library Choice Rationale**: `python-jsonpath` was selected for its:
-- Full JSONPath standard compliance
-- Active maintenance and modern Python support
-- Comprehensive syntax support including filters and wildcards
-- Good performance characteristics (>10,000 ops/sec for typical queries)
+**Library Choice**: `python-jsonpath` selected for JSONPath compliance, active maintenance, comprehensive syntax, good performance (>10k ops/sec).
 
-**Advanced indexing examples**:
+**Advanced indexing examples:**
 - Service by name: `["metadata.labels['kubernetes.io/service-name']"]`
 - Ingress by host: `["spec.rules[0].host"]` 
 - Cross-resource matching: `["metadata.namespace", "metadata.labels['app']"]`
 
 ### Field Filtering
 
-The `watched_resources_ignore_fields` configuration allows omitting unnecessary fields from indexed resources to reduce memory usage and improve performance.
+The `watched_resources_ignore_fields` configuration omits unnecessary fields from indexed resources to reduce memory usage and improve performance.
 
-**Configuration**: Add a list of JSONPath expressions for fields to remove:
+**Configuration**: Add JSONPath expressions for fields to remove:
 ```yaml
 watched_resources_ignore_fields:
   - metadata.managedFields  # Default: removes Kubernetes server-side apply metadata
@@ -303,22 +278,16 @@ watched_resources_ignore_fields:
   - status  # Remove entire status section if not used in templates
 ```
 
-**Default Configuration**: By default, `metadata.managedFields` is ignored as it's rarely needed in templates and can consume significant memory.
+**Default**: `metadata.managedFields` ignored (rarely needed in templates, can consume significant memory).
 
-**Common Fields to Consider Ignoring**:
+**Common fields to ignore:**
 - `metadata.managedFields`: Server-side apply metadata (can be very large)
 - `metadata.resourceVersion`: Version tracking (changes frequently)
 - `metadata.generation`: Generation counter (if not used)
 - `metadata.annotations['kubectl.kubernetes.io/last-applied-configuration']`: Last applied config (can be large)
 - `status`: Status information (if not used in templates)
 
-**Performance Considerations**:
-- Field filtering occurs during resource indexing, reducing memory usage for large clusters
-- Uses deep copy to preserve original resources, which has a performance cost for very large resources
-- JSONPath expressions are compiled and cached (up to 256 unique paths) for better performance
-- Currently applies the same ignore_fields to all resource types (per-type filtering may be added in future)
-
-**Note**: Invalid JSONPath expressions are validated at config load time and logged with warnings.
+**Performance**: Field filtering during resource indexing. Deep copy preserves originals. JSONPath expressions compiled/cached (256 paths max). Same ignore_fields for all types. Invalid JSONPath validated at load.
 
 ```yaml
 data:
@@ -326,7 +295,6 @@ data:
     pod_selector:
       match_labels: {app: haproxy, component: loadbalancer}
     
-    # Fields to omit from indexed resources (reduces memory usage)
     watched_resources_ignore_fields:
       - metadata.managedFields
     
@@ -388,97 +356,70 @@ data:
 ### HAProxy Version Requirement: 3.1+ (Critical for Performance)
 **Decision**: All HAProxy containers MUST use `haproxytech/haproxy-alpine:3.1` or newer.
 
-**Rationale**:
-- **Critical startup speed**: Version 3.0 dataplaneapi Go binary has 30-60+ second startup time
-- **Version 3.1 fix**: dataplaneapi starts in 3-5 seconds (10x faster than 3.0)
-- **HAProxy core unaffected**: HAProxy itself starts quickly in both versions, the issue is specifically the dataplaneapi component
-- **Production impact**: Slow dataplaneapi startup causes routing failures during pod moves/restarts  
-- **Distribution agnostic**: The performance issue was version-specific, not distribution-specific
+**Rationale**: Version 3.0 dataplaneapi has 30-60s startup vs. 3.1+ starts in 3-5s (10x faster). HAProxy core unaffected - dataplaneapi issue only. Slow startup causes routing failures. **Do NOT use 3.0** despite LTS.
 
-**Do NOT use version 3.0** even though it's the LTS release. The dataplaneapi startup speed regression in 3.0 is critical for ingress controller availability.
-
-**Measured dataplaneapi startup times**:
+**Measured dataplaneapi startup times:**
 - Version 3.0: 30-60+ seconds (requires failureThreshold: 10)
 - Version 3.1+: 3-5 seconds (works with failureThreshold: 3)
 
 ### Runtime API Configuration Requirements
 **Critical**: Runtime API requires proper HAProxy stats socket and dataplane API master socket configuration to avoid "Runtime API not configured, not using it" warnings.
 
-**Required HAProxy Master Socket**:
+**Required HAProxy Master Socket:**
 ```bash
-# HAProxy master-worker mode with master socket (in startup command)
 haproxy -W -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
 ```
 
-**Required Dataplane API Configuration**:
+**Required Dataplane API Configuration:**
 ```yaml
 haproxy:
   master_runtime: /etc/haproxy/haproxy-master.sock
 ```
 
-**Note**: The `-S` flag creates the master socket that dataplane API uses for runtime operations. No separate `stats socket` in the global section is needed.
+**Note**: The `-S` flag creates the master socket that dataplane API uses for runtime operations. No separate `stats socket` in global section needed.
 
-**Version Parameter Requirements**: All runtime API operations require either `transaction_id` OR `version` parameter:
-- Non-transactional operations must include current configuration version
-- Implemented in `dataplane.py:505` via `_get_configuration_version()`
-- Prevents HTTP 400 "version or transaction not specified" errors
+**Version Parameter Requirements**: Runtime API operations require `transaction_id` OR `version` parameter. Non-transactional operations need current config version. Implemented in `dataplane.py:505` via `_get_configuration_version()`. Prevents HTTP 400 errors.
 
 ### Runtime API Optimization for Zero-Reload Deployments
-**Decision**: The controller optimizes deployments by separating runtime-eligible operations from configuration operations to avoid unnecessary HAProxy reloads.
+**Decision**: Controller optimizes deployments by separating runtime-eligible operations from configuration operations to avoid unnecessary HAProxy reloads.
 
-**Implementation**:
-- **Server Operations**: Server add/update/delete operations are applied without transactions when possible, enabling the Go dataplane API to automatically use HAProxy's runtime API
-- **Map Operations**: Map file entries use runtime API endpoints exclusively (no reload required)
-- **ACL Operations**: ACL file entries use runtime API endpoints (no reload required)
+**Implementation:**
+- **Server Operations**: Applied without transactions when possible, enabling Go dataplane API to automatically use HAProxy's runtime API
+- **Map Operations**: Use runtime API endpoints exclusively (no reload required)
+- **ACL Operations**: Use runtime API endpoints (no reload required)
 - **Mixed Operations**: Server changes applied first via runtime API, then other changes via transaction
 
-**Runtime Requirements for Servers**:
+**Runtime Requirements for Servers:**
 - No `default_server` defined in backend or defaults section
 - Backend uses compatible load balancing algorithm (roundrobin, leastconn, first, random)
 - Operation not within a transaction
-- Proper stats socket and master runtime configuration (see above)
+- Proper stats socket and master runtime configuration
 
-**Benefits**:
-- **Zero reloads** for most server add/remove/update operations
-- **Instant updates** for map and ACL entries  
-- **Improved availability** - no connection drops during server changes
-- **Better performance** - no reload overhead
-- **Smart fallback** - automatically falls back to transaction/reload for complex configurations
+**Benefits**: Zero reloads for most server operations, instant updates for map/ACL entries, improved availability, better performance, smart fallback to transaction/reload for complex configurations.
 
-**Monitoring**: Look for log messages like "server added through runtime" from dataplane API to confirm runtime API usage.
+**Monitoring**: Look for "server added through runtime" log messages from dataplane API.
 
 ### HAProxy Dataplane API v3 Defaults Section Limitation
 **Issue**: HAProxy Dataplane API v3 returns HTTP 501 Not Implemented for nested element endpoints on defaults sections.
 
-**Impact**: 
-- Cannot fetch individual nested elements (ACLs, HTTP rules, etc.) from defaults sections using standard endpoints
-- Affects configuration comparison and deployment strategies for defaults sections only
-- Other configuration sections (frontends, backends, etc.) work normally with nested elements
+**Impact**: Cannot fetch individual nested elements (ACLs, HTTP rules, etc.) from defaults sections. Affects configuration comparison and deployment for defaults sections only.
 
-**Workaround**: 
-- Defaults sections are handled as atomic units using `full_section=true` parameter
-- All nested elements are included in the main defaults configuration during fetch/deployment
-- Configuration changes to defaults sections trigger complete section replacement
-- Performance impact is minimal as defaults sections are typically small
+**Workaround**: Defaults sections handled as atomic units using `full_section=true` parameter. All nested elements included in main defaults configuration during fetch/deployment. Configuration changes trigger complete section replacement. Performance impact minimal as defaults sections typically small.
 
-**Implementation Details**:
-- `dataplane.py` skips nested element fetching for defaults sections
-- Comparison logic ignores nested element differences for defaults
-- Deployment uses `full_section=true` when updating defaults sections
-- This limitation is specific to defaults sections and doesn't affect other configuration types
+**Implementation**: `dataplane.py` skips nested element fetching for defaults. Comparison ignores nested differences for defaults. Deployment uses `full_section=true` for defaults updates.
 
 ## Important Development Notes
 
-- **Kubernetes Required**: Application only runs in Kubernetes environments. Local development requires kind or minikube.
-- **Python 3.13+**: Target version with type hints support
-- **uv Package Manager**: Use exclusively for Python package management (never pip/poetry)
-- **Pre-commit Hooks**: Automatically enforces code quality standards
-- **Three-tier Testing Strategy**: Fast unit tests + integration tests with Docker + e2e tests with real Kubernetes clusters
+- **K8s Required**: Application only runs in K8s environments. Local development requires kind/minikube.
+- **Python 3.13+**: Target version with type hints
+- **uv Package Manager**: Use exclusively for Python packages (never pip/poetry)
+- **Pre-commit Hooks**: Automatically enforces code quality
+- **3-tier Testing Strategy**: Fast unit tests + integration tests with Docker + e2e tests with K8s clusters
 
 ## Template System
 
 **Snippets**: Define in `template_snippets`, use with `{% include "snippet-name" %}`
-**Variables**: `resources` (IndexedResourceCollections by type), `namespace` (current namespace)
+**Variables**: `resources` (IndexedResourceCollections by type)
 **Filters**: `b64decode` for base64 strings, plus standard Jinja2 filters
 
 ### Resource Access Patterns
@@ -517,23 +458,20 @@ haproxy:
 {% endfor %}
 ```
 
-**IndexedResourceCollection methods**:
+**IndexedResourceCollection methods:**
 - `get_indexed(*args)`: Returns list of resources matching index key
 - `get_indexed_iter(*args)`: Returns iterator of resources (memory efficient for large datasets)
 - `get_indexed_single(*args)`: Returns single resource or None (raises error if multiple found)
 - `items()`: Iterate over all indexed resources
 - `values()`: Iterate over resource values only
 
-**Performance considerations**:
-- Use `get_indexed_iter()` for memory efficiency with large result sets
-- Index keys are cached for O(1) lookup performance
-- Resource validation prevents invalid data from being indexed
+**Performance**: Use `get_indexed_iter()` for large result sets. Index keys cached for O(1) lookup. Resource validation prevents invalid data indexing.
 
 ## Distributed Tracing
 
 OpenTelemetry tracing for end-to-end observability across template rendering and deployment pipeline.
 
-**Configuration**: Tracing settings configured via ConfigMap (see Runtime Configuration section)
+**Configuration**: Tracing settings configured via ConfigMap
 **Operations traced**: Template rendering, dataplane API, Kubernetes operations, pod discovery
 **Development**: Set `tracing.console_export: true` in ConfigMap for console output
 **Production**: Use `tracing.sample_rate: 0.1` in ConfigMap for performance, deploy Jaeger collector
@@ -552,16 +490,13 @@ Uses official OpenAPI-generated HAProxy Dataplane API v3 client (218 endpoints, 
 
 The TUI provides a modern, interactive terminal dashboard for monitoring the HAProxy Template IC operator in real-time.
 
-### Features
+### Features & Usage
 
-- **Real-time monitoring** - Live updates of operator status, pod health, and performance metrics
-- **Widget-based architecture** - Organized views for different aspects of the system
-- **Interactive navigation** - Keyboard shortcuts for efficient dashboard usage
-- **Template inspection** - Built-in template editor and renderer for debugging
-- **Activity tracking** - Visual timeline of operator events and resource changes
-- **Performance metrics** - Resource usage, response times, and operational statistics
-
-### Usage
+- **Real-time monitoring**: Live updates of operator status, pod health, and performance metrics
+- **Widget-based architecture**: Organized views (HeaderWidget, ActivityWidget, PodsWidget, ResourcesWidget, TemplatesWidget, PerformanceWidget)
+- **Interactive navigation**: Keyboard shortcuts for efficient dashboard usage
+- **Template inspection**: Built-in template editor and renderer for debugging
+- **Activity tracking**: Visual timeline of operator events and resource changes
 
 ```bash
 # Launch TUI dashboard
@@ -571,48 +506,23 @@ uv run haproxy-template-ic tui
 uv run haproxy-template-ic tui --namespace default --refresh 10 --deployment-name my-operator
 ```
 
-### TUI Options
+### TUI Options & Shortcuts
 
+**Options:**
 - `--namespace`: Kubernetes namespace to monitor (defaults to current kubectl context)
 - `--context`: Kubernetes context to use
 - `--refresh`: Refresh interval in seconds (default: 5)
 - `--deployment-name`: Name of the operator deployment (default: haproxy-template-ic)
-- `--socket-path`: Path to management socket for direct connection
 
-### TUI Architecture
+**Keyboard Shortcuts:**
+- `q`: Quit the application, `r`: Force refresh all data, `t`: Open template inspector, `d`: Toggle debug mode, `h`: Show help screen, `Tab`/`Shift+Tab`: Navigate between widgets
 
-The TUI is built using the Textual framework with a modular widget system:
-
-- **HeaderWidget**: Status overview and navigation
-- **ActivityWidget**: Recent operator events and changes
-- **PodsWidget**: HAProxy pod status and health
-- **ResourcesWidget**: Watched Kubernetes resources
-- **TemplatesWidget**: Template rendering status
-- **PerformanceWidget**: Metrics and performance indicators
-
-### Keyboard Shortcuts
-
-- `q`: Quit the application
-- `r`: Force refresh all data
-- `t`: Open template inspector
-- `d`: Toggle debug mode
-- `h`: Show help screen
-- `Tab`/`Shift+Tab`: Navigate between widgets
-
-### Template Inspector
-
-The integrated template inspector provides:
-- Syntax highlighting for Jinja2 templates
-- Live template rendering with current resource data
-- Error highlighting and validation
-- Resource context browser
+**Template Inspector**: Provides syntax highlighting for Jinja2 templates, live template rendering with current resource data, error highlighting and validation, resource context browser.
 
 ## Monitoring and Observability
 
 **Structured Logging**: Uses structlog with operation correlation, component context, JSON output (set `logging.structured: true` in ConfigMap)
 **Prometheus Metrics**: Port 9090, tracks application/resources/templates/dataplane/errors
-**Management Socket**: `/run/haproxy-template-ic/management.sock` for runtime inspection
-- Commands: `dump all|indices|config`, `get maps|template_snippets <name>`
 **TUI Dashboard**: Interactive terminal interface for real-time monitoring and debugging
 
 ## Reliability and Error Handling
@@ -633,16 +543,15 @@ Environment variables (bootstrap parameters only):
 - `CONFIGMAP_NAME`: Required ConfigMap name
 - `SECRET_NAME`: Required Secret name for credentials
 
-## Runtime Configuration
+### Runtime Configuration
 
-All runtime settings are now configured via the ConfigMap specified by `CONFIGMAP_NAME`. The configuration uses a grouped structure:
+All runtime settings configured via ConfigMap specified by `CONFIGMAP_NAME` using grouped structure:
 
 ```yaml
 # Operator runtime settings
 operator:
   healthz_port: 8080        # Health check port  
   metrics_port: 9090        # Prometheus metrics port
-  socket_path: /run/haproxy-template-ic/management.sock  # Management socket path
 
 # Logging configuration
 logging:
@@ -710,26 +619,26 @@ auth = credentials.dataplane  # Clear and type-safe
 
 **Standard Process**: Feature branch → Plan/implement → Test (`uv run pytest -n auto`) → Quality checks → Self-review → Commit → PR → Review → Merge
 
-**CRITICAL**: Having all tests including unit, integration, and acceptance tests pass reliably is mandatory before merging a PR. The full test suite (`timeout 480 uv run pytest -n auto`) must complete successfully without any failures or flaky tests.
+**CRITICAL**: All tests (unit, integration, acceptance) must pass before PR merge. Full test suite (`timeout 480 uv run pytest -n auto`) must complete without failures or flaky tests.
 
-**Self-Review Step**: After all changes have been made but before committing, Claude should proactively review its own changes using the `code-reviewer` agent and act on any resulting suggestions to ensure code quality and catch potential issues early.
+**Self-Review**: After changes but before commit, Claude should proactively review changes using `code-reviewer` agent and act on suggestions to ensure quality and catch issues early.
 
-**PR Management**:
-- Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) format for PR titles as they become the first line of squashed merge commits: `<type>: <description>`
-- **CRITICAL**: After pushing new commits to an existing PR branch, ALWAYS update the PR description to reflect the changes using `gh pr edit <PR_NUMBER> --body "updated description"`
-- PR descriptions should comprehensively describe the current state of all changes, not just the original changes
-- When addressing code review feedback, add a summary of what was fixed/changed in response to the review
+**PR Management:**
+- Use [Conventional Commits](https://conventionalcommits.org/) format for PR titles as they become the first line of squashed merge commits: `<type>: <description>`
+- **CRITICAL**: After pushing new commits to existing PR branch, ALWAYS update PR description using `gh pr edit <PR_NUMBER> --body "updated description"`
+- PR descriptions should describe current state of all changes, not just original changes
+- When addressing code review feedback, add summary of fixes/changes made
 
-**Kind Development**:
+**Kind Development:**
 1. Setup: `bash ./scripts/start-dev-env.sh up`, optionally with `--skip-build` or `--verbose`
 2. Monitor: `bash ./scripts/start-dev-env.sh logs` or `status`
-3. Debug: Port-forward management socket, inspect with `dump all`
+3. Debug: Use TUI dashboard or check logs for debugging
 4. **CRITICAL: Code Changes**: `bash ./scripts/start-dev-env.sh restart` - MANDATORY after ANY code changes to rebuild Docker image and reload to kind cluster
 5. Clean: `bash ./scripts/start-dev-env.sh down` to remove cluster
 
-**⚠️ CRITICAL DEPLOYMENT REQUIREMENT**: When making code changes in the dev environment, you MUST rebuild and reload the Docker image using `./scripts/start-dev-env.sh restart`. Code changes will NOT take effect without rebuilding the image and reloading it into the kind cluster. This is because the controller runs in containers, not directly from source code.
+**⚠️ CRITICAL**: When making code changes in dev environment, MUST rebuild and reload Docker image using `./scripts/start-dev-env.sh restart`. Code changes will NOT take effect without rebuild/reload into kind cluster. Controller runs in containers, not from source.
 
-**Debugging**:
+### Debugging
 
 The project uses [Telepresence](https://www.telepresence.io/) for debugging in Kubernetes:
 
@@ -738,18 +647,17 @@ The project uses [Telepresence](https://www.telepresence.io/) for debugging in K
 3. **Enable debug mode**: `./scripts/start-dev-env.sh debug` (sleeps in-cluster controller)
 4. **Connect via Telepresence**: `./scripts/start-dev-env.sh telepresence-connect`
 5. **Debug locally**: `CONFIGMAP_NAME=haproxy-template-ic-config-dev SECRET_NAME=haproxy-template-ic-credentials uv run haproxy-template-ic run`
-6. **Management socket**: Available locally as `mgmt.sock` for debugging
 7. **Clean up**: `./scripts/start-dev-env.sh telepresence-disconnect && ./scripts/start-dev-env.sh no-debug`
 
-No Docker rebuilds needed for code changes. The application runs locally with full cluster network access.
+No Docker rebuilds needed for code changes. Application runs locally with full cluster access.
 
-**E2E Test Utilities**:
+**E2E Test Utilities:**
 - **LocalOperatorRunner**: Context manager for running operators locally during tests
 - **Log assertions**: `assert_log_line(operator, pattern, since_milliseconds=100)` for timing-sensitive checks
 - **Socket commands**: `send_socket_command(operator, "dump all")` for runtime state inspection
 - **Time-based search**: `get_log_position_at_time(milliseconds_ago)` for precise log analysis
 
-**Other debugging tools**:
+**Other debugging tools:**
 - TUI Dashboard: `uv run haproxy-template-ic tui` for real-time interactive monitoring
 - Metrics: Port-forward 9090, `curl /metrics`
 - Tracing: Set `tracing.enabled: true` and `tracing.console_export: true` in ConfigMap
@@ -798,7 +706,7 @@ No Docker rebuilds needed for code changes. The application runs locally with fu
 - Use `kubectl apply --dry-run=server` to test webhook validation
 - Check controller logs for template rendering errors
 - Validate Jinja2 syntax with `--webhook-enabled=true`
-- Use management socket `dump config` to inspect rendered templates
+- Check logs or use TUI template inspector to inspect rendered templates
 
 **ConfigMap Reload Issues:**
 - Configuration changes now properly trigger operator reload without infinite loops
@@ -808,7 +716,7 @@ No Docker rebuilds needed for code changes. The application runs locally with fu
 
 ## Commit Message Guidelines
 
-Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `<type>: <description>`
+Use [Conventional Commits](https://conventionalcommits.org/): `<type>: <description>`
 **Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `ci`, `perf`
 
 ## Development Rules
@@ -846,35 +754,33 @@ if "pytest" in sys.modules:  # Never check for test runners!
 - Configure test data to work with production requirements
 
 ### Other Development Rules
-- Always fix failing tests without asking confirmation
+- Always fix failing tests without confirmation
 - Run `uv run pytest -n auto` after code changes to verify full test suite passes
-- Update tests as mandatory part of API changes in same session - test updates are NOT an afterthought
+- Update tests as mandatory part of API changes in same session - test updates are NOT afterthoughts
 - Never edit generated code - regenerate from source specifications
 - Prefer module-level imports over local imports in Python
 - Use `progress_context` (not `test_progress`) to avoid pytest discovery issues
-- **Zero tolerance for flaky tests**: All tests must be deterministic and reliable. Flaky tests must be either fixed to be deterministic or removed entirely. Using `pytest.mark.skip` for flaky tests is not acceptable. Timing-sensitive tests should use mocking, controlled async primitives, or be redesigned to avoid race conditions.
+- **Zero tolerance for flaky tests**: All tests must be deterministic and reliable. Flaky tests must be fixed or removed entirely. No `pytest.mark.skip` for flaky tests. Timing-sensitive tests should use mocking, controlled async primitives, or be redesigned.
+- **No defensive programming**: Avoid getattr()/hasattr() patterns. Leverage required field knowledge to access attributes directly. Project uses strongly-typed models (ApplicationState, Config, etc.) that guarantee field presence - use type safety instead of defensive patterns.
 
 ## No Backward Compatibility Policy
 
 **CRITICAL**: This project prioritizes clean code over backward compatibility. Always disregard backward compatibility when making improvements.
 
-### Core Principles
+### Core Principles & Implementation Guidelines
 
 - **Clean breaks over compatibility layers**: Remove deprecated APIs immediately, don't add fallback logic
 - **No technical debt accumulation**: Delete old code patterns when introducing new ones
 - **Explicit dependencies only**: Use dependency injection, avoid hidden state and implicit coupling
 - **Forward-looking design**: Design for the future, not the past
-
-### Implementation Guidelines
-
 - **Remove deprecated code immediately**: Don't add "backward compatibility" comments or deprecation warnings
 - **Avoid fallback logic**: No `if old_way: ... else: new_way` patterns
 - **No helper methods for old APIs**: Don't create bridge functions to maintain old interfaces  
 - **Clean test updates**: Update test data formats and API calls to match new patterns
 - **Explicit over implicit**: Prefer `config.create_template_compiler()` over hidden `_parent_config` injection
-- **Package exports**: Packages must export their public API through `__init__.py`. External modules should import from the package, not submodules (e.g., `from haproxy_template_ic.dataplane import DataplaneClient`, not `from haproxy_template_ic.dataplane.client import DataplaneClient`)
+- **Package exports**: Packages must export public API through `__init__.py`. External modules import from package, not submodules (e.g., `from haproxy_template_ic.dataplane import DataplaneClient`, not `from haproxy_template_ic.dataplane.client import DataplaneClient`)
 
-### Examples of What NOT to Do
+### Examples of What NOT to Do vs Clean Approach
 
 ```python
 # ❌ Don't add backward compatibility
@@ -888,15 +794,11 @@ def new_method(self, arg):
 @deprecated("Use new_method instead")
 def old_method(self, arg):
     return self.new_method(arg)
-```
 
-### Examples of Clean Approach
-
-```python
 # ✅ Clean replacement - remove old method entirely
 def compile_template(self, compiler: TemplateCompiler) -> Template:
     """Compile template with explicit dependency injection."""
     return compiler.compile_template(self.template)
 ```
 
-This policy ensures the codebase remains lean, maintainable, and free of technical debt.
+This ensures the codebase remains lean, maintainable, and technical debt-free.

@@ -6,12 +6,15 @@ into a single, well-organized module for easier imports and maintenance.
 """
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pytest
 
-from tests.e2e.utils.local_operator import LocalOperatorRunner
-from tests.e2e.utils.socket_client import send_socket_command as socket_send
+
+from tests.e2e.utils.local_operator import (
+    LocalOperatorRunner,
+    wait_for_operator_ready as local_wait,
+)
 
 
 # =============================================================================
@@ -21,8 +24,6 @@ from tests.e2e.utils.socket_client import send_socket_command as socket_send
 
 def wait_for_operator_ready(operator: LocalOperatorRunner) -> None:
     """Wait for the operator to be fully initialized and ready."""
-    from tests.e2e.utils.local_operator import wait_for_operator_ready as local_wait
-
     if not isinstance(operator, LocalOperatorRunner):
         raise ValueError(f"Expected LocalOperatorRunner, got {type(operator)}")
 
@@ -33,7 +34,7 @@ def wait_for_watch_streams_ready(operator: LocalOperatorRunner) -> None:
     """Wait for the operator to establish watch streams for ConfigMap changes."""
     assert_log_line(
         operator,
-        "Starting the watch-stream for configmaps.v1 cluster-wide.",
+        "☸️ Activity 'init_watch_configmap' succeeded.",
     )
 
 
@@ -151,44 +152,104 @@ def assert_no_reload_loop(
     )
 
 
-def assert_operator_health(operator: LocalOperatorRunner) -> None:
-    """Assert that the operator is healthy and functioning."""
-    # If socket responds successfully, operator is healthy
-    response = send_socket_command(operator, "dump all", retries=1)
-    assert response is not None, "Management socket should be responsive"
-    assert "error" not in response, (
-        f"Socket should not return errors: {response.get('error', 'N/A')}"
+def assert_operator_health(operator: LocalOperatorRunner, timeout: float = 30) -> None:
+    """Assert that the operator is healthy and fully operational.
+
+    This function performs comprehensive health checks to verify:
+    1. Process is running
+    2. Initialization completed successfully
+    3. Key services (metrics, config loading, watch streams) are active
+    4. No critical errors occurred
+
+    Args:
+        operator: The LocalOperatorRunner instance
+        timeout: Maximum time to wait for initialization completion
+
+    Raises:
+        AssertionError: If any health check fails
+    """
+    # 1. Basic process health
+    assert operator.is_running(), "Operator process should be running"
+
+    # 2. Wait for initialization completion (with timeout)
+    _wait_for_operator_initialization(operator, timeout)
+
+    # 3. Check for critical errors
+    logs = operator.get_logs()
+    assert "CRITICAL" not in logs, "Operator should not have critical errors"
+    assert "FATAL" not in logs, "Operator should not have fatal errors"
+
+    # 4. Verify key services started
+    _assert_config_loaded(operator)
+    _assert_metrics_server_started(operator)
+    _assert_watch_streams_active(operator)
+
+
+def _wait_for_operator_initialization(
+    operator: LocalOperatorRunner, timeout: float
+) -> None:
+    """Wait for all required initialization steps to complete.
+
+    Args:
+        operator: The LocalOperatorRunner instance
+        timeout: Maximum time to wait for initialization
+
+    Raises:
+        AssertionError: If initialization doesn't complete within timeout
+    """
+    # Wait for configuration and credentials to be loaded
+    assert_log_line(
+        operator,
+        "✅ Configuration and credentials loaded successfully.",
+        timeout=timeout,
     )
 
 
-# =============================================================================
-# SOCKET COMMUNICATION
-# =============================================================================
-
-
-def send_socket_command(
-    operator: LocalOperatorRunner, command: str, timeout: float = 5, retries: int = 3
-) -> Optional[Dict[str, Any]]:
-    """Send a command to the operator's management socket.
+def _assert_config_loaded(operator: LocalOperatorRunner) -> None:
+    """Verify configuration was loaded successfully.
 
     Args:
-        operator: LocalOperatorRunner instance
-        command: Command to send (e.g., "dump all", "dump config")
-        timeout: Socket timeout in seconds (ignored, uses socket default)
-        retries: Number of retry attempts (ignored for simplicity)
+        operator: The LocalOperatorRunner instance
 
-    Returns:
-        Parsed response from the socket or None if failed
+    Raises:
+        AssertionError: If configuration loading is not confirmed in logs
     """
-    # Extract socket path from operator
-    if hasattr(operator, "socket_path"):
-        socket_path = operator.socket_path
-    else:
-        # This shouldn't happen, but handle it for type safety
-        socket_path = str(operator)
+    logs = operator.get_logs()
+    assert "✅ Configuration and credentials loaded successfully." in logs, (
+        "Configuration should be loaded successfully"
+    )
 
-    # Call the actual socket client function (which only takes 2 args)
-    return socket_send(socket_path, command)
+
+def _assert_metrics_server_started(operator: LocalOperatorRunner) -> None:
+    """Verify metrics server started (port is dynamic, check log message).
+
+    Args:
+        operator: The LocalOperatorRunner instance
+
+    Raises:
+        AssertionError: If metrics server startup is not confirmed in logs
+    """
+    logs = operator.get_logs()
+    assert "📊 Metrics server started on port" in logs, (
+        "Metrics server should have started successfully"
+    )
+
+
+def _assert_watch_streams_active(operator: LocalOperatorRunner) -> None:
+    """Verify kopf framework is active and processing events.
+
+    Args:
+        operator: The LocalOperatorRunner instance
+
+    Raises:
+        AssertionError: If kopf framework activity is not confirmed in logs
+    """
+    logs = operator.get_logs()
+    # Check for kopf startup and activity completion which indicates watch streams are working
+    assert (
+        "☸️ Starting Kopf" in logs
+        and "☸️ Activity 'init_watch_configmap' succeeded." in logs
+    ), "Kopf framework should be active and processing configuration"
 
 
 # =============================================================================
@@ -203,14 +264,6 @@ def verify_config_contains(
     for key, expected_value in expected_partial.items():
         assert key in actual_config, f"Missing expected config key: {key}"
         assert actual_config[key] == expected_value, f"Config key '{key}' mismatch"
-
-
-def verify_response_has_structure(
-    response: Dict[str, Any], required_keys: list
-) -> None:
-    """Verify that response contains all required top-level keys."""
-    missing_keys = [key for key in required_keys if key not in response]
-    assert not missing_keys, f"Response missing required keys: {missing_keys}"
 
 
 def assert_config_structure(config: Dict[str, Any]) -> None:
@@ -229,36 +282,6 @@ def assert_config_structure(config: Dict[str, Any]) -> None:
     if "ingresses" in watched_resources:
         expected_ingress = {"kind": "Ingress", "api_version": "networking.k8s.io/v1"}
         verify_config_contains(watched_resources["ingresses"], expected_ingress)
-
-
-def assert_dump_all_response_structure(response: Dict[str, Any]) -> None:
-    """Assert that 'dump all' response has the expected structure and values."""
-    # Verify response has all required sections
-    required_keys = [
-        "config",
-        "haproxy_config_context",
-        "metadata",
-        "indices",
-        "cli_options",
-    ]
-    verify_response_has_structure(response, required_keys)
-
-    # Verify config data
-    assert_config_structure(response["config"])
-
-    # Verify expected metadata values
-    expected_metadata = {
-        "configmap_name": "haproxy-template-ic-config",
-        "has_config_reload_flag": True,
-        "has_stop_flag": True,
-    }
-    verify_config_contains(response["metadata"], expected_metadata)
-
-    # Verify expected CLI options
-    expected_cli_options = {
-        "configmap_name": "haproxy-template-ic-config",
-    }
-    verify_config_contains(response["cli_options"], expected_cli_options)
 
 
 # =============================================================================

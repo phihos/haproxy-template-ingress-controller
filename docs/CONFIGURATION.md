@@ -111,7 +111,7 @@ Reusable template components:
 ```yaml
 template_snippets:
   backend-name: |
-    backend_{{ namespace }}_{{ service }}_{{ port }}
+    backend_{{ service }}_{{ port }}
   
   server-line: |
     server {{ name }} {{ ip }}:{{ port }} check inter 2s
@@ -208,9 +208,6 @@ template_rendering:
 
 View debouncer statistics:
 ```bash
-# Via management socket
-echo "dump debouncer" | socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
-
 # Prometheus metrics
 curl localhost:9090/metrics | grep debouncer
 ```

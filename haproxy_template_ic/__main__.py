@@ -5,33 +5,21 @@ This module provides the CLI interface with proper subcommand structure
 for clear separation between operator mode and utility commands.
 """
 
-import asyncio
 import logging
-import os
 import subprocess  # nosec B404
 import sys
-from dataclasses import dataclass
 from importlib import metadata
 from importlib.metadata import PackageNotFoundError
-from typing import Optional
 
 import click
 
-from haproxy_template_ic.credentials import validate_k8s_name
 from haproxy_template_ic.core.logging import setup_structured_logging
-from haproxy_template_ic.k8s import get_current_namespace
-from haproxy_template_ic.operator import run_operator_loop
-from haproxy_template_ic.tui import TuiLauncher
+from haproxy_template_ic.credentials import validate_k8s_name
+from haproxy_template_ic.initialization import run_operator_loop
+from haproxy_template_ic.k8s.resource_utils import get_current_namespace
+from haproxy_template_ic.models.cli import CliOptions
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class CliOptions:
-    """Container for bootstrap CLI options (configmap and secret location)."""
-
-    configmap_name: str
-    secret_name: str
 
 
 def _get_namespace_fallback() -> str:
@@ -75,22 +63,6 @@ def _cleanup_console_loggers() -> None:
                 root_logger.removeHandler(handler)
 
 
-def _detect_socket_path(socket_path: Optional[str]) -> Optional[str]:
-    """Detect management socket path with fallbacks."""
-    if socket_path:
-        return socket_path
-
-    socket_path = os.environ.get("MANAGEMENT_SOCKET_PATH")
-    if socket_path:
-        return socket_path
-
-    default_socket = "/run/haproxy-template-ic/management.sock"
-    if os.path.exists(default_socket):
-        return default_socket
-
-    return None
-
-
 @click.group()
 @click.pass_context
 def cli(ctx: click.Context) -> None:
@@ -98,7 +70,7 @@ def cli(ctx: click.Context) -> None:
 
     Use 'run' subcommand to start the operator.
 
-    NOTE: Logging, tracing, and other runtime settings are now configured
+    Logging, tracing, and other runtime settings are configured
     via ConfigMap rather than CLI options or environment variables.
     """
     ctx.ensure_object(dict)
@@ -153,84 +125,6 @@ def version() -> None:
         click.echo(f"haproxy-template-ic {app_version}")
     except PackageNotFoundError:
         click.echo("haproxy-template-ic (development)")
-
-
-@cli.command()
-@click.option(
-    "-n",
-    "--namespace",
-    default="",
-    help="Kubernetes namespace to monitor. Defaults to current kubectl context namespace.",
-)
-@click.option(
-    "--context",
-    default=None,
-    help="Kubernetes context to use. Defaults to current kubectl context.",
-)
-@click.option(
-    "-r",
-    "--refresh",
-    default=5,
-    help="Refresh interval in seconds. Default: 5",
-)
-@click.option(
-    "--deployment-name",
-    default="haproxy-template-ic",
-    help="Name of the operator deployment. Default: haproxy-template-ic",
-)
-@click.option(
-    "--socket-path",
-    default=None,
-    help="Path to management socket for direct connection. Auto-detects if running in container.",
-)
-@click.pass_context
-def tui(
-    ctx: click.Context,
-    namespace: str,
-    context: str,
-    refresh: int,
-    deployment_name: str,
-    socket_path: Optional[str],
-) -> None:
-    """Launch Textual TUI dashboard for monitoring HAProxy Template IC.
-
-    The TUI dashboard provides a modern terminal user interface for real-time
-    monitoring of operator status, HAProxy pods, template rendering, resource
-    synchronization, and performance metrics.
-
-    This is an alternative to the Rich-based dashboard with better interactivity,
-    reactive data updates, and a more organized widget-based architecture.
-
-    Examples:
-    \b
-        # Basic usage with current context
-        haproxy-template-ic tui
-
-        # Specific namespace and context
-        haproxy-template-ic tui -n production --context prod-cluster
-
-        # Custom refresh interval
-        haproxy-template-ic tui -r 3
-    """
-    namespace = _detect_namespace(namespace)
-    _cleanup_console_loggers()
-    socket_path = _detect_socket_path(socket_path)
-
-    launcher = TuiLauncher(
-        namespace=namespace,
-        context=context,
-        refresh_interval=refresh,
-        deployment_name=deployment_name,
-        socket_path=socket_path,
-    )
-
-    try:
-        asyncio.run(launcher.launch())
-    except KeyboardInterrupt:
-        logger.info("TUI dashboard terminated by user")
-    except Exception as e:
-        logger.error(f"TUI dashboard failed: {e}")
-        ctx.exit(1)
 
 
 if __name__ == "__main__":

@@ -9,11 +9,8 @@ and basic state management.
 import pytest
 
 from tests.e2e.utils import (
+    assert_operator_health,
     wait_for_operator_ready,
-    send_socket_command,
-    verify_response_has_structure,
-    verify_config_contains,
-    assert_config_structure,
 )
 
 
@@ -23,15 +20,17 @@ def test_basic_init(operator, collect_coverage):
 
     This test verifies:
     1. The operator starts and initializes configuration
-    2. The management socket becomes available
-    3. Basic state can be queried via the socket
+    2. The operator process remains healthy
+    3. No critical errors occur during initialization
     """
     wait_for_operator_ready(operator)
 
-    # Verify we can query the operator state and config is loaded correctly
-    response = send_socket_command(operator, "dump all")
-    verify_response_has_structure(response, ["config", "metadata"])
+    # Verify operator is healthy and running
+    assert_operator_health(operator)
 
-    expected_metadata = {"configmap_name": "haproxy-template-ic-config"}
-    verify_config_contains(response["metadata"], expected_metadata)
-    assert_config_structure(response["config"])
+    # Check logs for successful initialization
+    logs = operator.get_logs()
+    # Verify configuration was loaded successfully
+    assert "✅ Configuration and credentials loaded successfully." in logs
+    # Verify metrics server started
+    assert "📊 Metrics server started on port" in logs

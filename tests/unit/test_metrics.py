@@ -98,17 +98,6 @@ class TestMetricsCollector:
         # Should not raise any exceptions
         assert True
 
-    def test_record_management_socket_operations(self):
-        """Test recording management socket operations."""
-        collector = MetricsCollector()
-
-        collector.record_management_socket_connection()
-        collector.record_management_socket_command("dump_all", "success")
-        collector.record_management_socket_command("invalid", "error")
-
-        # Should not raise any exceptions
-        assert True
-
     def test_record_dataplane_api_request(self):
         """Test recording Dataplane API requests."""
         collector = MetricsCollector()
@@ -278,9 +267,9 @@ class TestMetricsIntegration:
             time.sleep(0.0005)
         collector.record_config_reload(success=True)
 
-        # Simulate management socket activity
-        collector.record_management_socket_connection()
-        collector.record_management_socket_command("dump_all", "success")
+        # Management socket functionality has been removed
+        # collector.record_management_socket_connection()
+        # collector.record_management_socket_command("dump_all", "success")
 
         # Should complete without errors
         assert True
@@ -301,8 +290,8 @@ class TestMetricsIntegration:
         collector.record_config_reload(success=False)
         collector.record_error("config_load_failed", "operator")
 
-        # Management socket errors
-        collector.record_management_socket_command("invalid", "error")
+        # Management socket functionality has been removed
+        # collector.record_management_socket_command("invalid", "error")
 
         # Should complete without errors
         assert True

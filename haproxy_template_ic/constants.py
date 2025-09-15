@@ -48,7 +48,6 @@ DEFAULT_VALIDATION_PASSWORD: Final[str] = "validationpass"
 NAMESPACE_FILE_PATH: Final[str] = (
     "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 )
-DEFAULT_SOCKET_PATH: Final[str] = "/run/haproxy-template-ic/management.sock"
 
 # Kubernetes Resource Limits
 MAX_K8S_NAME_LENGTH: Final[int] = 253
@@ -79,11 +78,6 @@ ERROR_MISSING_CREDENTIALS: Final[str] = "Missing/invalid credential fields: {fie
 
 # Template Processing Limits
 MAX_TEMPLATE_FRAMES: Final[int] = 10  # Maximum traceback frames for template nesting
-
-# Activity Buffer Configuration
-DEFAULT_ACTIVITY_BUFFER_SIZE: Final[int] = 5000  # Maximum events in activity buffer
-DEFAULT_ACTIVITY_QUERY_LIMIT: Final[int] = 1000  # Default number of events to retrieve
-TUI_LOG_BUFFER_SIZE: Final[int] = 1000  # Maximum log entries in TUI screens
 
 # Time calculation constants
 SECONDS_PER_MINUTE: Final[int] = 60

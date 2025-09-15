@@ -81,10 +81,10 @@ def extract_nested_field(resource: Dict[str, Any], field_path: str) -> Optional[
 
 def _is_valid_resource(resource: Any) -> bool:
     """Check if a resource is valid (has required Kubernetes fields)."""
-    if hasattr(resource, "metadata") and hasattr(resource.metadata, "name"):
-        return bool(getattr(resource.metadata, "name", None))
-
-    return _is_valid_dict_resource(resource)
+    try:
+        return bool(resource.metadata.name)
+    except AttributeError:
+        return _is_valid_dict_resource(resource)
 
 
 def _is_valid_dict_resource(resource: Any) -> bool:
@@ -111,23 +111,10 @@ def _is_valid_sequence_resource(resources: Any) -> bool:
 
 def _is_valid_object_resource(resource: Any) -> bool:
     """Check if an object resource (with attributes) is valid."""
-    if not hasattr(resource, "__dict__"):
+    try:
+        # Check if it has kubernetes-like attributes
+        return bool(
+            resource.metadata and resource.kind and _is_valid_resource(resource)
+        )
+    except AttributeError:
         return False
-
-    # Check if it has kubernetes-like attributes
-    return (
-        hasattr(resource, "metadata")
-        and hasattr(resource, "kind")
-        and _is_valid_resource(resource)
-    )
-
-
-__all__ = [
-    "get_current_namespace",
-    "extract_nested_field",
-    "_compile_jsonpath",
-    "_is_valid_resource",
-    "_is_valid_dict_resource",
-    "_is_valid_sequence_resource",
-    "_is_valid_object_resource",
-]

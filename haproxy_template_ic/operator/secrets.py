@@ -13,6 +13,8 @@ import structlog
 from kr8s.objects import Secret
 
 from haproxy_template_ic.core.logging import autolog
+from haproxy_template_ic.credentials import Credentials
+from haproxy_template_ic.models.state import ApplicationState
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -49,7 +51,7 @@ async def fetch_secret(name: str, namespace: str) -> Secret:
 
 @autolog(component="operator")
 async def handle_secret_change(
-    memo: Any,
+    memo: ApplicationState,
     event: dict[str, Any],
     name: str,
     type: str,
@@ -62,5 +64,6 @@ async def handle_secret_change(
     structured_logger.info(f"Kubernetes {type}")
 
     # Store the new credentials in memo for next sync operation
-    memo.credentials = event["object"]
+    secret_data = event["object"]["data"]
+    memo.configuration.credentials = Credentials.from_secret(secret_data)
     structured_logger.info("Credentials updated, will be used in next sync")

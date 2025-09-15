@@ -6,7 +6,8 @@ and template rendering context information.
 """
 
 from enum import Enum
-from pydantic import BaseModel, Field, field_validator
+
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from .types import Filename, NonEmptyStr, NonEmptyStrictStr, SnippetName
 
@@ -16,9 +17,11 @@ class TemplateConfig(BaseModel):
 
     template: NonEmptyStrictStr = Field(..., description="Jinja2 template content")
 
-    class Config:
+    model_config = ConfigDict(
         # Allow Template objects (not JSON serializable but used internally)
-        arbitrary_types_allowed = True
+        arbitrary_types_allowed=True,
+        frozen=True,
+    )
 
 
 class TemplateSnippet(BaseModel):
@@ -27,9 +30,11 @@ class TemplateSnippet(BaseModel):
     name: SnippetName = Field(..., description="Snippet name for {% include %}")
     template: NonEmptyStrictStr = Field(..., description="Jinja2 template content")
 
-    class Config:
+    model_config = ConfigDict(
         # Allow Template objects (not JSON serializable but used internally)
-        arbitrary_types_allowed = True
+        arbitrary_types_allowed=True,
+        frozen=True,
+    )
 
 
 class ContentType(str, Enum):

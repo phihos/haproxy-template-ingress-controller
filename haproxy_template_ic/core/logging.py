@@ -6,11 +6,11 @@ metadata injection, operation correlation, and JSON output formatting
 using the industry-standard structlog library.
 """
 
-import logging
 import functools
 import inspect
+import logging
 from functools import lru_cache
-from typing import Any, Callable, TypeVar, Awaitable, Dict, Union
+from typing import Any, Callable, TypeVar, Awaitable, Dict, Union, cast
 from uuid import uuid4
 
 import structlog
@@ -110,7 +110,7 @@ def autolog(**decorator_kwargs: Any) -> Callable[[F], F]:
                     if bound_keys:
                         structlog.contextvars.unbind_contextvars(*bound_keys)
 
-            return async_wrapper  # type: ignore[return-value]
+            return cast(F, async_wrapper)
         else:
 
             @functools.wraps(func)
@@ -132,7 +132,7 @@ def autolog(**decorator_kwargs: Any) -> Callable[[F], F]:
                     if bound_keys:
                         structlog.contextvars.unbind_contextvars(*bound_keys)
 
-            return sync_wrapper  # type: ignore[return-value]
+            return cast(F, sync_wrapper)
 
     return decorator
 
@@ -163,10 +163,10 @@ def observe(**decorator_kwargs: Any) -> Callable[[AsyncF], AsyncF]:
                 span_name=span_name, attributes=trace_attrs
             )(autolog_func)
 
-            return traced_func  # type: ignore[return-value]
+            return cast(AsyncF, traced_func)
         except ImportError:
             # If tracing module is unavailable, return just the autolog version
-            return autolog_func  # type: ignore[return-value]
+            return cast(AsyncF, autolog_func)
 
     return decorator
 

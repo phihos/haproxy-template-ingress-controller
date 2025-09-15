@@ -10,7 +10,8 @@ import base64
 import io
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 from tenacity import (
@@ -20,8 +21,6 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-if TYPE_CHECKING:
-    pass
 
 # HAProxy Dataplane API v3 client
 from haproxy_dataplane_v3 import AuthenticatedClient
@@ -121,7 +120,7 @@ from haproxy_dataplane_v3.api.http_response_rule import (
     replace_http_response_rule_backend,
     replace_http_response_rule_frontend,
 )
-from haproxy_dataplane_v3.api.information import get_info
+from haproxy_dataplane_v3.api.information import get_info, get_haproxy_process_info
 
 # Advanced section APIs
 from haproxy_dataplane_v3.api.log_forward import (
@@ -278,6 +277,16 @@ from haproxy_template_ic.tracing import (
     trace_dataplane_operation,
 )
 
+
+@dataclass
+class MapChange:
+    """Represents a change in map file entries."""
+
+    operation: str
+    key: str
+    value: str = ""
+
+
 logger = logging.getLogger(__name__)
 
 # Section elements registry defining nested elements each section supports
@@ -308,7 +317,6 @@ _SECTION_ELEMENTS = {
         ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
         ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
         ("tcp_request_rules", ConfigElementType.TCP_REQUEST_RULE, False),  # Ordered
-        # NOTE: TCP response rules are not supported for frontends
         ("acls", ConfigElementType.ACL, True),  # Named
         ("filters", ConfigElementType.FILTER, False),  # Ordered
         ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
@@ -533,7 +541,6 @@ _SECTION_ELEMENTS = {
         ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
         ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
         ("tcp_request_rules", ConfigElementType.TCP_REQUEST_RULE, False),  # Ordered
-        # NOTE: TCP response rules are not supported for frontends
         ("acls", ConfigElementType.ACL, True),  # Named
         ("filters", ConfigElementType.FILTER, False),  # Ordered
         ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
@@ -712,16 +719,34 @@ class DataplaneClient:
     async def get_version(self) -> Dict[str, Any]:
         """Get HAProxy version information using the generated client."""
         client = self._get_client()
-        info_response = await get_info.asyncio(client=client)
 
-        # Convert the generated model to dict format expected by existing code
+        # Get HAProxy process information for version details
+        haproxy_info_response = await get_haproxy_process_info.asyncio(client=client)
+
+        # Get general API information for completeness
+        api_info_response = await get_info.asyncio(client=client)
+
+        # Convert the generated models to dict format expected by existing code
         result = {}
-        if hasattr(info_response, "haproxy") and info_response.haproxy:
-            result.update(info_response.haproxy.to_dict())
-        if hasattr(info_response, "api") and info_response.api:
-            result.update(info_response.api.to_dict())
-        if hasattr(info_response, "system") and info_response.system:
-            result.update(info_response.system.to_dict())
+
+        # Add HAProxy version information from process info
+        if haproxy_info_response and haproxy_info_response.info:
+            haproxy_info = haproxy_info_response.info.to_dict()
+            result.update(haproxy_info)
+            # Ensure 'haproxy' key exists for backward compatibility
+            if "version" in haproxy_info:
+                result["haproxy"] = {"version": haproxy_info["version"]}
+                if "release_date" in haproxy_info:
+                    result["haproxy"]["release_date"] = haproxy_info["release_date"]
+
+        # Add API information if available
+        if api_info_response.api:
+            api_info = api_info_response.api.to_dict()
+            result.update(api_info)
+
+        # Add system information if available
+        if api_info_response.system:
+            result.update(api_info_response.system.to_dict())
 
         return result
 
@@ -1116,14 +1141,6 @@ class DataplaneClient:
         Returns:
             List of change objects with operation, key, and data attributes
         """
-        from dataclasses import dataclass
-
-        @dataclass
-        class MapChange:
-            operation: str
-            key: str
-            value: str = ""
-            data: str = ""  # Keep for backward compatibility
 
         changes = []
         old_keys = set(old_entries.keys())
@@ -1140,7 +1157,6 @@ class DataplaneClient:
                     operation="add",
                     key=key,
                     value=new_entries[key],
-                    data=f"{key} {new_entries[key]}".strip(),
                 )
             )
 
@@ -1152,7 +1168,6 @@ class DataplaneClient:
                         operation="replace",
                         key=key,
                         value=new_entries[key],
-                        data=f"{key} {new_entries[key]}".strip(),
                     )
                 )
 
@@ -1508,6 +1523,133 @@ class DataplaneClient:
             result = await self.deploy_configuration(new_config_normalized)
             return result
 
+    def _separate_server_changes(
+        self, changes: List[ConfigChange]
+    ) -> Tuple[List[ConfigChange], List[ConfigChange]]:
+        """Separate server changes from other changes for runtime API optimization.
+
+        Args:
+            changes: List of configuration changes
+
+        Returns:
+            Tuple of (server_changes, other_changes)
+        """
+        server_changes = [
+            c
+            for c in changes
+            if c.element_type == ConfigElementType.SERVER
+            and c.section_type == ConfigSectionType.BACKEND
+        ]
+        other_changes = [c for c in changes if c not in server_changes]
+
+        # Sort server changes by name for consistent ordering (SRV_1, SRV_2, ..., SRV_10)
+        server_changes.sort(key=lambda c: _natural_sort_key(c.element_id or ""))
+
+        return server_changes, other_changes
+
+    async def _apply_server_changes_runtime(
+        self, client, server_changes: List[ConfigChange]
+    ) -> List[ConfigChange]:
+        """Apply server changes via runtime API, returning failed changes.
+
+        Args:
+            client: HTTP client for API calls
+            server_changes: List of server changes to apply
+
+        Returns:
+            List of server changes that failed runtime API (need transaction fallback)
+        """
+        if not server_changes:
+            return []
+
+        logger.info(
+            f"🏃 Applying {len(server_changes)} server changes via runtime-eligible path"
+        )
+
+        runtime_failed_servers = []
+        for i, change in enumerate(server_changes):
+            logger.debug(
+                f"🏃 Applying server change {i + 1}/{len(server_changes)}: {change}"
+            )
+            try:
+                await self._apply_server_without_transaction(client, change)
+            except Exception as server_error:
+                logger.warning(
+                    f"⚠️  Runtime API failed for server {change.element_id}, will retry via transaction: {server_error}"
+                )
+                runtime_failed_servers.append(change)
+
+        # Log results
+        if runtime_failed_servers:
+            logger.info(
+                f"🔄 {len(runtime_failed_servers)} server changes failed runtime API, will retry via transaction"
+            )
+
+        successful_runtime_servers = len(server_changes) - len(runtime_failed_servers)
+        if successful_runtime_servers > 0:
+            logger.info(
+                f"✅ {successful_runtime_servers} server changes applied via runtime API"
+            )
+
+        return runtime_failed_servers
+
+    def _sort_other_changes(self, other_changes: List[ConfigChange]) -> None:
+        """Sort changes to ensure consistent ordering, especially for initial server creation.
+
+        Args:
+            other_changes: List of changes to sort in-place
+        """
+        other_changes.sort(
+            key=lambda c: (
+                c.section_type.value if c.section_type else "",
+                c.section_name or "",
+                c.element_type.value if c.element_type else "",
+                _natural_sort_key(c.element_id or ""),
+            )
+        )
+
+    async def _handle_runtime_only_deployment(
+        self, client, server_changes: List[ConfigChange]
+    ) -> Dict[str, Any]:
+        """Handle the case where all changes were applied via runtime API.
+
+        Args:
+            client: HTTP client for API calls
+            server_changes: List of server changes that were applied
+
+        Returns:
+            Deployment result dictionary
+        """
+        logger.info(
+            "✅ All changes were server changes applied via runtime API - no transaction needed"
+        )
+
+        # Get current version for return
+        try:
+            version_response = await _get_configuration_version(client)
+            new_version = str(version_response) if version_response else "runtime-only"
+
+            record_span_event(
+                "runtime_only_deployment_successful",
+                {
+                    "server_changes_count": len(server_changes),
+                    "version": new_version,
+                },
+            )
+
+            return {
+                "version": new_version,
+                "reload_triggered": False,
+                "reload_id": None,
+            }
+        except Exception:
+            # Runtime-only fallback - no reload
+            return {
+                "version": "runtime-only",
+                "reload_triggered": False,
+                "reload_id": None,
+            }
+
     async def deploy_structured_configuration(
         self, changes: List[ConfigChange]
     ) -> Dict[str, Any]:
@@ -1545,16 +1687,7 @@ class DataplaneClient:
             client = self._get_client()
 
             # Separate server changes from other changes for runtime API optimization
-            server_changes = [
-                c
-                for c in changes
-                if c.element_type == ConfigElementType.SERVER
-                and c.section_type == ConfigSectionType.BACKEND
-            ]
-            other_changes = [c for c in changes if c not in server_changes]
-
-            # Sort server changes by name for consistent ordering (SRV_1, SRV_2, ..., SRV_10)
-            server_changes.sort(key=lambda c: _natural_sort_key(c.element_id or ""))
+            server_changes, other_changes = self._separate_server_changes(changes)
 
             logger.debug(
                 f"🔄 Separated changes: {len(server_changes)} server changes (runtime-eligible), "
@@ -1562,81 +1695,22 @@ class DataplaneClient:
             )
 
             # Apply server changes first WITHOUT transaction to enable runtime API
-            runtime_failed_servers = []
-            if server_changes:
-                logger.info(
-                    f"🏃 Applying {len(server_changes)} server changes via runtime-eligible path"
-                )
-                for i, change in enumerate(server_changes):
-                    logger.debug(
-                        f"🏃 Applying server change {i + 1}/{len(server_changes)}: {change}"
-                    )
-                    try:
-                        await self._apply_server_without_transaction(client, change)
-                    except Exception as server_error:
-                        logger.warning(
-                            f"⚠️  Runtime API failed for server {change.element_id}, will retry via transaction: {server_error}"
-                        )
-                        runtime_failed_servers.append(change)
+            runtime_failed_servers = await self._apply_server_changes_runtime(
+                client, server_changes
+            )
 
-                # If some servers failed runtime API, add them to other_changes for transaction
-                if runtime_failed_servers:
-                    logger.info(
-                        f"🔄 {len(runtime_failed_servers)} server changes failed runtime API, will retry via transaction"
-                    )
-                    other_changes.extend(runtime_failed_servers)
-
-                # Update success count
-                successful_runtime_servers = len(server_changes) - len(
-                    runtime_failed_servers
-                )
-                if successful_runtime_servers > 0:
-                    logger.info(
-                        f"✅ {successful_runtime_servers} server changes applied via runtime API"
-                    )
+            # If some servers failed runtime API, add them to other_changes for transaction
+            if runtime_failed_servers:
+                other_changes.extend(runtime_failed_servers)
 
             # Only use transaction if there are non-server changes
             if not other_changes:
-                logger.info(
-                    "✅ All changes were server changes applied via runtime API - no transaction needed"
+                return await self._handle_runtime_only_deployment(
+                    client, server_changes
                 )
-                # Get current version for return
-                try:
-                    version_response = await _get_configuration_version(client)
-                    new_version = (
-                        str(version_response) if version_response else "runtime-only"
-                    )
-                    record_span_event(
-                        "runtime_only_deployment_successful",
-                        {
-                            "server_changes_count": len(server_changes),
-                            "version": new_version,
-                        },
-                    )
 
-                    # Runtime-only deployments don't trigger reloads
-                    return {
-                        "version": new_version,
-                        "reload_triggered": False,
-                        "reload_id": None,
-                    }
-                except Exception:
-                    # Runtime-only fallback - no reload
-                    return {
-                        "version": "runtime-only",
-                        "reload_triggered": False,
-                        "reload_id": None,
-                    }
-
-            # Sort other_changes to ensure consistent ordering, especially for initial server creation
-            other_changes.sort(
-                key=lambda c: (
-                    c.section_type.value if c.section_type else "",
-                    c.section_name or "",
-                    c.element_type.value if c.element_type else "",
-                    _natural_sort_key(c.element_id or ""),
-                )
-            )
+            # Sort other_changes to ensure consistent ordering
+            self._sort_other_changes(other_changes)
 
             # Start a transaction to batch remaining changes atomically
             try:
@@ -1919,7 +1993,6 @@ class DataplaneClient:
             # Extract just the filename from the full path for the API
             map_filename = os.path.basename(map_file_path)
 
-            # NOTE: Map operations are always runtime in the dataplane API
             # The API endpoints automatically use runtime operations
             for change in map_changes:
                 if hasattr(change, "operation"):
@@ -1981,7 +2054,6 @@ class DataplaneClient:
             acl_changes: List of ACL entry changes to apply
         """
         try:
-            # NOTE: ACL operations are always runtime in the dataplane API
             for change in acl_changes:
                 if hasattr(change, "operation"):
                     if change.operation == "add":
@@ -2358,7 +2430,7 @@ class DataplaneClient:
                     fetch_apis = _ELEMENT_FETCH_APIS.get(section_type, {})
 
                     for section in sections:
-                        if hasattr(section, "name") and section.name:
+                        if section.name:
                             section_name = section.name
                             nested_elements[section_key][section_name] = {}
 

@@ -140,7 +140,6 @@ The development workflow uses two key configurations:
 ### 1. Development ConfigMap (`haproxy-template-ic-config-dev`)
 Key differences from production ConfigMap:
 - `validation.dataplane_host: haproxy-template-ic` (uses K8s service name)
-- `operator.socket_path: mgmt.sock` (local file instead of `/run/haproxy-template-ic/management.sock`)
 
 ### 2. Debug Mode Deployment Patch
 The sleep mode patch:

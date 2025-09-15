@@ -5,10 +5,7 @@ import pytest
 from haproxy_template_ic.models import (
     HAProxyConfigContext,
     TriggerContext,
-    Config,
     TemplateContext,
-    TemplateConfig,
-    PodSelector,
     RenderedConfig,
     RenderedContent,
     IndexedResourceCollection,
@@ -21,14 +18,8 @@ class TestSyncOptimization:
     @pytest.mark.asyncio
     async def test_content_hash_computation(self):
         """Test content hash computation and change detection."""
-        config = Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=TemplateConfig(template="# Test config"),
-        )
-
         context = HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(namespace="default"),
+            template_context=TemplateContext(),
             rendered_config=RenderedConfig(content="test config content"),
         )
 
@@ -63,14 +54,8 @@ class TestSyncOptimization:
     @pytest.mark.asyncio
     async def test_pod_hash_computation(self):
         """Test pod hash computation and change detection."""
-        config = Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=TemplateConfig(template="# Test config"),
-        )
-
         context = HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(namespace="default"),
+            template_context=TemplateContext(),
         )
 
         # Create mock pod collection
@@ -84,10 +69,9 @@ class TestSyncOptimization:
                 "status": {"podIP": "10.0.0.2"},
             },
         }
-        pods_collection = IndexedResourceCollection()
-        # IndexedResourceCollection uses _internal_dict with list values
-        for key, resource in pod_data1.items():
-            pods_collection._internal_dict[key] = [resource]
+        # Convert pod_data to proper format for from_kopf_index
+        mock_pods_index = {key: [resource] for key, resource in pod_data1.items()}
+        pods_collection = IndexedResourceCollection.from_kopf_index(mock_pods_index)
 
         # First hash computation
         hash1 = context.compute_haproxy_pods_hash(pods_collection)
@@ -106,9 +90,9 @@ class TestSyncOptimization:
             "metadata": {"namespace": "default", "name": "pod3"},
             "status": {"podIP": "10.0.0.3"},
         }
-        pods_collection2 = IndexedResourceCollection()
-        for key, resource in pod_data2.items():
-            pods_collection2._internal_dict[key] = [resource]
+        # Convert pod_data2 to proper format for from_kopf_index
+        mock_pods_index2 = {key: [resource] for key, resource in pod_data2.items()}
+        pods_collection2 = IndexedResourceCollection.from_kopf_index(mock_pods_index2)
 
         hash3 = context.compute_haproxy_pods_hash(pods_collection2)
         changed3 = await context.have_pods_changed(pods_collection2)
@@ -117,14 +101,9 @@ class TestSyncOptimization:
 
     def test_empty_pod_collection_hash(self):
         """Test pod hash computation with empty collection."""
-        config = Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=TemplateConfig(template="# Test config"),
-        )
 
         context = HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(namespace="default"),
+            template_context=TemplateContext(),
         )
 
         # Test with None collection
@@ -156,20 +135,14 @@ class TestSyncOptimization:
 
     def test_deterministic_content_hash(self):
         """Test that content hash is deterministic."""
-        config = Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=TemplateConfig(template="# Test config"),
-        )
 
         context1 = HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(namespace="default"),
+            template_context=TemplateContext(),
             rendered_config=RenderedConfig(content="test config content"),
         )
 
         context2 = HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(namespace="default"),
+            template_context=TemplateContext(),
             rendered_config=RenderedConfig(content="test config content"),
         )
 
@@ -180,14 +153,9 @@ class TestSyncOptimization:
 
     def test_deterministic_pod_hash(self):
         """Test that pod hash is deterministic and order-independent."""
-        config = Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=TemplateConfig(template="# Test config"),
-        )
 
         context = HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(namespace="default"),
+            template_context=TemplateContext(),
         )
 
         # Create two collections with same pods in different order
@@ -213,13 +181,12 @@ class TestSyncOptimization:
             },
         }
 
-        pods_collection1 = IndexedResourceCollection()
-        for key, resource in pod_data1.items():
-            pods_collection1._internal_dict[key] = [resource]
+        # Convert pod_data to proper format for from_kopf_index
+        mock_pods_index1 = {key: [resource] for key, resource in pod_data1.items()}
+        pods_collection1 = IndexedResourceCollection.from_kopf_index(mock_pods_index1)
 
-        pods_collection2 = IndexedResourceCollection()
-        for key, resource in pod_data2.items():
-            pods_collection2._internal_dict[key] = [resource]
+        mock_pods_index2 = {key: [resource] for key, resource in pod_data2.items()}
+        pods_collection2 = IndexedResourceCollection.from_kopf_index(mock_pods_index2)
 
         # Same pods in different order should produce same hash
         hash1 = context.compute_haproxy_pods_hash(pods_collection1)
@@ -228,15 +195,10 @@ class TestSyncOptimization:
 
     def test_content_type_ordering_in_hash(self):
         """Test that content is properly ordered by type and filename for deterministic hashing."""
-        config = Config(
-            pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-            haproxy_config=TemplateConfig(template="# Test config"),
-        )
 
         # Create two contexts with same content in different orders
         context1 = HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(namespace="default"),
+            template_context=TemplateContext(),
             rendered_config=RenderedConfig(content="test config content"),
         )
         context1.rendered_content = [
@@ -249,8 +211,7 @@ class TestSyncOptimization:
         ]
 
         context2 = HAProxyConfigContext(
-            config=config,
-            template_context=TemplateContext(namespace="default"),
+            template_context=TemplateContext(),
             rendered_config=RenderedConfig(content="test config content"),
         )
         context2.rendered_content = [

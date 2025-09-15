@@ -1,12 +1,19 @@
 """Unit tests for the template rendering debouncer."""
 
 import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from kopf._core.engines.indexing import OperatorIndices
 
-from haproxy_template_ic.debouncer import TemplateRenderDebouncer
-from haproxy_template_ic.models import TriggerContext
+from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
+from haproxy_template_ic.metrics import MetricsCollector
+from haproxy_template_ic.models.config import Config
+from haproxy_template_ic.models.context import HAProxyConfigContext
+from haproxy_template_ic.models.templates import TriggerContext
+from haproxy_template_ic.templating import TemplateRenderer
 
 # Test constants to avoid magic numbers
 MIN_INTERVAL_SHORT = 0.04  # 40ms for fast test execution
@@ -19,108 +26,130 @@ SLEEP_MEDIUM = 0.15  # 150ms to exceed short max_interval
 SLEEP_LONG = 0.25  # 250ms to ensure render completes
 
 
+# =============================================================================
+# Centralized Mock Creation
+# =============================================================================
+
+
+def create_debouncer_mocks():
+    """Create all required mocks for TemplateRenderDebouncer."""
+    # Create a config mock with required attributes
+    config_mock = MagicMock(spec=Config)
+    config_mock.watched_resources_ignore_fields = []
+    config_mock.watched_resources = {}  # Empty dict to avoid iteration
+
+    # Create context mock with required attributes
+    context_mock = MagicMock(spec=HAProxyConfigContext)
+    context_mock.rendered_content = []
+
+    return {
+        "config": config_mock,
+        "haproxy_config_context": context_mock,
+        "template_renderer": MagicMock(spec=TemplateRenderer),
+        "config_synchronizer": MagicMock(spec=ConfigSynchronizer),
+        "kopf_indices": MagicMock(spec=OperatorIndices),
+        "metrics": MagicMock(spec=MetricsCollector),
+    }
+
+
+def create_debouncer(
+    min_interval=MIN_INTERVAL_SHORT, max_interval=MAX_INTERVAL_LONG, **kwargs
+):
+    """Create a TemplateRenderDebouncer with standard mocks."""
+    mocks = create_debouncer_mocks()
+    mocks.update(kwargs)  # Allow override of specific mocks
+    return TemplateRenderDebouncer(
+        min_interval=min_interval, max_interval=max_interval, **mocks
+    )
+
+
+@contextlib.asynccontextmanager
+async def managed_debouncer(*args, **kwargs):
+    """Context manager that handles debouncer start/stop lifecycle."""
+    debouncer = create_debouncer(*args, **kwargs)
+    await debouncer.start()
+    try:
+        yield debouncer
+    finally:
+        await debouncer.stop()
+
+
+@pytest.fixture
+def mock_render_haproxy_templates():
+    """Mock the render_haproxy_templates function."""
+    with patch(
+        "haproxy_template_ic.operator.debouncer.render_haproxy_templates",
+        new_callable=AsyncMock,
+    ) as mock:
+        # Make the mock return successfully without doing anything
+        mock.return_value = None
+        yield mock
+
+
 class TestTemplateRenderDebouncer:
     """Test the TemplateRenderDebouncer class."""
 
     @pytest.mark.asyncio
     async def test_init_validation(self):
         """Test that initialization validates interval constraints."""
-        render_func = AsyncMock()
-        memo = MagicMock()
-
         # Valid initialization
-        debouncer = TemplateRenderDebouncer(
-            min_interval=5, max_interval=10, render_func=render_func, memo=memo
-        )
+        debouncer = create_debouncer(min_interval=5, max_interval=10)
         assert debouncer.min_interval == 5
         assert debouncer.max_interval == 10
 
         # Invalid: max < min
         with pytest.raises(ValueError, match="max_interval.*must be >= min_interval"):
-            TemplateRenderDebouncer(
-                min_interval=10, max_interval=5, render_func=render_func, memo=memo
-            )
+            create_debouncer(min_interval=10, max_interval=5)
 
     @pytest.mark.asyncio
-    async def test_single_trigger(self):
+    async def test_single_trigger(self, mock_render_haproxy_templates):
         """Test that a single trigger causes rendering after min_interval."""
-        render_func = AsyncMock()
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
-            min_interval=MIN_INTERVAL_SHORT,
-            max_interval=MAX_INTERVAL_LONG,
-            render_func=render_func,
-            memo=memo,
-        )
-
-        await debouncer.start()
-
-        try:
+        async with managed_debouncer(
+            MIN_INTERVAL_SHORT, MAX_INTERVAL_LONG
+        ) as debouncer:
             # Trigger once
             await debouncer.trigger()
 
             # Wait for min_interval + buffer
             await asyncio.sleep(SLEEP_SHORT)
 
-            # Should have rendered once with trigger context
-            # Note: debouncer now passes logger as second parameter
-            assert render_func.call_count == 1
-            args, kwargs = render_func.call_args
-            assert args[0] is memo  # First arg is memo
-            # Second arg is logger (we don't need to test the logger object)
-            assert len(args) == 2
-            assert kwargs["trigger_context"] == TriggerContext(
-                trigger_type="periodic_refresh", pod_changed=False
-            )
-        finally:
-            await debouncer.stop()
+            # Should have rendered once
+            assert mock_render_haproxy_templates.call_count == 1
+
+            # Verify the call was made with correct arguments
+            call_args = mock_render_haproxy_templates.call_args
+            assert call_args is not None
+            args, kwargs = call_args
+
+            # Check that trigger_context is passed in kwargs
+            assert "trigger_context" in kwargs
+            trigger_context = kwargs["trigger_context"]
+            assert isinstance(trigger_context, TriggerContext)
+            assert trigger_context.pod_changed is False
 
     @pytest.mark.asyncio
-    async def test_guaranteed_periodic_execution(self):
+    async def test_guaranteed_periodic_execution(self, mock_render_haproxy_templates):
         """Test that rendering happens at max_interval even without triggers."""
-        render_func = AsyncMock()
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
-            min_interval=MIN_INTERVAL_SHORT,
-            max_interval=MAX_INTERVAL_SHORT,
-            render_func=render_func,
-            memo=memo,
-        )
-
-        await debouncer.start()
-
-        try:
+        async with managed_debouncer(
+            MIN_INTERVAL_SHORT, MAX_INTERVAL_SHORT
+        ) as _debouncer:
             # Don't trigger anything, just wait
             await asyncio.sleep(SLEEP_MEDIUM)  # Wait past max_interval
 
             # Should have rendered due to timeout
-            assert render_func.call_count >= 1
-        finally:
-            await debouncer.stop()
+            assert mock_render_haproxy_templates.call_count >= 1
 
     @pytest.mark.asyncio
-    async def test_rate_limiting(self):
+    async def test_rate_limiting(self, mock_render_haproxy_templates):
         """Test that min_interval is enforced between renders."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        debouncer = TemplateRenderDebouncer(
-            min_interval=MIN_INTERVAL_LONG,
-            max_interval=MAX_INTERVAL_LONG,
-            render_func=render_func,
-            memo=memo,
-        )
+        async with managed_debouncer(MIN_INTERVAL_LONG, MAX_INTERVAL_LONG) as debouncer:
+            await asyncio.sleep(MIN_INTERVAL_SHORT)  # Let it start
 
-        await debouncer.start()
-        await asyncio.sleep(MIN_INTERVAL_SHORT)  # Let it start
-
-        try:
             # First trigger and render
             await debouncer.trigger()
             await asyncio.sleep(SLEEP_LONG)  # Wait for render
-            render_count_1 = render_func.call_count
+            render_count_1 = mock_render_haproxy_templates.call_count
             assert render_count_1 >= 1
 
             # Trigger again - should be rate limited
@@ -128,28 +157,18 @@ class TestTemplateRenderDebouncer:
             await asyncio.sleep(SLEEP_SHORT)  # Less than min_interval
 
             # Should not have rendered yet
-            assert render_func.call_count == render_count_1
+            assert mock_render_haproxy_templates.call_count == render_count_1
 
             # Wait for min_interval to pass
             await asyncio.sleep(SLEEP_SHORT * 2)
 
             # Now should have rendered again
-            assert render_func.call_count > render_count_1
-        finally:
-            await debouncer.stop()
+            assert mock_render_haproxy_templates.call_count > render_count_1
 
     @pytest.mark.asyncio
-    async def test_stop_gracefully(self):
+    async def test_stop_gracefully(self, mock_render_haproxy_templates):
         """Test that debouncer stops gracefully."""
-        render_func = AsyncMock()
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
-            min_interval=MIN_INTERVAL_SHORT,
-            max_interval=MAX_INTERVAL_LONG,
-            render_func=render_func,
-            memo=memo,
-        )
+        debouncer = create_debouncer(MIN_INTERVAL_SHORT, MAX_INTERVAL_LONG)
 
         await debouncer.start()
         await asyncio.sleep(SLEEP_BUFFER)  # Let it start
@@ -162,17 +181,12 @@ class TestTemplateRenderDebouncer:
         assert debouncer._stop is True
 
     @pytest.mark.asyncio
-    async def test_render_error_handling(self):
+    async def test_render_error_handling(self, mock_render_haproxy_templates):
         """Test that render errors don't crash the debouncer."""
-        render_func = AsyncMock(side_effect=Exception("Test error"))
-        memo = MagicMock()
+        # Configure the mock to raise an exception
+        mock_render_haproxy_templates.side_effect = Exception("Test error")
 
-        debouncer = TemplateRenderDebouncer(
-            min_interval=MIN_INTERVAL_SHORT,
-            max_interval=MIN_INTERVAL_LONG,
-            render_func=render_func,
-            memo=memo,
-        )
+        debouncer = create_debouncer(MIN_INTERVAL_SHORT, MIN_INTERVAL_LONG)
 
         await debouncer.start()
 
@@ -182,60 +196,24 @@ class TestTemplateRenderDebouncer:
             await asyncio.sleep(SLEEP_SHORT)
 
             # Should have attempted render despite error
-            assert render_func.call_count >= 1
-
-            # Debouncer should still be running
-            stats = debouncer.get_stats()
-            assert stats["is_running"] is True
+            assert mock_render_haproxy_templates.call_count >= 1
         finally:
             await debouncer.stop()
 
     @pytest.mark.asyncio
-    async def test_get_stats(self):
-        """Test that get_stats returns correct information."""
-        render_func = AsyncMock()
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
-            min_interval=5, max_interval=60, render_func=render_func, memo=memo
-        )
-
-        stats = debouncer.get_stats()
-        assert stats["min_interval"] == 5
-        assert stats["max_interval"] == 60
-        assert stats["is_running"] is False
-        assert stats["pending_changes"] == 0
-
-        await debouncer.start()
-        await asyncio.sleep(SLEEP_BUFFER / 5)
-
-        stats = debouncer.get_stats()
-        assert stats["is_running"] is True
-
-        await debouncer.trigger()
-        stats = debouncer.get_stats()
-        assert stats["pending_changes"] == 1
-
-        await debouncer.stop()
-
-    @pytest.mark.asyncio
-    async def test_start_idempotent(self):
+    async def test_start_idempotent(self, mock_render_haproxy_templates):
         """Test that calling start multiple times is safe."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        debouncer = TemplateRenderDebouncer(
+        debouncer = create_debouncer(
             min_interval=MIN_INTERVAL_SHORT,
             max_interval=MAX_INTERVAL_LONG,
-            render_func=render_func,
-            memo=memo,
         )
 
         await debouncer.start()
         first_task = debouncer._task
 
         # Starting again should not create a new task
-        with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
+        with patch("haproxy_template_ic.operator.debouncer.logger") as mock_logger:
             await debouncer.start()
             mock_logger.warning.assert_called_with("Debouncer already running")
 
@@ -244,30 +222,21 @@ class TestTemplateRenderDebouncer:
         await debouncer.stop()
 
     @pytest.mark.asyncio
-    async def test_periodic_refresh_timing(self):
+    async def test_periodic_refresh_timing(self, mock_render_haproxy_templates):
         """Test that periodic refresh doesn't add unnecessary min_interval wait."""
         import time
 
-        render_func = AsyncMock()
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
+        async with managed_debouncer(
             min_interval=MIN_INTERVAL_SHORT,  # 0.1s min interval
             max_interval=MAX_INTERVAL_SHORT,  # 0.3s max interval (short for test)
-            render_func=render_func,
-            memo=memo,
-        )
-
-        await debouncer.start()
-
-        try:
+        ) as _debouncer:
             start_time = time.time()
 
             # Wait for periodic refresh (should happen after max_interval)
             await asyncio.sleep(SLEEP_MEDIUM)  # 0.35s > 0.3s max_interval
 
             # Should have rendered due to periodic refresh
-            assert render_func.call_count >= 1
+            assert mock_render_haproxy_templates.call_count >= 1
 
             # Check that total time is approximately max_interval, not max_interval + min_interval
             total_time = time.time() - start_time
@@ -277,31 +246,21 @@ class TestTemplateRenderDebouncer:
                 total_time < 0.4
             )  # Should be much less than 0.4s if working correctly
 
-        finally:
-            await debouncer.stop()
-
     @pytest.mark.asyncio
-    async def test_accurate_time_calculation_after_wait(self):
+    async def test_accurate_time_calculation_after_wait(
+        self, mock_render_haproxy_templates
+    ):
         """Test that resource changes don't wait unnecessarily when enough time has passed."""
         import time
 
-        render_func = AsyncMock()
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
+        async with managed_debouncer(
             min_interval=MIN_INTERVAL_LONG,  # 0.5s min interval
             max_interval=MAX_INTERVAL_LONG,  # 10s max interval
-            render_func=render_func,
-            memo=memo,
-        )
-
-        await debouncer.start()
-
-        try:
+        ) as debouncer:
             # First render
             await debouncer.trigger()
             await asyncio.sleep(SLEEP_LONG)  # 0.6s wait for first render
-            first_count = render_func.call_count
+            first_count = mock_render_haproxy_templates.call_count
             assert first_count >= 1
 
             # Wait longer than min_interval
@@ -315,36 +274,26 @@ class TestTemplateRenderDebouncer:
             await asyncio.sleep(SLEEP_SHORT)  # Just enough for processing
 
             # Should have rendered without additional delay
-            assert render_func.call_count > first_count
+            assert mock_render_haproxy_templates.call_count > first_count
             processing_time = time.time() - start_time
             # Should be much less than min_interval (0.5s) since enough time already passed
             assert processing_time < 0.3
 
-        finally:
-            await debouncer.stop()
-
     @pytest.mark.asyncio
-    async def test_min_interval_still_enforced_when_needed(self):
+    async def test_min_interval_still_enforced_when_needed(
+        self, mock_render_haproxy_templates
+    ):
         """Test that min_interval is still enforced for rapid successive triggers."""
         import time
 
-        render_func = AsyncMock()
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
+        async with managed_debouncer(
             min_interval=MIN_INTERVAL_LONG,  # 0.5s min interval
             max_interval=MAX_INTERVAL_LONG,  # 10s max interval
-            render_func=render_func,
-            memo=memo,
-        )
-
-        await debouncer.start()
-
-        try:
+        ) as debouncer:
             # First render
             await debouncer.trigger()
             await asyncio.sleep(SLEEP_LONG)  # 0.6s wait for first render
-            first_count = render_func.call_count
+            first_count = mock_render_haproxy_templates.call_count
             assert first_count >= 1
 
             # Trigger again immediately (within min_interval)
@@ -355,30 +304,23 @@ class TestTemplateRenderDebouncer:
             )  # Wait for rate limiting + processing
 
             # Should have rendered but with rate limiting delay
-            assert render_func.call_count > first_count
+            assert mock_render_haproxy_templates.call_count > first_count
             total_time = time.time() - start_time
             # Should be approximately min_interval (0.5s) plus some processing time
             assert total_time >= MIN_INTERVAL_LONG * 0.8  # Allow 20% timing tolerance
-
-        finally:
-            await debouncer.stop()
 
 
 # Extended tests (merged from test_debouncer_extended.py)
 class TestDebouncerWarnings:
     """Test warning messages for unusual configurations."""
 
-    def test_warning_for_very_long_max_interval(self):
+    def test_warning_for_very_long_max_interval(self, mock_render_haproxy_templates):
         """Test that a warning is logged for max_interval > 3600."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
-            _ = TemplateRenderDebouncer(
+        with patch("haproxy_template_ic.operator.debouncer.logger") as mock_logger:
+            _ = create_debouncer(
                 min_interval=60,
                 max_interval=7200,  # 2 hours
-                render_func=render_func,
-                memo=memo,
             )
 
             # Check that info was called about long max_interval
@@ -391,14 +333,10 @@ class TestDebouncerMetricsImportError:
     """Test debouncer behavior when metrics module is not available."""
 
     @pytest.mark.asyncio
-    async def test_trigger_without_metrics(self):
+    async def test_trigger_without_metrics(self, mock_render_haproxy_templates):
         """Test trigger method when metrics module import fails."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        debouncer = TemplateRenderDebouncer(
-            min_interval=1, max_interval=5, render_func=render_func, memo=memo
-        )
+        debouncer = create_debouncer(min_interval=1, max_interval=5)
 
         # Mock the import to fail
         with patch.dict("sys.modules", {"haproxy_template_ic.metrics": None}):
@@ -409,63 +347,39 @@ class TestDebouncerMetricsImportError:
             assert debouncer._last_change_time > 0
 
     @pytest.mark.asyncio
-    async def test_run_metrics_update_import_error(self):
+    async def test_run_metrics_update_import_error(self, mock_render_haproxy_templates):
         """Test _run method metrics update when import fails."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        debouncer = TemplateRenderDebouncer(
-            min_interval=0.1, max_interval=0.2, render_func=render_func, memo=memo
-        )
-
-        await debouncer.start()
-
-        try:
+        async with managed_debouncer(min_interval=0.1, max_interval=0.2) as debouncer:
             # Patch the metrics import to fail
             with patch.dict("sys.modules", {"haproxy_template_ic.metrics": None}):
                 await debouncer.trigger()
                 await asyncio.sleep(0.08)
 
                 # Should have rendered despite import error
-                assert render_func.called
-        finally:
-            await debouncer.stop()
+                assert mock_render_haproxy_templates.called
 
     @pytest.mark.asyncio
-    async def test_run_metrics_render_import_error(self):
+    async def test_run_metrics_render_import_error(self, mock_render_haproxy_templates):
         """Test _run method metrics recording when import fails."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        debouncer = TemplateRenderDebouncer(
-            min_interval=0.1, max_interval=0.2, render_func=render_func, memo=memo
-        )
-
-        await debouncer.start()
-
-        try:
+        async with managed_debouncer(min_interval=0.1, max_interval=0.2) as _debouncer:
             # Let it run for a periodic refresh with no metrics
             with patch.dict("sys.modules", {"haproxy_template_ic.metrics": None}):
                 await asyncio.sleep(0.12)  # Wait for max_interval
 
                 # Should have rendered despite import error
-                assert render_func.called
-        finally:
-            await debouncer.stop()
+                assert mock_render_haproxy_templates.called
 
 
 class TestDebouncerEdgeCases:
     """Test debouncer edge cases and error conditions."""
 
     @pytest.mark.asyncio
-    async def test_cancelled_error_during_run(self):
+    async def test_cancelled_error_during_run(self, mock_render_haproxy_templates):
         """Test handling of CancelledError in _run method."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        debouncer = TemplateRenderDebouncer(
-            min_interval=0.1, max_interval=1.0, render_func=render_func, memo=memo
-        )
+        debouncer = create_debouncer(min_interval=0.1, max_interval=1.0)
 
         # Manually set _stop to False to enter the loop
         debouncer._stop = False
@@ -488,14 +402,10 @@ class TestDebouncerEdgeCases:
         # The method should have logged the cancellation
 
     @pytest.mark.asyncio
-    async def test_unexpected_error_in_run(self):
+    async def test_unexpected_error_in_run(self, mock_render_haproxy_templates):
         """Test handling of unexpected errors in _run method."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        debouncer = TemplateRenderDebouncer(
-            min_interval=0.1, max_interval=0.5, render_func=render_func, memo=memo
-        )
+        debouncer = create_debouncer(min_interval=0.1, max_interval=0.5)
 
         # Patch asyncio.wait_for to raise an unexpected error once
         call_count = 0
@@ -509,7 +419,7 @@ class TestDebouncerEdgeCases:
             return await original_wait_for(*args, **kwargs)
 
         with patch("asyncio.wait_for", mock_wait_for):
-            with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
+            with patch("haproxy_template_ic.operator.debouncer.logger") as mock_logger:
                 await debouncer.start()
 
                 try:
@@ -523,28 +433,18 @@ class TestDebouncerEdgeCases:
                         if "Unexpected error in debouncer task" in str(call)
                     ]
                     assert len(error_calls) > 0
-
-                    # Debouncer should still be running
-                    stats = debouncer.get_stats()
-                    assert stats["is_running"] is True
                 finally:
                     await debouncer.stop()
 
     @pytest.mark.asyncio
-    async def test_stop_with_timeout(self):
+    async def test_stop_with_timeout(self, mock_render_haproxy_templates):
         """Test stop method when task doesn't stop gracefully."""
 
-        # Create a render function that takes a very long time
-        async def slow_render(memo):
-            await asyncio.sleep(10)  # Very long render
-
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
+        # This test doesn't use the render function mocking since it tests timeout behavior
+        # Instead we override the internal _run method to simulate a stuck task
+        debouncer = create_debouncer(
             min_interval=0.01,  # Very short so render triggers quickly
             max_interval=10,  # Long max_interval so it won't trigger periodic refresh
-            render_func=slow_render,
-            memo=memo,
         )
 
         # Manually override the _run method to ignore stop signals
@@ -564,7 +464,7 @@ class TestDebouncerEdgeCases:
         await asyncio.sleep(0.005)
 
         # Now try to stop - it should timeout and cancel
-        with patch("haproxy_template_ic.debouncer.logger") as mock_logger:
+        with patch("haproxy_template_ic.operator.debouncer.logger") as mock_logger:
             await debouncer.stop()
 
             # Should have warned about ungraceful stop
@@ -576,14 +476,12 @@ class TestDebouncerEdgeCases:
             assert len(warning_calls) > 0
 
     @pytest.mark.asyncio
-    async def test_stop_with_cancelled_error_during_await(self):
+    async def test_stop_with_cancelled_error_during_await(
+        self, mock_render_haproxy_templates
+    ):
         """Test stop method handling CancelledError when awaiting task."""
-        render_func = AsyncMock()
-        memo = MagicMock()
 
-        debouncer = TemplateRenderDebouncer(
-            min_interval=0.1, max_interval=1.0, render_func=render_func, memo=memo
-        )
+        debouncer = create_debouncer(min_interval=0.1, max_interval=1.0)
 
         # Start the debouncer normally to have a real task
         await debouncer.start()
@@ -597,22 +495,3 @@ class TestDebouncerEdgeCases:
 
         # Task should be done
         assert debouncer._task.done()
-
-
-class TestDebouncerGetStats:
-    """Test get_stats method with various states."""
-
-    def test_get_stats_with_no_last_change_time(self):
-        """Test get_stats when no changes have been triggered."""
-        render_func = AsyncMock()
-        memo = MagicMock()
-
-        debouncer = TemplateRenderDebouncer(
-            min_interval=5, max_interval=60, render_func=render_func, memo=memo
-        )
-
-        stats = debouncer.get_stats()
-
-        assert stats["time_since_last_change"] is None
-        assert stats["last_change_time"] == 0
-        assert stats["pending_changes"] == 0

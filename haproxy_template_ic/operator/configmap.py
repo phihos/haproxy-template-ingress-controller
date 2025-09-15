@@ -14,9 +14,10 @@ import yaml
 from deepdiff import DeepDiff
 from kr8s.objects import ConfigMap
 
-from haproxy_template_ic.activity import EventType
-from haproxy_template_ic.models import config_from_dict, Config
 from haproxy_template_ic.core.logging import autolog
+from haproxy_template_ic.core.validation import has_valid_attr
+from haproxy_template_ic.models.config import Config, config_from_dict
+from haproxy_template_ic.models.state import ApplicationState
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -38,7 +39,7 @@ __all__ = [
 async def load_config_from_configmap(configmap) -> Config:
     """Load configuration from a Kubernetes ConfigMap."""
     # Handle both kr8s ConfigMap objects and dictionary representations
-    if hasattr(configmap, "namespace"):
+    if has_valid_attr(configmap, "namespace"):
         # kr8s ConfigMap object
         add_span_attributes(
             configmap_namespace=configmap.namespace or "unknown",
@@ -87,7 +88,7 @@ async def fetch_configmap(name: str, namespace: str) -> ConfigMap:
 
 @autolog(component="operator")
 async def handle_configmap_change(
-    memo: Any,
+    memo: ApplicationState,
     event: dict[str, Any],
     name: str,
     type: str,
@@ -102,37 +103,23 @@ async def handle_configmap_change(
     new_config = await load_config_from_configmap(event["object"])
 
     # Check if configuration has actually changed
-    if hasattr(memo, "config") and memo.config:
-        # Compare raw configuration dictionaries using DeepDiff
-        diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
+    # Compare raw configuration dictionaries using DeepDiff
+    diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
 
-        # Debug logging to understand what's being compared
-        structured_logger.debug(
-            "🔄 Comparing configs",
-            old_pod_selector=memo.config.raw.get("pod_selector"),
-            new_pod_selector=new_config.raw.get("pod_selector"),
-        )
+    # Debug logging to understand what's being compared
+    structured_logger.debug(
+        "🔄 Comparing configs",
+        old_pod_selector=memo.config.raw.get("pod_selector"),
+        new_pod_selector=new_config.raw.get("pod_selector"),
+    )
 
-        if not diff:
-            structured_logger.info("Configuration unchanged, skipping reload")
-            return
-
-        # Configuration has changed - show the diff and trigger reload
-        diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
-        structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
-
-        # Record activity event for config change
-        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
-            memo.activity_buffer.add_event_sync(
-                EventType.UPDATE,
-                f"ConfigMap {name} updated - triggering reload",
-                source="configmap",
-                metadata={"name": name, "type": type, "diff_preview": diff_str[:100]},
-            )
-    else:
-        # First time - no existing config to compare, so don't trigger reload
-        structured_logger.info("Initial configuration loaded, no reload needed")
+    if not diff:
+        structured_logger.info("Configuration unchanged, skipping reload")
         return
+
+    # Configuration has changed - show the diff and trigger reload
+    diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
+    structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
 
     # Trigger reload by setting the flag
     memo.config_reload_flag.set_result(None)

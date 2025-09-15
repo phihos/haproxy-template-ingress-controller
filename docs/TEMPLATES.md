@@ -48,12 +48,6 @@ Indexed Kubernetes resources by type:
 {% endfor %}
 ```
 
-### namespace
-Current namespace:
-
-```jinja2
-{{ namespace }}  # e.g., "default"
-```
 
 ### register_error
 Internal error registration function (advanced use only):

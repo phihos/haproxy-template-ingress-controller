@@ -12,15 +12,15 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from haproxy_template_ic.constants import (
-    DEFAULT_HEALTH_PORT,
-    CONNECT_TIMEOUT_MS,
     CLIENT_TIMEOUT_MS,
+    CONNECT_TIMEOUT_MS,
+    DEFAULT_HEALTH_PORT,
     SERVER_TIMEOUT_MS,
 )
-from haproxy_template_ic.k8s import validate_ignore_fields
 
-from .types import ApiVersion, Filename, KubernetesKind
+from ..k8s.field_filter import validate_ignore_fields
 from .templates import TemplateConfig, TemplateSnippet
+from .types import ApiVersion, Filename, KubernetesKind
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +82,11 @@ class WatchResourceConfig(BaseModel):
             return self.api_version.rsplit("/", 1)[1]
         return self.api_version
 
-    class Config:
+    model_config = ConfigDict(
         # Allow arbitrary types for filters
-        arbitrary_types_allowed = True
+        arbitrary_types_allowed=True,
+        frozen=True,
+    )
 
 
 class PodSelector(BaseModel):
@@ -94,8 +96,7 @@ class PodSelector(BaseModel):
         ..., description="Labels to match HAProxy pods", min_length=1
     )
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class TemplateRenderingConfig(BaseModel):
@@ -137,10 +138,6 @@ class OperatorConfig(BaseModel):
     )
     metrics_port: int = Field(
         default=9090, ge=1, le=65535, description="Port for Prometheus metrics endpoint"
-    )
-    socket_path: str = Field(
-        default="/run/haproxy-template-ic/management.sock",
-        description="Path for management socket to expose internal state",
     )
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -318,6 +315,8 @@ class Config(BaseModel):
         validate_assignment=True,
         # Allow Template objects (not JSON serializable but used internally)
         arbitrary_types_allowed=True,
+        # Freeze the model after creation
+        frozen=True,
         # Add title and description for better schema generation
         title="HAProxy Template IC Configuration",
         # Custom JSON schema modifications

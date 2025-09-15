@@ -6,6 +6,7 @@
 import hashlib
 import logging
 import os
+import socket
 import subprocess
 import time
 from collections import namedtuple
@@ -543,7 +544,6 @@ OperatorPorts = namedtuple("OperatorPorts", ["healthz", "metrics"])
 
 def find_free_port() -> int:
     """Find a free port on the local system."""
-    import socket
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
@@ -559,26 +559,15 @@ def operator_ports():
 
 
 @pytest.fixture
-def socket_path(tmp_path):
-    """Provide shared socket path for operator and test communication."""
-    return str(tmp_path / "management.sock")
-
-
-@pytest.fixture
-def config_dict(operator_ports, socket_path):
+def config_dict(operator_ports):
     """Provide basic configuration dictionary for HAProxy template ingress controller."""
     return {
         "operator": {
             "healthz_port": operator_ports.healthz,
             "metrics_port": operator_ports.metrics,
-            "socket_path": socket_path,  # Use shared socket path for E2E tests
         },
         "logging": {
             "verbose": 2  # Enable DEBUG logging for tests
-        },
-        "validation": {
-            "dataplane_host": "validation-unavailable",  # Validation disabled for E2E tests
-            "dataplane_port": 5555,
         },
         "pod_selector": {
             "match_labels": {
@@ -636,8 +625,15 @@ backend servers
 
 
 @pytest.fixture
-def configmap(config_dict, k8s_client, k8s_namespace):
+def configmap(config_dict, validation_service, k8s_client, k8s_namespace):
     """Create ConfigMap with basic HAProxy template ingress controller configuration."""
+    # Update config_dict with proper validation service configuration using service IP
+    updated_config = config_dict.copy()
+    updated_config["validation"] = {
+        "dataplane_host": validation_service.spec.clusterIP,  # Use service IP, not hostname
+        "dataplane_port": 5555,
+    }
+
     cm = ConfigMap(
         {
             "apiVersion": "v1",
@@ -647,7 +643,7 @@ def configmap(config_dict, k8s_client, k8s_namespace):
                 "namespace": k8s_namespace,
             },
             "data": {
-                "config": yaml.dump(config_dict, Dumper=yaml.CDumper),
+                "config": yaml.dump(updated_config, Dumper=yaml.CDumper),
             },
         },
         namespace=k8s_namespace,
@@ -790,7 +786,6 @@ def operator(
     configmap,
     credentials_secret,
     kind_cluster,
-    socket_path,
 ):
     """Run the operator locally using Telepresence.
 
@@ -812,7 +807,6 @@ def operator(
         configmap_name=configmap_name,
         secret_name=secret_name,
         namespace=k8s_namespace,
-        socket_path=socket_path,
         collect_coverage=coverage,
         kubeconfig_path=kubeconfig_path,
     )
@@ -820,6 +814,26 @@ def operator(
     runner.start()
     yield runner
     runner.stop()
+
+    # After stopping the operator, handle coverage collection if enabled
+    coverage_enabled = request.config.getoption("--coverage")
+    if coverage_enabled and hasattr(runner, "get_detected_coverage_file"):
+        coverage_file = runner.get_detected_coverage_file()
+
+        if coverage_file and os.path.exists(coverage_file):
+            # Validate that the coverage file has content and is readable
+            if _validate_coverage_file(coverage_file):
+                file_size = os.path.getsize(coverage_file)
+                print(f"Found e2e coverage data: {coverage_file} ({file_size} bytes)")
+
+                # Store the coverage file in the session for the pytest hook
+                if not hasattr(request.session, "_e2e_coverage_files"):
+                    request.session._e2e_coverage_files = []
+                request.session._e2e_coverage_files.append(coverage_file)
+            else:
+                print(f"Warning: Coverage file validation failed: {coverage_file}")
+        else:
+            print("No e2e coverage data found for this test")
 
 
 # =============================================================================
@@ -1124,18 +1138,27 @@ def haproxy_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap, req
 
     deployment.create()
 
-    # Wait for deployment to be ready
+    # Wait for pods to be scheduled and have IPs (but not necessarily ready)
+    # Pods can't become ready until the operator configures health endpoints
 
-    max_wait = 120  # Increased from 60 to 120 seconds
+    max_wait = 120  # Wait for pods to be scheduled and get IPs
     start_time = time.time()
     while time.time() - start_time < max_wait:
-        deployment.refresh()
-        if getattr(deployment.status, "readyReplicas", 0) == replicas:
+        # Get pods directly to check for IP assignment
+        pods = k8s_client.get(
+            "pods",
+            label_selector="app=haproxy,component=loadbalancer",
+            namespace=k8s_namespace,
+        )
+        pods_with_ips = [pod for pod in pods if getattr(pod.status, "podIP", None)]
+
+        if len(pods_with_ips) >= replicas:
+            # Pods have been scheduled and have IPs - that's enough for operator to discover them
             break
         time.sleep(2)
     else:
         raise TimeoutError(
-            f"HAProxy deployment did not become ready with {replicas} replicas in time"
+            f"HAProxy deployment did not get {replicas} pods with IPs in time"
         )
 
     return deployment
@@ -1450,19 +1473,364 @@ backend servers
     return cm
 
 
-# Removed unused commented fixtures: validation_deployment_unused, validation_service_unused
+@pytest.fixture
+def validation_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap):
+    """
+    Create validation deployment for E2E tests.
+
+    This provides a standalone validation service with HAProxy + Dataplane API
+    that the local operator can reach via Telepresence at haproxy-template-ic:5555.
+    """
+    deployment = Deployment(
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": "haproxy-template-ic-validation",
+                "namespace": k8s_namespace,
+                "labels": {
+                    "app": "haproxy-template-ic",
+                    "component": "validation",
+                },
+            },
+            "spec": {
+                "replicas": 1,
+                "selector": {
+                    "matchLabels": {
+                        "app": "haproxy-template-ic",
+                        "component": "validation",
+                    }
+                },
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "app": "haproxy-template-ic",
+                            "component": "validation",
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "validation-haproxy",
+                                "image": "haproxytech/haproxy-alpine:3.1",
+                                "imagePullPolicy": "IfNotPresent",
+                                "command": ["/opt/haproxy/startup.sh"],
+                                "ports": [
+                                    {"containerPort": 8404, "name": "validation"},
+                                ],
+                                "env": [
+                                    {
+                                        "name": "HAPROXY_PASSWORD",
+                                        "value": "validationpass",
+                                    },
+                                    {"name": "CONTAINER_TYPE", "value": "haproxy"},
+                                ],
+                                "volumeMounts": [
+                                    {
+                                        "name": "universal-config",
+                                        "mountPath": "/opt/haproxy",
+                                    },
+                                    {
+                                        "name": "validation-config",
+                                        "mountPath": "/etc/haproxy",
+                                    },
+                                ],
+                                "livenessProbe": {
+                                    "httpGet": {
+                                        "path": "/healthz",
+                                        "port": 8404,
+                                    },
+                                    "initialDelaySeconds": 10,
+                                    "periodSeconds": 10,
+                                },
+                                "readinessProbe": {
+                                    "httpGet": {
+                                        "path": "/healthz",
+                                        "port": 8404,
+                                    },
+                                    "initialDelaySeconds": 5,
+                                    "periodSeconds": 5,
+                                },
+                            },
+                            {
+                                "name": "validation-dataplane",
+                                "image": "haproxytech/haproxy-alpine:3.1",
+                                "imagePullPolicy": "IfNotPresent",
+                                "command": ["/opt/haproxy/startup.sh"],
+                                "ports": [
+                                    {"containerPort": 5555, "name": "validation-api"},
+                                ],
+                                "env": [
+                                    {
+                                        "name": "HAPROXY_PASSWORD",
+                                        "value": "validationpass",
+                                    },
+                                    {"name": "CONTAINER_TYPE", "value": "dataplane"},
+                                ],
+                                "volumeMounts": [
+                                    {
+                                        "name": "universal-config",
+                                        "mountPath": "/opt/haproxy",
+                                    },
+                                    {
+                                        "name": "validation-config",
+                                        "mountPath": "/etc/haproxy",
+                                    },
+                                ],
+                                "livenessProbe": {
+                                    "httpGet": {
+                                        "path": "/v3/info",
+                                        "port": 5555,
+                                        "httpHeaders": [
+                                            {
+                                                "name": "Authorization",
+                                                "value": "Basic YWRtaW46dmFsaWRhdGlvbnBhc3M=",
+                                            }
+                                        ],
+                                    },
+                                    "initialDelaySeconds": 20,
+                                    "periodSeconds": 10,
+                                    "failureThreshold": 5,
+                                },
+                                "readinessProbe": {
+                                    "httpGet": {
+                                        "path": "/v3/info",
+                                        "port": 5555,
+                                        "httpHeaders": [
+                                            {
+                                                "name": "Authorization",
+                                                "value": "Basic YWRtaW46dmFsaWRhdGlvbnBhc3M=",
+                                            }
+                                        ],
+                                    },
+                                    "initialDelaySeconds": 15,
+                                    "periodSeconds": 5,
+                                    "failureThreshold": 5,
+                                },
+                            },
+                        ],
+                        "volumes": [
+                            {"name": "validation-config", "emptyDir": {}},
+                            {
+                                "name": "universal-config",
+                                "configMap": {
+                                    "name": "haproxy-universal-test",
+                                    "defaultMode": 0o755,
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+        namespace=k8s_namespace,
+        api=k8s_client,
+    )
+
+    deployment.create()
+
+    # Wait for deployment to be ready
+    import time
+
+    max_wait = 120
+    start_time = time.time()
+    while time.time() - start_time < max_wait:
+        deployment.refresh()
+        if getattr(deployment.status, "readyReplicas", 0) >= 1:
+            break
+        time.sleep(2)
+    else:
+        raise TimeoutError("Validation deployment did not become ready in time")
+
+    return deployment
+
+
+@pytest.fixture
+def validation_service(k8s_client, k8s_namespace, validation_deployment, telepresence):
+    """
+    Create validation service for E2E tests.
+
+    This creates the haproxy-template-ic service that exposes the validation
+    dataplane API at port 5555, allowing the local operator to connect via
+    Telepresence to haproxy-template-ic:5555.
+
+    Includes connectivity check to ensure the service is reachable via Telepresence.
+    """
+    import time
+    import httpx
+
+    service = Service(
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": "haproxy-template-ic",
+                "namespace": k8s_namespace,
+                "labels": {
+                    "app": "haproxy-template-ic",
+                    "component": "validation",
+                },
+            },
+            "spec": {
+                "type": "ClusterIP",
+                "selector": {
+                    "app": "haproxy-template-ic",
+                    "component": "validation",
+                },
+                "ports": [
+                    {
+                        "name": "validation-api",
+                        "port": 5555,
+                        "targetPort": "validation-api",
+                        "protocol": "TCP",
+                    }
+                ],
+            },
+        },
+        namespace=k8s_namespace,
+        api=k8s_client,
+    )
+
+    service.create()
+
+    # Wait for service to have endpoints - simplified approach
+    max_wait = 60
+    start_time = time.time()
+    endpoints_ready = False
+
+    while time.time() - start_time < max_wait:
+        try:
+            endpoints = k8s_client.get(
+                "endpoints", name="haproxy-template-ic", namespace=k8s_namespace
+            )
+            logger.debug(f"Endpoints object type: {type(endpoints)}")
+
+            # Simple check - if endpoints exists, assume it's ready
+            # The HTTP connectivity check below is the real validation
+            if endpoints:
+                logger.info("✅ Validation service endpoints found")
+                endpoints_ready = True
+                break
+
+        except Exception as e:
+            logger.debug(f"Endpoint check failed: {e}")
+
+        time.sleep(2)
+
+    if not endpoints_ready:
+        logger.warning(
+            "Endpoint check timed out, proceeding with connectivity test anyway"
+        )
+
+    # Get the service cluster IP for direct connectivity test
+    service_ip = service.spec.clusterIP
+    logger.info(
+        f"Testing Telepresence connectivity to validation service at {service_ip}:5555..."
+    )
+
+    max_wait = 60
+    start_time = time.time()
+    delay = 2
+
+    while time.time() - start_time < max_wait:
+        try:
+            # Test connectivity via Telepresence using the service IP
+            with httpx.Client(timeout=10.0) as client:
+                response = client.get(
+                    f"http://{service_ip}:5555/v3/info",
+                    headers={"Authorization": "Basic YWRtaW46dmFsaWRhdGlvbnBhc3M="},
+                )
+                if response.status_code == 200:
+                    logger.info("✅ Validation service is reachable via Telepresence")
+                    break
+        except Exception as e:
+            logger.debug(f"Validation service connectivity check failed: {e}")
+
+        # Exponential backoff
+        time.sleep(delay)
+        delay = min(delay * 1.5, 10)
+    else:
+        raise TimeoutError(
+            f"Validation service at {service_ip}:5555 is not reachable via Telepresence after {max_wait}s. "
+            "Check that Telepresence is connected and the validation deployment is healthy."
+        )
+
+    return service
 
 
 @pytest.fixture(scope="function")
 def collect_coverage(request, operator):
     """
-    Collect coverage data from the local operator if --coverage flag is enabled.
+    Coverage collection fixture - now handled directly in operator fixture.
 
-    The LocalOperatorRunner handles coverage collection automatically when
-    coverage is enabled, so this fixture just needs to exist for compatibility.
+    This fixture is kept for backward compatibility with existing tests
+    but the actual coverage collection logic has been moved to the operator
+    fixture to ensure proper timing after process termination.
     """
-    yield
-    # Coverage is handled by LocalOperatorRunner.stop() method
+    # Coverage collection is now handled in the operator fixture teardown
+    # This fixture just needs to exist for tests that reference it
+    return None
+
+
+def _validate_coverage_file(coverage_file: str) -> bool:
+    """
+    Validate that a coverage file is properly formatted and contains data.
+
+    Args:
+        coverage_file: Path to the coverage file to validate
+
+    Returns:
+        True if the file is valid, False otherwise
+    """
+    try:
+        # Check file exists and has size
+        if not os.path.exists(coverage_file):
+            print(f"Coverage file does not exist: {coverage_file}")
+            return False
+
+        file_size = os.path.getsize(coverage_file)
+        if file_size == 0:
+            print(f"Coverage file is empty: {coverage_file}")
+            return False
+
+        print(f"Validating coverage file: {coverage_file} ({file_size} bytes)")
+
+        # Try to read the file with coverage.py to ensure it's valid
+        try:
+            import coverage
+
+            # Create a temporary coverage instance to validate the file
+            cov = coverage.Coverage(data_file=coverage_file)
+
+            # Try to load the data - this will fail if the file is corrupted
+            cov.load()
+
+            # Get some basic info about the coverage data
+            data = cov.get_data()
+            measured_files = data.measured_files()
+
+            if not measured_files:
+                print(f"Coverage file contains no measured files: {coverage_file}")
+                return False
+
+            print(
+                f"Coverage file validation passed: {len(measured_files)} measured files"
+            )
+            return True
+
+        except ImportError:
+            print(
+                f"Warning: coverage module not available for validation, accepting file: {coverage_file}"
+            )
+            return True  # If coverage module isn't available, trust the file exists and has size
+
+        except Exception as e:
+            print(f"Coverage file validation failed - not readable by coverage.py: {e}")
+            return False
+
+    except Exception as e:
+        print(f"Coverage file validation error: {e}")
+        return False
 
 
 def pytest_runtest_teardown(item, nextitem):
@@ -1544,3 +1912,85 @@ def pytest_runtest_teardown(item, nextitem):
                 f"Unexpected error in pod log retrieval for test {item.name}: {e}"
             )
             print(f"⚠️ Failed to retrieve pod logs for debugging: {e}")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """
+    Combine e2e coverage data at the end of the test session.
+
+    This hook runs after all tests have completed and combines
+    any coverage data files from e2e tests that used LocalOperatorRunner.
+    """
+    # Check if coverage collection was enabled
+    if not hasattr(session.config, "getoption") or not session.config.getoption(
+        "--coverage", default=False
+    ):
+        return
+
+    # Check if we have any e2e coverage files to combine
+    e2e_coverage_files = getattr(session, "_e2e_coverage_files", [])
+    if not e2e_coverage_files:
+        print("No e2e coverage data to combine")
+        return
+
+    print(f"Combining {len(e2e_coverage_files)} e2e coverage files...")
+    print(f"E2E coverage files detected: {e2e_coverage_files}")
+
+    try:
+        # Use coverage combine to merge all e2e coverage files
+        import subprocess
+        import sys
+
+        # Find all coverage files (main + e2e)
+        all_coverage_files = []
+
+        # Look for main coverage file
+        if os.path.exists(".coverage"):
+            main_size = os.path.getsize(".coverage")
+            all_coverage_files.append(".coverage")
+            print(f"Found main coverage file: .coverage ({main_size} bytes)")
+        else:
+            print("No main coverage file found")
+
+        # Add e2e coverage files (with validation)
+        for coverage_file in e2e_coverage_files:
+            if os.path.exists(coverage_file):
+                file_size = os.path.getsize(coverage_file)
+                all_coverage_files.append(coverage_file)
+                print(f"Adding e2e coverage file: {coverage_file} ({file_size} bytes)")
+            else:
+                print(f"Warning: E2E coverage file missing: {coverage_file}")
+
+        if len(all_coverage_files) <= 1:
+            print("Only one coverage file found, no combining needed")
+            return
+
+        print(
+            f"Combining {len(all_coverage_files)} coverage files: {[os.path.basename(f) for f in all_coverage_files]}"
+        )
+
+        # Run coverage combine
+        result = subprocess.run(
+            [sys.executable, "-m", "coverage", "combine"] + all_coverage_files,
+            capture_output=True,
+            text=True,
+            cwd=os.getcwd(),
+        )
+
+        if result.returncode == 0:
+            print("✅ Successfully combined e2e coverage data")
+
+            # Clean up individual e2e coverage files
+            for coverage_file in e2e_coverage_files:
+                try:
+                    if os.path.exists(coverage_file) and coverage_file != ".coverage":
+                        os.remove(coverage_file)
+                        print(f"Cleaned up {coverage_file}")
+                except OSError as e:
+                    print(f"Warning: Could not remove {coverage_file}: {e}")
+        else:
+            print(f"❌ Failed to combine coverage data: {result.stderr}")
+            print(f"stdout: {result.stdout}")
+
+    except Exception as e:
+        print(f"❌ Error combining e2e coverage data: {e}")
