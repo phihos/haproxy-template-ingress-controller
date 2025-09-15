@@ -250,7 +250,7 @@ class TestRunOperatorLoop:
     ):
         """Test that run_operator_loop initialization flow loads config and credentials properly."""
         from haproxy_template_ic.initialization import run_operator_loop
-        from haproxy_template_ic.__main__ import CliOptions
+        from haproxy_template_ic.models.cli import CliOptions
 
         # Mock the metrics collector
         mock_metrics = MagicMock()

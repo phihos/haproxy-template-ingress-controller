@@ -6,7 +6,7 @@ object, eliminating defensive programming patterns throughout the codebase.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from kopf._core.engines.indexing import OperatorIndices
 from pydantic import BaseModel, Field
@@ -20,8 +20,7 @@ from haproxy_template_ic.templating import TemplateRenderer
 from .config import Config
 from .context import HAProxyConfigContext
 
-if TYPE_CHECKING:
-    from haproxy_template_ic.__main__ import CliOptions
+from .cli import CliOptions
 
 
 class RuntimeState(BaseModel):
@@ -29,7 +28,7 @@ class RuntimeState(BaseModel):
 
     stop_flag: asyncio.Future[None]
     config_reload_flag: asyncio.Future[None]
-    cli_options: "CliOptions" = Field(..., description="CLI options object from Click")
+    cli_options: CliOptions = Field(..., description="CLI options object from Click")
     socket_server_task: Optional[asyncio.Task] = Field(default=None)
 
     model_config = {"arbitrary_types_allowed": True}

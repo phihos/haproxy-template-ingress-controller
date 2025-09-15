@@ -56,7 +56,7 @@ from haproxy_template_ic.tracing import (
 )
 
 if TYPE_CHECKING:
-    from haproxy_template_ic.__main__ import CliOptions
+    from haproxy_template_ic.models.cli import CliOptions
 
 logger = logging.getLogger(__name__)
 

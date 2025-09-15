@@ -8,7 +8,6 @@ for clear separation between operator mode and utility commands.
 import logging
 import subprocess  # nosec B404
 import sys
-from dataclasses import dataclass
 from importlib import metadata
 from importlib.metadata import PackageNotFoundError
 
@@ -18,16 +17,9 @@ from haproxy_template_ic.core.logging import setup_structured_logging
 from haproxy_template_ic.credentials import validate_k8s_name
 from haproxy_template_ic.initialization import run_operator_loop
 from haproxy_template_ic.k8s.resource_utils import get_current_namespace
+from haproxy_template_ic.models.cli import CliOptions
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class CliOptions:
-    """Container for bootstrap CLI options (configmap and secret location)."""
-
-    configmap_name: str
-    secret_name: str
 
 
 def _get_namespace_fallback() -> str:
