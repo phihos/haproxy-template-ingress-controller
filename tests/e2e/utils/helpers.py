@@ -10,7 +10,11 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-from tests.e2e.utils.local_operator import LocalOperatorRunner
+
+from tests.e2e.utils.local_operator import (
+    LocalOperatorRunner,
+    wait_for_operator_ready as local_wait,
+)
 from tests.e2e.utils.socket_client import send_socket_command as socket_send
 
 
@@ -21,8 +25,6 @@ from tests.e2e.utils.socket_client import send_socket_command as socket_send
 
 def wait_for_operator_ready(operator: LocalOperatorRunner) -> None:
     """Wait for the operator to be fully initialized and ready."""
-    from tests.e2e.utils.local_operator import wait_for_operator_ready as local_wait
-
     if not isinstance(operator, LocalOperatorRunner):
         raise ValueError(f"Expected LocalOperatorRunner, got {type(operator)}")
 
@@ -205,14 +207,6 @@ def verify_config_contains(
         assert actual_config[key] == expected_value, f"Config key '{key}' mismatch"
 
 
-def verify_response_has_structure(
-    response: Dict[str, Any], required_keys: list
-) -> None:
-    """Verify that response contains all required top-level keys."""
-    missing_keys = [key for key in required_keys if key not in response]
-    assert not missing_keys, f"Response missing required keys: {missing_keys}"
-
-
 def assert_config_structure(config: Dict[str, Any]) -> None:
     """Assert that config has the expected structure and values."""
     expected_config = {
@@ -229,36 +223,6 @@ def assert_config_structure(config: Dict[str, Any]) -> None:
     if "ingresses" in watched_resources:
         expected_ingress = {"kind": "Ingress", "api_version": "networking.k8s.io/v1"}
         verify_config_contains(watched_resources["ingresses"], expected_ingress)
-
-
-def assert_dump_all_response_structure(response: Dict[str, Any]) -> None:
-    """Assert that 'dump all' response has the expected structure and values."""
-    # Verify response has all required sections
-    required_keys = [
-        "config",
-        "haproxy_config_context",
-        "metadata",
-        "indices",
-        "cli_options",
-    ]
-    verify_response_has_structure(response, required_keys)
-
-    # Verify config data
-    assert_config_structure(response["config"])
-
-    # Verify expected metadata values
-    expected_metadata = {
-        "configmap_name": "haproxy-template-ic-config",
-        "has_config_reload_flag": True,
-        "has_stop_flag": True,
-    }
-    verify_config_contains(response["metadata"], expected_metadata)
-
-    # Verify expected CLI options
-    expected_cli_options = {
-        "configmap_name": "haproxy-template-ic-config",
-    }
-    verify_config_contains(response["cli_options"], expected_cli_options)
 
 
 # =============================================================================

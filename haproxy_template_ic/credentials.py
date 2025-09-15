@@ -9,7 +9,7 @@ from typing import Any, cast
 import click
 
 from haproxy_template_ic.constants import MAX_K8S_NAME_LENGTH
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, ConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,8 @@ class DataplaneAuth(BaseModel):
         ..., min_length=1, description="Password for Dataplane API"
     )
 
+    model_config = ConfigDict(frozen=True)
+
 
 class Credentials(BaseModel):
     """Credentials for HAProxy instances loaded from Kubernetes Secret."""
@@ -32,6 +34,8 @@ class Credentials(BaseModel):
     validation: DataplaneAuth = Field(
         ..., description="Validation dataplane authentication"
     )
+
+    model_config = ConfigDict(frozen=True)
 
     @classmethod
     def from_secret(cls, data: dict) -> "Credentials":

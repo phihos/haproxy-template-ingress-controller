@@ -82,9 +82,11 @@ class WatchResourceConfig(BaseModel):
             return self.api_version.rsplit("/", 1)[1]
         return self.api_version
 
-    class Config:
+    model_config = ConfigDict(
         # Allow arbitrary types for filters
-        arbitrary_types_allowed = True
+        arbitrary_types_allowed=True,
+        frozen=True,
+    )
 
 
 class PodSelector(BaseModel):
@@ -94,8 +96,7 @@ class PodSelector(BaseModel):
         ..., description="Labels to match HAProxy pods", min_length=1
     )
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 class TemplateRenderingConfig(BaseModel):
@@ -318,6 +319,8 @@ class Config(BaseModel):
         validate_assignment=True,
         # Allow Template objects (not JSON serializable but used internally)
         arbitrary_types_allowed=True,
+        # Freeze the model after creation
+        frozen=True,
         # Add title and description for better schema generation
         title="HAProxy Template IC Configuration",
         # Custom JSON schema modifications

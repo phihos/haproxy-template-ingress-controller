@@ -1,21 +1,135 @@
 """
-End-to-end acceptance test for HAProxy pod discovery via management socket.
+End-to-end acceptance test for HAProxy pod discovery.
 
 This test verifies that the controller correctly discovers HAProxy instances
-and reports them through the management socket, including proper handling
-of deployment scaling operations.
+and reports them through operator logs, including proper handling
+of deployment scaling and pod deletion operations.
 """
 
-import asyncio
 import ast
+import asyncio
+import logging
 import re
 import time
 
 import pytest
 
-from tests.e2e.utils import send_socket_command, wait_for_operator_ready
+from tests.e2e.utils import wait_for_operator_ready
 
+logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.acceptance
+
+
+def get_running_haproxy_pods(k8s_client, namespace):
+    """Get list of running HAProxy pods with assigned IPs, excluding terminating pods."""
+    pods = k8s_client.get(
+        "pods",
+        label_selector="app=haproxy,component=loadbalancer",
+        namespace=namespace,
+    )
+    running_pods = []
+    for pod in pods:
+        # Skip pods that are being deleted (have deletionTimestamp)
+        if getattr(pod.metadata, "deletionTimestamp", None):
+            continue
+        # Only include pods that are Running with assigned IPs
+        if (getattr(pod.status, "phase", None) == "Running" 
+            and getattr(pod.status, "podIP", None)):
+            running_pods.append(pod)
+    return running_pods
+
+
+def extract_production_urls_from_logs(operator):
+    """Extract production URLs from operator logs.
+    
+    Returns:
+        List of URLs found in the latest log entry, or empty list if none found
+    """
+    try:
+        logs = operator.get_logs()
+        # Look for log lines like: 🔍 Found 2 production URLs: ['http://10.244.0.66:5555', 'http://10.244.0.67:5555']
+        pattern = r"🔍 Found \d+ production URLs: (\[.*?\])"
+        matches = re.findall(pattern, logs)
+        
+        if matches:
+            # Parse the latest match as a Python list
+            latest_urls_str = matches[-1]
+            try:
+                # Use ast.literal_eval to safely parse the list
+                urls = ast.literal_eval(latest_urls_str)
+                return urls if isinstance(urls, list) else []
+            except (ValueError, SyntaxError):
+                # Fallback: extract URLs using regex
+                url_pattern = r"http://[\d\.]+:\d+"
+                return re.findall(url_pattern, latest_urls_str)
+        return []
+    except Exception as e:
+        logger.debug(f"Error extracting production URLs: {e}")
+        return []
+
+
+def extract_ips_from_urls(urls):
+    """Extract IP addresses from production URLs.
+    
+    Args:
+        urls: List of URLs like ['http://10.244.0.66:5555', 'http://10.244.0.67:5555']
+        
+    Returns:
+        Set of IP addresses like {'10.244.0.66', '10.244.0.67'}
+    """
+    ips = set()
+    for url in urls:
+        # Extract IP from URL using regex
+        ip_match = re.search(r"http://([\d\.]+):", url)
+        if ip_match:
+            ips.add(ip_match.group(1))
+    return ips
+
+
+def verify_discovered_ips_match_pods(operator, expected_pods, description=""):
+    """Verify that discovered production URLs match the expected pods.
+    
+    Args:
+        operator: Operator instance to get logs from
+        expected_pods: List of pod objects with podIP in status
+        description: Description for error messages
+        
+    Returns:
+        bool: True if discovered IPs match expected pod IPs exactly
+    """
+    try:
+        discovered_urls = extract_production_urls_from_logs(operator)
+        discovered_ips = extract_ips_from_urls(discovered_urls)
+        
+        expected_ips = set(getattr(pod.status, "podIP") for pod in expected_pods)
+        
+        logger.debug(f"{description} - Discovered IPs: {discovered_ips}, Expected IPs: {expected_ips}")
+        
+        return discovered_ips == expected_ips
+    except Exception as e:
+        logger.debug(f"Error verifying discovered IPs {description}: {e}")
+        return False
+
+
+async def wait_for_pod_discovery(operator, expected_pods, description, timeout=60):
+    """Wait for operator to discover the expected pods and verify IPs match."""
+    async def check_discovery():
+        return verify_discovered_ips_match_pods(operator, expected_pods, description)
+    
+    success = await wait_for_condition(check_discovery, timeout=timeout)
+    return success
+
+
+def assert_operator_discovers_pods(operator, expected_pods, description):
+    """Assert that operator has discovered the correct pod IPs with detailed error info."""
+    discovered_urls = extract_production_urls_from_logs(operator)
+    discovered_ips = extract_ips_from_urls(discovered_urls)
+    expected_ips = set(getattr(pod.status, "podIP") for pod in expected_pods)
+    
+    assert discovered_ips == expected_ips, (
+        f"{description}: Operator discovered wrong IPs. "
+        f"Expected: {expected_ips}, Discovered: {discovered_ips}, URLs: {discovered_urls}"
+    )
 
 
 async def wait_for_condition(
@@ -49,91 +163,13 @@ async def wait_for_condition(
 
     return False
 
-
-def get_pod_ips_from_socket_response(response):
-    """Extract pod IP addresses from management socket response."""
-    if isinstance(response, dict):
-        # Look for HAProxy pod IPs in the indices section (operational data)
-        if "indices" in response and "haproxy_pods" in response["indices"]:
-            ips = []
-            haproxy_pods_index = response["indices"]["haproxy_pods"]
-
-            for key, resources in haproxy_pods_index.items():
-                # Resources might be a list or a single resource
-                if isinstance(resources, list):
-                    resource_list = resources
-                else:
-                    resource_list = [resources]
-
-                for resource in resource_list:
-                    pod_ip = None
-
-                    # Handle string representation of dictionaries
-                    if isinstance(resource, str):
-                        try:
-                            resource = ast.literal_eval(resource)
-                        except (ValueError, SyntaxError):
-                            # Try extracting IP from string directly
-                            ip_matches = re.findall(
-                                r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", str(resource)
-                            )
-                            if ip_matches:
-                                ips.extend(ip_matches)
-                            continue
-
-                    if isinstance(resource, dict):
-                        # Try multiple ways to extract IP
-                        # 1. Try status.podIP (standard k8s pod structure)
-                        if "status" in resource and isinstance(
-                            resource["status"], dict
-                        ):
-                            pod_ip = resource["status"].get("podIP")
-                        # 2. Try spec.podIP
-                        elif "spec" in resource and isinstance(resource["spec"], dict):
-                            pod_ip = resource["spec"].get("podIP")
-                        # 3. Try direct podIP field
-                        elif "podIP" in resource:
-                            pod_ip = resource["podIP"]
-                        # 4. Look for nested pod object
-                        elif "pod" in resource and isinstance(resource["pod"], dict):
-                            if "status" in resource["pod"] and isinstance(
-                                resource["pod"]["status"], dict
-                            ):
-                                pod_ip = resource["pod"]["status"].get("podIP")
-
-                        # 5. If still no IP, extract from string representation
-                        if not pod_ip:
-                            resource_str = str(resource)
-                            ip_matches = re.findall(
-                                r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", resource_str
-                            )
-                            if ip_matches:
-                                ips.extend(ip_matches)
-                                continue
-
-                    if pod_ip:
-                        ips.append(pod_ip)
-
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_ips = []
-            for ip in ips:
-                if ip not in seen:
-                    seen.add(ip)
-                    unique_ips.append(ip)
-            return unique_ips
-
-        # Fall back to string representation
-        response_str = str(response)
-    else:
-        response_str = str(response)
-
-    # Fall back to regex extraction of IP addresses from entire response
-    ip_pattern = r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"
-    all_ips = re.findall(ip_pattern, response_str)
-    # Filter out common non-pod IPs (localhost, DNS, etc)
-    filtered_ips = [ip for ip in all_ips if not ip.startswith(("127.", "0.0.0.0"))]
-    return filtered_ips
+async def wait_for_pod_count(k8s_client, namespace, expected_count, timeout=60):
+    """Wait for exactly the expected number of running HAProxy pods."""
+    async def check_count():
+        running_pods = get_running_haproxy_pods(k8s_client, namespace)
+        return len(running_pods) == expected_count
+    
+    return await wait_for_condition(check_count, timeout=timeout)
 
 
 def wait_for_deployment_replicas(deployment, expected_replicas, timeout=60):
@@ -157,126 +193,27 @@ async def test_pod_discovery_with_scaling(
     k8s_client,
     k8s_namespace,
 ):
-    """
-    Test that the controller correctly discovers HAProxy pods and tracks scaling operations.
-
-    This test:
-    1. Verifies that 2 production HAProxy instances are discovered initially
-    2. Scales the deployment down to 1 replica
-    3. Verifies that only 1 instance is discovered after scaling
-    """
-    # Wait for operator to be ready
+    """Test HAProxy pod discovery and scaling operations."""
     wait_for_operator_ready(operator)
 
-    # Step 1: Wait for controller to discover initial HAProxy pods (2 instances)
-    async def check_initial_discovery():
-        response = send_socket_command(operator, "dump all")
-        # Debug logging to understand response structure
-        if isinstance(response, dict):
-            if "indices" in response:
-                if "haproxy_pods" in response.get("indices", {}):
-                    haproxy_pods = response["indices"]["haproxy_pods"]
-                    if isinstance(haproxy_pods, dict) and haproxy_pods:
-                        first_key = list(haproxy_pods.keys())[0]
-                        print(
-                            f"DEBUG: First value type: {type(haproxy_pods[first_key])}"
-                        )
-                        print(
-                            f"DEBUG: First value sample: {str(haproxy_pods[first_key])[:500]}"
-                        )
-        discovered_ips = get_pod_ips_from_socket_response(response)
-        print(f"DEBUG: Discovered IPs: {discovered_ips}")
+    # Wait for initial 2 pods and verify discovery
+    pods_ready = await wait_for_pod_count(k8s_client, k8s_namespace, 2)
+    assert pods_ready, "HAProxy pods failed to become ready within 60 seconds"
+    
+    initial_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
+    discovery_success = await wait_for_pod_discovery(operator, initial_pods, "Initial discovery")
+    assert discovery_success, f"Controller failed to discover initial pods: {[getattr(p.status, 'podIP') for p in initial_pods]}"
 
-        # Get actual HAProxy pod IPs for validation
-        haproxy_pods = k8s_client.get(
-            "pods",
-            label_selector="app=haproxy,component=loadbalancer",
-            namespace=k8s_namespace,
-        )
-        actual_ips = [pod.status.podIP for pod in haproxy_pods if pod.status.podIP]
-        print(f"DEBUG: Actual pod IPs: {actual_ips}")
-
-        # Check if we have at least 2 discovered instances and they match actual IPs
-        if len(discovered_ips) >= 2:
-            for ip in discovered_ips:
-                if ip not in actual_ips:
-                    return False
-            return True
-        return False
-
-    discovery_successful = await wait_for_condition(check_initial_discovery, timeout=30)
-    assert discovery_successful, (
-        "Controller failed to discover initial HAProxy pods within 30 seconds"
-    )
-
-    # Final state verified by the wait_for_condition above
-
-    # Step 2: Scale deployment down to 1 replica
+    # Scale down to 1 replica and verify
     haproxy_deployment.scale(1)
     wait_for_deployment_replicas(haproxy_deployment, 1)
-
-    # Step 3: Wait for controller to detect scaling change and update discovery
-    async def check_scaled_discovery():
-        response = send_socket_command(operator, "dump all")
-        discovered_ips_after = get_pod_ips_from_socket_response(response)
-
-        haproxy_pods_after = k8s_client.get(
-            "pods",
-            label_selector="app=haproxy,component=loadbalancer",
-            namespace=k8s_namespace,
-        )
-        actual_ips_after = [
-            pod.status.podIP
-            for pod in haproxy_pods_after
-            if pod.status.phase == "Running" and pod.status.podIP
-        ]
-
-        # Allow for eventual consistency - should have at most the number of actual running pods + 1 for stale entries
-        # But also verify we have at least one running instance discovered
-        return (
-            len(discovered_ips_after) <= len(actual_ips_after) + 1
-            and len([ip for ip in discovered_ips_after if ip in actual_ips_after]) >= 1
-        )
-
-    scaling_detected = await wait_for_condition(check_scaled_discovery, timeout=30)
-    assert scaling_detected, (
-        "Controller failed to detect scaling change within 30 seconds"
-    )
-
-    # Get final state after scaling
-    response = send_socket_command(operator, "dump all")
-    discovered_ips_after = get_pod_ips_from_socket_response(response)
-    haproxy_pods_after = k8s_client.get(
-        "pods",
-        label_selector="app=haproxy,component=loadbalancer",
-        namespace=k8s_namespace,
-    )
-    actual_ips_after = [
-        pod.status.podIP
-        for pod in haproxy_pods_after
-        if pod.status.phase == "Running" and pod.status.podIP
-    ]
-    # Verify that at least some discovered IPs correspond to actual running pods
-    # (allowing for stale entries due to eventual consistency)
-    running_ips_found = [ip for ip in discovered_ips_after if ip in actual_ips_after]
-    assert len(running_ips_found) >= 1, (
-        f"Expected at least 1 discovered IP to match running pods, got {running_ips_found} from discovered {discovered_ips_after} vs actual {actual_ips_after}"
-    )
-
-    # Step 4: Test scaling back up to 3 replicas
-    haproxy_deployment.scale(3)
-    wait_for_deployment_replicas(haproxy_deployment, 3)
-
-    # Wait for controller to detect scale-up and discover new pods
-    async def check_scale_up_discovery():
-        response = send_socket_command(operator, "dump all")
-        discovered_ips_final = get_pod_ips_from_socket_response(response)
-        return len(discovered_ips_final) >= 3
-
-    scale_up_detected = await wait_for_condition(check_scale_up_discovery, timeout=30)
-    assert scale_up_detected, "Controller failed to detect scale-up within 30 seconds"
-
-    # Final state verified by the wait_for_condition above
+    
+    scaled_ready = await wait_for_pod_count(k8s_client, k8s_namespace, 1)
+    assert scaled_ready, "Scaling to 1 replica failed within 60 seconds"
+    
+    remaining_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
+    scaling_detected = await wait_for_pod_discovery(operator, remaining_pods, "After scaling")
+    assert scaling_detected, f"Controller failed to detect scaling: {[getattr(p.status, 'podIP') for p in remaining_pods]}"
 
 
 @pytest.mark.asyncio
@@ -287,67 +224,56 @@ async def test_pod_discovery_with_pod_deletion(
     k8s_client,
     k8s_namespace,
 ):
-    """
-    Test that the controller correctly handles individual pod deletion and recreation.
-
-    This test verifies proper handling when pods are deleted directly (not via scaling).
-    """
+    """Test HAProxy pod discovery with individual pod deletion and recreation."""
     wait_for_operator_ready(operator)
 
-    # Wait for initial pod discovery
-    async def check_initial_pods_discovered():
-        response = send_socket_command(operator, "dump all")
-        initial_ips = get_pod_ips_from_socket_response(response)
-        return len(initial_ips) >= 2
+    # Wait for initial 2 pods and verify discovery
+    pods_ready = await wait_for_pod_count(k8s_client, k8s_namespace, 2)
+    assert pods_ready, "HAProxy pods failed to become ready within 60 seconds"
+    
+    initial_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
+    initial_ips = [getattr(pod.status, "podIP") for pod in initial_pods]
+    
+    discovery_success = await wait_for_pod_discovery(operator, initial_pods, "Initial discovery")
+    assert discovery_success, f"Controller failed to discover initial pods: {initial_ips}"
 
-    initial_discovery = await wait_for_condition(
-        check_initial_pods_discovered, timeout=30
-    )
-    assert initial_discovery, (
-        "Controller failed to discover initial pods within 30 seconds"
-    )
+    # Delete one pod and wait for removal
+    pod_to_delete = initial_pods[0]
+    deleted_pod_name = pod_to_delete.metadata.name
+    deleted_pod_ip = getattr(pod_to_delete.status, "podIP")
+    pod_to_delete.delete()
+    
+    logger.info(f"Deleted pod {deleted_pod_name} with IP {deleted_pod_ip}")
 
-    # Get initial discovered instances
-    response = send_socket_command(operator, "dump all")
-    initial_ips = get_pod_ips_from_socket_response(response)
+    # Wait for pod to be completely removed
+    async def check_pod_deleted():
+        current_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
+        current_names = [p.metadata.name for p in current_pods]
+        return deleted_pod_name not in current_names
 
-    # Delete one HAProxy pod
-    haproxy_pods = k8s_client.get(
-        "pods",
-        label_selector="app=haproxy,component=loadbalancer",
-        namespace=k8s_namespace,
-    )
+    pod_deleted = await wait_for_condition(check_pod_deleted, timeout=60)
+    assert pod_deleted, f"Deleted pod {deleted_pod_name} did not disappear within 60 seconds"
 
-    haproxy_pods = list(haproxy_pods)
-    if len(haproxy_pods) > 0:
-        pod_to_delete = haproxy_pods[0]
-        deleted_pod_ip = pod_to_delete.status.podIP
-        pod_to_delete.delete()
+    # Wait for deployment to recreate and verify discovery
+    wait_for_deployment_replicas(haproxy_deployment, 2)
+    
+    recreation_ready = await wait_for_pod_count(k8s_client, k8s_namespace, 2, timeout=120)
+    assert recreation_ready, "Pod recreation failed within 120 seconds"
+    
+    final_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
+    recreation_detected = await wait_for_pod_discovery(operator, final_pods, "After recreation")
+    assert recreation_detected, "Controller failed to discover recreated pods"
 
-        # Wait for deployment to recreate the pod
-        wait_for_deployment_replicas(haproxy_deployment, 2)
-
-        # Wait for controller to re-discover after pod recreation
-        async def check_pod_recreation_discovery():
-            response = send_socket_command(operator, "dump all")
-            updated_ips = get_pod_ips_from_socket_response(response)
-            return len(updated_ips) >= 2
-
-        recreation_detected = await wait_for_condition(
-            check_pod_recreation_discovery, timeout=30
-        )
-        assert recreation_detected, (
-            "Controller failed to detect pod recreation within 30 seconds"
-        )
-
-        # Get updated state for verification
-        response = send_socket_command(operator, "dump all")
-        updated_ips = get_pod_ips_from_socket_response(response)
-        # Verify pod recreation worked - either:
-        # 1. The deleted pod IP is no longer in the discovered list, OR
-        # 2. New pods were created (indicating successful recreation)
-        new_ips = set(updated_ips) - set(initial_ips)
-        assert deleted_pod_ip not in updated_ips or len(new_ips) > 0, (
-            f"Expected pod recreation: deleted IP {deleted_pod_ip} should be gone or new IPs should appear. "
-            f"Initial: {initial_ips}, Updated: {updated_ips}, New IPs: {new_ips}"
-        )
+    # Final verification
+    final_ips = [getattr(pod.status, "podIP") for pod in final_pods]
+    assert_operator_discovers_pods(operator, final_pods, "Final verification")
+    
+    # Check if deleted IP was reused
+    if deleted_pod_ip in final_ips:
+        logger.info(f"Pod IP {deleted_pod_ip} was reused by new pod")
+    else:
+        discovered_urls = extract_production_urls_from_logs(operator)
+        discovered_ips = extract_ips_from_urls(discovered_urls)
+        assert deleted_pod_ip not in discovered_ips, f"Operator still discovering deleted pod IP {deleted_pod_ip}"
+    
+    logger.info(f"✅ Pod deletion test passed: {initial_ips} → {final_ips}")

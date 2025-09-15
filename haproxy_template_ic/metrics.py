@@ -8,7 +8,7 @@ performance, resource counts, operation timing, and error rates.
 import time
 import logging
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar, cast
 from functools import wraps
 
 from prometheus_async import aio
@@ -437,7 +437,7 @@ def timed_operation(
                         duration
                     )
 
-        return wrapper  # type: ignore
+        return cast(F, wrapper)
 
     return decorator
 

@@ -8,7 +8,7 @@ and recovery mechanisms to reduce code duplication across the codebase.
 import asyncio
 import functools
 import logging
-from typing import Any, Callable, TypeVar, Optional, Union
+from typing import Any, Callable, TypeVar, Optional, Union, cast
 
 import structlog
 
@@ -71,7 +71,7 @@ def handle_exceptions(
 
                     return default_return
 
-            return async_wrapper  # type: ignore[return-value]
+            return cast(F, async_wrapper)
         else:
 
             @functools.wraps(func)
@@ -107,7 +107,7 @@ def handle_exceptions(
 
                     return default_return
 
-            return wrapper  # type: ignore[return-value]
+            return cast(F, wrapper)
 
     return decorator
 

@@ -102,37 +102,31 @@ async def handle_configmap_change(
     new_config = await load_config_from_configmap(event["object"])
 
     # Check if configuration has actually changed
-    if hasattr(memo, "config") and memo.config:
-        # Compare raw configuration dictionaries using DeepDiff
-        diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
+    # Compare raw configuration dictionaries using DeepDiff
+    diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
 
-        # Debug logging to understand what's being compared
-        structured_logger.debug(
-            "🔄 Comparing configs",
-            old_pod_selector=memo.config.raw.get("pod_selector"),
-            new_pod_selector=new_config.raw.get("pod_selector"),
-        )
+    # Debug logging to understand what's being compared
+    structured_logger.debug(
+        "🔄 Comparing configs",
+        old_pod_selector=memo.config.raw.get("pod_selector"),
+        new_pod_selector=new_config.raw.get("pod_selector"),
+    )
 
-        if not diff:
-            structured_logger.info("Configuration unchanged, skipping reload")
-            return
-
-        # Configuration has changed - show the diff and trigger reload
-        diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
-        structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
-
-        # Record activity event for config change
-        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
-            memo.activity_buffer.add_event_sync(
-                EventType.UPDATE,
-                f"ConfigMap {name} updated - triggering reload",
-                source="configmap",
-                metadata={"name": name, "type": type, "diff_preview": diff_str[:100]},
-            )
-    else:
-        # First time - no existing config to compare, so don't trigger reload
-        structured_logger.info("Initial configuration loaded, no reload needed")
+    if not diff:
+        structured_logger.info("Configuration unchanged, skipping reload")
         return
+
+    # Configuration has changed - show the diff and trigger reload
+    diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
+    structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
+
+    # Record activity event for config change
+    memo.activity_buffer.add_event_sync(
+        EventType.UPDATE,
+        f"ConfigMap {name} updated - triggering reload",
+        source="configmap",
+        metadata={"name": name, "type": type, "diff_preview": diff_str[:100]},
+    )
 
     # Trigger reload by setting the flag
     memo.config_reload_flag.set_result(None)

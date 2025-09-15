@@ -30,6 +30,7 @@ from .pod_management import (
     handle_haproxy_pod_delete,
     handle_haproxy_pod_update,
     setup_haproxy_pod_indexing,
+    fetch_haproxy_pods,
 )
 
 from .template_renderer import (
@@ -50,7 +51,7 @@ from .synchronization import (
 )
 
 from .initialization import (
-    initialize_configuration,
+    initialize_post_config,
     init_watch_configmap,
     init_management_socket,
     init_template_debouncer,
@@ -67,9 +68,6 @@ from .utils import (
     get_current_namespace,
     trigger_reload,
     get_memo_activity_buffer,
-    get_memo_attr_safe,
-    has_memo_attr,
-    get_effective_namespace,
 )
 
 from haproxy_template_ic.k8s import (
@@ -105,6 +103,7 @@ __all__ = [
     "handle_haproxy_pod_delete",
     "handle_haproxy_pod_update",
     "setup_haproxy_pod_indexing",
+    "fetch_haproxy_pods",
     # Template rendering
     "render_haproxy_templates",
     "trigger_template_rendering",
@@ -119,7 +118,7 @@ __all__ = [
     "_record_sync_metrics",
     "_log_haproxy_error_hints",
     # Initialization
-    "initialize_configuration",
+    "initialize_post_config",
     "init_watch_configmap",
     "init_management_socket",
     "init_template_debouncer",
@@ -134,9 +133,6 @@ __all__ = [
     "get_current_namespace",
     "trigger_reload",
     "get_memo_activity_buffer",
-    "get_memo_attr_safe",
-    "has_memo_attr",
-    "get_effective_namespace",
     # K8s utilities
     "extract_nested_field",
     "_compile_jsonpath",

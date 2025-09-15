@@ -27,12 +27,18 @@ class TestResourceTimestampTracking:
                     )
                 }
 
+        class MockResources:
+            def __init__(self):
+                self.indices = {}
+                self.resource_metadata = {}
+
         class MockMemo:
             def __init__(self):
                 self.config = MockConfig()
-                self.indices = {}
+                self.resources = MockResources()
                 self.debouncer = Mock()
                 self.debouncer.trigger = AsyncMock()
+                self.activity_buffer = Mock()
 
         return MockMemo()
 
@@ -73,10 +79,10 @@ class TestResourceTimestampTracking:
             )
 
             # Check that resource_metadata was created and timestamp updated
-            assert hasattr(mock_memo, "resource_metadata")
-            assert "ingresses" in mock_memo.resource_metadata
+            assert hasattr(mock_memo.resources, "resource_metadata")
+            assert "ingresses" in mock_memo.resources.resource_metadata
 
-            metadata = mock_memo.resource_metadata["ingresses"]
+            metadata = mock_memo.resources.resource_metadata["ingresses"]
             assert isinstance(metadata, ResourceTypeMetadata)
             assert metadata.resource_type == "ingresses"
             assert metadata.last_change == "2024-01-15T10:30:00+00:00"
@@ -109,7 +115,9 @@ class TestResourceTimestampTracking:
                 memo=mock_memo,
             )
 
-            first_timestamp = mock_memo.resource_metadata["ingresses"].last_change
+            first_timestamp = mock_memo.resources.resource_metadata[
+                "ingresses"
+            ].last_change
 
         # Second update (different resource, same type)
         sample_resource_body["metadata"]["name"] = "ingress-2"
@@ -128,7 +136,9 @@ class TestResourceTimestampTracking:
                 memo=mock_memo,
             )
 
-            second_timestamp = mock_memo.resource_metadata["ingresses"].last_change
+            second_timestamp = mock_memo.resources.resource_metadata[
+                "ingresses"
+            ].last_change
 
         # Check that timestamp was updated
         assert first_timestamp == "2024-01-15T10:00:00+00:00"
@@ -189,11 +199,11 @@ class TestResourceTimestampTracking:
             )
 
         # Check that both resource types have separate metadata
-        assert "ingresses" in mock_memo.resource_metadata
-        assert "services" in mock_memo.resource_metadata
+        assert "ingresses" in mock_memo.resources.resource_metadata
+        assert "services" in mock_memo.resources.resource_metadata
 
-        ingress_metadata = mock_memo.resource_metadata["ingresses"]
-        service_metadata = mock_memo.resource_metadata["services"]
+        ingress_metadata = mock_memo.resources.resource_metadata["ingresses"]
+        service_metadata = mock_memo.resources.resource_metadata["services"]
 
         assert ingress_metadata.last_change == "2024-01-15T10:00:00+00:00"
         assert service_metadata.last_change == "2024-01-15T11:00:00+00:00"
@@ -219,7 +229,7 @@ class TestResourceTimestampTracking:
 
     @pytest.mark.asyncio
     async def test_initialization_on_first_use(self, sample_resource_body):
-        """Test that resource_metadata dict is initialized on first use."""
+        """Test that resource_metadata entries are created on first use of a resource type."""
 
         class MockConfig:
             def __init__(self):
@@ -231,16 +241,24 @@ class TestResourceTimestampTracking:
                     )
                 }
 
+        class MockResources:
+            def __init__(self):
+                self.indices = {}
+                self.resource_metadata = {}  # Always initialized, matching ResourceState
+
         class MockMemo:
             def __init__(self):
                 self.config = MockConfig()
+                self.resources = MockResources()
                 self.debouncer = Mock()
                 self.debouncer.trigger = AsyncMock()
+                self.activity_buffer = Mock()
 
         memo = MockMemo()
 
-        # Memo doesn't have resource_metadata initially
-        assert not hasattr(memo, "resource_metadata")
+        # Resources has resource_metadata but it's empty initially
+        assert hasattr(memo.resources, "resource_metadata")
+        assert memo.resources.resource_metadata == {}
 
         with patch(
             "haproxy_template_ic.models.resource_metadata.datetime"
@@ -259,7 +277,7 @@ class TestResourceTimestampTracking:
                 memo=memo,
             )
 
-        # Check that resource_metadata was initialized
-        assert hasattr(memo, "resource_metadata")
-        assert isinstance(memo.resource_metadata, dict)
-        assert "ingresses" in memo.resource_metadata
+        # Check that resource_metadata entry was created for this resource type
+        assert hasattr(memo.resources, "resource_metadata")
+        assert isinstance(memo.resources.resource_metadata, dict)
+        assert "ingresses" in memo.resources.resource_metadata

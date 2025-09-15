@@ -28,7 +28,6 @@ from haproxy_template_ic.tracing import (
     trace_template_render,
 )
 from .synchronization import synchronize_with_haproxy_instances
-from .utils import get_current_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ def _prepare_template_context(
     memo.haproxy_config_context.rendered_config = None
 
     template_context = TemplateContext(
-        resources=indices, namespace=get_current_namespace()
+        resources=indices, namespace=memo.get_namespace()
     )
 
     validation_errors = []
@@ -246,17 +245,16 @@ async def render_haproxy_templates(
         )
 
         # Record activity event for successful template rendering
-        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
-            memo.activity_buffer.add_event_sync(
-                EventType.SUCCESS,
-                f"Templates rendered successfully: {content_items} content items, {resource_types} resource types",
-                source="template_renderer",
-                metadata={
-                    "haproxy_config_size": haproxy_config_size,
-                    "content_items": content_items,
-                    "resource_types": resource_types,
-                },
-            )
+        memo.activity_buffer.add_event_sync(
+            EventType.SUCCESS,
+            f"Templates rendered successfully: {content_items} content items, {resource_types} resource types",
+            source="template_renderer",
+            metadata={
+                "haproxy_config_size": haproxy_config_size,
+                "content_items": content_items,
+                "resource_types": resource_types,
+            },
+        )
 
         record_span_event("template_rendering_completed")
         metrics.record_template_render("all", "success")
@@ -277,17 +275,15 @@ async def render_haproxy_templates(
         logger.error(f"❌ Template rendering failed: {e}")
 
         # Record activity event for template rendering failure
-        if hasattr(memo, "activity_buffer") and memo.activity_buffer:
-            memo.activity_buffer.add_event_sync(
-                EventType.ERROR,
-                f"Template rendering failed: {str(e)[:100]}",
-                source="template_renderer",
-                metadata={"error": str(e)[:500]},
-            )
+        memo.activity_buffer.add_event_sync(
+            EventType.ERROR,
+            f"Template rendering failed: {str(e)[:100]}",
+            source="template_renderer",
+            metadata={"error": str(e)[:500]},
+        )
 
         # Clear any partial results to prevent inconsistent state
-        if hasattr(memo, "haproxy_config_context"):
-            memo.haproxy_config_context.rendered_content.clear()
-            memo.haproxy_config_context.rendered_config = None
+        memo.haproxy_config_context.rendered_content.clear()
+        memo.haproxy_config_context.rendered_config = None
 
         raise

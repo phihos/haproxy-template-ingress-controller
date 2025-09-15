@@ -20,9 +20,8 @@ class TestTimestampInitialization:
             def __init__(self):
                 self.watched_resources = {"ingresses": Mock(), "services": Mock()}
 
-        class MockMemo:
+        class MockResources:
             def __init__(self):
-                self.config = MockConfig()
                 self.indices = {
                     "ingresses": {
                         ("default", "test-ingress"): {
@@ -35,6 +34,14 @@ class TestTimestampInitialization:
                         }
                     },
                 }
+                self.resource_metadata = {}
+
+        class MockMemo:
+            def __init__(self):
+                self.config = MockConfig()
+                self.resources = MockResources()
+                # Add indices property for backward compatibility
+                self.indices = self.resources.indices
 
         memo = MockMemo()
         metrics = Mock()
@@ -50,13 +57,13 @@ class TestTimestampInitialization:
             indices = _collect_resource_indices(memo, metrics)
 
         # Verify resource_metadata was created with timestamps
-        assert hasattr(memo, "resource_metadata")
-        assert "ingresses" in memo.resource_metadata
-        assert "services" in memo.resource_metadata
+        assert hasattr(memo.resources, "resource_metadata")
+        assert "ingresses" in memo.resources.resource_metadata
+        assert "services" in memo.resources.resource_metadata
 
         # Check that timestamps were set
-        ingress_metadata = memo.resource_metadata["ingresses"]
-        service_metadata = memo.resource_metadata["services"]
+        ingress_metadata = memo.resources.resource_metadata["ingresses"]
+        service_metadata = memo.resources.resource_metadata["services"]
 
         assert isinstance(ingress_metadata, ResourceTypeMetadata)
         assert isinstance(service_metadata, ResourceTypeMetadata)
@@ -75,9 +82,8 @@ class TestTimestampInitialization:
             def __init__(self):
                 self.watched_resources = {"ingresses": Mock()}
 
-        class MockMemo:
+        class MockResources:
             def __init__(self):
-                self.config = MockConfig()
                 self.indices = {
                     "ingresses": {
                         ("default", "test"): {
@@ -93,6 +99,13 @@ class TestTimestampInitialization:
                     )
                 }
 
+        class MockMemo:
+            def __init__(self):
+                self.config = MockConfig()
+                self.resources = MockResources()
+                # Add indices property for backward compatibility
+                self.indices = self.resources.indices
+
         memo = MockMemo()
         metrics = Mock()
 
@@ -107,7 +120,7 @@ class TestTimestampInitialization:
             _collect_resource_indices(memo, metrics)
 
         # Verify timestamp was NOT overwritten
-        ingress_metadata = memo.resource_metadata["ingresses"]
+        ingress_metadata = memo.resources.resource_metadata["ingresses"]
         assert (
             ingress_metadata.last_change == "2024-01-15T09:00:00+00:00"
         )  # Original timestamp preserved
@@ -121,10 +134,17 @@ class TestTimestampInitialization:
             def __init__(self):
                 self.watched_resources = {"ingresses": Mock()}
 
+        class MockResources:
+            def __init__(self):
+                self.indices = {}  # Empty indices
+                self.resource_metadata = {}
+
         class MockMemo:
             def __init__(self):
                 self.config = MockConfig()
-                self.indices = {}  # Empty indices
+                self.resources = MockResources()
+                # Add indices property for backward compatibility
+                self.indices = self.resources.indices
 
         memo = MockMemo()
         metrics = Mock()
@@ -140,10 +160,10 @@ class TestTimestampInitialization:
             _collect_resource_indices(memo, metrics)
 
         # Verify metadata was created even with empty indices
-        assert hasattr(memo, "resource_metadata")
-        assert "ingresses" in memo.resource_metadata
+        assert hasattr(memo.resources, "resource_metadata")
+        assert "ingresses" in memo.resources.resource_metadata
 
-        metadata = memo.resource_metadata["ingresses"]
+        metadata = memo.resources.resource_metadata["ingresses"]
         assert isinstance(metadata, ResourceTypeMetadata)
         assert metadata.last_change == "2024-01-15T10:30:00+00:00"
         assert metadata.total_count == 0  # No resources, so count should be 0
@@ -155,13 +175,20 @@ class TestTimestampInitialization:
             def __init__(self):
                 self.watched_resources = {"ingresses": Mock()}
 
-        class MockMemo:
+        class MockResources:
             def __init__(self):
-                self.config = MockConfig()
                 # Set up indices to cause an error in IndexedResourceCollection.from_kopf_index
                 self.indices = {
                     "ingresses": "invalid_data"
                 }  # This will cause an exception
+                self.resource_metadata = {}
+
+        class MockMemo:
+            def __init__(self):
+                self.config = MockConfig()
+                self.resources = MockResources()
+                # Add indices property for backward compatibility
+                self.indices = self.resources.indices
 
         memo = MockMemo()
         metrics = Mock()
@@ -177,10 +204,10 @@ class TestTimestampInitialization:
             indices = _collect_resource_indices(memo, metrics)
 
         # Verify metadata was created even on error
-        assert hasattr(memo, "resource_metadata")
-        assert "ingresses" in memo.resource_metadata
+        assert hasattr(memo.resources, "resource_metadata")
+        assert "ingresses" in memo.resources.resource_metadata
 
-        metadata = memo.resource_metadata["ingresses"]
+        metadata = memo.resources.resource_metadata["ingresses"]
         assert isinstance(metadata, ResourceTypeMetadata)
         assert metadata.last_change == "2024-01-15T10:30:00+00:00"
 

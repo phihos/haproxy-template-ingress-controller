@@ -378,7 +378,7 @@ def test_template_context_creation():
 
     # Create an IndexedResourceCollection for test_resource
     test_collection = IndexedResourceCollection()
-    test_collection._internal_dict[("default", "test")] = [
+    test_collection.resources[("default", "test")] = [
         {"name": "test", "host": "example.com"}
     ]
 
@@ -402,13 +402,13 @@ def test_template_context_is_frozen():
 
     # Create an IndexedResourceCollection for pods
     pods_collection = IndexedResourceCollection()
-    pods_collection._internal_dict[("default", "test-pod")] = {"name": "test"}
+    pods_collection.resources[("default", "test-pod")] = {"name": "test"}
 
     context = TemplateContext(resources={"pods": pods_collection})
 
     # Create a new collection to try replacing
     new_pods_collection = IndexedResourceCollection()
-    new_pods_collection._internal_dict[("default", "new-pod")] = {"name": "new"}
+    new_pods_collection.resources[("default", "new-pod")] = {"name": "new"}
 
     with pytest.raises(ValidationError):
         context.resources = {"pods": new_pods_collection}
@@ -1354,15 +1354,15 @@ def test_template_context_helper_methods():
 
     # Create IndexedResourceCollections for each resource type
     ingresses_collection = IndexedResourceCollection()
-    ingresses_collection._internal_dict[("default", "ing1")] = {
+    ingresses_collection.resources[("default", "ing1")] = {
         "metadata": {"name": "ing1"}
     }
-    ingresses_collection._internal_dict[("default", "ing2")] = {
+    ingresses_collection.resources[("default", "ing2")] = {
         "metadata": {"name": "ing2"}
     }
 
     services_collection = IndexedResourceCollection()
-    services_collection._internal_dict[("default", "svc1")] = {
+    services_collection.resources[("default", "svc1")] = {
         "metadata": {"name": "svc1"}
     }
 
@@ -1620,7 +1620,7 @@ def test_host_map_template_rendering():
     # Create mock ingress resources using IndexedResourceCollection
 
     ingresses_collection = IndexedResourceCollection()
-    ingresses_collection._internal_dict[("default", "test-ingress")] = [
+    ingresses_collection.resources[("default", "test-ingress")] = [
         {
             "metadata": {"name": "test-ingress", "namespace": "default"},
             "spec": {
@@ -1632,7 +1632,7 @@ def test_host_map_template_rendering():
             },
         }
     ]
-    ingresses_collection._internal_dict[("production", "prod-ingress")] = [
+    ingresses_collection.resources[("production", "prod-ingress")] = [
         {
             "metadata": {"name": "prod-ingress", "namespace": "production"},
             "spec": {"rules": [{"host": "prod.example.com"}]},
@@ -1703,7 +1703,7 @@ def test_complete_ingress_configuration_with_certificates():
     # Create mock TLS secret using IndexedResourceCollection
 
     secrets_collection = IndexedResourceCollection()
-    secrets_collection._internal_dict[("default", "example-tls")] = [
+    secrets_collection.resources[("default", "example-tls")] = [
         {
             "metadata": {
                 "name": "example-tls",
@@ -2458,7 +2458,7 @@ class TestIndexedResourceCollectionQueryMethods:
         collection = IndexedResourceCollection()
 
         # Add some test data
-        collection._internal_dict[("default", "service1")] = [
+        collection.resources[("default", "service1")] = [
             {"name": "resource1"},
             {"name": "resource2"},
         ]
@@ -2479,7 +2479,7 @@ class TestIndexedResourceCollectionQueryMethods:
         collection = IndexedResourceCollection()
 
         # Add multiple resources with same key
-        collection._internal_dict[("default", "service1")] = [
+        collection.resources[("default", "service1")] = [
             {"metadata": {"name": "resource1"}},
             {"metadata": {"name": "resource2"}},
             {"metadata": {"name": "resource3"}},
@@ -2499,8 +2499,8 @@ class TestIndexedResourceCollectionQueryMethods:
         collection = IndexedResourceCollection()
 
         # Add test data
-        collection._internal_dict[("ns1", "res1")] = [{"name": "r1"}]
-        collection._internal_dict[("ns2", "res2")] = [{"name": "r2"}, {"name": "r3"}]
+        collection.resources[("ns1", "res1")] = [{"name": "r1"}]
+        collection.resources[("ns2", "res2")] = [{"name": "r2"}, {"name": "r3"}]
 
         items = list(collection.items())
         assert len(items) == 3
@@ -2515,8 +2515,8 @@ class TestIndexedResourceCollectionQueryMethods:
         collection = IndexedResourceCollection()
 
         # Add test data
-        collection._internal_dict[("ns1", "res1")] = [{"name": "r1"}]
-        collection._internal_dict[("ns2", "res2")] = [{"name": "r2"}, {"name": "r3"}]
+        collection.resources[("ns1", "res1")] = [{"name": "r1"}]
+        collection.resources[("ns2", "res2")] = [{"name": "r2"}, {"name": "r3"}]
 
         values = list(collection.values())
         assert len(values) == 3
@@ -2530,7 +2530,7 @@ class TestIndexedResourceCollectionQueryMethods:
         collection = IndexedResourceCollection()
 
         # Add test data
-        collection._internal_dict[("ns1", "res1")] = [{"name": "r1"}]
+        collection.resources[("ns1", "res1")] = [{"name": "r1"}]
 
         # Test with tuple key
         assert ("ns1", "res1") in collection
@@ -2542,8 +2542,8 @@ class TestIndexedResourceCollectionQueryMethods:
         collection = IndexedResourceCollection()
 
         # Add test data
-        collection._internal_dict[("ns1", "res1")] = [{"name": "r1"}]
-        collection._internal_dict[("ns2", "res2")] = [{"name": "r2"}]
+        collection.resources[("ns1", "res1")] = [{"name": "r1"}]
+        collection.resources[("ns2", "res2")] = [{"name": "r2"}]
 
         keys = list(collection.keys())
         assert len(keys) == 2

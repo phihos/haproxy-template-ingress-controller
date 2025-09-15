@@ -6,24 +6,24 @@ ability to watch ConfigMaps, detect changes, reload configurations,
 and apply new settings correctly.
 """
 
-import pytest
 import time
+
+import pytest
 import yaml
 
 from tests.e2e.utils import (
-    wait_for_operator_ready,
-    wait_for_watch_streams_ready,
-    send_socket_command,
-    assert_config_structure,
     assert_config_change,
     assert_log_line,
-    verify_config_contains,
     assert_no_reload_loop,
+    wait_for_operator_ready,
+    wait_for_watch_streams_ready,
 )
 
 
 @pytest.mark.acceptance
-def test_config_reload(operator, configmap, config_dict, collect_coverage):
+def test_config_reload(
+    operator, management_socket, configmap, config_dict, collect_coverage
+):
     """Test that configuration changes are detected and applied.
 
     This test verifies:
@@ -36,8 +36,11 @@ def test_config_reload(operator, configmap, config_dict, collect_coverage):
     wait_for_operator_ready(operator)
     wait_for_watch_streams_ready(operator)
 
-    initial_response = send_socket_command(operator, "dump all")
-    assert_config_structure(initial_response["config"])
+    initial_application_state = management_socket.application_state()
+    assert (
+        initial_application_state.configuration.config.pod_selector.match_labels
+        == config_dict["pod_selector"]["match_labels"]
+    )
 
     # Change configuration
     config_dict["pod_selector"] = {"match_labels": {"baz": "bar"}}
@@ -58,14 +61,15 @@ def test_config_reload(operator, configmap, config_dict, collect_coverage):
     )
 
     # Verify new configuration is applied
-    updated_response = send_socket_command(operator, "dump all")
-    expected_new_config = {"pod_selector": {"match_labels": {"baz": "bar"}}}
-    verify_config_contains(updated_response["config"], expected_new_config)
+    updated_application_state = management_socket.application_state()
+    assert updated_application_state.configuration.config.pod_selector.match_labels == {
+        "baz": "bar"
+    }
 
 
 @pytest.mark.acceptance
 def test_no_reload_loop_on_repeated_events(
-    operator, configmap, config_dict, collect_coverage
+    operator, management_socket, configmap, config_dict, collect_coverage
 ):
     """Regression test to ensure no reload loop occurs when ConfigMap events are repeated.
 
@@ -85,8 +89,7 @@ def test_no_reload_loop_on_repeated_events(
     wait_for_operator_ready(operator)
     wait_for_watch_streams_ready(operator)
 
-    initial_response = send_socket_command(operator, "dump all")
-    assert_config_structure(initial_response["config"])
+    initial_application_state = management_socket.application_state()
 
     # Trigger multiple ConfigMap updates with IDENTICAL content
     # This simulates Kubernetes generating update events even when content is unchanged
@@ -107,8 +110,12 @@ def test_no_reload_loop_on_repeated_events(
     assert_no_reload_loop(operator, max_reloads=0, timeout=30)
 
     # Verify operator is still healthy and configuration is unchanged
-    final_response = send_socket_command(operator, "dump all")
-    verify_config_contains(final_response["config"], initial_response["config"])
+    updated_application_state = management_socket.application_state()
+    # Compare the config objects directly
+    assert (
+        initial_application_state.configuration.config
+        == updated_application_state.configuration.config
+    )
 
     print(
         "✅ Regression test passed: No reload loop detected for repeated ConfigMap events"

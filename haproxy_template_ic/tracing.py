@@ -10,7 +10,7 @@ requests, and custom business logic spans.
 import functools
 import os
 from contextlib import contextmanager
-from typing import Any, Dict, Optional, Iterator, Callable, TypeVar, Awaitable
+from typing import Any, Dict, Optional, Iterator, Callable, TypeVar, Awaitable, cast
 from dataclasses import dataclass
 
 from opentelemetry import trace
@@ -219,7 +219,7 @@ def trace_async_function(
 
                 return await func(*args, **kwargs)
 
-        return wrapper  # type: ignore[return-value]
+        return cast(AsyncF, wrapper)
 
     return decorator
 
@@ -242,7 +242,7 @@ def trace_function(
 
                 return func(*args, **kwargs)
 
-        return wrapper  # type: ignore[return-value]
+        return cast(F, wrapper)
 
     return decorator
 

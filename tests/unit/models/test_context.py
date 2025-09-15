@@ -87,7 +87,7 @@ class TestSyncOptimization:
         pods_collection = IndexedResourceCollection()
         # IndexedResourceCollection uses _internal_dict with list values
         for key, resource in pod_data1.items():
-            pods_collection._internal_dict[key] = [resource]
+            pods_collection.resources[key] = [resource]
 
         # First hash computation
         hash1 = context.compute_haproxy_pods_hash(pods_collection)
@@ -108,7 +108,7 @@ class TestSyncOptimization:
         }
         pods_collection2 = IndexedResourceCollection()
         for key, resource in pod_data2.items():
-            pods_collection2._internal_dict[key] = [resource]
+            pods_collection2.resources[key] = [resource]
 
         hash3 = context.compute_haproxy_pods_hash(pods_collection2)
         changed3 = await context.have_pods_changed(pods_collection2)
@@ -215,11 +215,11 @@ class TestSyncOptimization:
 
         pods_collection1 = IndexedResourceCollection()
         for key, resource in pod_data1.items():
-            pods_collection1._internal_dict[key] = [resource]
+            pods_collection1.resources[key] = [resource]
 
         pods_collection2 = IndexedResourceCollection()
         for key, resource in pod_data2.items():
-            pods_collection2._internal_dict[key] = [resource]
+            pods_collection2.resources[key] = [resource]
 
         # Same pods in different order should produce same hash
         hash1 = context.compute_haproxy_pods_hash(pods_collection1)

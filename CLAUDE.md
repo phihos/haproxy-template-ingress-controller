@@ -196,7 +196,9 @@ This is a proof-of-concept Kubernetes ingress controller that enables full Jinja
 ### Key Technologies
 
 - **kopf**: Kubernetes operator framework for event handling
-- **kr8s**: Modern Kubernetes client library  
+- **kr8s**: Modern Kubernetes client library
+  - **IMPORTANT**: Use `from kr8s.asyncio.objects import Pod, ConfigMap, Secret` for async operations
+  - Never use `from kr8s.objects import ...` in async contexts - those are synchronous only
 - **jinja2**: Template engine for HAProxy configurations
 - **httpx**: Async HTTP client for Dataplane API integration
 - **click**: CLI interface framework
@@ -853,6 +855,7 @@ if "pytest" in sys.modules:  # Never check for test runners!
 - Prefer module-level imports over local imports in Python
 - Use `progress_context` (not `test_progress`) to avoid pytest discovery issues
 - **Zero tolerance for flaky tests**: All tests must be deterministic and reliable. Flaky tests must be either fixed to be deterministic or removed entirely. Using `pytest.mark.skip` for flaky tests is not acceptable. Timing-sensitive tests should use mocking, controlled async primitives, or be redesigned to avoid race conditions.
+- **No defensive programming**: Avoid getattr() and hasattr() patterns. Leverage knowledge of required fields to access attributes directly. This project uses strongly-typed models (ApplicationState, Config, etc.) that guarantee field presence - use this type safety instead of defensive patterns.
 
 ## No Backward Compatibility Policy
 

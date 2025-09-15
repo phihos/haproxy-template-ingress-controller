@@ -373,9 +373,12 @@ def wait_for_operator_ready(runner: LocalOperatorRunner, timeout: int = 60) -> N
         if os.path.exists(runner.socket_path):
             # Try to connect to socket
             response = runner.send_socket_command("dump all", retries=1)
-            if response and "config" in response:
-                socket_ready = True
-                break
+            if response and "configuration" in response:
+                # Check for nested config structure (Pydantic serialization)
+                config_section = response.get("configuration", {})
+                if "config" in config_section or len(config_section) > 0:
+                    socket_ready = True
+                    break
 
         time.sleep(1)
 

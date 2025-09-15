@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 from haproxy_template_ic.models import HAProxyConfigContext
 from .client import DataplaneClient, _SECTION_ELEMENTS
 from .errors import DataplaneAPIError, ValidationError
-from .models import ConfigChange
+from .models import ConfigChange, compute_content_hash
 from .types import ConfigChangeType, ConfigElementType, ConfigSectionType
 from .utils import (
     parse_validation_error_details,
@@ -84,7 +84,6 @@ class ConfigSynchronizer:
         self, config_context: HAProxyConfigContext
     ) -> Dict[str, str]:
         """Compute hashes for all rendered templates."""
-        from .models import compute_content_hash
 
         template_hashes = {}
 

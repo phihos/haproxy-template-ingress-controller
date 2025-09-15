@@ -5,6 +5,7 @@ Contains configuration change representations, deployment tracking,
 and utility functions for content hashing and validation.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar
 
@@ -173,7 +174,6 @@ def get_production_urls_from_index(
         - urls: List of dataplane URLs
         - url_to_pod_name_mapping: Dict mapping URLs to pod names
     """
-    import logging
 
     logger = logging.getLogger(__name__)
     urls: List[str] = []

@@ -54,11 +54,25 @@ from .context import (
     HAProxyConfigContext,
 )
 
+from .state import (
+    RuntimeState,
+    ConfigurationState,
+    ResourceState,
+    OperationalState,
+    ApplicationState,
+)
+
 logger = logging.getLogger(__name__)
 
 # Rebuild models with forward references after all imports are complete
 try:
     HAProxyConfigContext.model_rebuild()
+    # Rebuild state models that use forward references
+    RuntimeState.model_rebuild()
+    ConfigurationState.model_rebuild()
+    ResourceState.model_rebuild()
+    OperationalState.model_rebuild()
+    ApplicationState.model_rebuild()
 except Exception as e:  # nosec B110 - Exception is logged and safe to ignore for backward compatibility
     # If rebuilding fails, continue anyway for backward compatibility during development
     # This can happen when Config import is not available or circular dependencies exist
@@ -97,6 +111,12 @@ __all__ = [
     # Context models
     "TemplateContext",
     "HAProxyConfigContext",
+    # State models
+    "RuntimeState",
+    "ConfigurationState",
+    "ResourceState",
+    "OperationalState",
+    "ApplicationState",
     # Type aliases for collections
     "WatchResourceCollection",
     "MapCollection",

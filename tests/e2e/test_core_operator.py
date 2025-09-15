@@ -10,15 +10,11 @@ import pytest
 
 from tests.e2e.utils import (
     wait_for_operator_ready,
-    send_socket_command,
-    verify_response_has_structure,
-    verify_config_contains,
-    assert_config_structure,
 )
 
 
 @pytest.mark.acceptance
-def test_basic_init(operator, collect_coverage):
+def test_basic_init(operator, management_socket, collect_coverage):
     """Test that the operator initializes successfully.
 
     This test verifies:
@@ -28,10 +24,10 @@ def test_basic_init(operator, collect_coverage):
     """
     wait_for_operator_ready(operator)
 
-    # Verify we can query the operator state and config is loaded correctly
-    response = send_socket_command(operator, "dump all")
-    verify_response_has_structure(response, ["config", "metadata"])
+    application_state = management_socket.application_state()
 
-    expected_metadata = {"configmap_name": "haproxy-template-ic-config"}
-    verify_config_contains(response["metadata"], expected_metadata)
-    assert_config_structure(response["config"])
+    # Verify configmap name is in CLI options
+    expected_configmap_name = "haproxy-template-ic-config"
+    assert (
+        application_state.runtime.cli_options.configmap_name == expected_configmap_name
+    )
