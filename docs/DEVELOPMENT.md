@@ -64,14 +64,13 @@ haproxy_template_ic/
 - **Maintainable imports** - Logical grouping reduces complexity
 - **Backward compatible** - Wrapper modules preserve existing imports
 
-### Performance Improvements
+### Recent Improvements
 
-Recent optimizations deliver significant performance gains:
+Recent optimizations include:
 
-- **Test execution**: 26% faster (11.5s vs 18s)
-- **Docker builds**: 60-80% faster for code-only changes  
-- **Test count**: Reduced from 825 to 607 tests (removed 218 duplicates)
 - **Build caching**: Multi-stage Docker with BuildKit optimization
+- **Test organization**: Streamlined test suite with removed duplicates
+- **Dependency management**: Optimized layer structure for better caching
 
 ## Testing
 
@@ -129,7 +128,7 @@ uv run pytest -n 0 -s -v
 
 ### E2E Test Infrastructure
 
-E2E tests use Telepresence for enhanced debugging and development speed:
+E2E tests use Telepresence for enhanced debugging:
 
 **LocalOperatorRunner**
 ```python
@@ -141,10 +140,9 @@ with LocalOperatorRunner("config-name", "secret-name", "namespace") as operator:
 ```
 
 **Key Features:**
-- **60-80% faster iteration** - No container build/deploy cycles
+- **No container rebuilds** - Operator runs locally without Docker build cycles
 - **Real-time debugging** - Direct access to operator running locally
 - **Millisecond-precision timing** - `since_milliseconds` parameter for precise log analysis
-- **Log analysis** - Comprehensive log capture with search utilities
 - **Comprehensive logging** - Timestamp-tracked log capture with search utilities
 
 **Log Analysis Utilities:**
@@ -197,7 +195,7 @@ git commit --no-verify
 
 ### Docker Images
 
-**Optimized builds** with BuildKit for maximum performance:
+**Optimized builds** with BuildKit caching:
 
 ```bash
 # Enable BuildKit (required)
@@ -221,10 +219,10 @@ docker build \
 kind load docker-image haproxy-template-ic:dev --name haproxy-ic-dev
 ```
 
-**Performance gains:**
-- **Code changes only**: 60-80% faster due to dependency layer caching
-- **First builds**: 10-20% faster with parallelized stages  
-- **CI/CD builds**: 40-50% faster with registry cache
+**Benefits:**
+- **Efficient caching**: Dependency layers cached separately from code changes
+- **Parallelized stages**: Multi-stage builds with concurrent execution
+- **Registry caching**: Shared cache across CI/CD builds
 
 ### Multi-stage Build
 
@@ -269,11 +267,6 @@ haproxy_template_ic/
 │   ├── pod_management.py   # HAProxy pod discovery
 │   ├── synchronization.py  # Resource synchronization
 │   └── k8s_resources.py    # K8s resource operations
-├── tui/                     # Terminal User Interface
-│   ├── app.py              # Main TUI application
-│   ├── launcher.py         # TUI entry point
-│   ├── screens.py          # Screen definitions
-│   └── widgets/            # UI widget components
 ├── templating.py            # Jinja2 template engine
 ├── webhook.py               # Admission webhooks
 ├── metrics.py               # Prometheus metrics

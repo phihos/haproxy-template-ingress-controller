@@ -30,10 +30,6 @@ curl -u admin:adminpass http://localhost:5555/v3/services/haproxy/info
 ### Inspect State
 
 ```bash
-# Use TUI for interactive state inspection
-kubectl exec -it deployment/haproxy-template-ic -- \
-  uv run haproxy-template-ic tui
-
 # Check logs for configuration details
 kubectl logs deployment/haproxy-template-ic | grep "template render"
 ```

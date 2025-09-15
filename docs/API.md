@@ -26,21 +26,6 @@ Environment variables:
 - `CONFIGMAP_NAME` - ConfigMap name (alternative to --configmap-name)
 - `SECRET_NAME` - Secret name (alternative to --secret-name)
 
-### tui
-
-Launch Terminal User Interface dashboard:
-
-```bash
-haproxy-template-ic tui [OPTIONS]
-```
-
-Options:
-- `--namespace` / `-n` - Kubernetes namespace to monitor (defaults to current kubectl context)
-- `--context` - Kubernetes context to use
-- `--refresh` / `-r` - Refresh interval in seconds (default: 5)
-- `--deployment-name` - Name of the operator deployment (default: haproxy-template-ic)
-- `--socket-path` - Path to management socket for direct connection
-
 ### version
 
 Show version information:

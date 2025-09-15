@@ -12,7 +12,7 @@ Template-driven HAProxy ingress controller for Kubernetes. Full control over HAP
 - **Live reload** - HAProxy Dataplane API v3 integration with smart change detection
 - **Validation** - Test configs before production deployment
 - **Observable** - Prometheus metrics, OpenTelemetry tracing, structured logging
-- **High performance** - Optimized builds (60-80% faster), efficient testing (26% faster)
+- **Optimized builds** - Multi-stage Docker caching and efficient CI/CD pipelines
 - **Developer friendly** - Telepresence integration, millisecond-precision debugging
 
 ## Quick Start
@@ -99,7 +99,7 @@ data:
 ## Requirements
 
 - Kubernetes 1.28+
-- HAProxy 3.1 or later (critical for performance)
+- HAProxy 3.1 or later (required for proper startup)
 - Python 3.13+ (development only)
 
 ## Status
