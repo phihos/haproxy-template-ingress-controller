@@ -120,7 +120,7 @@ from haproxy_dataplane_v3.api.http_response_rule import (
     replace_http_response_rule_backend,
     replace_http_response_rule_frontend,
 )
-from haproxy_dataplane_v3.api.information import get_info
+from haproxy_dataplane_v3.api.information import get_info, get_haproxy_process_info
 
 # Advanced section APIs
 from haproxy_dataplane_v3.api.log_forward import (
@@ -719,16 +719,34 @@ class DataplaneClient:
     async def get_version(self) -> Dict[str, Any]:
         """Get HAProxy version information using the generated client."""
         client = self._get_client()
-        info_response = await get_info.asyncio(client=client)
 
-        # Convert the generated model to dict format expected by existing code
+        # Get HAProxy process information for version details
+        haproxy_info_response = await get_haproxy_process_info.asyncio(client=client)
+
+        # Get general API information for completeness
+        api_info_response = await get_info.asyncio(client=client)
+
+        # Convert the generated models to dict format expected by existing code
         result = {}
-        if info_response.haproxy:
-            result.update(info_response.haproxy.to_dict())
-        if info_response.api:
-            result.update(info_response.api.to_dict())
-        if info_response.system:
-            result.update(info_response.system.to_dict())
+
+        # Add HAProxy version information from process info
+        if haproxy_info_response and haproxy_info_response.info:
+            haproxy_info = haproxy_info_response.info.to_dict()
+            result.update(haproxy_info)
+            # Ensure 'haproxy' key exists for backward compatibility
+            if "version" in haproxy_info:
+                result["haproxy"] = {"version": haproxy_info["version"]}
+                if "release_date" in haproxy_info:
+                    result["haproxy"]["release_date"] = haproxy_info["release_date"]
+
+        # Add API information if available
+        if api_info_response.api:
+            api_info = api_info_response.api.to_dict()
+            result.update(api_info)
+
+        # Add system information if available
+        if api_info_response.system:
+            result.update(api_info_response.system.to_dict())
 
         return result
 
