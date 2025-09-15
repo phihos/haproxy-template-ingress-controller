@@ -70,7 +70,6 @@ data:
     operator:
       healthz_port: 8080
       metrics_port: 9090
-      socket_path: /run/haproxy-template-ic/management.sock
 
     # Logging configuration
     logging:
@@ -299,10 +298,11 @@ from haproxy_template_ic.debouncer import Debouncer
 ```
 
 #### Modern Modular Imports (Recommended)
+
 ```python
 # New organized structure
 from haproxy_template_ic.models.config import Config
-from haproxy_template_ic.models.resources import IndexedResourceCollection
+from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
 from haproxy_template_ic.dataplane.client import DataplaneClient
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
 from haproxy_template_ic.k8s.resource_utils import validate_resource
@@ -340,7 +340,6 @@ with LocalOperatorRunner(
 - `configmap_name: str` - ConfigMap containing operator configuration
 - `secret_name: str` - Secret containing credentials
 - `namespace: str` - Kubernetes namespace to operate in
-- `socket_path: Optional[str]` - Management socket path (auto-generated if None)
 - `verbose: int` - Logging level (0=WARNING, 1=INFO, 2=DEBUG)
 - `collect_coverage: bool` - Enable code coverage collection
 - `kubeconfig_path: Optional[str]` - Custom kubeconfig file path

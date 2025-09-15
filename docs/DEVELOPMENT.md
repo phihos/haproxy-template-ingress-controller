@@ -144,7 +144,7 @@ with LocalOperatorRunner("config-name", "secret-name", "namespace") as operator:
 - **60-80% faster iteration** - No container build/deploy cycles
 - **Real-time debugging** - Direct access to operator running locally
 - **Millisecond-precision timing** - `since_milliseconds` parameter for precise log analysis
-- **Socket inspection** - Runtime state access via management socket
+- **Log analysis** - Comprehensive log capture with search utilities
 - **Comprehensive logging** - Timestamp-tracked log capture with search utilities
 
 **Log Analysis Utilities:**
@@ -276,7 +276,6 @@ haproxy_template_ic/
 │   └── widgets/            # UI widget components
 ├── templating.py            # Jinja2 template engine
 ├── webhook.py               # Admission webhooks
-├── management_socket.py     # Debug socket server
 ├── metrics.py               # Prometheus metrics
 ├── tracing.py               # OpenTelemetry tracing
 ├── activity.py              # Activity tracking
@@ -337,10 +336,10 @@ if __name__ == "__main__":
 #### Remote Debugging
 
 ```bash
-# Port forward management socket
-kubectl port-forward deployment/haproxy-template-ic 5000:5000
+# Port forward metrics for monitoring
+kubectl port-forward deployment/haproxy-template-ic 9090:9090
 
-# Connect debugger to localhost:5000
+# Access metrics at localhost:9090/metrics
 ```
 
 #### Template Debugging

@@ -5,11 +5,11 @@ This module provides comprehensive metrics collection for monitoring operator
 performance, resource counts, operation timing, and error rates.
 """
 
-import time
 import logging
+import time
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar, cast
 from functools import wraps
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar, cast
 
 from prometheus_async import aio
 from prometheus_client import (
@@ -137,18 +137,6 @@ config_last_success_timestamp = Gauge(
     "Timestamp of last successful configuration reload",
 )
 
-# Management socket connections
-management_socket_connections_total = Counter(
-    "haproxy_template_ic_management_socket_connections_total",
-    "Total number of management socket connections",
-)
-
-management_socket_commands_total = Counter(
-    "haproxy_template_ic_management_socket_commands_total",
-    "Total number of management socket commands",
-    ["command", "status"],
-)
-
 # Template debouncer metrics
 debouncer_triggers_total = Counter(
     "haproxy_template_ic_debouncer_triggers_total",
@@ -261,16 +249,6 @@ class MetricsCollector:
 
         if success:
             config_last_success_timestamp.set(timestamp)
-
-    def record_management_socket_connection(self) -> None:
-        """Record a management socket connection."""
-        management_socket_connections_total.inc()
-
-    def record_management_socket_command(
-        self, command: str, status: str = "success"
-    ) -> None:
-        """Record a management socket command."""
-        management_socket_commands_total.labels(command=command, status=status).inc()
 
     def record_dataplane_api_request(
         self, operation: str, status: str = "success"

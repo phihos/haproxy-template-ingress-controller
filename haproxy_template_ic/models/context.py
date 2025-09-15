@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import xxhash
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, computed_field
 
-from .resources import IndexedResourceCollection
-from .templates import RenderedContent, RenderedConfig
+from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
+from .templates import RenderedConfig, RenderedContent
 
 if TYPE_CHECKING:
-    from .config import Config
+    pass
 
 
 class TemplateContext(BaseModel):
@@ -25,7 +25,6 @@ class TemplateContext(BaseModel):
         default_factory=dict,
         description="Indexed resource collections organized by type",
     )
-    namespace: Optional[str] = Field(None, description="Current namespace")
 
     model_config = ConfigDict(
         # Allow extra fields for extensibility
@@ -40,8 +39,6 @@ class TemplateContext(BaseModel):
 class HAProxyConfigContext(BaseModel):
     """Complete context for HAProxy configuration rendering."""
 
-    # Core configuration - using forward reference to avoid circular imports
-    config: "Config" = Field(..., description="Configuration object")
     template_context: TemplateContext = Field(
         ..., description="Template rendering context"
     )

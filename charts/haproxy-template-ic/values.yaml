@@ -80,7 +80,6 @@ controller:
     operator:
       healthz_port: 8080
       metrics_port: 9090
-      socket_path: /run/haproxy-template-ic/management.sock
     
     logging:
       verbose: 2  # 0=WARNING, 1=INFO, 2=DEBUG
@@ -327,14 +326,13 @@ webhook:
             {%- endfor %}
           {%- endfor %}
     
-          {#- Calculate required slots using power-of-2 expansion #}
+          {#- Calculate required slots using mathematical approach #}
           {%- set active_count = active_endpoints|length %}
-          {%- set max_servers = initial_slots %}
-          {%- for _ in range(10) %}  {#- Loop to find right size #}
-            {%- if active_count >= max_servers %}
-              {%- set max_servers = max_servers * 2 %}
-            {%- endif %}
-          {%- endfor %}
+          # active count = {{ active_count }}
+          {%- set ratio = active_count / initial_slots %}
+          {%- set power_of_two = [0, ratio | log(2) | round(0, 'ceil')] | max %}
+          {%- set max_servers = initial_slots * (2 ** power_of_two) | int %}
+          # max servers = {{ max_servers }}
     
           {#- Generate all server slots with fixed names #}
           {%- for i in range(1, max_servers + 1) %}

@@ -7,14 +7,12 @@ and utility functions for content hashing and validation.
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 import xxhash
 
 from .types import ConfigChangeType, ConfigElementType, ConfigSectionType
 
-if TYPE_CHECKING:
-    from haproxy_template_ic.models import IndexedResourceCollection
 
 __all__ = [
     "ConfigChange",
@@ -22,6 +20,8 @@ __all__ = [
     "extract_hash_from_description",
     "get_production_urls_from_index",
 ]
+
+from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
 
 DEFAULT_DATAPLANE_PORT = 5555
 

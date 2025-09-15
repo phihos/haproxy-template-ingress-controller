@@ -5,7 +5,6 @@ This package provides utilities for:
 - Telepresence connection management
 - Local operator execution
 - Test helpers and assertions
-- Management socket communication
 """
 
 # Import main utilities from consolidated modules
@@ -16,8 +15,6 @@ from .helpers import (
     assert_no_reload_loop,
     assert_operator_health,
     count_log_occurrences,
-    # Socket communication
-    send_socket_command,
     # Assertions
     verify_config_contains,
     # Operator helpers
@@ -39,8 +36,6 @@ __all__ = [
     "count_log_occurrences",
     "assert_no_reload_loop",
     "assert_operator_health",
-    # Socket communication
-    "send_socket_command",
     # Assertions
     "verify_config_contains",
     "assert_config_structure",

@@ -33,15 +33,16 @@ def get_running_haproxy_pods(k8s_client, namespace):
         if getattr(pod.metadata, "deletionTimestamp", None):
             continue
         # Only include pods that are Running with assigned IPs
-        if (getattr(pod.status, "phase", None) == "Running" 
-            and getattr(pod.status, "podIP", None)):
+        if getattr(pod.status, "phase", None) == "Running" and getattr(
+            pod.status, "podIP", None
+        ):
             running_pods.append(pod)
     return running_pods
 
 
 def extract_production_urls_from_logs(operator):
     """Extract production URLs from operator logs.
-    
+
     Returns:
         List of URLs found in the latest log entry, or empty list if none found
     """
@@ -50,7 +51,7 @@ def extract_production_urls_from_logs(operator):
         # Look for log lines like: 🔍 Found 2 production URLs: ['http://10.244.0.66:5555', 'http://10.244.0.67:5555']
         pattern = r"🔍 Found \d+ production URLs: (\[.*?\])"
         matches = re.findall(pattern, logs)
-        
+
         if matches:
             # Parse the latest match as a Python list
             latest_urls_str = matches[-1]
@@ -70,10 +71,10 @@ def extract_production_urls_from_logs(operator):
 
 def extract_ips_from_urls(urls):
     """Extract IP addresses from production URLs.
-    
+
     Args:
         urls: List of URLs like ['http://10.244.0.66:5555', 'http://10.244.0.67:5555']
-        
+
     Returns:
         Set of IP addresses like {'10.244.0.66', '10.244.0.67'}
     """
@@ -88,23 +89,25 @@ def extract_ips_from_urls(urls):
 
 def verify_discovered_ips_match_pods(operator, expected_pods, description=""):
     """Verify that discovered production URLs match the expected pods.
-    
+
     Args:
         operator: Operator instance to get logs from
         expected_pods: List of pod objects with podIP in status
         description: Description for error messages
-        
+
     Returns:
         bool: True if discovered IPs match expected pod IPs exactly
     """
     try:
         discovered_urls = extract_production_urls_from_logs(operator)
         discovered_ips = extract_ips_from_urls(discovered_urls)
-        
+
         expected_ips = set(getattr(pod.status, "podIP") for pod in expected_pods)
-        
-        logger.debug(f"{description} - Discovered IPs: {discovered_ips}, Expected IPs: {expected_ips}")
-        
+
+        logger.debug(
+            f"{description} - Discovered IPs: {discovered_ips}, Expected IPs: {expected_ips}"
+        )
+
         return discovered_ips == expected_ips
     except Exception as e:
         logger.debug(f"Error verifying discovered IPs {description}: {e}")
@@ -113,9 +116,10 @@ def verify_discovered_ips_match_pods(operator, expected_pods, description=""):
 
 async def wait_for_pod_discovery(operator, expected_pods, description, timeout=60):
     """Wait for operator to discover the expected pods and verify IPs match."""
+
     async def check_discovery():
         return verify_discovered_ips_match_pods(operator, expected_pods, description)
-    
+
     success = await wait_for_condition(check_discovery, timeout=timeout)
     return success
 
@@ -125,7 +129,7 @@ def assert_operator_discovers_pods(operator, expected_pods, description):
     discovered_urls = extract_production_urls_from_logs(operator)
     discovered_ips = extract_ips_from_urls(discovered_urls)
     expected_ips = set(getattr(pod.status, "podIP") for pod in expected_pods)
-    
+
     assert discovered_ips == expected_ips, (
         f"{description}: Operator discovered wrong IPs. "
         f"Expected: {expected_ips}, Discovered: {discovered_ips}, URLs: {discovered_urls}"
@@ -163,12 +167,14 @@ async def wait_for_condition(
 
     return False
 
+
 async def wait_for_pod_count(k8s_client, namespace, expected_count, timeout=60):
     """Wait for exactly the expected number of running HAProxy pods."""
+
     async def check_count():
         running_pods = get_running_haproxy_pods(k8s_client, namespace)
         return len(running_pods) == expected_count
-    
+
     return await wait_for_condition(check_count, timeout=timeout)
 
 
@@ -199,21 +205,29 @@ async def test_pod_discovery_with_scaling(
     # Wait for initial 2 pods and verify discovery
     pods_ready = await wait_for_pod_count(k8s_client, k8s_namespace, 2)
     assert pods_ready, "HAProxy pods failed to become ready within 60 seconds"
-    
+
     initial_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
-    discovery_success = await wait_for_pod_discovery(operator, initial_pods, "Initial discovery")
-    assert discovery_success, f"Controller failed to discover initial pods: {[getattr(p.status, 'podIP') for p in initial_pods]}"
+    discovery_success = await wait_for_pod_discovery(
+        operator, initial_pods, "Initial discovery"
+    )
+    assert discovery_success, (
+        f"Controller failed to discover initial pods: {[getattr(p.status, 'podIP') for p in initial_pods]}"
+    )
 
     # Scale down to 1 replica and verify
     haproxy_deployment.scale(1)
     wait_for_deployment_replicas(haproxy_deployment, 1)
-    
+
     scaled_ready = await wait_for_pod_count(k8s_client, k8s_namespace, 1)
     assert scaled_ready, "Scaling to 1 replica failed within 60 seconds"
-    
+
     remaining_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
-    scaling_detected = await wait_for_pod_discovery(operator, remaining_pods, "After scaling")
-    assert scaling_detected, f"Controller failed to detect scaling: {[getattr(p.status, 'podIP') for p in remaining_pods]}"
+    scaling_detected = await wait_for_pod_discovery(
+        operator, remaining_pods, "After scaling"
+    )
+    assert scaling_detected, (
+        f"Controller failed to detect scaling: {[getattr(p.status, 'podIP') for p in remaining_pods]}"
+    )
 
 
 @pytest.mark.asyncio
@@ -230,19 +244,23 @@ async def test_pod_discovery_with_pod_deletion(
     # Wait for initial 2 pods and verify discovery
     pods_ready = await wait_for_pod_count(k8s_client, k8s_namespace, 2)
     assert pods_ready, "HAProxy pods failed to become ready within 60 seconds"
-    
+
     initial_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
     initial_ips = [getattr(pod.status, "podIP") for pod in initial_pods]
-    
-    discovery_success = await wait_for_pod_discovery(operator, initial_pods, "Initial discovery")
-    assert discovery_success, f"Controller failed to discover initial pods: {initial_ips}"
+
+    discovery_success = await wait_for_pod_discovery(
+        operator, initial_pods, "Initial discovery"
+    )
+    assert discovery_success, (
+        f"Controller failed to discover initial pods: {initial_ips}"
+    )
 
     # Delete one pod and wait for removal
     pod_to_delete = initial_pods[0]
     deleted_pod_name = pod_to_delete.metadata.name
     deleted_pod_ip = getattr(pod_to_delete.status, "podIP")
     pod_to_delete.delete()
-    
+
     logger.info(f"Deleted pod {deleted_pod_name} with IP {deleted_pod_ip}")
 
     # Wait for pod to be completely removed
@@ -252,28 +270,36 @@ async def test_pod_discovery_with_pod_deletion(
         return deleted_pod_name not in current_names
 
     pod_deleted = await wait_for_condition(check_pod_deleted, timeout=60)
-    assert pod_deleted, f"Deleted pod {deleted_pod_name} did not disappear within 60 seconds"
+    assert pod_deleted, (
+        f"Deleted pod {deleted_pod_name} did not disappear within 60 seconds"
+    )
 
     # Wait for deployment to recreate and verify discovery
     wait_for_deployment_replicas(haproxy_deployment, 2)
-    
-    recreation_ready = await wait_for_pod_count(k8s_client, k8s_namespace, 2, timeout=120)
+
+    recreation_ready = await wait_for_pod_count(
+        k8s_client, k8s_namespace, 2, timeout=120
+    )
     assert recreation_ready, "Pod recreation failed within 120 seconds"
-    
+
     final_pods = get_running_haproxy_pods(k8s_client, k8s_namespace)
-    recreation_detected = await wait_for_pod_discovery(operator, final_pods, "After recreation")
+    recreation_detected = await wait_for_pod_discovery(
+        operator, final_pods, "After recreation"
+    )
     assert recreation_detected, "Controller failed to discover recreated pods"
 
     # Final verification
     final_ips = [getattr(pod.status, "podIP") for pod in final_pods]
     assert_operator_discovers_pods(operator, final_pods, "Final verification")
-    
+
     # Check if deleted IP was reused
     if deleted_pod_ip in final_ips:
         logger.info(f"Pod IP {deleted_pod_ip} was reused by new pod")
     else:
         discovered_urls = extract_production_urls_from_logs(operator)
         discovered_ips = extract_ips_from_urls(discovered_urls)
-        assert deleted_pod_ip not in discovered_ips, f"Operator still discovering deleted pod IP {deleted_pod_ip}"
-    
+        assert deleted_pod_ip not in discovered_ips, (
+            f"Operator still discovering deleted pod IP {deleted_pod_ip}"
+        )
+
     logger.info(f"✅ Pod deletion test passed: {initial_ips} → {final_ips}")

@@ -7,32 +7,16 @@ memo object handling, and configuration management.
 
 import logging
 import os
-from typing import Any, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from haproxy_template_ic.activity import ActivityBuffer
 
 from haproxy_template_ic.constants import NAMESPACE_FILE_PATH
+from haproxy_template_ic.models.state import ApplicationState
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "get_current_namespace",
     "trigger_reload",
-    "get_memo_activity_buffer",
 ]
-
-
-def get_memo_activity_buffer(memo: Any) -> Optional["ActivityBuffer"]:
-    """Get activity buffer from memo if available.
-
-    Args:
-        memo: Kopf memo object
-
-    Returns:
-        ActivityBuffer if available and valid, None otherwise
-    """
-    return memo.activity_buffer
 
 
 def get_current_namespace() -> str:
@@ -74,7 +58,7 @@ def get_current_namespace() -> str:
     return "default"
 
 
-def trigger_reload(memo: Any) -> None:
+def trigger_reload(memo: ApplicationState) -> None:
     """Trigger configuration reload by setting flags on the memo object.
 
     This function sets the reload flags that signal the operator to reload

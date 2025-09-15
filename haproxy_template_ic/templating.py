@@ -6,32 +6,30 @@ functionality including support for template snippets and custom filters.
 """
 
 import base64
+import math
 import os
 import re
 import sys
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
 
-from pathvalidate import ValidationError, is_valid_filename, sanitize_filename
-
 import jinja2
 from jinja2 import (
     BaseLoader,
     Environment,
     Template,
-    TemplateSyntaxError,
     TemplateNotFound,
+    TemplateSyntaxError,
 )
+from pathvalidate import ValidationError, is_valid_filename, sanitize_filename
 
 # Import Pydantic models and collection type aliases
-from .models import (
-    TemplateSnippet,
-    TemplateSnippetCollection,
-)
 from .constants import (
     MAX_TEMPLATE_FRAMES,
     TEMPLATE_CACHE_SIZE,
 )
+from .models.config import TemplateSnippetCollection
+from .models.templates import TemplateSnippet
 
 # Regex pattern for extracting snippet names from include statements
 INCLUDE_PATTERN = re.compile(r'{%\s*include\s+["\']([^"\']+)["\']\s*%}')
@@ -47,6 +45,17 @@ def b64decode_filter(value: str) -> str:
         return base64.b64decode(value).decode("utf-8")
     except (ValueError, TypeError, UnicodeDecodeError) as e:
         raise ValueError(f"Failed to decode base64 value: {e}") from e
+
+
+def logarithm_filter(x, base=math.e):
+    """Ansible-style logarithm filter."""
+    try:
+        if base == 10:
+            return math.log10(x)
+        else:
+            return math.log(x, base)
+    except TypeError as ex:
+        raise ValueError("logarithm() can only be used on numbers") from ex
 
 
 def get_path_filter(
@@ -508,6 +517,9 @@ def get_template_environment(
 
     # Add custom filters
     env.filters["b64decode"] = b64decode_filter
+
+    # Add math filters (Ansible-style)
+    env.filters["log"] = logarithm_filter
 
     # Add get_path filter with config access
     def get_path_with_config(filename: str, content_type: str) -> str:

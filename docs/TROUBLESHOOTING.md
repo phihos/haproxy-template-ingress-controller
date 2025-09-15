@@ -30,13 +30,12 @@ curl -u admin:adminpass http://localhost:5555/v3/services/haproxy/info
 ### Inspect State
 
 ```bash
-# Dump complete controller state
-kubectl exec deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump all" | jq '.'
+# Use TUI for interactive state inspection
+kubectl exec -it deployment/haproxy-template-ic -- \
+  uv run haproxy-template-ic tui
 
-# Check rendered configuration
-kubectl exec deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump config" | jq '.haproxy_config'
+# Check logs for configuration details
+kubectl logs deployment/haproxy-template-ic | grep "template render"
 ```
 
 ## Common Issues
@@ -50,9 +49,8 @@ kubectl exec deployment/haproxy-template-ic -- \
 # Check for template syntax errors
 kubectl logs deployment/haproxy-template-ic | grep -A5 "TemplateSyntaxError"
 
-# Verify resources are being watched
-kubectl exec deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump indices" | jq 'keys'
+# Verify resources are being watched in logs
+kubectl logs deployment/haproxy-template-ic | grep "watching resource"
 ```
 
 **Resolution**:
@@ -172,10 +170,8 @@ from haproxy_template_ic.models.config import Config
 # Check for deleted resources
 kubectl get events --sort-by='.lastTimestamp' | grep -i delete
 
-# Compare current state with rendered config
-kubectl exec deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump indices" | \
-  jq '.services_index | length'
+# Check current resource counts in logs
+kubectl logs deployment/haproxy-template-ic | grep "indexed resources"
 ```
 
 **Resolution**:
@@ -249,10 +245,8 @@ curl -s http://localhost:9090/metrics | grep template_render_duration
 # Check memory consumption
 kubectl top pod -l app=haproxy-template-ic
 
-# View resource count
-kubectl exec deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump indices" | \
-  jq 'to_entries | map({key: .key, count: (.value | length)})'
+# Check resource counts in logs
+kubectl logs deployment/haproxy-template-ic | grep "resource count"
 ```
 
 **Resolution**:

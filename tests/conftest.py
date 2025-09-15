@@ -633,7 +633,7 @@ def configmap(config_dict, validation_service, k8s_client, k8s_namespace):
         "dataplane_host": validation_service.spec.clusterIP,  # Use service IP, not hostname
         "dataplane_port": 5555,
     }
-    
+
     cm = ConfigMap(
         {
             "apiVersion": "v1",
@@ -1457,7 +1457,7 @@ backend servers
 def validation_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap):
     """
     Create validation deployment for E2E tests.
-    
+
     This provides a standalone validation service with HAProxy + Dataplane API
     that the local operator can reach via Telepresence at haproxy-template-ic:5555.
     """
@@ -1499,7 +1499,10 @@ def validation_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap):
                                     {"containerPort": 8404, "name": "validation"},
                                 ],
                                 "env": [
-                                    {"name": "HAPROXY_PASSWORD", "value": "validationpass"},
+                                    {
+                                        "name": "HAPROXY_PASSWORD",
+                                        "value": "validationpass",
+                                    },
                                     {"name": "CONTAINER_TYPE", "value": "haproxy"},
                                 ],
                                 "volumeMounts": [
@@ -1522,7 +1525,7 @@ def validation_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap):
                                 },
                                 "readinessProbe": {
                                     "httpGet": {
-                                        "path": "/healthz", 
+                                        "path": "/healthz",
                                         "port": 8404,
                                     },
                                     "initialDelaySeconds": 5,
@@ -1538,7 +1541,10 @@ def validation_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap):
                                     {"containerPort": 5555, "name": "validation-api"},
                                 ],
                                 "env": [
-                                    {"name": "HAPROXY_PASSWORD", "value": "validationpass"},
+                                    {
+                                        "name": "HAPROXY_PASSWORD",
+                                        "value": "validationpass",
+                                    },
                                     {"name": "CONTAINER_TYPE", "value": "dataplane"},
                                 ],
                                 "volumeMounts": [
@@ -1602,9 +1608,10 @@ def validation_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap):
     )
 
     deployment.create()
-    
+
     # Wait for deployment to be ready
     import time
+
     max_wait = 120
     start_time = time.time()
     while time.time() - start_time < max_wait:
@@ -1614,7 +1621,7 @@ def validation_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap):
         time.sleep(2)
     else:
         raise TimeoutError("Validation deployment did not become ready in time")
-        
+
     return deployment
 
 
@@ -1622,16 +1629,16 @@ def validation_deployment(k8s_client, k8s_namespace, unified_haproxy_configmap):
 def validation_service(k8s_client, k8s_namespace, validation_deployment, telepresence):
     """
     Create validation service for E2E tests.
-    
+
     This creates the haproxy-template-ic service that exposes the validation
     dataplane API at port 5555, allowing the local operator to connect via
     Telepresence to haproxy-template-ic:5555.
-    
+
     Includes connectivity check to ensure the service is reachable via Telepresence.
     """
     import time
     import httpx
-    
+
     service = Service(
         {
             "apiVersion": "v1",
@@ -1663,56 +1670,62 @@ def validation_service(k8s_client, k8s_namespace, validation_deployment, telepre
         namespace=k8s_namespace,
         api=k8s_client,
     )
-    
+
     service.create()
-    
+
     # Wait for service to have endpoints - simplified approach
     max_wait = 60
     start_time = time.time()
     endpoints_ready = False
-    
+
     while time.time() - start_time < max_wait:
         try:
-            endpoints = k8s_client.get("endpoints", name="haproxy-template-ic", namespace=k8s_namespace)
+            endpoints = k8s_client.get(
+                "endpoints", name="haproxy-template-ic", namespace=k8s_namespace
+            )
             logger.debug(f"Endpoints object type: {type(endpoints)}")
-            
+
             # Simple check - if endpoints exists, assume it's ready
             # The HTTP connectivity check below is the real validation
             if endpoints:
                 logger.info("✅ Validation service endpoints found")
                 endpoints_ready = True
                 break
-                
+
         except Exception as e:
             logger.debug(f"Endpoint check failed: {e}")
-            
+
         time.sleep(2)
-    
+
     if not endpoints_ready:
-        logger.warning("Endpoint check timed out, proceeding with connectivity test anyway")
-    
+        logger.warning(
+            "Endpoint check timed out, proceeding with connectivity test anyway"
+        )
+
     # Get the service cluster IP for direct connectivity test
     service_ip = service.spec.clusterIP
-    logger.info(f"Testing Telepresence connectivity to validation service at {service_ip}:5555...")
-    
+    logger.info(
+        f"Testing Telepresence connectivity to validation service at {service_ip}:5555..."
+    )
+
     max_wait = 60
     start_time = time.time()
     delay = 2
-    
+
     while time.time() - start_time < max_wait:
         try:
             # Test connectivity via Telepresence using the service IP
             with httpx.Client(timeout=10.0) as client:
                 response = client.get(
                     f"http://{service_ip}:5555/v3/info",
-                    headers={"Authorization": "Basic YWRtaW46dmFsaWRhdGlvbnBhc3M="}
+                    headers={"Authorization": "Basic YWRtaW46dmFsaWRhdGlvbnBhc3M="},
                 )
                 if response.status_code == 200:
                     logger.info("✅ Validation service is reachable via Telepresence")
                     break
         except Exception as e:
             logger.debug(f"Validation service connectivity check failed: {e}")
-        
+
         # Exponential backoff
         time.sleep(delay)
         delay = min(delay * 1.5, 10)
@@ -1721,7 +1734,7 @@ def validation_service(k8s_client, k8s_namespace, validation_deployment, telepre
             f"Validation service at {service_ip}:5555 is not reachable via Telepresence after {max_wait}s. "
             "Check that Telepresence is connected and the validation deployment is healthy."
         )
-    
+
     return service
 
 

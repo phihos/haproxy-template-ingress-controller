@@ -332,38 +332,6 @@ webhooks:
   failurePolicy: Fail
 ```
 
-## Management Socket Security
-
-### Restrict Access
-
-Never expose management socket outside the pod:
-
-```yaml
-# CORRECT: Unix socket only
-- name: SOCKET_PATH
-  value: /run/haproxy-template-ic/management.sock
-
-# WRONG: Network socket
-- name: SOCKET_PATH
-  value: tcp://0.0.0.0:5000
-```
-
-### RBAC for Socket Access
-
-Limit who can exec into pods:
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: haproxy-debug
-  namespace: haproxy-system
-rules:
-- apiGroups: [""]
-  resources: ["pods/exec"]
-  verbs: ["create"]
-  resourceNames: ["haproxy-template-ic-*"]
-```
 
 ## Security Checklist
 
@@ -374,7 +342,6 @@ rules:
 - [ ] Read-only root filesystem
 - [ ] Non-root user
 - [ ] Capabilities dropped
-- [ ] Management socket not exposed
 - [ ] Webhook TLS configured
 - [ ] Resource limits set
 - [ ] Security scanning in CI/CD

@@ -472,7 +472,6 @@ create_dev_configmap() {
 	# Create modified ConfigMap with dev-specific settings
 	sed -e 's/name: haproxy-template-ic-config/name: haproxy-template-ic-config-dev/' \
 	    -e 's/dataplane_host: localhost/dataplane_host: haproxy-template-ic/' \
-	    -e 's|socket_path: /run/haproxy-template-ic/management.sock|socket_path: mgmt.sock|' \
 	    /tmp/original-configmap.yaml | kubectl apply -f -
 	
 	rm -f /tmp/original-configmap.yaml

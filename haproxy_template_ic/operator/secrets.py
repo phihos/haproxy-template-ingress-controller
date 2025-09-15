@@ -14,6 +14,7 @@ from kr8s.objects import Secret
 
 from haproxy_template_ic.core.logging import autolog
 from haproxy_template_ic.credentials import Credentials
+from haproxy_template_ic.models.state import ApplicationState
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -50,7 +51,7 @@ async def fetch_secret(name: str, namespace: str) -> Secret:
 
 @autolog(component="operator")
 async def handle_secret_change(
-    memo: Any,
+    memo: ApplicationState,
     event: dict[str, Any],
     name: str,
     type: str,

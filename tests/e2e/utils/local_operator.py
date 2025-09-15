@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 from queue import Empty, Queue
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import structlog
 
@@ -39,7 +39,6 @@ class LocalOperatorRunner:
         configmap_name: str,
         secret_name: str,
         namespace: str,
-        socket_path: Optional[str] = None,
         verbose: int = 2,
         collect_coverage: bool = True,
         kubeconfig_path: Optional[str] = None,
@@ -51,7 +50,6 @@ class LocalOperatorRunner:
             configmap_name: Name of the ConfigMap containing operator config
             secret_name: Name of the Secret containing credentials
             namespace: Kubernetes namespace for the operator to use
-            socket_path: Path for the management socket (auto-generated if None)
             verbose: Verbosity level (0=WARNING, 1=INFO, 2=DEBUG)
             collect_coverage: Whether to collect coverage data
         """
@@ -62,13 +60,12 @@ class LocalOperatorRunner:
         self.collect_coverage = collect_coverage
         self.kubeconfig_path = kubeconfig_path
 
-        # Create temporary directory for socket if not provided
-        if socket_path:
-            self.socket_path = socket_path
-            self.temp_dir = None
-        else:
+        # Create temporary directory for testing if coverage is enabled
+        self.temp_dir: Optional[str]
+        if collect_coverage:
             self.temp_dir = tempfile.mkdtemp(prefix="haproxy-test-")
-            self.socket_path = os.path.join(self.temp_dir, "management.sock")
+        else:
+            self.temp_dir = None
 
         self.process: Optional[subprocess.Popen] = None
         self.log_queue: Queue = Queue()
@@ -95,7 +92,6 @@ class LocalOperatorRunner:
                 "CONFIGMAP_NAME": self.configmap_name,
                 "SECRET_NAME": self.secret_name,
                 "POD_NAMESPACE": self.namespace,  # Pass namespace to operator
-                "SOCKET_PATH": self.socket_path,
                 "VERBOSE": str(self.verbose),
                 # Disable buffering for real-time log capture
                 "PYTHONUNBUFFERED": "1",
@@ -136,7 +132,6 @@ class LocalOperatorRunner:
             "Starting operator locally",
             namespace=self.namespace,
             configmap=self.configmap_name,
-            socket_path=self.socket_path,
         )
 
         # Determine project root directory
@@ -313,37 +308,6 @@ class LocalOperatorRunner:
         """Check if the operator process is still running."""
         return self.process is not None and self.process.poll() is None
 
-    def send_socket_command(
-        self, command: str, retries: int = 3
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Send a command to the management socket.
-
-        Args:
-            command: Socket command to send
-            retries: Number of retry attempts
-
-        Returns:
-            Parsed JSON response or None on failure
-        """
-        from .socket_client import send_socket_command as send_cmd
-
-        for attempt in range(retries):
-            try:
-                response = send_cmd(self.socket_path, command)
-                if response:
-                    return response
-
-            except Exception as e:
-                if attempt == retries - 1:
-                    logger.error(
-                        f"Failed to send socket command after {retries} attempts: {e}"
-                    )
-                else:
-                    time.sleep(1)
-
-        return None
-
 
 def wait_for_operator_ready(runner: LocalOperatorRunner, timeout: int = 60) -> None:
     """
@@ -359,9 +323,9 @@ def wait_for_operator_ready(runner: LocalOperatorRunner, timeout: int = 60) -> N
     """
     logger.info("Waiting for operator to become ready")
 
-    # First, wait for socket to be available
+    # Wait for operator to be ready by checking for successful initialization in logs
     start_time = time.time()
-    socket_ready = False
+    ready = False
 
     while time.time() - start_time < timeout:
         if not runner.is_running():
@@ -369,20 +333,18 @@ def wait_for_operator_ready(runner: LocalOperatorRunner, timeout: int = 60) -> N
                 f"Operator process exited unexpectedly. Logs:\n{runner.get_logs()}"
             )
 
-        # Check if socket file exists
-        if os.path.exists(runner.socket_path):
-            # Try to connect to socket
-            response = runner.send_socket_command("dump all", retries=1)
-            if response and "configuration" in response:
-                # Check for nested config structure (Pydantic serialization)
-                config_section = response.get("configuration", {})
-                if "config" in config_section or len(config_section) > 0:
-                    socket_ready = True
-                    break
+        # Check for ready indicators in logs
+        logs = runner.get_logs()
+        if (
+            "✅ Configuration and credentials loaded successfully." in logs
+            and "📊 Metrics server started on port" in logs
+        ):
+            ready = True
+            break
 
         time.sleep(1)
 
-    if not socket_ready:
+    if not ready:
         raise TimeoutError(
             f"Operator did not become ready within {timeout} seconds. "
             f"Logs:\n{runner.get_logs()}"

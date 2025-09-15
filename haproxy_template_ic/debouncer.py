@@ -8,12 +8,18 @@ templates are refreshed periodically.
 
 import asyncio
 import time
-from typing import Any, Callable, Coroutine, Optional
+from typing import Optional
 
 import structlog
+from kopf._core.engines.indexing import OperatorIndices
 
-from haproxy_template_ic.models import TriggerContext
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
+from haproxy_template_ic.metrics import MetricsCollector, get_metrics_collector
+from haproxy_template_ic.models.config import Config
+from haproxy_template_ic.models.context import HAProxyConfigContext
+from haproxy_template_ic.models.templates import TriggerContext
+from haproxy_template_ic.operator.template_renderer import render_haproxy_templates
+from haproxy_template_ic.templating import TemplateRenderer
 
 logger = structlog.get_logger(__name__)
 
@@ -32,8 +38,12 @@ class TemplateRenderDebouncer:
         self,
         min_interval: int,
         max_interval: int,
-        render_func: Callable[..., Coroutine[Any, Any, None]],
-        memo: Any,
+        config: Config,
+        haproxy_config_context: HAProxyConfigContext,
+        template_renderer: TemplateRenderer,
+        config_synchronizer: ConfigSynchronizer,
+        kopf_indices: OperatorIndices,
+        metrics: MetricsCollector,
     ):
         """
         Initialize the debouncer.
@@ -49,10 +59,14 @@ class TemplateRenderDebouncer:
                 f"max_interval ({max_interval}) must be >= min_interval ({min_interval})"
             )
 
+        self.config = config
+        self.haproxy_config_context = haproxy_config_context
+        self.template_renderer = template_renderer
+        self.config_synchronizer = config_synchronizer
+        self.kopf_indices = kopf_indices
+        self.metrics = metrics
         self.min_interval = min_interval
         self.max_interval = max_interval
-        self.render_func = render_func
-        self.memo = memo
 
         self._event = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
@@ -211,8 +225,15 @@ class TemplateRenderDebouncer:
                 # Render templates with trigger context
                 self._last_render_time = time.time()
                 try:
-                    await self.render_func(
-                        self.memo, logger, trigger_context=trigger_context
+                    await render_haproxy_templates(
+                        config=self.config,
+                        haproxy_config_context=self.haproxy_config_context,
+                        template_renderer=self.template_renderer,
+                        config_synchronizer=self.config_synchronizer,
+                        kopf_indices=self.kopf_indices,
+                        metrics=self.metrics,
+                        logger=logger,
+                        trigger_context=trigger_context,
                     )
                 except Exception as e:
                     logger.error(
@@ -273,24 +294,3 @@ class TemplateRenderDebouncer:
                     pass
 
         logger.info("Template debouncer stopped")
-
-    def get_stats(self) -> dict:
-        """
-        Get current debouncer statistics.
-
-        Returns:
-            Dictionary with debouncer stats for monitoring/debugging
-        """
-        current_time = time.time()
-        return {
-            "min_interval": self.min_interval,
-            "max_interval": self.max_interval,
-            "last_render_time": self._last_render_time,
-            "time_since_last_render": current_time - self._last_render_time,
-            "pending_changes": self._change_count,
-            "last_change_time": self._last_change_time,
-            "time_since_last_change": current_time - self._last_change_time
-            if self._last_change_time
-            else None,
-            "is_running": self._task and not self._task.done() if self._task else False,
-        }

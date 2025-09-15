@@ -12,15 +12,15 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from haproxy_template_ic.constants import (
-    DEFAULT_HEALTH_PORT,
-    CONNECT_TIMEOUT_MS,
     CLIENT_TIMEOUT_MS,
+    CONNECT_TIMEOUT_MS,
+    DEFAULT_HEALTH_PORT,
     SERVER_TIMEOUT_MS,
 )
-from haproxy_template_ic.k8s import validate_ignore_fields
 
-from .types import ApiVersion, Filename, KubernetesKind
+from ..k8s.field_filter import validate_ignore_fields
 from .templates import TemplateConfig, TemplateSnippet
+from .types import ApiVersion, Filename, KubernetesKind
 
 logger = logging.getLogger(__name__)
 
@@ -138,10 +138,6 @@ class OperatorConfig(BaseModel):
     )
     metrics_port: int = Field(
         default=9090, ge=1, le=65535, description="Port for Prometheus metrics endpoint"
-    )
-    socket_path: str = Field(
-        default="/run/haproxy-template-ic/management.sock",
-        description="Path for management socket to expose internal state",
     )
 
     model_config = ConfigDict(frozen=True, extra="forbid")

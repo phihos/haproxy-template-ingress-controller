@@ -24,38 +24,38 @@ from kubernetes import config
 from haproxy_template_ic.core.logging import setup_structured_logging
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.dataplane.models import get_production_urls_from_index
+from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
+from haproxy_template_ic.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.metrics import get_metrics_collector
-from haproxy_template_ic.models import (
-    IndexedResourceCollection,
-    HAProxyConfigContext,
-    TemplateContext,
-)
+from haproxy_template_ic.models.context import HAProxyConfigContext, TemplateContext
+from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
 from haproxy_template_ic.models.state import (
     ApplicationState,
-    RuntimeState,
     ConfigurationState,
-    ResourceState,
     OperationalState,
+    ResourceState,
+    RuntimeState,
 )
+
+# from haproxy_template_ic.webhook import start_webhook_server  # Function may not exist
+from haproxy_template_ic.operator.configmap import (
+    fetch_configmap,
+    handle_configmap_change,
+    load_config_from_configmap,
+)
+from haproxy_template_ic.operator.k8s_resources import setup_resource_watchers
+from haproxy_template_ic.operator.pod_management import (
+    fetch_haproxy_pods,
+    setup_haproxy_pod_indexing,
+)
+from haproxy_template_ic.operator.secrets import fetch_secret, handle_secret_change
+from haproxy_template_ic.operator.utils import get_current_namespace
 from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.tracing import (
     create_tracing_config_from_env,
     initialize_tracing,
     shutdown_tracing,
 )
-
-# from haproxy_template_ic.webhook import start_webhook_server  # Function may not exist
-from .configmap import (
-    fetch_configmap,
-    handle_configmap_change,
-    load_config_from_configmap,
-)
-from .k8s_resources import setup_resource_watchers
-from .pod_management import fetch_haproxy_pods, setup_haproxy_pod_indexing
-from .secrets import fetch_secret, handle_secret_change
-from .utils import get_current_namespace
-from ..dataplane import ConfigSynchronizer
-from ..debouncer import TemplateRenderDebouncer
 
 if TYPE_CHECKING:
     from haproxy_template_ic.__main__ import CliOptions
@@ -149,7 +149,6 @@ async def cleanup_template_debouncer(memo: ApplicationState, **kwargs: Any) -> N
     """Stop the template rendering debouncer on shutdown."""
     logger.info("Stopping template debouncer...")
     await memo.debouncer.stop()
-    memo.operations.debouncer = None
 
 
 async def cleanup_tracing(memo: ApplicationState, **kwargs: Any) -> None:
@@ -166,7 +165,6 @@ async def cleanup_metrics_server(memo: ApplicationState, **kwargs: Any) -> None:
     """Clean up metrics server."""
     try:
         await memo.metrics.stop_metrics_server()
-        memo.operations.metrics = None
         logger.debug("📊 Metrics server shutdown complete")
     except Exception as e:
         logger.error(f"❌ Error shutting down metrics server: {e}")
@@ -335,9 +333,12 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             logger.error(f"❌ Failed to load configuration or credentials: {e}")
             raise
 
+        # Construct validation URL from configuration
+        validation_url = f"http://{loaded_config.validation.dataplane_host}:{loaded_config.validation.dataplane_port}"
+
         config_synchronizer = ConfigSynchronizer(
             production_urls=production_urls,
-            validation_url="http://localhost:5555",
+            validation_url=validation_url,
             credentials=loaded_credentials,
             url_to_pod_name=url_to_pod_name,
         )

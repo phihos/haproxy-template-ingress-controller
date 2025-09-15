@@ -14,9 +14,9 @@ import yaml
 from deepdiff import DeepDiff
 from kr8s.objects import ConfigMap
 
-from haproxy_template_ic.activity import EventType
-from haproxy_template_ic.models import config_from_dict, Config
 from haproxy_template_ic.core.logging import autolog
+from haproxy_template_ic.models.config import Config, config_from_dict
+from haproxy_template_ic.models.state import ApplicationState
 from haproxy_template_ic.tracing import (
     add_span_attributes,
     record_span_event,
@@ -87,7 +87,7 @@ async def fetch_configmap(name: str, namespace: str) -> ConfigMap:
 
 @autolog(component="operator")
 async def handle_configmap_change(
-    memo: Any,
+    memo: ApplicationState,
     event: dict[str, Any],
     name: str,
     type: str,
@@ -119,14 +119,6 @@ async def handle_configmap_change(
     # Configuration has changed - show the diff and trigger reload
     diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
     structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
-
-    # Record activity event for config change
-    memo.activity_buffer.add_event_sync(
-        EventType.UPDATE,
-        f"ConfigMap {name} updated - triggering reload",
-        source="configmap",
-        metadata={"name": name, "type": type, "diff_preview": diff_str[:100]},
-    )
 
     # Trigger reload by setting the flag
     memo.config_reload_flag.set_result(None)

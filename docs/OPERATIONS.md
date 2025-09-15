@@ -29,24 +29,17 @@ kubectl port-forward deployment/haproxy-template-ic 8080:8080
 curl http://localhost:8080/healthz
 ```
 
-### Management Socket
+### Runtime Inspection
 
-**Security Warning**: The management socket exposes sensitive configuration and resource data. Ensure proper RBAC and pod security policies are in place.
-
-Runtime inspection via Unix socket:
+Use the TUI dashboard for interactive monitoring:
 
 ```bash
-# Dump all state
+# Interactive dashboard
 kubectl exec -it deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump all"
+  uv run haproxy-template-ic tui
 
-# Show resource indices
-kubectl exec -it deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump indices"
-
-# Show rendered config
-kubectl exec -it deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump config"
+# Or check logs for detailed information
+kubectl logs -f deployment/haproxy-template-ic
 ```
 
 ### Structured Logging
@@ -106,9 +99,8 @@ kubectl logs deployment/haproxy-template-ic --tail=50 | grep -E "(ERROR|FATAL)"
 kubectl exec deployment/haproxy-template-ic -- \
   wget -qO- --timeout=5 http://haproxy:5555/v3/services/haproxy/info
 
-# Inspect current state
-kubectl exec deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump config" | jq '.'
+# Inspect current logs for state information
+kubectl logs deployment/haproxy-template-ic | grep "rendered template"
 ```
 
 ### Debug Mode
@@ -271,10 +263,8 @@ spec:
 # Backup ConfigMap
 kubectl get cm haproxy-config -o yaml > backup-config.yaml
 
-# Backup rendered config
-kubectl exec deployment/haproxy-template-ic -- \
-  socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock <<< "dump config" \
-  > backup-rendered.json
+# Backup configuration (ConfigMap)
+kubectl get configmap haproxy-template-ic-config -o yaml > backup-config.yaml
 
 # Restore
 kubectl apply -f backup-config.yaml

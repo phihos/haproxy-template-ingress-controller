@@ -14,7 +14,6 @@ data:
     operator:
       healthz_port: 8080
       metrics_port: 9090
-      socket_path: mgmt.sock  # Local socket for development
     
     logging:
       verbose: 2  # 0=WARNING, 1=INFO, 2=DEBUG

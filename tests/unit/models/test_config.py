@@ -378,15 +378,14 @@ def test_template_context_creation():
 
     # Create an IndexedResourceCollection for test_resource
     test_collection = IndexedResourceCollection()
-    test_collection.resources[("default", "test")] = [
+    test_collection._internal_dict[("default", "test")] = [
         {"name": "test", "host": "example.com"}
     ]
 
     resources = {"test_resource": test_collection}
-    context = TemplateContext(resources=resources, namespace="test-namespace")
+    context = TemplateContext(resources=resources)
 
     assert len(context.resources["test_resource"]) == 1
-    assert context.namespace == "test-namespace"
 
 
 def test_template_context_default_resources():
@@ -394,42 +393,36 @@ def test_template_context_default_resources():
     context = TemplateContext()
 
     assert context.resources == {}
-    assert context.namespace is None
 
 
 def test_template_context_is_frozen():
     """Test that TemplateContext is immutable."""
 
-    # Create an IndexedResourceCollection for pods
-    pods_collection = IndexedResourceCollection()
-    pods_collection.resources[("default", "test-pod")] = {"name": "test"}
+    # Create an IndexedResourceCollection for pods using from_kopf_index
+    mock_index = {
+        ("default", "test-pod"): [{"metadata": {"name": "test-pod"}, "name": "test"}]
+    }
+    pods_collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
     context = TemplateContext(resources={"pods": pods_collection})
 
     # Create a new collection to try replacing
-    new_pods_collection = IndexedResourceCollection()
-    new_pods_collection.resources[("default", "new-pod")] = {"name": "new"}
+    new_mock_index = {
+        ("default", "new-pod"): [{"metadata": {"name": "new-pod"}, "name": "new"}]
+    }
+    new_pods_collection = IndexedResourceCollection.from_kopf_index(new_mock_index)
 
     with pytest.raises(ValidationError):
         context.resources = {"pods": new_pods_collection}
-
-    with pytest.raises(ValidationError):
-        context.namespace = "new-namespace"
 
 
 # HAProxyConfigContext Tests
 def test_haproxy_config_context_creation():
     """Test HAProxyConfigContext dataclass creation."""
-    # Create required config and template_context
 
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
     template_context = TemplateContext()
 
-    context = HAProxyConfigContext(config=config, template_context=template_context)
+    context = HAProxyConfigContext(template_context=template_context)
 
     assert context.rendered_maps == []
 
@@ -440,18 +433,10 @@ def test_haproxy_config_context_with_custom_data():
         filename="test.map", content="content", content_type="map"
     )
     rendered_maps = [rendered_map]
-
-    # Create required config and template_context
-
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
     template_context = TemplateContext()
 
     context = HAProxyConfigContext(
-        config=config, template_context=template_context, rendered_content=rendered_maps
+        template_context=template_context, rendered_content=rendered_maps
     )
 
     assert context.rendered_maps == rendered_maps
@@ -460,14 +445,9 @@ def test_haproxy_config_context_with_custom_data():
 def test_haproxy_config_context_mutable():
     """Test that HAProxyConfigContext is mutable (not frozen)."""
 
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "test"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
     template_context = TemplateContext()
 
-    context = HAProxyConfigContext(config=config, template_context=template_context)
+    context = HAProxyConfigContext(template_context=template_context)
     rendered_content = RenderedContent(
         filename="test", content="content", content_type="map"
     )
@@ -498,16 +478,10 @@ def test_rendered_config_frozen():
 
 def test_haproxy_config_context_with_rendered_config():
     """Test HAProxyConfigContext with rendered config."""
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
     template_context = TemplateContext()
 
     rendered_config = RenderedConfig(content="global\n    daemon")
     context = HAProxyConfigContext(
-        config=config,
         template_context=template_context,
         rendered_config=rendered_config,
     )
@@ -518,13 +492,8 @@ def test_haproxy_config_context_with_rendered_config():
 
 def test_haproxy_config_context_default_rendered_config():
     """Test HAProxyConfigContext default rendered_config is None."""
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
     template_context = TemplateContext()
-    context = HAProxyConfigContext(config=config, template_context=template_context)
+    context = HAProxyConfigContext(template_context=template_context)
 
     assert context.rendered_config is None
     assert context.rendered_maps == []
@@ -554,11 +523,6 @@ def test_rendered_certificate_frozen():
 
 def test_haproxy_config_context_with_rendered_certificates():
     """Test HAProxyConfigContext with rendered certificates."""
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
     template_context = TemplateContext()
 
     rendered_certificate = RenderedContent(
@@ -566,7 +530,6 @@ def test_haproxy_config_context_with_rendered_certificates():
     )
 
     context = HAProxyConfigContext(
-        config=config,
         template_context=template_context,
         rendered_content=[rendered_certificate],
     )
@@ -578,13 +541,8 @@ def test_haproxy_config_context_with_rendered_certificates():
 
 def test_haproxy_config_context_default_rendered_certificates():
     """Test HAProxyConfigContext default rendered_certificates is empty list."""
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
     template_context = TemplateContext()
-    context = HAProxyConfigContext(config=config, template_context=template_context)
+    context = HAProxyConfigContext(template_context=template_context)
 
     assert context.rendered_certificates == []
 
@@ -725,7 +683,6 @@ def test_template_context_get_methods():
     test_collection = IndexedResourceCollection()
     context_basic = TemplateContext(resources={"test": test_collection})
     assert len(context_basic.resources["test"]) == 0
-    assert context_basic.namespace is None
 
 
 # =============================================================================
@@ -1352,19 +1309,20 @@ def test_template_snippet_update_during_config_reload():
 def test_template_context_helper_methods():
     """Test the new helper methods for resource access."""
 
-    # Create IndexedResourceCollections for each resource type
-    ingresses_collection = IndexedResourceCollection()
-    ingresses_collection.resources[("default", "ing1")] = {
-        "metadata": {"name": "ing1"}
-    }
-    ingresses_collection.resources[("default", "ing2")] = {
-        "metadata": {"name": "ing2"}
+    # Create mock kopf index data for ingresses
+    mock_ingresses_index = {
+        ("default", "ing1"): [{"metadata": {"name": "ing1"}}],
+        ("default", "ing2"): [{"metadata": {"name": "ing2"}}],
     }
 
-    services_collection = IndexedResourceCollection()
-    services_collection.resources[("default", "svc1")] = {
-        "metadata": {"name": "svc1"}
-    }
+    # Create mock kopf index data for services
+    mock_services_index = {("default", "svc1"): [{"metadata": {"name": "svc1"}}]}
+
+    # Create IndexedResourceCollections from mock data
+    ingresses_collection = IndexedResourceCollection.from_kopf_index(
+        mock_ingresses_index
+    )
+    services_collection = IndexedResourceCollection.from_kopf_index(mock_services_index)
 
     empty_collection = IndexedResourceCollection()
 
@@ -1619,25 +1577,30 @@ def test_host_map_template_rendering():
 
     # Create mock ingress resources using IndexedResourceCollection
 
-    ingresses_collection = IndexedResourceCollection()
-    ingresses_collection.resources[("default", "test-ingress")] = [
-        {
-            "metadata": {"name": "test-ingress", "namespace": "default"},
-            "spec": {
-                "rules": [
-                    {"host": "example.com"},
-                    {"host": "www.example.com"},
-                    {"host": "api.example.com"},
-                ]
-            },
-        }
-    ]
-    ingresses_collection.resources[("production", "prod-ingress")] = [
-        {
-            "metadata": {"name": "prod-ingress", "namespace": "production"},
-            "spec": {"rules": [{"host": "prod.example.com"}]},
-        }
-    ]
+    mock_ingresses_index = {
+        ("default", "test-ingress"): [
+            {
+                "metadata": {"name": "test-ingress", "namespace": "default"},
+                "spec": {
+                    "rules": [
+                        {"host": "example.com"},
+                        {"host": "www.example.com"},
+                        {"host": "api.example.com"},
+                    ]
+                },
+            }
+        ],
+        ("production", "prod-ingress"): [
+            {
+                "metadata": {"name": "prod-ingress", "namespace": "production"},
+                "spec": {"rules": [{"host": "prod.example.com"}]},
+            }
+        ],
+    }
+
+    ingresses_collection = IndexedResourceCollection.from_kopf_index(
+        mock_ingresses_index
+    )
 
     mock_resources = {"ingresses": ingresses_collection}
 
@@ -1648,7 +1611,6 @@ def test_host_map_template_rendering():
     host_map_config = config.maps.get("host.map")
     template_vars = {
         "resources": context.resources,
-        "namespace": context.namespace,
     }
 
     rendered_content = (
@@ -1702,18 +1664,21 @@ def test_complete_ingress_configuration_with_certificates():
 
     # Create mock TLS secret using IndexedResourceCollection
 
-    secrets_collection = IndexedResourceCollection()
-    secrets_collection.resources[("default", "example-tls")] = [
-        {
-            "metadata": {
-                "name": "example-tls",
-                "namespace": "default",
-                "labels": {"haproxy-template-ic/tls": "true"},
-            },
-            "type": "kubernetes.io/tls",
-            "data": {"tls.crt": cert_b64, "tls.key": key_b64},
-        }
-    ]
+    mock_secrets_index = {
+        ("default", "example-tls"): [
+            {
+                "metadata": {
+                    "name": "example-tls",
+                    "namespace": "default",
+                    "labels": {"haproxy-template-ic/tls": "true"},
+                },
+                "type": "kubernetes.io/tls",
+                "data": {"tls.crt": cert_b64, "tls.key": key_b64},
+            }
+        ]
+    }
+
+    secrets_collection = IndexedResourceCollection.from_kopf_index(mock_secrets_index)
 
     mock_resources = {"secrets": secrets_collection}
 
@@ -1724,7 +1689,6 @@ def test_complete_ingress_configuration_with_certificates():
     cert_config = config.certificates.get("tls.pem")
     template_vars = {
         "resources": context.resources,
-        "namespace": context.namespace,
     }
 
     rendered_content = (
@@ -1746,11 +1710,7 @@ def test_complete_ingress_configuration_with_certificates():
 
 def test_haproxy_config_context_get_rendered_map_by_path():
     """Test getting rendered map by path."""
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
+
     template_context = TemplateContext()
 
     rendered_map1 = RenderedContent(
@@ -1761,7 +1721,6 @@ def test_haproxy_config_context_get_rendered_map_by_path():
     )
 
     context = HAProxyConfigContext(
-        config=config,
         template_context=template_context,
         rendered_content=[rendered_map1, rendered_map2],
     )
@@ -1778,11 +1737,7 @@ def test_haproxy_config_context_get_rendered_map_by_path():
 
 def test_haproxy_config_context_get_rendered_certificate_by_path():
     """Test getting rendered certificate by path."""
-    config = Config(
-        pod_selector=PodSelector(match_labels={"app": "haproxy"}),
-        haproxy_config=TemplateConfig(template="global\n    daemon"),
-        # Authentication removed - now managed via Kubernetes Secrets
-    )
+
     template_context = TemplateContext()
 
     cert1 = RenderedContent(
@@ -1793,7 +1748,6 @@ def test_haproxy_config_context_get_rendered_certificate_by_path():
     )
 
     context = HAProxyConfigContext(
-        config=config,
         template_context=template_context,
         rendered_content=[cert1, cert2],
     )
@@ -2192,7 +2146,9 @@ class TestFieldValidators:
     def test_validate_ignore_fields_with_invalid_expressions(self):
         """Test that invalid JSONPath expressions trigger warning."""
 
-        with patch("haproxy_template_ic.k8s.validate_ignore_fields") as mock_validate:
+        with patch(
+            "haproxy_template_ic.k8s.field_filter.validate_ignore_fields"
+        ) as mock_validate:
             # Return fewer fields than input (simulating some invalid)
             mock_validate.return_value = ["metadata.managedFields"]
 
@@ -2266,7 +2222,7 @@ class TestIndexedResourceCollectionFromKopfIndex:
             ]
         )
 
-        with patch("haproxy_template_ic.models.resources.logger") as mock_logger:
+        with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
             collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
             # Should log warning about normalization failure
@@ -2289,7 +2245,7 @@ class TestIndexedResourceCollectionFromKopfIndex:
             ]
         )
 
-        with patch("haproxy_template_ic.models.resources.logger") as mock_logger:
+        with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
             collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
             # Should log warning about invalid resource
@@ -2308,7 +2264,7 @@ class TestIndexedResourceCollectionFromKopfIndex:
         mock_index.__iter__.return_value = iter([("key1",)])
         mock_index.__getitem__.side_effect = RuntimeError("Unexpected error")
 
-        with patch("haproxy_template_ic.models.resources.logger") as mock_logger:
+        with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
             collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
             # Should log warning about error
@@ -2455,13 +2411,15 @@ class TestIndexedResourceCollectionQueryMethods:
     def test_get_indexed_iter(self):
         """Test get_indexed_iter method."""
 
-        collection = IndexedResourceCollection()
+        # Create mock index data
+        mock_index = {
+            ("default", "service1"): [
+                {"metadata": {"name": "resource1"}, "name": "resource1"},
+                {"metadata": {"name": "resource2"}, "name": "resource2"},
+            ]
+        }
 
-        # Add some test data
-        collection.resources[("default", "service1")] = [
-            {"name": "resource1"},
-            {"name": "resource2"},
-        ]
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
         # Test iterator
         resources = list(collection.get_indexed_iter("default", "service1"))
@@ -2476,16 +2434,18 @@ class TestIndexedResourceCollectionQueryMethods:
     def test_get_indexed_single_multiple_resources(self):
         """Test get_indexed_single with multiple resources."""
 
-        collection = IndexedResourceCollection()
+        # Create mock index data with multiple resources
+        mock_index = {
+            ("default", "service1"): [
+                {"metadata": {"name": "resource1"}},
+                {"metadata": {"name": "resource2"}},
+                {"metadata": {"name": "resource3"}},
+            ]
+        }
 
-        # Add multiple resources with same key
-        collection.resources[("default", "service1")] = [
-            {"metadata": {"name": "resource1"}},
-            {"metadata": {"name": "resource2"}},
-            {"metadata": {"name": "resource3"}},
-        ]
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
-        with patch("haproxy_template_ic.models.resources.logger") as mock_logger:
+        with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
             # Should raise ValueError
             with pytest.raises(ValueError, match="Multiple resources found"):
                 collection.get_indexed_single("default", "service1")
@@ -2496,11 +2456,16 @@ class TestIndexedResourceCollectionQueryMethods:
     def test_items_iteration(self):
         """Test items method."""
 
-        collection = IndexedResourceCollection()
+        # Create mock index data
+        mock_index = {
+            ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
+            ("ns2", "res2"): [
+                {"metadata": {"name": "r2"}, "name": "r2"},
+                {"metadata": {"name": "r3"}, "name": "r3"},
+            ],
+        }
 
-        # Add test data
-        collection.resources[("ns1", "res1")] = [{"name": "r1"}]
-        collection.resources[("ns2", "res2")] = [{"name": "r2"}, {"name": "r3"}]
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
         items = list(collection.items())
         assert len(items) == 3
@@ -2512,11 +2477,16 @@ class TestIndexedResourceCollectionQueryMethods:
     def test_values_iteration(self):
         """Test values method."""
 
-        collection = IndexedResourceCollection()
+        # Create mock index data
+        mock_index = {
+            ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
+            ("ns2", "res2"): [
+                {"metadata": {"name": "r2"}, "name": "r2"},
+                {"metadata": {"name": "r3"}, "name": "r3"},
+            ],
+        }
 
-        # Add test data
-        collection.resources[("ns1", "res1")] = [{"name": "r1"}]
-        collection.resources[("ns2", "res2")] = [{"name": "r2"}, {"name": "r3"}]
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
         values = list(collection.values())
         assert len(values) == 3
@@ -2527,10 +2497,10 @@ class TestIndexedResourceCollectionQueryMethods:
     def test_contains_check(self):
         """Test __contains__ method."""
 
-        collection = IndexedResourceCollection()
+        # Create mock index data
+        mock_index = {("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}]}
 
-        # Add test data
-        collection.resources[("ns1", "res1")] = [{"name": "r1"}]
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
         # Test with tuple key
         assert ("ns1", "res1") in collection
@@ -2539,11 +2509,13 @@ class TestIndexedResourceCollectionQueryMethods:
     def test_keys_iteration(self):
         """Test keys method."""
 
-        collection = IndexedResourceCollection()
+        # Create mock index data
+        mock_index = {
+            ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
+            ("ns2", "res2"): [{"metadata": {"name": "r2"}, "name": "r2"}],
+        }
 
-        # Add test data
-        collection.resources[("ns1", "res1")] = [{"name": "r1"}]
-        collection.resources[("ns2", "res2")] = [{"name": "r2"}]
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
         keys = list(collection.keys())
         assert len(keys) == 2
@@ -2557,13 +2529,7 @@ class TestHAProxyConfigContextMethods:
     def test_get_content_by_filename_not_found(self):
         """Test get_content_by_filename when content not found."""
 
-        config = Config(
-            pod_selector={"match_labels": {"app": "test"}},
-            haproxy_config={"template": "test"},
-        )
-
         context = HAProxyConfigContext(
-            config=config,
             template_context=TemplateContext(),
             rendered_content=[
                 RenderedContent(filename="file1.txt", content="content1"),

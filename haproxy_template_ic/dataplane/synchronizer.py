@@ -10,28 +10,24 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
+from ..models.context import HAProxyConfigContext
+
 if TYPE_CHECKING:
     from haproxy_template_ic.credentials import Credentials
 
-from haproxy_template_ic.models import HAProxyConfigContext
-from .client import DataplaneClient, _SECTION_ELEMENTS
+from haproxy_template_ic.metrics import get_metrics_collector
+
+from .client import _SECTION_ELEMENTS, DataplaneClient
 from .errors import DataplaneAPIError, ValidationError
 from .models import ConfigChange, compute_content_hash
 from .types import ConfigChangeType, ConfigElementType, ConfigSectionType
 from .utils import (
-    parse_validation_error_details,
-    extract_hostname_from_url,
-    _check_early_exit_condition,
-    _to_dict_safe,
-    _natural_sort_key,
     MAX_CONFIG_COMPARISON_CHANGES,
-)
-from haproxy_template_ic.metrics import get_metrics_collector
-from haproxy_template_ic.activity import (
-    EventType,
-    get_activity_buffer,
-    ActivityBuffer,
-    ActivityEventMetadata,
+    _check_early_exit_condition,
+    _natural_sort_key,
+    _to_dict_safe,
+    extract_hostname_from_url,
+    parse_validation_error_details,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,13 +41,11 @@ class ConfigSynchronizer:
         production_urls: List[str],
         validation_url: str,
         credentials: "Credentials",
-        activity_buffer: Optional[ActivityBuffer] = None,
         url_to_pod_name: Optional[Dict[str, str]] = None,
     ):
         self.production_urls = production_urls
         self.validation_url = validation_url
         self.credentials = credentials
-        self.activity_buffer = activity_buffer or get_activity_buffer()
         self.url_to_pod_name = url_to_pod_name or {}
 
         self._validation_client: Optional[DataplaneClient] = None
@@ -99,7 +93,7 @@ class ConfigSynchronizer:
 
         return template_hashes
 
-    def _update_production_clients(
+    def update_production_clients(
         self, new_urls: List[str], url_to_pod_name: Optional[Dict[str, str]] = None
     ) -> None:
         """Update production clients based on current URLs.
@@ -1034,17 +1028,6 @@ class ConfigSynchronizer:
         Returns:
             Dict with keys: method, version
         """
-        # Record deployment start event
-        pod_name = self.url_to_pod_name.get(url)
-        self.activity_buffer.add_event_sync(
-            EventType.DEPLOYMENT_START,
-            f"Starting deployment to {url}",
-            source="synchronizer",
-            metadata=ActivityEventMetadata(
-                endpoint=url,
-                pod_name=pod_name,
-            ),
-        )
 
         client = self._production_clients[url]
 
@@ -1145,21 +1128,6 @@ class ConfigSynchronizer:
         self, url: str, error: Exception, config: str, results: Dict[str, Any]
     ) -> None:
         """Handle deployment error with enhanced logging."""
-        # Get pod name for this URL
-        pod_name = self.url_to_pod_name.get(url)
-
-        # Record deployment failure event
-        self.activity_buffer.add_event_sync(
-            EventType.DEPLOYMENT_FAILED,
-            f"Deployment failed to {url}: {str(error)[:100]}",
-            source="synchronizer",
-            metadata=ActivityEventMetadata(
-                endpoint=url,
-                version="unknown",
-                error=str(error),
-                pod_name=pod_name,
-            ),
-        )
         results["failed"] += 1
         results["errors"].append(f"{url}: {error}")
 
@@ -1213,7 +1181,7 @@ class ConfigSynchronizer:
         _ = self._compute_template_hashes(config_context)
 
         # Update production clients to handle dynamic URL changes
-        self._update_production_clients(self.production_urls)
+        self.update_production_clients(self.production_urls)
 
         # Step 1: Sync content to validation instance and validate
         logger.debug("🔍 Validating configuration and syncing auxiliary content")
@@ -1301,80 +1269,16 @@ class ConfigSynchronizer:
                     f"🔍 Processing deployment result for {url}: reload_triggered={reload_triggered}, "
                     f"reload_id={reload_id}, method={result.get('method')}, version={result.get('version')}"
                 )
-
-                # Get activity buffer and pod info for all deployment events
-                activity_buffer = get_activity_buffer()
                 pod_info = self._extract_pod_info_from_url(url)
 
-                # Emit activity events for all deployment types
                 if result["method"] == "skipped":
-                    # Configuration unchanged - emit INFO event (no last_update change)
-                    activity_buffer.add_event_sync(
-                        EventType.INFO,
-                        f"Configuration unchanged on {pod_info['pod_name']} ({url})",
-                        source="dataplane",
-                        metadata=ActivityEventMetadata(
-                            endpoint=url,
-                            pod_ip=pod_info["pod_ip"],
-                            pod_name=pod_info["pod_name"],
-                            version=result["version"],
-                        ),
-                    )
                     logger.debug(
                         f"ℹ️  Configuration unchanged on {pod_info['pod_name']} ({url})"
                     )
                 else:
-                    # Configuration was deployed - emit SYNC event (updates last_update)
-                    activity_buffer.add_event_sync(
-                        EventType.SYNC,
-                        f"Configuration updated on {pod_info['pod_name']} ({url}) ({result['method']})",
-                        source="dataplane",
-                        metadata=ActivityEventMetadata(
-                            endpoint=url,
-                            pod_ip=pod_info["pod_ip"],
-                            pod_name=pod_info["pod_name"],
-                            version=result["version"],
-                        ),
-                    )
                     logger.debug(
                         f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result['method']}"
                     )
-
-                # Additionally emit RELOAD event for reloads (provides extra detail)
-                if reload_triggered:
-                    logger.debug(
-                        f"🚀 Emitting additional RELOAD activity event for {pod_info['pod_name']} ({url}) with reload_id={reload_id}"
-                    )
-
-                    activity_buffer.add_event_sync(
-                        EventType.RELOAD,
-                        f"HAProxy process reloaded on {pod_info['pod_name']} ({url})",
-                        source="dataplane",
-                        metadata=ActivityEventMetadata(
-                            endpoint=url,
-                            pod_ip=pod_info["pod_ip"],
-                            pod_name=pod_info["pod_name"],
-                            version=result["version"],
-                        ),
-                    )
-                    logger.debug(
-                        f"✅ Successfully emitted RELOAD activity event for {pod_info['pod_name']} ({url})"
-                    )
-
-                # Get pod name for this URL
-                pod_name = self.url_to_pod_name.get(url)
-
-                # Record deployment success event
-                self.activity_buffer.add_event_sync(
-                    EventType.DEPLOYMENT_SUCCESS,
-                    f"Deployment successful to {url} (version: {result['version']})",
-                    source="synchronizer",
-                    metadata=ActivityEventMetadata(
-                        endpoint=url,
-                        version=result["version"],
-                        pod_name=pod_name,
-                    ),
-                )
             else:
                 # Unexpected result type
                 error_msg = f"Unexpected result type from deployment: {type(result)}"
