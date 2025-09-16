@@ -27,6 +27,7 @@ FROM uv-base AS dependencies
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=codegen/haproxy_dataplane_v3,target=codegen/haproxy_dataplane_v3 \
     uv sync \
         --locked \
         --no-dev \
