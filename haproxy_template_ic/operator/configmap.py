@@ -104,12 +104,12 @@ async def handle_configmap_change(
 
     # Check if configuration has actually changed
     # Compare raw configuration dictionaries using DeepDiff
-    diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
+    diff = DeepDiff(memo.configuration.config.raw, new_config.raw, verbose_level=2)
 
     # Debug logging to understand what's being compared
     structured_logger.debug(
         "🔄 Comparing configs",
-        old_pod_selector=memo.config.raw.get("pod_selector"),
+        old_pod_selector=memo.configuration.config.raw.get("pod_selector"),
         new_pod_selector=new_config.raw.get("pod_selector"),
     )
 
@@ -122,5 +122,5 @@ async def handle_configmap_change(
     structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
 
     # Trigger reload by setting the flag
-    memo.config_reload_flag.set_result(None)
-    memo.stop_flag.set_result(None)
+    memo.runtime.config_reload_flag.set_result(None)
+    memo.runtime.stop_flag.set_result(None)

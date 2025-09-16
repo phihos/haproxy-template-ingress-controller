@@ -176,6 +176,37 @@ certificates:
       {% endfor %}
 ```
 
+## Operator Configuration
+
+Core operator runtime settings:
+
+```yaml
+operator:
+  healthz_port: 8080                    # Health check port
+  metrics_port: 9090                    # Prometheus metrics port  
+  index_initialization_timeout: 5       # Index sync timeout for zero-resource cases (seconds)
+```
+
+### Index Initialization Timeout
+
+The `index_initialization_timeout` setting controls how long the operator waits for index initialization when no resources exist for a given type (zero-resource edge case).
+
+**Default**: 5 seconds
+
+**Range**: 1-300 seconds
+
+**Purpose**: During startup, prevents infinite waiting when watched resource types have zero matching objects in the cluster.
+
+**Example scenarios**:
+- No Ingress objects exist yet, but watched_resources includes ingresses
+- HAProxy pods not yet created during initial deployment
+- Custom resource types configured but no instances applied
+
+**Tuning guidelines**:
+- **1-3 seconds**: Fast startup, suitable for development
+- **5 seconds (default)**: Balanced for most environments  
+- **10+ seconds**: Conservative for slow clusters or complex deployments
+
 ## Template Rendering Configuration
 
 Control template rendering behavior for optimal performance:

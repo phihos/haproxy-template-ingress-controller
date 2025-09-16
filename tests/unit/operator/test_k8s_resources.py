@@ -57,13 +57,13 @@ class TestUpdateResourceIndex:
         memo = MagicMock()
         watch_config = MagicMock()
         watch_config.index_by = ["metadata.namespace", "metadata.labels['app']"]
-        memo.config.watched_resources = {"services": watch_config}
+        memo.configuration.config.watched_resources = {"services": watch_config}
 
         # Mock debouncer trigger to return a coroutine
         async def mock_trigger(trigger_type):
             pass
 
-        memo.debouncer.trigger = mock_trigger
+        memo.operations.debouncer.trigger = mock_trigger
 
         body = {
             "metadata": {

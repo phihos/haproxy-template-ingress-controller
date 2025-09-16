@@ -19,7 +19,7 @@ class TestInitializePostConfig:
     def mock_application_state(self):
         """Create a mock ApplicationState."""
         state = MagicMock(spec=ApplicationState)
-        # Mock the config object with tracing settings
+        # Mock the nested configuration structure
         config_mock = MagicMock()
         config_mock.logging.verbose = 1
         config_mock.logging.structured = False
@@ -30,6 +30,12 @@ class TestInitializePostConfig:
         config_mock.tracing.sample_rate = 0.5
         config_mock.tracing.console_export = True
 
+        # Create nested mock structure
+        configuration_mock = MagicMock()
+        configuration_mock.config = config_mock
+        state.configuration = configuration_mock
+
+        # Also set up the backwards compatibility property
         state.config = config_mock
         return state
 
@@ -186,10 +192,16 @@ class TestInitWatchConfigmap:
     @patch("haproxy_template_ic.initialization.kopf.on")
     async def test_init_watch_configmap_setup(self, mock_kopf_on):
         """Test that init_watch_configmap sets up event handlers correctly."""
-        # Create mock ApplicationState
+        # Create mock ApplicationState with nested structure
         mock_state = MagicMock(spec=ApplicationState)
         mock_cli_options = MagicMock()
         mock_cli_options.configmap_name = "test-configmap"
+        mock_cli_options.secret_name = "test-secret"
+        # Create nested mock structure
+        runtime_mock = MagicMock()
+        runtime_mock.cli_options = mock_cli_options
+        mock_state.runtime = runtime_mock
+        # Also set up the backwards compatibility property
         mock_state.cli_options = mock_cli_options
 
         # Call the function
@@ -201,10 +213,16 @@ class TestInitWatchConfigmap:
     @pytest.mark.asyncio
     async def test_init_watch_configmap_with_mock_cli_options(self):
         """Test init_watch_configmap with proper ApplicationState setup."""
-        # Create a more realistic mock
+        # Create a more realistic mock with nested structure
         mock_state = MagicMock(spec=ApplicationState)
         mock_cli_options = MagicMock()
         mock_cli_options.configmap_name = "test-config"
+        mock_cli_options.secret_name = "test-secret"
+        # Create nested mock structure
+        runtime_mock = MagicMock()
+        runtime_mock.cli_options = mock_cli_options
+        mock_state.runtime = runtime_mock
+        # Also set up the backwards compatibility property
         mock_state.cli_options = mock_cli_options
 
         # The function should complete without errors

@@ -139,6 +139,12 @@ class OperatorConfig(BaseModel):
     metrics_port: int = Field(
         default=9090, ge=1, le=65535, description="Port for Prometheus metrics endpoint"
     )
+    index_initialization_timeout: int = Field(
+        default=5,
+        ge=1,
+        le=300,
+        description="Seconds to wait before considering index initialized (zero-resource case)",
+    )
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

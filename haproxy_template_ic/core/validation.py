@@ -25,31 +25,6 @@ def has_valid_attr(obj: Any, attr_name: str) -> bool:
     return hasattr(obj, attr_name) and bool(getattr(obj, attr_name, None))
 
 
-def has_valid_nested_attr(obj: Any, *attr_path: str) -> bool:
-    """Check if object has valid nested attributes following a path.
-
-    This consolidates patterns like:
-    `hasattr(obj, "config") and obj.config and hasattr(obj.config, "watched_resources")`
-
-    Args:
-        obj: Object to check
-        *attr_path: Sequence of attribute names to traverse
-
-    Returns:
-        True if all attributes in the path exist and are truthy, False otherwise
-
-    Example:
-        >>> has_valid_nested_attr(memo, "config", "watched_resources")
-        # Equivalent to: hasattr(memo, "config") and memo.config and hasattr(memo.config, "watched_resources")
-    """
-    current_obj = obj
-    for attr_name in attr_path:
-        if not has_valid_attr(current_obj, attr_name):
-            return False
-        current_obj = getattr(current_obj, attr_name)
-    return True
-
-
 def get_safe_attr(obj: Any, attr_name: str, default: Any = None) -> Any:
     """Safely get an attribute with a default fallback.
 
@@ -67,32 +42,6 @@ def get_safe_attr(obj: Any, attr_name: str, default: Any = None) -> Any:
     if has_valid_attr(obj, attr_name):
         return getattr(obj, attr_name)
     return default
-
-
-def get_safe_nested_attr(obj: Any, *attr_path: str, default: Any = None) -> Any:
-    """Safely get a nested attribute with a default fallback.
-
-    This consolidates patterns where we traverse a chain of attributes
-    with safety checks at each level.
-
-    Args:
-        obj: Object to start traversal from
-        *attr_path: Sequence of attribute names to traverse
-        default: Default value if any attribute in the path fails
-
-    Returns:
-        Final attribute value or default
-
-    Example:
-        >>> get_safe_nested_attr(memo, "config", "watched_resources", default={})
-        # Equivalent to safe traversal of memo.config.watched_resources
-    """
-    current_obj = obj
-    for attr_name in attr_path:
-        if not has_valid_attr(current_obj, attr_name):
-            return default
-        current_obj = getattr(current_obj, attr_name)
-    return current_obj
 
 
 def is_non_empty_dict(obj: Any) -> bool:

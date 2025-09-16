@@ -14,6 +14,7 @@ from kr8s.asyncio.objects import Pod
 from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
 from haproxy_template_ic.core.logging import autolog
 from haproxy_template_ic.models.state import ApplicationState
+from haproxy_template_ic.operator.index_sync import create_tracking_decorator
 from haproxy_template_ic.operator.utils import get_current_namespace
 from haproxy_template_ic.tracing import (
     add_span_attributes,
@@ -25,9 +26,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "haproxy_pods_index",
-    "handle_haproxy_pod_create",
-    "handle_haproxy_pod_delete",
-    "handle_haproxy_pod_update",
+    "handle_haproxy_pod_event",
     "setup_haproxy_pod_indexing",
     "fetch_haproxy_pods",
 ]
@@ -124,84 +123,53 @@ async def fetch_haproxy_pods(match_labels: Dict[str, str], namespace: str) -> Li
 
 
 @autolog(component="operator")
-async def handle_haproxy_pod_create(
+async def handle_haproxy_pod_event(
     body: Dict[str, Any],
     meta: Dict[str, Any],
+    type: str,
     logger: logging.Logger,
     memo: ApplicationState,
     **kwargs: Any,
 ) -> None:
-    """Handle HAProxy pod creation events."""
+    """Handle HAProxy pod events (create, update, delete)."""
     namespace = meta["namespace"]
     name = meta["name"]
-
-    logger.info(f"🆕 HAProxy pod created: {namespace}/{name}")
 
     # Extract pod status for logging
     status = body.get("status", {})
     phase = status.get("phase", "Unknown")
     pod_ip = status.get("podIP", "Not assigned")
 
-    logger.info(f"📊 Pod status: phase={phase}, podIP={pod_ip}")
+    if type == "ADDED":
+        logger.info(f"🆕 HAProxy pod created: {namespace}/{name}")
+        logger.info(f"📊 Pod status: phase={phase}, podIP={pod_ip}")
+        # Always trigger for pod creation
+        await memo.operations.debouncer.trigger("pod_changes")
+        logger.debug("⏰ Triggered template rendering due to new HAProxy pod")
 
-    # Trigger template rendering and sync after a brief delay to allow pod to stabilize
-    await memo.debouncer.trigger("pod_changes")
-    logger.debug("⏰ Triggered template rendering due to new HAProxy pod")
+    elif type == "DELETED":
+        logger.info(f"🗑️ HAProxy pod deleted: {namespace}/{name}")
+        # Always trigger for pod deletion
+        await memo.operations.debouncer.trigger("pod_changes")
+        logger.debug("⏰ Triggered template rendering due to HAProxy pod deletion")
 
+    elif type == "MODIFIED":
+        # Check readiness condition for updates
+        ready_condition = None
+        conditions = status.get("conditions", [])
+        for condition in conditions:
+            if condition.get("type") == "Ready":
+                ready_condition = condition.get("status", "Unknown")
+                break
 
-@autolog(component="operator")
-async def handle_haproxy_pod_delete(
-    body: Dict[str, Any],
-    meta: Dict[str, Any],
-    logger: logging.Logger,
-    memo: ApplicationState,
-    **kwargs: Any,
-) -> None:
-    """Handle HAProxy pod deletion events."""
-    namespace = meta["namespace"]
-    name = meta["name"]
+        logger.info(
+            f"🔄 HAProxy pod updated: {namespace}/{name} phase={phase} pod_ip={pod_ip} ready={ready_condition}"
+        )
 
-    logger.info(f"🗑️ HAProxy pod deleted: {namespace}/{name}")
-
-    # The pod will be automatically removed from the index by the indexing function
-    # Trigger template rendering and sync to update remaining instances
-    await memo.debouncer.trigger("pod_changes")
-    logger.debug("⏰ Triggered template rendering due to HAProxy pod deletion")
-
-
-@autolog(component="operator")
-async def handle_haproxy_pod_update(
-    body: Dict[str, Any],
-    meta: Dict[str, Any],
-    logger: logging.Logger,
-    memo: ApplicationState,
-    **kwargs: Any,
-) -> None:
-    """Handle HAProxy pod update events."""
-    namespace = meta["namespace"]
-    name = meta["name"]
-
-    # Extract relevant status information
-    status = body.get("status", {})
-    phase = status.get("phase", "Unknown")
-    pod_ip = status.get("podIP", "Not assigned")
-    ready_condition = None
-
-    # Check readiness condition
-    conditions = status.get("conditions", [])
-    for condition in conditions:
-        if condition.get("type") == "Ready":
-            ready_condition = condition.get("status", "Unknown")
-            break
-
-    logger.info(
-        f"🔄 HAProxy pod updated: {namespace}/{name} phase={phase} pod_ip={pod_ip} ready={ready_condition}"
-    )
-
-    # Trigger sync if pod became ready or IP changed
-    if phase == "Running" and pod_ip and pod_ip != "Not assigned":
-        await memo.debouncer.trigger("pod_changes")
-        logger.debug("⏰ Triggered template rendering due to HAProxy pod update")
+        # Only trigger sync if pod became ready or has IP assigned
+        if phase == "Running" and pod_ip and pod_ip != "Not assigned":
+            await memo.operations.debouncer.trigger("pod_changes")
+            logger.debug("⏰ Triggered template rendering due to HAProxy pod update")
 
 
 def setup_haproxy_pod_indexing(memo: ApplicationState) -> None:
@@ -214,7 +182,7 @@ def setup_haproxy_pod_indexing(memo: ApplicationState) -> None:
     Args:
         memo: Kopf memo object containing configuration
     """
-    pod_selector = memo.config.pod_selector
+    pod_selector = memo.configuration.config.pod_selector
     current_namespace = get_current_namespace()
 
     logger.info(
@@ -222,42 +190,25 @@ def setup_haproxy_pod_indexing(memo: ApplicationState) -> None:
     )
 
     try:
-        # Register kopf index for HAProxy pods (namespace-scoped)
+        # Create tracking decorator with injected tracker
+        track = create_tracking_decorator(memo.operations.index_tracker)
+
+        # Register kopf index for HAProxy pods (namespace-scoped) with tracking
         kopf.index(
             "v1",
             "pods",
             id=HAPROXY_PODS_INDEX,
             labels=pod_selector.match_labels,
             when=lambda namespace, **_: namespace == current_namespace,
-        )(haproxy_pods_index)
+        )(track(HAPROXY_PODS_INDEX)(haproxy_pods_index))
 
-        # Register event handlers for HAProxy pod lifecycle (namespace-scoped)
-        @kopf.on.create(
+        # Register event handler for HAProxy pod lifecycle (namespace-scoped) with tracking
+        kopf.on.event(
             "v1",
             "pods",
             labels=pod_selector.match_labels,
             when=lambda namespace, **_: namespace == current_namespace,
-        )
-        async def haproxy_pod_create_handler(**kwargs):
-            return await handle_haproxy_pod_create(**kwargs)
-
-        @kopf.on.delete(
-            "v1",
-            "pods",
-            labels=pod_selector.match_labels,
-            when=lambda namespace, **_: namespace == current_namespace,
-        )
-        async def haproxy_pod_delete_handler(**kwargs):
-            return await handle_haproxy_pod_delete(**kwargs)
-
-        @kopf.on.update(
-            "v1",
-            "pods",
-            labels=pod_selector.match_labels,
-            when=lambda namespace, **_: namespace == current_namespace,
-        )
-        async def haproxy_pod_update_handler(**kwargs):
-            return await handle_haproxy_pod_update(**kwargs)
+        )(track(HAPROXY_PODS_INDEX)(handle_haproxy_pod_event))
 
         logger.info(
             "✅ HAProxy pod indexing and event handlers registered successfully"

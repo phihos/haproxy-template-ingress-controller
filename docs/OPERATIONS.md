@@ -103,7 +103,53 @@ kubectl exec deployment/haproxy-template-ic -- \
 
 # Inspect current logs for state information
 kubectl logs deployment/haproxy-template-ic | grep "rendered template"
+
+# Check index initialization status
+kubectl logs deployment/haproxy-template-ic | grep -E "(Index.*complete|initialization.*timeout)"
 ```
+
+### Startup Issues
+
+#### Index Initialization Delays
+
+During startup, the controller waits for all Kopf indices to be initialized before template rendering begins.
+
+**Normal startup logs**:
+```
+Index synchronization tracker initialized for 4 resource types with 5s timeout
+Event handler called for services
+Event handler called for ingresses  
+Index initialization complete - tracking disabled
+```
+
+**Common issues**:
+
+1. **Slow startup (> 30 seconds)**:
+   ```bash
+   # Check which indices are pending
+   kubectl logs deployment/haproxy-template-ic | grep "ready via timeout"
+   
+   # Possible causes:
+   # - No matching resources exist (expected, will timeout after 5s)
+   # - Network issues preventing API calls
+   # - RBAC permissions missing for resource types
+   ```
+
+2. **Startup hangs indefinitely**:
+   ```bash
+   # Check resource permissions
+   kubectl auth can-i list ingresses --as system:serviceaccount:default:haproxy-template-ic
+   
+   # Verify resource selectors
+   kubectl get pods -l app=haproxy  # Should match pod_selector in config
+   ```
+
+3. **Faster startup needed**:
+   ```yaml
+   # Reduce timeout in ConfigMap
+   operator:
+     index_initialization_timeout: 2  # Faster for development
+   ```
 
 ### Debug Mode
 

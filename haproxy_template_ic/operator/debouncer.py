@@ -18,6 +18,7 @@ from haproxy_template_ic.metrics import MetricsCollector, get_metrics_collector
 from haproxy_template_ic.models.config import Config
 from haproxy_template_ic.models.context import HAProxyConfigContext
 from haproxy_template_ic.models.templates import TriggerContext
+from haproxy_template_ic.operator.index_sync import IndexSynchronizationTracker
 from .template_renderer import render_haproxy_templates
 from haproxy_template_ic.templating import TemplateRenderer
 
@@ -44,6 +45,7 @@ class TemplateRenderDebouncer:
         config_synchronizer: ConfigSynchronizer,
         kopf_indices: OperatorIndices,
         metrics: MetricsCollector,
+        index_tracker: IndexSynchronizationTracker,
     ):
         """
         Initialize the debouncer.
@@ -51,8 +53,13 @@ class TemplateRenderDebouncer:
         Args:
             min_interval: Minimum seconds between renders (rate limit)
             max_interval: Maximum seconds without render (guaranteed refresh)
-            render_func: Async function to call for rendering
-            memo: Operator memo object to pass to render function
+            config: Configuration object
+            haproxy_config_context: HAProxy configuration context
+            template_renderer: Template renderer instance
+            config_synchronizer: Configuration synchronizer
+            kopf_indices: Kopf indices object
+            metrics: Metrics collector
+            index_tracker: Index synchronization tracker
         """
         if max_interval < min_interval:
             raise ValueError(
@@ -67,6 +74,7 @@ class TemplateRenderDebouncer:
         self.metrics = metrics
         self.min_interval = min_interval
         self.max_interval = max_interval
+        self.index_tracker = index_tracker
 
         self._event = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
@@ -134,6 +142,11 @@ class TemplateRenderDebouncer:
         and triggers template rendering according to the configured intervals.
         """
         logger.info("Template debouncer background task started")
+
+        # Wait for index initialization to complete
+        logger.info("Waiting for index initialization to complete...")
+        await self.index_tracker.wait_for_indices_ready()
+        logger.info("Index initialization complete - normal operation starting")
 
         while not self._stop:
             try:

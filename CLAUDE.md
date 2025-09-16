@@ -347,6 +347,32 @@ data:
 
 ## Important Architectural Decisions
 
+### Index Synchronization System
+**Decision**: IndexSynchronizationTracker prevents template rendering until all Kopf indices are initialized to avoid incomplete configurations during startup.
+
+**Problem**: Template rendering could be triggered by timer events or partial index updates before all Kopf indices are fully populated, leading to incomplete HAProxy configurations during controller startup.
+
+**Solution**: Event-based tracking system with timeout protection for zero-resource edge cases.
+
+**Implementation**:
+- **Event Handlers**: All resource handlers (watched resources + HAProxy pods) report to IndexSynchronizationTracker when called
+- **Timeout Protection**: 5-second timeout handles cases where no resources exist for a given type (prevents infinite waiting)
+- **Performance Optimization**: Tracking automatically disabled after initialization to eliminate runtime overhead
+- **Clean Code**: Uses factory pattern with dependency injection, no global state
+
+**Configuration**:
+```yaml
+operator:
+  index_initialization_timeout: 5  # Seconds to wait for zero-resource timeout (default: 5)
+```
+
+**Key Components**:
+- `IndexSynchronizationTracker`: Core synchronization logic in `operator/index_sync.py`
+- `TemplateRenderDebouncer`: Waits for index initialization before first render
+- `create_tracking_decorator`: Factory function that creates tracking decorators with injected dependencies
+
+**Always Tracked**: HAProxy pods are always included in synchronization regardless of configuration to ensure complete system startup coordination.
+
 ### HAProxy Version Requirement: 3.1+ (Critical for Startup)
 **Decision**: All HAProxy containers MUST use `haproxytech/haproxy-alpine:3.1` or newer.
 
@@ -511,8 +537,9 @@ All runtime settings configured via ConfigMap specified by `CONFIGMAP_NAME` usin
 ```yaml
 # Operator runtime settings
 operator:
-  healthz_port: 8080        # Health check port  
-  metrics_port: 9090        # Prometheus metrics port
+  healthz_port: 8080                    # Health check port  
+  metrics_port: 9090                    # Prometheus metrics port
+  index_initialization_timeout: 5       # Seconds to wait for index init timeout (zero-resource case)
 
 # Logging configuration
 logging:
