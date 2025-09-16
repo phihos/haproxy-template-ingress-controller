@@ -1,5 +1,21 @@
 # Templates
 
+This document provides a comprehensive guide to using Jinja2 templates in the HAProxy Ingress Controller. It covers
+syntax, available variables, filters, resource access patterns, and common template patterns for configuring HAProxy
+dynamically.
+
+Learn how to efficiently create and debug templates that transform Kubernetes resources into HAProxy configurations.
+
+## Contents
+
+- [Jinja2 Basics](#jinja2-basics)
+- [Available Variables](#available-variables)
+- [Available Filters](#available-filters)
+- [Resource Access Patterns](#resource-access-patterns)
+- [Reusable Snippets](#reusable-snippets)
+- [Common Patterns](#common-patterns)
+- [Debugging Templates](#debugging-templates)
+
 ## Jinja2 Basics
 
 Templates use standard Jinja2 syntax with custom filters and variables.
@@ -31,6 +47,7 @@ Templates use standard Jinja2 syntax with custom filters and variables.
 ## Available Variables
 
 ### resources
+
 Indexed Kubernetes resources by type:
 
 ```jinja2
@@ -48,8 +65,8 @@ Indexed Kubernetes resources by type:
 {% endfor %}
 ```
 
-
 ### register_error
+
 Internal error registration function (advanced use only):
 
 ```jinja2
@@ -57,9 +74,10 @@ Internal error registration function (advanced use only):
 # Not typically used in user templates
 ```
 
-## Filters
+## Available Filters
 
 ### b64decode
+
 Decode base64 strings:
 
 ```jinja2
@@ -67,6 +85,7 @@ Decode base64 strings:
 ```
 
 ### get_path
+
 Safe nested field access:
 
 ```jinja2
@@ -74,6 +93,7 @@ Safe nested field access:
 ```
 
 ### Standard Jinja2
+
 All standard filters available:
 
 ```jinja2
@@ -88,7 +108,8 @@ All standard filters available:
 
 ## Resource Access Patterns
 
-The `resources` variable contains IndexedResourceCollection objects for each watched resource type. There are two main access patterns:
+The `resources` variable contains IndexedResourceCollection objects for each watched resource type. There are two main
+access patterns:
 
 ### Basic Iteration
 
@@ -136,6 +157,7 @@ watched_resources:
 ```
 
 **Performance Notes:**
+
 - `items()` and `values()`: O(n) - iterate all resources
 - `get_indexed_single()`: O(1) - fast lookup, returns one resource or None
 - `get_indexed()`: O(1) - fast lookup, returns list of matching resources
@@ -187,7 +209,7 @@ watched_resources:
 {% set service_name = rule.backend.service.name | default('unknown') %}
 ```
 
-## Template Snippets
+## Reusable Snippets
 
 ### Define Snippets
 
@@ -197,7 +219,7 @@ template_snippets:
     backend {{ name }}
         balance {{ balance | default('roundrobin') }}
         option httpchk GET /health
-  
+
   rate-limit: |
     stick-table type ip size 100k expire 30s store http_req_rate(10s)
     http-request track-sc0 src
