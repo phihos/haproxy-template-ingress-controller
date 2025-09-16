@@ -467,6 +467,7 @@ def wait_for_operator_ready(runner: LocalOperatorRunner, timeout: int = 60) -> N
         if (
             "✅ Configuration and credentials loaded successfully." in logs
             and "📊 Metrics server started on port" in logs
+            and "Template debouncer started (" in logs
         ):
             ready = True
             break

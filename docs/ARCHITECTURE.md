@@ -49,7 +49,9 @@ haproxy_template_ic/
 │   └── templates.py   # Template models
 ├── operator/          # Operator lifecycle management
 │   ├── configmap.py   # ConfigMap change handling
+│   ├── index_sync.py  # Index synchronization tracking
 │   ├── initialization.py # Startup and cleanup
+│   ├── pod_management.py # HAProxy pod discovery
 └   └── utils.py       # Operator utilities
 ```
 
@@ -121,16 +123,40 @@ haproxy_template_ic/
 ## Data Flow
 
 ```
-Resource Change → Watch Event → Template Render → Validation → Production Deploy
-       ↑                                                              ↓
-       └──────────────── Timer-based reconciliation ─────────────────┘
+Resource Change → Watch Event → Index Sync → Template Render → Validation → Production Deploy
+       ↑                                                                              ↓
+       └────────────────────── Timer-based reconciliation ───────────────────────────┘
 ```
 
 1. **Watch** - Kubernetes resource changes trigger events
-2. **Render** - Templates processed with current state
-3. **Validate** - Config tested in validation sidecar
-4. **Deploy** - Validated config pushed to production
-5. **Reconcile** - Periodic full sync prevents drift
+2. **Index Sync** - Wait for all indices to be initialized (startup only)
+3. **Render** - Templates processed with current state
+4. **Validate** - Config tested in validation sidecar
+5. **Deploy** - Validated config pushed to production
+6. **Reconcile** - Periodic full sync prevents drift
+
+### Index Initialization Flow
+
+During controller startup, the IndexSynchronizationTracker ensures template rendering doesn't begin until all Kopf indices are ready:
+
+```
+Controller Start → Setup Indices → Wait for Initialization → Template Rendering
+                       ↓                        ↑
+              Event Handlers Created → Report to Tracker
+```
+
+**Synchronization Process**:
+
+1. **Index Setup**: Resource handlers and HAProxy pod handlers registered with tracking wrappers
+2. **Event Tracking**: Each handler reports to IndexSynchronizationTracker when first called
+3. **Timeout Protection**: 5-second timeout handles zero-resource cases (no resources exist)
+4. **Initialization Complete**: All resource types ready or timed out
+5. **Template Rendering**: Debouncer unblocked, normal operation begins
+
+**Key Benefits**:
+- **Startup Reliability**: Prevents incomplete configurations during controller initialization
+- **Zero-Resource Handling**: Doesn't hang when no resources match selectors
+- **Performance**: Tracking disabled after initialization for zero runtime overhead
 
 ### ConfigMap Change Detection
 

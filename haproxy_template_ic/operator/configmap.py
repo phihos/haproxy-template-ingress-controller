@@ -5,7 +5,6 @@ Contains functions for loading configuration from ConfigMaps,
 fetching ConfigMaps from the cluster, and handling ConfigMap change events.
 """
 
-import logging
 from typing import Any
 
 import kopf
@@ -30,6 +29,8 @@ __all__ = [
     "fetch_configmap",
     "handle_configmap_change",
 ]
+
+logger = structlog.get_logger(__name__)
 
 
 @trace_async_function(
@@ -92,35 +93,24 @@ async def handle_configmap_change(
     event: dict[str, Any],
     name: str,
     type: str,
-    logger: logging.Logger,
     **kwargs: Any,
 ) -> None:
     """Handle ConfigMap change events."""
-    # Logging context is automatically injected by @autolog decorator
-    structured_logger = structlog.get_logger(__name__)
-    structured_logger.info(f"Kubernetes {type}")
 
     new_config = await load_config_from_configmap(event["object"])
 
     # Check if configuration has actually changed
     # Compare raw configuration dictionaries using DeepDiff
-    diff = DeepDiff(memo.config.raw, new_config.raw, verbose_level=2)
-
-    # Debug logging to understand what's being compared
-    structured_logger.debug(
-        "🔄 Comparing configs",
-        old_pod_selector=memo.config.raw.get("pod_selector"),
-        new_pod_selector=new_config.raw.get("pod_selector"),
-    )
+    diff = DeepDiff(memo.configuration.config.raw, new_config.raw, verbose_level=2)
 
     if not diff:
-        structured_logger.info("Configuration unchanged, skipping reload")
+        logger.debug("Configuration unchanged, skipping reload")
         return
 
     # Configuration has changed - show the diff and trigger reload
     diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
-    structured_logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
+    logger.info("🔄 Config has changed: reloading", config_diff=diff_str)
 
     # Trigger reload by setting the flag
-    memo.config_reload_flag.set_result(None)
-    memo.stop_flag.set_result(None)
+    memo.runtime.config_reload_flag.set_result(None)
+    memo.runtime.stop_flag.set_result(None)

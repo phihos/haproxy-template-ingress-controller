@@ -26,6 +26,7 @@ from haproxy_template_ic.core.validation import has_valid_attr
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
 from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.operator.index_sync import IndexSynchronizationTracker
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext, TemplateContext
 from haproxy_template_ic.models.state import (
@@ -82,28 +83,32 @@ async def initialize_post_config(memo: ApplicationState) -> None:
         with metrics.time_config_reload():
             # Reconfigure logging based on config
             setup_structured_logging(
-                verbose_level=memo.config.logging.verbose,
-                use_json=memo.config.logging.structured,
+                verbose_level=memo.configuration.config.logging.verbose,
+                use_json=memo.configuration.config.logging.structured,
             )
 
             # Initialize distributed tracing if enabled
-            if memo.config.tracing.enabled:
+            if memo.configuration.config.tracing.enabled:
                 tracing_config = create_tracing_config_from_env()
-                tracing_config.enabled = memo.config.tracing.enabled
+                tracing_config.enabled = memo.configuration.config.tracing.enabled
                 tracing_config.service_name = (
-                    memo.config.tracing.service_name or tracing_config.service_name
+                    memo.configuration.config.tracing.service_name
+                    or tracing_config.service_name
                 )
                 tracing_config.service_version = (
-                    memo.config.tracing.service_version
+                    memo.configuration.config.tracing.service_version
                     or tracing_config.service_version
                 )
                 tracing_config.jaeger_endpoint = (
-                    memo.config.tracing.jaeger_endpoint
+                    memo.configuration.config.tracing.jaeger_endpoint
                     or tracing_config.jaeger_endpoint
                 )
-                tracing_config.sample_rate = memo.config.tracing.sample_rate
+                tracing_config.sample_rate = (
+                    memo.configuration.config.tracing.sample_rate
+                )
                 tracing_config.console_export = (
-                    memo.config.tracing.console_export or tracing_config.console_export
+                    memo.configuration.config.tracing.console_export
+                    or tracing_config.console_export
                 )
                 initialize_tracing(tracing_config)
 
@@ -119,7 +124,7 @@ async def initialize_post_config(memo: ApplicationState) -> None:
 async def init_watch_configmap(memo: ApplicationState, **kwargs: Any) -> None:
     """Set up startup handlers after configuration is loaded."""
 
-    configmap_name = memo.cli_options.configmap_name
+    configmap_name = memo.runtime.cli_options.configmap_name
     kopf.on.event(
         "configmap",
         when=lambda name, namespace, type, **_: (
@@ -128,7 +133,7 @@ async def init_watch_configmap(memo: ApplicationState, **kwargs: Any) -> None:
     )(handle_configmap_change)  # type: ignore[arg-type]
 
     # Watch Secret changes
-    secret_name = memo.cli_options.secret_name
+    secret_name = memo.runtime.cli_options.secret_name
     current_namespace = get_current_namespace()
     kopf.on.event(
         "secret",
@@ -140,19 +145,19 @@ async def init_watch_configmap(memo: ApplicationState, **kwargs: Any) -> None:
 
 async def init_template_debouncer(memo: ApplicationState, **kwargs: Any) -> None:
     """Initialize and start the template rendering debouncer."""
-    await memo.debouncer.start()
+    await memo.operations.debouncer.start()
 
 
 async def cleanup_template_debouncer(memo: ApplicationState, **kwargs: Any) -> None:
     """Stop the template rendering debouncer on shutdown."""
     logger.info("Stopping template debouncer...")
-    await memo.debouncer.stop()
+    await memo.operations.debouncer.stop()
 
 
 async def cleanup_tracing(memo: ApplicationState, **kwargs: Any) -> None:
     """Clean up distributed tracing."""
     try:
-        if memo.config.tracing.enabled:
+        if memo.configuration.config.tracing.enabled:
             shutdown_tracing()
             logger.debug("🔍 Tracing shutdown complete")
     except Exception as e:
@@ -162,7 +167,7 @@ async def cleanup_tracing(memo: ApplicationState, **kwargs: Any) -> None:
 async def cleanup_metrics_server(memo: ApplicationState, **kwargs: Any) -> None:
     """Clean up metrics server."""
     try:
-        await memo.metrics.stop_metrics_server()
+        await memo.operations.metrics.stop_metrics_server()
         logger.debug("📊 Metrics server shutdown complete")
     except Exception as e:
         logger.error(f"❌ Error shutting down metrics server: {e}")
@@ -170,8 +175,8 @@ async def cleanup_metrics_server(memo: ApplicationState, **kwargs: Any) -> None:
 
 async def init_metrics_server(memo: ApplicationState, **kwargs: Any) -> None:
     """Start the metrics server."""
-    metrics_port = memo.config.operator.metrics_port
-    await memo.metrics.start_metrics_server(port=metrics_port)
+    metrics_port = memo.configuration.config.operator.metrics_port
+    await memo.operations.metrics.start_metrics_server(port=metrics_port)
     logger.info(f"📊 Metrics server started on port {metrics_port}")
 
 
@@ -234,7 +239,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         registry = SmartOperatorRegistry()
         set_default_registry(registry)
 
-        # Explicitly set up the index containers to be able to retrieve all indices via memo
+        # Explicitly set up the index containers
         indexers = OperatorIndexers()
 
         # Explicitly create the asyncio event loop to be able to run some tasks manually before passing it to kopf.run
@@ -299,6 +304,9 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             rendered_config=None,
         )
 
+        # Create index synchronization tracker
+        index_tracker = IndexSynchronizationTracker(loaded_config)
+
         memo = ApplicationState(
             runtime=RuntimeState(
                 stop_flag=stop_flag,
@@ -324,9 +332,11 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
                     config_synchronizer=config_synchronizer,
                     kopf_indices=indexers.indices,
                     metrics=get_metrics_collector(),
+                    index_tracker=index_tracker,
                 ),
                 metrics=get_metrics_collector(),
                 config_synchronizer=config_synchronizer,
+                index_tracker=index_tracker,
             ),
         )
 
@@ -336,7 +346,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
 
             # Set up kopf indices
             # They must be set up before kopf.run or else they will not be initialized properly
-            setup_resource_watchers(memo.configuration.config)
+            setup_resource_watchers(memo)
             setup_haproxy_pod_indexing(memo)
 
             # Watch the configmap for any changes to reload when necessary
@@ -355,7 +365,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             kopf.run(
                 clusterwide=True,
                 loop=loop,
-                liveness_endpoint=f"http://0.0.0.0:{memo.config.operator.healthz_port}/healthz",
+                liveness_endpoint=f"http://0.0.0.0:{memo.configuration.config.operator.healthz_port}/healthz",
                 stop_flag=stop_flag,
                 memo=memo,
                 registry=registry,
@@ -363,7 +373,7 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             )
             loop.close()
             # Check if we should exit or reload
-            if not memo.config_reload_flag.done():
+            if not memo.runtime.config_reload_flag.done():
                 break  # Normal shutdown
 
             # Config changed, loop back to reload

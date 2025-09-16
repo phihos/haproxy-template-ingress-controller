@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from haproxy_template_ic.credentials import Credentials
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
 from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.operator.index_sync import IndexSynchronizationTracker
 from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.templating import TemplateRenderer
 
@@ -67,6 +68,9 @@ class OperationalState(BaseModel):
     config_synchronizer: ConfigSynchronizer = Field(
         ..., description="Always initialized with empty production URLs"
     )
+    index_tracker: IndexSynchronizationTracker = Field(
+        ..., description="Index initialization synchronization tracker"
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -86,58 +90,3 @@ class ApplicationState(BaseModel):
     operations: OperationalState
 
     model_config = {"arbitrary_types_allowed": True}
-
-    @property
-    def config(self) -> Config:
-        """Direct access to configuration for backwards compatibility."""
-        return self.configuration.config
-
-    @property
-    def haproxy_config_context(self) -> HAProxyConfigContext:
-        """Direct access to HAProxy config context for backwards compatibility."""
-        return self.configuration.haproxy_config_context
-
-    @property
-    def indices(self) -> OperatorIndices:
-        """Direct access to resource indices for backwards compatibility."""
-        return self.resources.indices
-
-    @property
-    def credentials(self) -> Credentials:
-        """Direct access to credentials for backwards compatibility."""
-        return self.configuration.credentials
-
-    @property
-    def template_renderer(self) -> TemplateRenderer:
-        """Direct access to template renderer for backwards compatibility."""
-        return self.configuration.template_renderer
-
-    @property
-    def debouncer(self) -> TemplateRenderDebouncer:
-        """Direct access to debouncer for backwards compatibility."""
-        return self.operations.debouncer
-
-    @property
-    def metrics(self) -> MetricsCollector:
-        """Direct access to metrics collector for backwards compatibility."""
-        return self.operations.metrics
-
-    @property
-    def config_synchronizer(self) -> "ConfigSynchronizer":
-        """Direct access to config synchronizer for backwards compatibility."""
-        return self.operations.config_synchronizer
-
-    @property
-    def cli_options(self) -> "CliOptions":
-        """Direct access to CLI options for backwards compatibility."""
-        return self.runtime.cli_options
-
-    @property
-    def stop_flag(self) -> asyncio.Future[None]:
-        """Direct access to stop flag for backwards compatibility."""
-        return self.runtime.stop_flag
-
-    @property
-    def config_reload_flag(self) -> asyncio.Future[None]:
-        """Direct access to config reload flag for backwards compatibility."""
-        return self.runtime.config_reload_flag

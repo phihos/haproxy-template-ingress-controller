@@ -8,6 +8,7 @@ import pytest
 from kopf._core.engines.indexing import OperatorIndices
 
 from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
+from haproxy_template_ic.operator.index_sync import IndexSynchronizationTracker
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
 from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.models.config import Config
@@ -42,6 +43,11 @@ def create_debouncer_mocks():
     context_mock = MagicMock(spec=HAProxyConfigContext)
     context_mock.rendered_content = []
 
+    # Create index_tracker mock that immediately resolves
+    index_tracker_mock = MagicMock(spec=IndexSynchronizationTracker)
+    index_tracker_mock.wait_for_indices_ready = AsyncMock(return_value=None)
+    index_tracker_mock.is_initialization_complete.return_value = True
+
     return {
         "config": config_mock,
         "haproxy_config_context": context_mock,
@@ -49,6 +55,7 @@ def create_debouncer_mocks():
         "config_synchronizer": MagicMock(spec=ConfigSynchronizer),
         "kopf_indices": MagicMock(spec=OperatorIndices),
         "metrics": MagicMock(spec=MetricsCollector),
+        "index_tracker": index_tracker_mock,
     }
 
 
