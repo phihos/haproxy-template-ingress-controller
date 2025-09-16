@@ -4,17 +4,18 @@ ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim-bookworm AS system-deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        dumb-init \
-        libssl3 \
-        libssl-dev \
         ca-certificates \
+        dumb-init \
         git \
+        libssl-dev \
+        libssl3 \
         socat && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
 
 # UV setup stage - cache UV installation separately
 FROM system-deps AS uv-base
+ARG PYTHON_VERSION
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /bin/uv
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -37,10 +38,9 @@ FROM dependencies AS build
 WORKDIR /src
 
 # Copy source files needed for installation
-COPY haproxy_template_ic/ haproxy_template_ic/
 COPY codegen/ codegen/
-COPY pyproject.toml .
-COPY uv.lock . 
+COPY pyproject.toml uv.lock ./
+COPY haproxy_template_ic/ haproxy_template_ic/
 
 # Install the project
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
