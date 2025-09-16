@@ -15,6 +15,7 @@ RUN apt-get update && \
 
 # UV setup stage - cache UV installation separately
 FROM system-deps AS uv-base
+ARG PYTHON_VERSION
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /bin/uv
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
