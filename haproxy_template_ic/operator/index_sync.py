@@ -61,6 +61,10 @@ class IndexSynchronizationTracker:
 
     def mark_ready(self, resource_type: str) -> None:
         """Mark a resource type as ready (handler called)."""
+        if not isinstance(resource_type, str):
+            logger.warning(f"Invalid resource_type type: {type(resource_type)}")
+            return
+
         if self._complete or resource_type not in self.resource_types:
             return
 

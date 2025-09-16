@@ -76,7 +76,10 @@ async def handle_secret_change(
         return
 
     # Credentials have changed - show the diff and trigger update
-    diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
+    # Convert to string efficiently for logging (verbose_level=0 already hides values)
+    diff_str = str(diff)
+    if len(diff_str) > 500:
+        diff_str = diff_str[:500] + "..."
     logger.info("🔄 Credentials changed: updating", credentials_diff=diff_str)
 
     # Update credentials

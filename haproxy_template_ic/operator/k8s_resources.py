@@ -95,10 +95,18 @@ def _collect_resource_indices(
                 namespaces[namespace] = namespaces.get(namespace, 0) + 1
 
             logger.debug(f"📊 Retrieved index '{resource_id}' with {total_count} items")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not retrieve index '{resource_id}': {e}")
+        except KeyError as e:
+            logger.warning(f"⚠️ Index '{resource_id}' not found in kopf indices: {e}")
             indices[resource_id] = IndexedResourceCollection()
-            # Ensure metadata exists even on error
+        except (AttributeError, TypeError) as e:
+            logger.warning(f"⚠️ Invalid data structure in index '{resource_id}': {e}")
+            indices[resource_id] = IndexedResourceCollection()
+        except Exception as e:
+            logger.error(f"⚠️ Unexpected error retrieving index '{resource_id}': {e}")
+            indices[resource_id] = IndexedResourceCollection()
+            # Re-raise unexpected errors for better debugging in development
+            if logger.isEnabledFor(logging.DEBUG):
+                raise
 
     _record_resource_metrics(metrics, indices)
     return indices
@@ -116,9 +124,10 @@ def _record_resource_metrics(metrics: Any, indices: Dict[str, Any]) -> None:
     metrics.record_watched_resources(metrics_data)
 
 
-async def handle_resource_event(**kwargs: Any) -> None:
+async def handle_resource_event(
+    memo: ApplicationState | None = None, **kwargs: Any
+) -> None:
     """Event handler that triggers template rendering debouncer."""
-    memo = kwargs.get("memo")
     if memo:
         await memo.operations.debouncer.trigger("resource_changes")
 
