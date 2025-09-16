@@ -5,11 +5,11 @@ Contains functions for fetching Secrets from the cluster
 and handling Secret change events.
 """
 
-import logging
 from typing import Any
 
 import kopf
 import structlog
+from deepdiff import DeepDiff
 from kr8s.objects import Secret
 
 from haproxy_template_ic.core.logging import autolog
@@ -25,6 +25,8 @@ __all__ = [
     "fetch_secret",
     "handle_secret_change",
 ]
+
+logger = structlog.get_logger(__name__)
 
 
 @trace_async_function(
@@ -55,15 +57,27 @@ async def handle_secret_change(
     event: dict[str, Any],
     name: str,
     type: str,
-    logger: logging.Logger,
     **kwargs: Any,
 ) -> None:
     """Handle Secret change events."""
-    # Logging context is automatically injected by @autolog decorator
-    structured_logger = structlog.get_logger(__name__)
-    structured_logger.info(f"Kubernetes {type}")
 
-    # Store the new credentials in memo for next sync operation
+    # Create new credentials from secret data
     secret_data = event["object"]["data"]
-    memo.configuration.credentials = Credentials.from_secret(secret_data)
-    structured_logger.info("Credentials updated, will be used in next sync")
+    new_credentials = Credentials.from_secret(secret_data)
+
+    # Compare with existing credentials
+    old_dict = memo.configuration.credentials.model_dump()
+    new_dict = new_credentials.model_dump()
+
+    # Use verbose_level=0 to hide password values in diff output
+    diff = DeepDiff(old_dict, new_dict, verbose_level=0)
+    if not diff:
+        logger.debug("Credentials unchanged, skipping update")
+        return
+
+    # Credentials have changed - show the diff and trigger update
+    diff_str = str(diff)[:500]  # Limit to 500 characters for log readability
+    logger.info("🔄 Credentials changed: updating", credentials_diff=diff_str)
+
+    # Update credentials
+    memo.configuration.credentials = new_credentials
