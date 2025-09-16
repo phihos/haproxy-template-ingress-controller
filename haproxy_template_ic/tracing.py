@@ -66,7 +66,7 @@ class TracingManager:
         )
 
         # Create resource with service metadata
-        resource = Resource.create(
+        resource = Resource(
             {
                 ResourceAttributes.SERVICE_NAME: self.config.service_name,
                 ResourceAttributes.SERVICE_VERSION: self.config.service_version,

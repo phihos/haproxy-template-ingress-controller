@@ -325,6 +325,55 @@ async def _fetch_with_metrics(
         return await fetch_func(client=client) or default_value
 
 
+def _handle_exception(
+    exception: Exception, op_name: str, metrics, endpoint: str
+) -> DataplaneAPIError:
+    """Handle exceptions consistently for dataplane operations.
+
+    Args:
+        exception: The caught exception
+        op_name: Operation name for context
+        metrics: Metrics collector instance
+        endpoint: Dataplane endpoint for context
+
+    Returns:
+        DataplaneAPIError with proper context and chaining
+    """
+    if isinstance(exception, (ValidationError, DataplaneAPIError)):
+        # Re-raise these without wrapping
+        raise exception
+
+    metrics.record_dataplane_api_request(op_name, "error")
+    record_span_event(f"{op_name}_failed", {"error": str(exception)})
+
+    if isinstance(exception, errors.UnexpectedStatus):
+        set_span_error(exception, f"Dataplane API error in {op_name}")
+        raise DataplaneAPIError(
+            f"API error in {op_name}: {exception}",
+            endpoint=endpoint,
+            operation=op_name,
+            original_error=exception,
+        ) from exception
+    elif isinstance(
+        exception, (ConnectionError, TimeoutError, OSError, httpx.RequestError)
+    ):
+        set_span_error(exception, f"Network error in {op_name}")
+        raise DataplaneAPIError(
+            f"Network error in {op_name}: {exception}",
+            endpoint=endpoint,
+            operation=op_name,
+            original_error=exception,
+        ) from exception
+    else:
+        set_span_error(exception, f"Unexpected error in {op_name}")
+        raise DataplaneAPIError(
+            f"Unexpected error in {op_name}: {exception}",
+            endpoint=endpoint,
+            operation=op_name,
+            original_error=exception,
+        ) from exception
+
+
 def handle_dataplane_errors(operation_name: Optional[str] = None):
     """Decorator to standardize error handling for dataplane operations.
 
@@ -340,89 +389,23 @@ def handle_dataplane_errors(operation_name: Optional[str] = None):
         async def async_wrapper(self, *args, **kwargs):
             op_name = operation_name or func.__name__
             metrics = get_metrics_collector()
+            endpoint = getattr(self, "base_url", "unknown")
 
             try:
                 return await func(self, *args, **kwargs)
-            except ValidationError:
-                # Re-raise ValidationError without wrapping
-                raise
-            except DataplaneAPIError:
-                # Re-raise DataplaneAPIError without wrapping
-                raise
-            except errors.UnexpectedStatus as e:
-                metrics.record_dataplane_api_request(op_name, "error")
-                record_span_event(f"{op_name}_failed", {"error": str(e)})
-                set_span_error(e, f"Dataplane API error in {op_name}")
-                raise DataplaneAPIError(
-                    f"API error in {op_name}: {e}",
-                    endpoint=getattr(self, "base_url", "unknown"),
-                    operation=op_name,
-                    original_error=e,
-                ) from e
-            except (ConnectionError, TimeoutError, OSError, httpx.RequestError) as e:
-                metrics.record_dataplane_api_request(op_name, "error")
-                record_span_event(f"{op_name}_failed", {"error": str(e)})
-                set_span_error(e, f"Network error in {op_name}")
-                raise DataplaneAPIError(
-                    f"Network error in {op_name}: {e}",
-                    endpoint=getattr(self, "base_url", "unknown"),
-                    operation=op_name,
-                    original_error=e,
-                ) from e
             except Exception as e:
-                metrics.record_dataplane_api_request(op_name, "error")
-                record_span_event(f"{op_name}_failed", {"error": str(e)})
-                set_span_error(e, f"Unexpected error in {op_name}")
-                raise DataplaneAPIError(
-                    f"Unexpected error in {op_name}: {e}",
-                    endpoint=getattr(self, "base_url", "unknown"),
-                    operation=op_name,
-                    original_error=e,
-                ) from e
+                _handle_exception(e, op_name, metrics, endpoint)
 
         @functools.wraps(func)
         def sync_wrapper(self, *args, **kwargs):
             op_name = operation_name or func.__name__
             metrics = get_metrics_collector()
+            endpoint = getattr(self, "base_url", "unknown")
 
             try:
                 return func(self, *args, **kwargs)
-            except ValidationError:
-                # Re-raise ValidationError without wrapping
-                raise
-            except DataplaneAPIError:
-                # Re-raise DataplaneAPIError without wrapping
-                raise
-            except errors.UnexpectedStatus as e:
-                metrics.record_dataplane_api_request(op_name, "error")
-                record_span_event(f"{op_name}_failed", {"error": str(e)})
-                set_span_error(e, f"Dataplane API error in {op_name}")
-                raise DataplaneAPIError(
-                    f"API error in {op_name}: {e}",
-                    endpoint=getattr(self, "base_url", "unknown"),
-                    operation=op_name,
-                    original_error=e,
-                ) from e
-            except (ConnectionError, TimeoutError, OSError, httpx.RequestError) as e:
-                metrics.record_dataplane_api_request(op_name, "error")
-                record_span_event(f"{op_name}_failed", {"error": str(e)})
-                set_span_error(e, f"Network error in {op_name}")
-                raise DataplaneAPIError(
-                    f"Network error in {op_name}: {e}",
-                    endpoint=getattr(self, "base_url", "unknown"),
-                    operation=op_name,
-                    original_error=e,
-                ) from e
             except Exception as e:
-                metrics.record_dataplane_api_request(op_name, "error")
-                record_span_event(f"{op_name}_failed", {"error": str(e)})
-                set_span_error(e, f"Unexpected error in {op_name}")
-                raise DataplaneAPIError(
-                    f"Unexpected error in {op_name}: {e}",
-                    endpoint=getattr(self, "base_url", "unknown"),
-                    operation=op_name,
-                    original_error=e,
-                ) from e
+                _handle_exception(e, op_name, metrics, endpoint)
 
         # Return the appropriate wrapper based on whether the function is async
         if asyncio.iscoroutinefunction(func):
