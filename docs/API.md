@@ -14,13 +14,16 @@ It includes detailed coverage of the API itself, Python interfaces, and document
 
 ## CLI Commands
 
+This section covers all available command-line interface (CLI) commands for configuring and managing the HAProxy Ingress
+Controller.
+
 ### haproxy-template-ic
 
 ```bash
 haproxy-template-ic COMMAND [OPTIONS]
 ```
 
-**Note**: Runtime settings (logging, tracing, ports, etc.) are now configured via ConfigMap rather than CLI options.
+**Note**: Runtime settings (logging, tracing, ports, etc.) are configured via ConfigMap rather than CLI options.
 
 ### run
 
@@ -31,10 +34,12 @@ haproxy-template-ic run [OPTIONS]
 ```
 
 Options:
+
 - `--configmap-name` / `-c` - ConfigMap containing configuration (required)
 - `--secret-name` / `-s` - Secret containing HAProxy credentials (required)
 
 Environment variables:
+
 - `CONFIGMAP_NAME` - ConfigMap name (alternative to --configmap-name)
 - `SECRET_NAME` - Secret name (alternative to --secret-name)
 
@@ -50,16 +55,18 @@ haproxy-template-ic version
 
 ### Required (Bootstrap Only)
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CONFIGMAP_NAME` | ConfigMap name containing all runtime configuration | - |
-| `SECRET_NAME` | Secret name containing HAProxy credentials | - |
+| Variable         | Description                                         | Default |
+|------------------|-----------------------------------------------------|---------|
+| `CONFIGMAP_NAME` | ConfigMap name containing all runtime configuration | -       |
+| `SECRET_NAME`    | Secret name containing HAProxy credentials          | -       |
 
 ### Runtime Configuration
 
-**Important**: All runtime settings (logging, tracing, ports, etc.) are now configured via the ConfigMap specified by `CONFIGMAP_NAME`. Environment variables are only used for bootstrap parameters.
+**Important**: All runtime settings (logging, tracing, ports, etc.) are configured via the ConfigMap specified by
+`CONFIGMAP_NAME`.
 
 Example ConfigMap structure for runtime settings:
+
 ```yaml
 data:
   config: |
@@ -89,6 +96,9 @@ data:
 
 ## HTTP Endpoints
 
+This section outlines the HTTP endpoints exposed by the HAProxy Ingress Controller. These endpoints enable programmatic
+interaction with the controller for configuration, monitoring, and management tasks.
+
 ### Health Check
 
 ```http
@@ -96,6 +106,7 @@ GET /healthz
 ```
 
 Response:
+
 ```json
 {
   "status": "healthy"
@@ -109,6 +120,7 @@ GET /metrics
 ```
 
 Metrics:
+
 - `haproxy_template_ic_info` - Version info
 - `haproxy_template_ic_rendered_templates_total` - Template render count by status
 - `haproxy_template_ic_template_render_duration_seconds` - Template render time
@@ -126,7 +138,7 @@ Metrics:
 - `haproxy_template_ic_debouncer_triggers_total` - Debouncer trigger events
 - `haproxy_template_ic_debouncer_renders_total` - Template renders by trigger type
 
-### Webhook Validation
+### Validation Webhook
 
 ```http
 POST /validate
@@ -135,18 +147,22 @@ POST /validate
 Admission webhook endpoint for validating resources.
 
 Request:
+
 ```json
 {
   "apiVersion": "admission.k8s.io/v1",
   "kind": "AdmissionReview",
   "request": {
     "uid": "...",
-    "object": {...}
+    "object": {
+      ...
+    }
   }
 }
 ```
 
 Response:
+
 ```json
 {
   "apiVersion": "admission.k8s.io/v1",
@@ -154,14 +170,20 @@ Response:
   "response": {
     "uid": "...",
     "allowed": true,
-    "warnings": ["..."]
+    "warnings": [
+      "..."
+    ]
   }
 }
 ```
 
 ## Management Socket
 
-**Security Warning**: The management socket exposes sensitive configuration and resource data. Ensure proper RBAC and pod security policies are in place.
+The **management socket** provides a low-level interface for runtime configuration, monitoring, and control of
+HAProxy instances. It allows dynamic adjustments without restarting the service.
+
+> **Security Warning**: The management socket exposes sensitive configuration and resource data. Ensure proper RBAC and
+> pod security policies are in place.
 
 ### Connection
 
@@ -173,23 +195,32 @@ socat - UNIX-CONNECT:/run/haproxy-template-ic/management.sock
 
 #### dump all
 
-Get complete state:
+Get a complete state:
 
 ```
 dump all
 ```
 
 Response:
+
 ```json
 {
-  "config": {...},
-  "haproxy_config_context": {...},
-  "metadata": {...},
-  "indices": {...}
+  "config": {
+    ...
+  },
+  "haproxy_config_context": {
+    ...
+  },
+  "metadata": {
+    ...
+  },
+  "indices": {
+    ...
+  }
 }
 ```
 
-#### dump indices
+#### Dump indices
 
 Get resource indices:
 
@@ -198,23 +229,31 @@ dump indices
 ```
 
 Response:
+
 ```json
 {
-  "services_index": {...},
-  "ingresses_index": {...},
-  "secrets_index": {...}
+  "services_index": {
+    ...
+  },
+  "ingresses_index": {
+    ...
+  },
+  "secrets_index": {
+    ...
+  }
 }
 ```
 
-#### dump index
+#### Dump index
 
-Get specific index:
+Get a specific index:
 
 ```
 dump index services
 ```
 
 Response:
+
 ```json
 {
   "('default', 'web'): {...},
@@ -222,7 +261,7 @@ Response:
 }
 ```
 
-#### dump config
+#### Dump config
 
 Get rendered configuration:
 
@@ -231,15 +270,20 @@ dump config
 ```
 
 Response:
+
 ```json
 {
   "haproxy_config": "...",
-  "maps": {...},
-  "certificates": {...}
+  "maps": {
+    ...
+  },
+  "certificates": {
+    ...
+  }
 }
 ```
 
-#### get maps
+#### Get host maps
 
 Get specific map:
 
@@ -248,34 +292,42 @@ get maps /etc/haproxy/maps/hosts.map
 ```
 
 Response:
+
 ```
 example.com backend_web
 api.example.com backend_api
 ```
 
-#### get template_snippets
+#### Get template snippets
 
-Get specific snippet:
+Get a specific snippet:
 
 ```
 get template_snippets backend-name
 ```
 
 Response:
+
 ```
 backend_{{ service }}_{{ port }}
 ```
 
 ## Dataplane API
 
+The Data Plane API enables real-time updates to HAProxy's configuration, including load balancing rules, server
+management, and runtime adjustments. It bridges the Ingress Controller with HAProxy's core functionality for seamless
+orchestration.
+
 ### Authentication
 
 Production pods:
+
 ```bash
 curl -u admin:adminpass http://haproxy:5555/v3/
 ```
 
 Validation sidecar:
+
 ```bash
 curl -u admin:validationpass http://localhost:5555/v3/
 ```
@@ -287,6 +339,7 @@ curl -u admin:validationpass http://localhost:5555/v3/
 The codebase uses a modular package structure with backward compatibility:
 
 #### Legacy Imports (Deprecated but Functional)
+
 ```python
 # Old flat structure - still works via wrapper modules
 from haproxy_template_ic.config_models import Config
@@ -316,24 +369,25 @@ Context manager for running operators locally during tests:
 from tests.e2e.utils import LocalOperatorRunner
 
 with LocalOperatorRunner(
-    configmap_name="test-config",
-    secret_name="test-secret", 
-    namespace="test-ns",
-    verbose=2,
-    collect_coverage=True
+        configmap_name="test-config",
+        secret_name="test-secret",
+        namespace="test-ns",
+        verbose=2,
+        collect_coverage=True
 ) as operator:
     # Operator process management
     assert operator.is_running()
-    
+
     # Log analysis with millisecond precision  
     position = operator.get_log_position_at_time(500)  # 500ms ago
     logs = operator.get_logs(since_index=position)
-    
+
     # Socket communication
     response = operator.send_socket_command("dump all")
 ```
 
 **Constructor Parameters:**
+
 - `configmap_name: str` - ConfigMap containing operator configuration
 - `secret_name: str` - Secret containing credentials
 - `namespace: str` - Kubernetes namespace to operate in
@@ -342,6 +396,7 @@ with LocalOperatorRunner(
 - `kubeconfig_path: Optional[str]` - Custom kubeconfig file path
 
 **Methods:**
+
 - `start() -> None` - Start operator process
 - `stop() -> None` - Stop operator process gracefully
 - `is_running() -> bool` - Check if process is active
@@ -358,7 +413,7 @@ from tests.e2e.utils import assert_log_line, send_socket_command, count_log_occu
 
 # Wait for specific log with millisecond timing
 assert_log_line(
-    operator, 
+    operator,
     "✅ Configuration loaded successfully",
     timeout=10,
     since_milliseconds=200  # Include logs from last 200ms
@@ -373,6 +428,7 @@ reload_count = count_log_occurrences(operator, "Config has changed")
 ```
 
 **assert_log_line Parameters:**
+
 - `operator: LocalOperatorRunner` - Operator instance
 - `expected_log_line: str` - Log text to search for (substring match)
 - `timeout: float = 5` - Maximum wait time in seconds
@@ -381,6 +437,7 @@ reload_count = count_log_occurrences(operator, "Config has changed")
 ### Method Signature Changes
 
 #### Time Resolution Changes
+
 Previous versions used seconds; current version uses milliseconds for higher precision:
 
 ```python
@@ -426,6 +483,8 @@ PUT /v3/services/haproxy/actions/reload
 ```
 
 ## Python API
+
+For developers and contributors, the **Python API** covers the python code for the controller.
 
 ### Operator
 

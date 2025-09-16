@@ -54,6 +54,7 @@ kubectl logs deployment/haproxy-template-ic | grep "template render"
 **Symptoms**: Error logs showing "Template rendering failed"
 
 **Diagnosis**:
+
 ```bash
 # Check for template syntax errors
 kubectl logs deployment/haproxy-template-ic | grep -A5 "TemplateSyntaxError"
@@ -63,6 +64,7 @@ kubectl logs deployment/haproxy-template-ic | grep "watching resource"
 ```
 
 **Resolution**:
+
 1. Fix Jinja2 syntax errors in ConfigMap
 2. Ensure all referenced snippets exist
 3. Verify resource access patterns match actual resource structure
@@ -72,6 +74,7 @@ kubectl logs deployment/haproxy-template-ic | grep "watching resource"
 **Symptoms**: Validation sidecar crashes, "validation failed" errors
 
 **Diagnosis**:
+
 ```bash
 # Check validation HAProxy logs
 kubectl logs deployment/haproxy-template-ic -c validation-haproxy --tail=50
@@ -81,6 +84,7 @@ kubectl logs deployment/haproxy-template-ic -c validation-dataplane --tail=50
 ```
 
 **Resolution**:
+
 1. Ensure HAProxy config has required health frontend on port 8404
 2. Check for HAProxy syntax errors in rendered config
 3. Verify validation containers have correct image version (3.1+)
@@ -90,6 +94,7 @@ kubectl logs deployment/haproxy-template-ic -c validation-dataplane --tail=50
 **Symptoms**: "connection refused" or timeout errors
 
 **Diagnosis**:
+
 ```bash
 # Check if Dataplane API is running
 kubectl get pods -l app=haproxy -o json | jq '.items[].status.containerStatuses[] | select(.name=="dataplane")'
@@ -102,6 +107,7 @@ kubectl exec deployment/haproxy-template-ic -- env | grep -E "(DATAPLANE_USER|DA
 ```
 
 **Resolution**:
+
 1. Ensure Dataplane API container is running
 2. Verify port 5555 is exposed
 3. Check authentication credentials match (admin/adminpass for production)
@@ -111,6 +117,7 @@ kubectl exec deployment/haproxy-template-ic -- env | grep -E "(DATAPLANE_USER|DA
 **Symptoms**: E2E tests fail with "Expected log line not found" or timing-related assertion errors
 
 **Diagnosis**:
+
 ```python
 # Check if tests are looking for old logs instead of new ones
 assert_log_line(operator, "Config loaded")  # May find old log
@@ -120,6 +127,7 @@ assert_log_line(operator, "Config loaded", since_milliseconds=100)  # Correct
 ```
 
 **Resolution**:
+
 1. Use `since_milliseconds` parameter for time-sensitive assertions
 2. Avoid checking old logs for events that should be recent
 3. Use appropriate timeouts for operations (100-500ms for config changes)
@@ -130,6 +138,7 @@ assert_log_line(operator, "Config loaded", since_milliseconds=100)  # Correct
 **Symptoms**: Continuous "Config has changed: reloading" messages in logs, operator never stabilizes
 
 **Diagnosis**:
+
 ```bash
 # Check for repeated reload messages
 kubectl logs deployment/haproxy-template-ic | grep -c "Config has changed: reloading"
@@ -145,8 +154,9 @@ data:
 ```
 
 **Resolution**:
+
 1. **Fixed automatically** - Modern operator uses DeepDiff for accurate change detection
-2. Identical configurations no longer trigger unnecessary reloads  
+2. Identical configurations no longer trigger unnecessary reloads
 3. Check structured logs for configuration diff details
 4. Verify ConfigMap updates contain actual content changes, not just metadata updates
 
@@ -155,6 +165,7 @@ data:
 **Symptoms**: ImportError or ModuleNotFoundError after code updates
 
 **Diagnosis**:
+
 ```python
 # Old import paths (still work via compatibility layer)
 from haproxy_template_ic.config_models import Config
@@ -164,6 +175,7 @@ from haproxy_template_ic.models.config import Config
 ```
 
 **Resolution**:
+
 1. **Backward compatibility maintained** - Old imports continue working
 2. New code should use modular import paths for better organization
 3. Run `uv sync` to ensure all dependencies are updated
@@ -175,6 +187,7 @@ from haproxy_template_ic.models.config import Config
 **Symptoms**: HAProxy backends disappear, 503 errors
 
 **Diagnosis**:
+
 ```bash
 # Check for deleted resources
 kubectl get events --sort-by='.lastTimestamp' | grep -i delete
@@ -184,11 +197,12 @@ kubectl logs deployment/haproxy-template-ic | grep "indexed resources"
 ```
 
 **Resolution**:
+
 1. Controller will automatically reconcile on next timer (default 30s)
 2. Force immediate reconciliation by updating ConfigMap
 3. Implement graceful deletion handling in templates
 
-## Recovery Procedures
+## Recover from failures
 
 ### Complete Reset
 
@@ -231,11 +245,12 @@ kubectl set env deployment/haproxy-template-ic STRUCTURED_LOGGING=true
 kubectl logs deployment/haproxy-template-ic | jq 'select(.level=="DEBUG")'
 ```
 
-## Performance Issues
+## Fix performance Issues
 
 ### Slow Template Rendering
 
 **Diagnosis**:
+
 ```bash
 # Check rendering metrics
 kubectl port-forward deployment/haproxy-template-ic 9090:9090
@@ -243,6 +258,7 @@ curl -s http://localhost:9090/metrics | grep template_render_duration
 ```
 
 **Resolution**:
+
 1. Simplify template logic
 2. Use indexed lookups instead of iteration
 3. Enable field filtering to reduce resource size
@@ -250,6 +266,7 @@ curl -s http://localhost:9090/metrics | grep template_render_duration
 ### High Memory Usage
 
 **Diagnosis**:
+
 ```bash
 # Check memory consumption
 kubectl top pod -l app=haproxy-template-ic
@@ -259,6 +276,7 @@ kubectl logs deployment/haproxy-template-ic | grep "resource count"
 ```
 
 **Resolution**:
+
 1. Add field filtering in ConfigMap:
    ```yaml
    watched_resources_ignore_fields:

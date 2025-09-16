@@ -49,33 +49,7 @@ kind create cluster --name haproxy-ic-dev
 
 ## Code Architecture
 
-### Package Structure
-
-The production code is organized into focused packages:
-
-```
-haproxy_template_ic/
-├── core/              # Foundation services
-├── dataplane/         # HAProxy API integration  
-├── k8s/               # Kubernetes operations
-├── models/            # Data models & validation
-├── operator/          # Event handling & lifecycle
-└── [legacy files]     # Backward compatibility
-```
-
-**Benefits:**
-- **Focused responsibility** - Each package has a single concern
-- **Testable modules** - Clear boundaries enable isolated testing
-- **Maintainable imports** - Logical grouping reduces complexity
-- **Backward compatible** - Wrapper modules preserve existing imports
-
-### Recent Improvements
-
-Recent optimizations include:
-
-- **Build caching**: Multi-stage Docker with BuildKit optimization
-- **Test organization**: Streamlined test suite with removed duplicates
-- **Dependency management**: Optimized layer structure for better caching
+Please refer to the [Architecture docs](ARCHITECTURE.md#code-structure).
 
 ## Testing
 
@@ -136,6 +110,7 @@ uv run pytest -n 0 -s -v
 E2E tests use Telepresence for enhanced debugging:
 
 **LocalOperatorRunner**
+
 ```python
 from tests.e2e.utils import LocalOperatorRunner
 
@@ -145,12 +120,14 @@ with LocalOperatorRunner("config-name", "secret-name", "namespace") as operator:
 ```
 
 **Key Features:**
+
 - **No container rebuilds** - Operator runs locally without Docker build cycles
 - **Real-time debugging** - Direct access to operator running locally
 - **Millisecond-precision timing** - `since_milliseconds` parameter for precise log analysis
 - **Comprehensive logging** - Timestamp-tracked log capture with search utilities
 
 **Log Analysis Utilities:**
+
 ```python
 # Time-based log searching
 operator.get_log_position_at_time(500)  # Position 500ms ago
@@ -186,12 +163,14 @@ uv run deptry .
 ### Pre-commit Hooks
 
 Automatically runs on commit:
+
 - ruff format
 - ruff check
 - mypy
 - bandit
 
 Skip hooks if needed:
+
 ```bash
 git commit --no-verify
 ```
@@ -225,6 +204,7 @@ kind load docker-image haproxy-template-ic:dev --name haproxy-ic-dev
 ```
 
 **Benefits:**
+
 - **Efficient caching**: Dependency layers cached separately from code changes
 - **Parallelized stages**: Multi-stage builds with concurrent execution
 - **Registry caching**: Shared cache across CI/CD builds
@@ -245,76 +225,37 @@ FROM base AS production
 FROM production AS coverage
 ```
 
-## Project Structure
-
-```
-haproxy_template_ic/
-├── __main__.py              # CLI entry point
-├── core/                    # Foundation services
-│   └── logging.py          # Structured logging setup
-├── dataplane/               # HAProxy Dataplane API integration
-│   ├── client.py           # API client wrapper
-│   ├── synchronizer.py     # Configuration deployment
-│   ├── models.py           # API models
-│   └── utils.py            # Dataplane utilities
-├── k8s/                     # Kubernetes integration
-│   ├── field_filter.py     # Resource field filtering
-│   ├── kopf_utils.py       # Kopf framework utilities
-│   └── resource_utils.py   # Resource manipulation
-├── models/                  # Data models & validation
-│   ├── config.py           # Configuration models
-│   ├── resources.py        # Resource collections
-│   ├── templates.py        # Template models
-│   └── context.py          # Template context
-├── operator/                # Operator lifecycle management
-│   ├── initialization.py   # Startup and cleanup
-│   ├── configmap.py        # ConfigMap handling
-│   ├── pod_management.py   # HAProxy pod discovery
-│   ├── synchronization.py  # Resource synchronization
-│   └── k8s_resources.py    # K8s resource operations
-├── templating.py            # Jinja2 template engine
-├── webhook.py               # Admission webhooks
-├── metrics.py               # Prometheus metrics
-├── tracing.py               # OpenTelemetry tracing
-├── activity.py              # Activity tracking
-└── deployment_state.py      # Deployment state management
-```
-
 ## Development Workflow
 
 ### Feature Development
 
 1. Create feature branch:
-```bash
-git checkout -b feat/my-feature
-```
-
+    ```bash
+    git checkout -b feat/my-feature
+    ```
 2. Make changes and test:
-```bash
-# Run affected tests
-uv run pytest tests/unit/test_affected.py
-
-# Run all tests
-uv run pytest -n auto
-```
-
+    ```bash
+    # Run affected tests
+    uv run pytest tests/unit/test_affected.py
+    
+    # Run all tests
+    uv run pytest -n auto
+    ```
 3. Check code quality:
-```bash
-uv run ruff format
-uv run ruff check --fix
-uv run mypy haproxy_template_ic/
-```
-
+    ```bash
+    uv run ruff format
+    uv run ruff check --fix
+    uv run mypy haproxy_template_ic/
+    ```
 4. Commit with conventional format:
-```bash
-git commit -m "feat: add new feature"
-```
-
+    ```bash
+    git commit -m "feat: add new feature"
+    ```
 5. Push and create PR:
-```bash
-git push origin feat/my-feature
-gh pr create
-```
+    ```bash
+    git push origin feat/my-feature
+    gh pr create
+    ```
 
 ### Debugging
 
@@ -322,11 +263,14 @@ gh pr create
 
 ```python
 # Add breakpoint
-import pdb; pdb.set_trace()
+import pdb;
+
+pdb.set_trace()
 
 # Or use IDE debugger with:
 if __name__ == "__main__":
     import debugpy
+
     debugpy.listen(5678)
     debugpy.wait_for_client()
 ```
@@ -389,27 +333,24 @@ Never edit generated code directly.
 ## Release Process
 
 1. Update version:
-```toml
-# pyproject.toml
-version = "x.y.z"
-```
-
+    ```toml
+    # pyproject.toml
+    version = "x.y.z"
+    ```
 2. Run tests:
-```bash
-timeout 480 uv run pytest -n auto
-```
-
+    ```bash
+    timeout 480 uv run pytest -n auto
+    ```
 3. Build images:
-```bash
-docker build --target production -t haproxy-template-ic:x.y.z .
-docker push haproxy-template-ic:x.y.z
-```
-
+    ```bash
+    docker build --target production -t haproxy-template-ic:x.y.z .
+    docker push haproxy-template-ic:x.y.z
+    ```
 4. Tag release:
-```bash
-git tag v.x.y.z
-git push origin v.x.y.z
-```
+    ```bash
+    git tag v.x.y.z
+    git push origin v.x.y.z
+    ```
 
 ## Troubleshooting Development
 

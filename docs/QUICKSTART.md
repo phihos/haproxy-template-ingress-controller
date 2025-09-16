@@ -9,7 +9,7 @@ By the end of this guide, you'll have a functional HAProxy Ingress Controller ma
 ## Prerequisites
 
 - Docker
-- kubectl  
+- kubectl
 - kind or minikube
 
 ## Installation
@@ -92,7 +92,6 @@ spec:
         emptyDir: {}
 EOF
 ```
-
 
 ### 4. Create Configuration
 
