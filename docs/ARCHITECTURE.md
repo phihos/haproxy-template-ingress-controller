@@ -163,6 +163,8 @@ Controller Start → Setup Indices → Wait for Initialization → Template Rend
 The operator uses intelligent change detection to prevent unnecessary reloads:
 
 ```python
+from deepdiff import DeepDiff
+
 # DeepDiff-based comparison
 diff = DeepDiff(old_config.raw, new_config.raw, verbose_level=2)
 if not diff:

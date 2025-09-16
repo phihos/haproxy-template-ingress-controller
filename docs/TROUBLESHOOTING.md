@@ -124,6 +124,8 @@ kubectl exec deployment/haproxy-template-ic -- env | grep -E "(DATAPLANE_USER|DA
 **Diagnosis**:
 
 ```python
+from tests.e2e.utils import assert_log_line
+
 # Check if tests are looking for old logs instead of new ones
 assert_log_line(operator, "Config loaded")  # May find old log
 

@@ -46,6 +46,9 @@ else:
 **Prefer explicit types over primitives**:
 
 ```python
+from dataclasses import dataclass
+from pydantic import BaseModel, SecretStr
+
 # ❌ Avoid primitive types
 credentials = (("admin", "pass"), ("validator", "pass"))
 auth = credentials[0]  # Unclear what this represents
@@ -87,6 +90,11 @@ from haproxy_template_ic.dataplane.client import DataplaneClient
 Leverage type safety instead of defensive patterns:
 
 ```python
+from typing import Protocol
+
+class DatabaseConfig(Protocol):
+    database: object  # Has 'host' attribute
+
 # ❌ Avoid defensive programming
 def get_config_value(config):
     if hasattr(config, 'database'):
@@ -104,13 +112,23 @@ def get_config_value(config: DatabaseConfig) -> str:
 Keep async code clean:
 
 ```python
+import asyncio
+from typing import List
+from kr8s.asyncio.objects import Pod, ConfigMap, Secret
+
+# Define Resource type for example
+class Resource:
+    pass
+
+async def process_resource(resource: Resource) -> None:
+    pass
+
 # ✅ Good async patterns
-async def process_resources(resources: list[Resource]) -> None:
+async def process_resources(resources: List[Resource]) -> None:
     tasks = [process_resource(r) for r in resources]
     await asyncio.gather(*tasks)
 
 # Use kr8s async objects in async contexts
-from kr8s.asyncio.objects import Pod, ConfigMap, Secret
 ```
 
 ## Testing
@@ -118,6 +136,9 @@ from kr8s.asyncio.objects import Pod, ConfigMap, Secret
 ### Test Structure
 
 ```python
+import pytest
+from tests.integration.utils import progress_context
+
 # Use descriptive test names
 def test_template_renders_with_missing_resources():
     ...
@@ -129,8 +150,10 @@ def test_template_renders_with_missing_resources():
 
 # Progress context for integration tests
 def test_haproxy_startup():
+    reporter = None  # Mock reporter for example
     with progress_context("haproxy_startup", reporter):
         # Test implementation
+        pass
 ```
 
 ### Test Reliability
@@ -143,13 +166,31 @@ def test_haproxy_startup():
 ## Error Handling
 
 ```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+class PodNotReadyError(Exception):
+    pass
+
+class Pod:
+    def __init__(self, name: str):
+        self.name = name
+        self.status = type('Status', (), {'phase': 'Pending'})()
+
 # ✅ Specific exceptions
-if not pod.status.phase == "Running":
-    raise PodNotReadyError(f"Pod {pod.name} is not running")
+def check_pod_ready(pod: Pod) -> None:
+    if not pod.status.phase == "Running":
+        raise PodNotReadyError(f"Pod {pod.name} is not running")
 
 # ✅ Log with context
-logger.error("Failed to deploy configuration", 
-             pod_name=pod.name, namespace=pod.namespace)
+def deploy_configuration(pod: Pod) -> None:
+    try:
+        # deployment logic here
+        pass
+    except Exception:
+        logger.error("Failed to deploy configuration", 
+                     extra={"pod_name": pod.name, "namespace": "default"})
 ```
 
 ## Documentation
@@ -157,6 +198,7 @@ logger.error("Failed to deploy configuration",
 - **Docstrings**: Use for public APIs
 - **Type annotations**: Required for all public functions
 - **Comments**: Only when code intent is unclear
+- **Python code samples**: All code snippets must include necessary imports at the top so they can be easily pasted into a Python REPL
 
 ## Git
 
