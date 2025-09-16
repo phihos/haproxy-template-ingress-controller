@@ -38,10 +38,9 @@ FROM dependencies AS build
 WORKDIR /src
 
 # Copy source files needed for installation
-COPY haproxy_template_ic/ haproxy_template_ic/
 COPY codegen/ codegen/
-COPY pyproject.toml .
-COPY uv.lock . 
+COPY pyproject.toml uv.lock ./
+COPY haproxy_template_ic/ haproxy_template_ic/
 
 # Install the project
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
