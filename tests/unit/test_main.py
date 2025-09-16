@@ -8,9 +8,10 @@ with the simplified CLI structure (run command only).
 import click
 import pytest
 from importlib.metadata import PackageNotFoundError
-from unittest.mock import patch
+from unittest.mock import MagicMock
 from click.testing import CliRunner
 
+import haproxy_template_ic.__main__ as main_module
 from haproxy_template_ic.__main__ import cli
 from haproxy_template_ic.credentials import validate_k8s_name
 
@@ -58,9 +59,11 @@ def test_cli_help_mentions_configmap_only():
 # =============================================================================
 
 
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_with_defaults(mock_run):
+def test_run_command_with_defaults(monkeypatch):
     """Test run command with default parameters."""
+    mock_run = MagicMock()
+    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
+
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -77,9 +80,11 @@ def test_run_command_with_defaults(mock_run):
     # Runtime settings are no longer in CLI options - they're in the ConfigMap
 
 
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_bootstrap_params_only(mock_run):
+def test_run_command_bootstrap_params_only(monkeypatch):
     """Test run command only accepts bootstrap parameters (configmap and secret names)."""
+    mock_run = MagicMock()
+    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
+
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -99,9 +104,11 @@ def test_run_command_bootstrap_params_only(mock_run):
     # Runtime settings are configured via ConfigMap, not CLI
 
 
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_with_env_vars(mock_run):
+def test_run_command_with_env_vars(monkeypatch):
     """Test run command with environment variables for bootstrap parameters only."""
+    mock_run = MagicMock()
+    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
+
     runner = CliRunner(
         env={
             "CONFIGMAP_NAME": "env-config",
@@ -140,9 +147,11 @@ def test_run_command_help_mentions_configmap():
     )
 
 
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_basic_functionality(mock_run):
+def test_run_command_basic_functionality(monkeypatch):
     """Test that run command executes successfully."""
+    mock_run = MagicMock()
+    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
+
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -184,9 +193,11 @@ def test_run_command_invalid_configmap_name():
     assert "Invalid K8s name format" in result.output
 
 
-@patch("haproxy_template_ic.__main__.run_operator_loop")
-def test_run_command_valid_configmap_names(mock_run):
+def test_run_command_valid_configmap_names(monkeypatch):
     """Test run command with valid ConfigMap names."""
+    mock_run = MagicMock()
+    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
+
     runner = CliRunner()
 
     valid_names = [
@@ -249,11 +260,11 @@ def test_version_command():
     assert "0.1.0" in result.output or "(development)" in result.output
 
 
-@patch("haproxy_template_ic.__main__.metadata.version")
-def test_version_command_development_fallback(mock_version):
+def test_version_command_development_fallback(monkeypatch):
     """Test version command fallback when package not found."""
+    mock_version = MagicMock(side_effect=PackageNotFoundError())
+    monkeypatch.setattr(main_module.metadata, "version", mock_version)
 
-    mock_version.side_effect = PackageNotFoundError()
     runner = CliRunner()
     result = runner.invoke(cli, ["version"])
 

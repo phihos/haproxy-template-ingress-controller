@@ -175,8 +175,20 @@ class TestDataplaneClientSimple:
         assert client.timeout == 60.0
         assert client.auth == ("user", "pass")
 
-    def test_client_configuration_lazy_loading(self):
+    def test_client_configuration_lazy_loading(self, monkeypatch):
         """Test client lazy loading."""
+        # Mock AuthenticatedClient to prevent actual network client creation
+        # We need to override the global monkeypatch that removed __init__
+        mock_client_instance = Mock()
+        monkeypatch.setattr(
+            "haproxy_dataplane_v3.AuthenticatedClient.__init__",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "haproxy_dataplane_v3.AuthenticatedClient.__new__",
+            lambda cls, *args, **kwargs: mock_client_instance,
+        )
+
         client = DataplaneClient("http://test:5555")
 
         # Initially client should be None
@@ -185,8 +197,9 @@ class TestDataplaneClientSimple:
         # First call creates client
         client1 = client._get_client()
         assert client._client is not None
+        assert client1 is mock_client_instance
 
-        # Second call returns same instance
+        # Second call returns same instance (no new creation)
         client2 = client._get_client()
         assert client1 is client2
 

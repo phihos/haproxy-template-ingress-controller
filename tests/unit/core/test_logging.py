@@ -11,7 +11,6 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
-from unittest.mock import patch
 
 import structlog
 import structlog.contextvars
@@ -299,11 +298,15 @@ class TestErrorHandling:
         context_vars = structlog.contextvars.get_contextvars()
         assert len(context_vars) == 0
 
-    def test_observe_decorator_without_tracing(self):
+    def test_observe_decorator_without_tracing(self, monkeypatch):
         """Test observe decorator when tracing module is not available."""
 
         # Mock the import to fail
-        with patch.dict("sys.modules", {"haproxy_template_ic.tracing": None}):
+        import sys
+
+        original_modules = sys.modules.copy()
+        monkeypatch.setitem(sys.modules, "haproxy_template_ic.tracing", None)
+        try:
             # This should not crash and should fall back to just autolog
             @observe(component="test", span_name="test_operation")
             async def test_function(name: str):
@@ -316,6 +319,10 @@ class TestErrorHandling:
                 assert "operation_id" in result
 
             asyncio.run(run_test())
+        finally:
+            # Restore original sys.modules
+            sys.modules.clear()
+            sys.modules.update(original_modules)
 
     def test_parameter_extraction_with_invalid_signatures(self):
         """Test parameter extraction handles various invalid signatures."""

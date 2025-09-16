@@ -5,8 +5,9 @@ Tests the ability to remove fields from resources using JSONPath expressions.
 """
 
 import copy
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
+import haproxy_template_ic.k8s.field_filter as field_filter_module
 from haproxy_template_ic.k8s.field_filter import (
     _remove_field_at_path,
     remove_fields_from_resource,
@@ -226,51 +227,55 @@ class TestFieldFilter:
         validated = validate_ignore_fields(valid_fields)
         assert len(validated) == 3
 
-    def test_invalid_field_path_in_remove(self):
+    def test_invalid_field_path_in_remove(self, monkeypatch):
         """Test handling of invalid field paths in remove_fields_from_resource."""
         resource = {"metadata": {"name": "test"}}
 
         # Test with non-string field paths
-        with patch("haproxy_template_ic.k8s.field_filter.logger") as mock_logger:
-            result = remove_fields_from_resource(
-                resource,
-                [None, 123, [], "valid.path"],  # Mix of invalid and valid
-            )
-            # Should skip invalid ones and process valid ones
-            assert result == resource  # valid.path doesn't exist so no change
-            assert mock_logger.debug.call_count >= 3  # For None, 123, and []
+        mock_logger = MagicMock()
+        monkeypatch.setattr(field_filter_module, "logger", mock_logger)
 
-    def test_field_path_too_long_in_remove(self):
+        result = remove_fields_from_resource(
+            resource,
+            [None, 123, [], "valid.path"],  # Mix of invalid and valid
+        )
+        # Should skip invalid ones and process valid ones
+        assert result == resource  # valid.path doesn't exist so no change
+        assert mock_logger.debug.call_count >= 3  # For None, 123, and []
+
+    def test_field_path_too_long_in_remove(self, monkeypatch):
         """Test handling of overly long field paths in remove_fields_from_resource."""
         resource = {"metadata": {"name": "test"}}
 
         # Create a path > 500 characters
         long_path = "a" * 501
 
-        with patch("haproxy_template_ic.k8s.field_filter.logger") as mock_logger:
-            result = remove_fields_from_resource(resource, [long_path])
-            assert result == resource  # Should skip the long path
-            mock_logger.warning.assert_called_once()
-            assert "Field path too long" in str(mock_logger.warning.call_args)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(field_filter_module, "logger", mock_logger)
 
-    def test_unexpected_error_in_remove(self):
+        result = remove_fields_from_resource(resource, [long_path])
+        assert result == resource  # Should skip the long path
+        mock_logger.warning.assert_called_once()
+        assert "Field path too long" in str(mock_logger.warning.call_args)
+
+    def test_unexpected_error_in_remove(self, monkeypatch):
         """Test handling of unexpected errors during field removal."""
         resource = {"metadata": {"name": "test"}}
 
-        with patch(
-            "haproxy_template_ic.k8s.field_filter._compile_jsonpath_filter"
-        ) as mock_compile:
-            # Make it raise an unexpected exception
-            mock_compile.side_effect = RuntimeError("Unexpected error")
+        mock_compile = MagicMock(side_effect=RuntimeError("Unexpected error"))
+        mock_logger = MagicMock()
+        monkeypatch.setattr(
+            field_filter_module, "_compile_jsonpath_filter", mock_compile
+        )
+        monkeypatch.setattr(field_filter_module, "logger", mock_logger)
 
-            with patch("haproxy_template_ic.k8s.field_filter.logger") as mock_logger:
-                result = remove_fields_from_resource(resource, ["metadata.name"])
-                # Should handle the error gracefully
-                assert result == resource
-                mock_logger.warning.assert_called_once()
-                assert "Unexpected error processing field filter" in str(
-                    mock_logger.warning.call_args
-                )
+        result = remove_fields_from_resource(resource, ["metadata.name"])
+        # Should handle the error gracefully
+        assert result == resource
+        mock_logger.warning.assert_called_once()
+        assert "Unexpected error processing field filter" in str(
+            mock_logger.warning.call_args
+        )
 
     def test_match_without_parts(self):
         """Test _remove_field_at_path with match lacking parts attribute."""
@@ -384,7 +389,7 @@ class TestFieldFilter:
         _remove_field_at_path(resource, mock_match)
         assert resource == {"items": ["a", "b", "c"]}  # Should remain unchanged
 
-    def test_validate_ignore_fields_with_invalid(self):
+    def test_validate_ignore_fields_with_invalid(self, monkeypatch):
         """Test validation filters out invalid expressions."""
         fields = [
             "metadata.managedFields",  # Valid
@@ -394,17 +399,19 @@ class TestFieldFilter:
             "[[[invalid",  # Invalid syntax
         ]
 
-        with patch("haproxy_template_ic.k8s.field_filter.logger") as mock_logger:
-            validated = validate_ignore_fields(fields)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(field_filter_module, "logger", mock_logger)
 
-            # Only the first valid field should remain
-            assert len(validated) == 1
-            assert validated[0] == "metadata.managedFields"
+        validated = validate_ignore_fields(fields)
 
-            # Check that warnings were logged for invalid fields
-            assert (
-                mock_logger.warning.call_count >= 3
-            )  # Empty, None, too long, invalid syntax
+        # Only the first valid field should remain
+        assert len(validated) == 1
+        assert validated[0] == "metadata.managedFields"
+
+        # Check that warnings were logged for invalid fields
+        assert (
+            mock_logger.warning.call_count >= 3
+        )  # Empty, None, too long, invalid syntax
 
 
 class TestIndexedResourceCollectionWithFieldFilter:

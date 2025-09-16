@@ -6,10 +6,11 @@ This module contains tests for Prometheus metrics collection functionality.
 
 import threading
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
 
+import haproxy_template_ic.metrics as metrics_module
 from haproxy_template_ic.metrics import (
     MetricsCollector,
     get_metrics_collector,
@@ -139,11 +140,17 @@ class TestMetricsCollector:
         assert True
 
     @pytest.mark.asyncio
-    @patch("haproxy_template_ic.metrics.aio.web.start_http_server")
-    async def test_start_metrics_server_success(self, mock_start_server):
+    async def test_start_metrics_server_success(self, monkeypatch):
         """Test successful metrics server startup."""
         collector = MetricsCollector()
-        mock_start_server.return_value = None  # async function returns None
+
+        async def mock_start_server(*args, **kwargs):
+            return None
+
+        mock_start_server = MagicMock(side_effect=mock_start_server)
+        monkeypatch.setattr(
+            metrics_module.aio.web, "start_http_server", mock_start_server
+        )
 
         await collector.start_metrics_server(9090)
 
@@ -151,22 +158,31 @@ class TestMetricsCollector:
         assert collector._server_started
 
     @pytest.mark.asyncio
-    @patch("haproxy_template_ic.metrics.aio.web.start_http_server")
-    async def test_start_metrics_server_already_started(self, mock_start_server):
+    async def test_start_metrics_server_already_started(self, monkeypatch):
         """Test starting metrics server when already started."""
         collector = MetricsCollector()
         collector._server_started = True
+        mock_start_server = MagicMock()
+        monkeypatch.setattr(
+            metrics_module.aio.web, "start_http_server", mock_start_server
+        )
 
         await collector.start_metrics_server(9090)
 
         mock_start_server.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("haproxy_template_ic.metrics.aio.web.start_http_server")
-    async def test_start_metrics_server_failure(self, mock_start_server):
+    async def test_start_metrics_server_failure(self, monkeypatch):
         """Test metrics server startup failure."""
         collector = MetricsCollector()
-        mock_start_server.side_effect = Exception("Port already in use")
+
+        async def mock_start_server(*args, **kwargs):
+            raise Exception("Port already in use")
+
+        mock_start_server = MagicMock(side_effect=mock_start_server)
+        monkeypatch.setattr(
+            metrics_module.aio.web, "start_http_server", mock_start_server
+        )
 
         await collector.start_metrics_server(9090)
 
