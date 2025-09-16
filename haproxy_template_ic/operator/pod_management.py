@@ -124,14 +124,32 @@ async def fetch_haproxy_pods(match_labels: Dict[str, str], namespace: str) -> Li
 
 @autolog(component="operator")
 async def handle_haproxy_pod_event(
-    body: Dict[str, Any],
-    meta: Dict[str, Any],
-    type: str,
-    logger: logging.Logger,
-    memo: ApplicationState,
+    body: Dict[str, Any] | None = None,
+    meta: Dict[str, Any] | None = None,
+    type: str | None = None,
+    logger: logging.Logger | None = None,
+    memo: ApplicationState | None = None,
     **kwargs: Any,
 ) -> None:
     """Handle HAProxy pod events (create, update, delete)."""
+    # Extract parameters from kwargs if not provided positionally
+    body = body or kwargs.get("body", {})
+    meta = meta or kwargs.get("meta", {})
+    type = type or kwargs.get("type", "")
+    logger = logger or kwargs.get("logger", logging.getLogger(__name__))
+    memo = memo or kwargs.get("memo")
+
+    # Validate required parameters
+    if not memo:
+        logger.warning("No memo provided to handle_haproxy_pod_event")
+        return
+
+    if not meta or not body:
+        logger.warning(
+            "Missing required parameters (meta or body) in handle_haproxy_pod_event"
+        )
+        return
+
     namespace = meta["namespace"]
     name = meta["name"]
 

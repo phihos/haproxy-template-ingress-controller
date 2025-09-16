@@ -75,7 +75,7 @@ class IndexSynchronizationTracker:
             if self.ready_types == self.resource_types:
                 self._complete = True
                 self._ready_event.set()
-                logger.info("Index initialization complete")
+                logger.debug("Index initialization complete for all resource types")
 
     async def wait_for_indices_ready(self) -> None:
         """Wait for all indices to be ready or timeout."""
