@@ -243,7 +243,7 @@ kubectl exec deployment/haproxy -- ps aux | grep haproxy
 **Common fixes**:
 - **Missing master socket**: Ensure HAProxy starts with `-S "/etc/haproxy/haproxy-master.sock,level,admin"`
 - **Missing master runtime**: Add `master_runtime: /etc/haproxy/haproxy-master.sock` to dataplane config
-- Check `/home/phil/Quellcode/haproxy-template-ic/deploy/base/configmap-universal.yaml` for proper dataplane configuration
+- Check `deploy/base/configmap-universal.yaml` for proper dataplane configuration
 
 ## Performance Issues
 
