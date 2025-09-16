@@ -1,13 +1,13 @@
 [tool.poetry]
-name = "ha-proxy-data-plane-api-client"
+name = "haproxy_dataplane_v3"
 version = "3.2"
 description = "A client library for accessing HAProxy Data Plane API"
 authors = []
 readme = "README.md"
 packages = [
-    { include = "ha_proxy_data_plane_api_client" },
+    { include = "haproxy_dataplane_v3" },
 ]
-include = ["CHANGELOG.md", "ha_proxy_data_plane_api_client/py.typed"]
+include = ["CHANGELOG.md", "haproxy_dataplane_v3/py.typed"]
 
 [tool.poetry.dependencies]
 python = "^3.9"

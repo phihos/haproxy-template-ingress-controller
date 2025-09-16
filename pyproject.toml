@@ -32,6 +32,7 @@ dependencies = [
     "urllib3>=2.0.0", # Required by generated client (with asyncio support)
     "uvloop>=0.21.0",
     "xxhash>=3.5.0", # Fast non-cryptographic hashing for content change detection
+    "haproxy_dataplane_v3"
 ]
 
 [dependency-groups]
@@ -45,7 +46,6 @@ dev = [
     "filelock>=3.19.1",
     "lint>=1.2.1",
     "mypy>=1.8.0",
-    "openapi-python-client",
     "oscrypto @ git+https://github.com/wbond/oscrypto.git@d5f3437", # Fix for OpenSSL 3.0.10+ version detection bug
     "prometheus-client>=0.22.1",
     "pytest>=8.4.1",
@@ -76,10 +76,10 @@ members = [
 ]
 
 [tool.uv.sources]
-openapi-python-client = { git = "https://github.com/phihos/openapi-python-client", branch = "enumerate-duplicate-model-names" }
+haproxy_dataplane_v3 = {path = "codegen/haproxy_dataplane_v3"}
 
 [tool.setuptools.packages.find]
-where = [".", "codegen/haproxy_dataplane_v3"]
+where = ["."]
 
 [tool.setuptools.package-data]
 haproxy_template_ic = ["tui/*.css"]

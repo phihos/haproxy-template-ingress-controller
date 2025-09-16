@@ -68,12 +68,6 @@ if ! command -v swagger2openapi &> /dev/null; then
     exit 1
 fi
 
-# Check if openapi-python-client is available
-if ! uv run openapi-python-client --help &> /dev/null; then
-    echo "❌ Error: openapi-python-client is not available in uv environment"
-    echo "   Install with: uv add --dev openapi-python-client"
-    exit 1
-fi
 
 echo "✅ Dependencies verified"
 
@@ -99,16 +93,10 @@ mkdir -p "$(dirname "$OUTPUT_DIR")"
 # Generate the new client
 echo "🏗️  Generating new client with openapi-python-client..."
 cd "$PROJECT_ROOT"
-uv run openapi-python-client generate \
+uvx --from "git+https://github.com/phihos/openapi-python-client@enumerate-duplicate-model-names" openapi-python-client generate \
     --path "$SPEC_FILE_V3" \
     --output-path "codegen/haproxy_dataplane_v3" \
     --config "codegen/openapi-python-client-config.yaml"
-
-# The openapi-python-client generates a different structure, so we need to rename it
-if [ -d "$OUTPUT_DIR/ha_proxy_data_plane_api_client" ]; then
-    echo "🔄 Adjusting directory structure for pyproject.toml compatibility..."
-    mv "$OUTPUT_DIR/ha_proxy_data_plane_api_client" "$OUTPUT_DIR/haproxy_dataplane_v3"
-fi
 
 echo "✅ Client regenerated successfully!"
 echo "📁 Generated code location: $OUTPUT_DIR"

@@ -2,3 +2,4 @@
 # This enables enumeration of duplicate model names instead of skipping them
 # Required for complete HAProxy Dataplane API v3 client generation
 enumerate_duplicate_model_names: true
+project_name_override: haproxy_dataplane_v3

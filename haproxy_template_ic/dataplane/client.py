@@ -10,10 +10,12 @@ import base64
 import io
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
+from haproxy_dataplane_v3.models import ReplaceRuntimeMapEntryBody
 from tenacity import (
     AsyncRetrying,
     retry_if_exception,
@@ -329,7 +331,7 @@ _SECTION_ELEMENTS = {
 
 
 # Element handler registry for structured nested element deployment
-_ELEMENT_HANDLERS = {
+_ELEMENT_HANDLERS: dict = {
     ConfigElementType.SERVER: {
         "sections": {ConfigSectionType.BACKEND},
         "api": (create_server_backend, replace_server_backend, delete_server_backend),
@@ -467,7 +469,7 @@ _ELEMENT_HANDLERS = {
 
 
 # Section handler registry for structured top-level section deployment
-_SECTION_HANDLERS = {
+_SECTION_HANDLERS: dict = {
     ConfigSectionType.BACKEND: {
         "create": create_backend.asyncio,
         "update": replace_backend.asyncio,
@@ -553,7 +555,7 @@ _SECTION_ELEMENTS = {
 
 
 # Element fetch API registry - maps element attribute names to their fetch functions
-_ELEMENT_FETCH_APIS = {
+_ELEMENT_FETCH_APIS: dict = {
     ConfigSectionType.BACKEND: {
         "servers": get_all_server_backend.asyncio,
         "server_switching_rules": get_server_switching_rules.asyncio,
@@ -591,7 +593,7 @@ _ELEMENT_FETCH_APIS = {
 
 
 # Storage resource sync registry for unified resource management
-_STORAGE_SYNC_CONFIGS = {
+_STORAGE_SYNC_CONFIGS: dict[str, dict[str, Callable | str]] = {
     "maps": {
         "get_all_func": get_all_storage_map_files.asyncio,
         "get_one_func": get_one_storage_map.asyncio,
@@ -698,7 +700,7 @@ class DataplaneClient:
         self.auth = auth
 
         # Defer client creation until first use
-        self._client = None
+        self._client: AuthenticatedClient | None = None
 
     def _get_client(self) -> Any:
         """Lazy initialization of AuthenticatedClient object."""
@@ -727,11 +729,12 @@ class DataplaneClient:
         api_info_response = await get_info.asyncio(client=client)
 
         # Convert the generated models to dict format expected by existing code
-        result = {}
+        result: dict = {}
 
         # Add HAProxy version information from process info
-        if haproxy_info_response and haproxy_info_response.info:
-            haproxy_info = haproxy_info_response.info.to_dict()
+        # TODO Check for type instead of assuming HAProxyInformation
+        if haproxy_info_response and haproxy_info_response.info:  # type: ignore[union-attr]
+            haproxy_info = haproxy_info_response.info.to_dict()  # type: ignore[union-attr]
             result.update(haproxy_info)
             # Ensure 'haproxy' key exists for backward compatibility
             if "version" in haproxy_info:
@@ -740,13 +743,15 @@ class DataplaneClient:
                     result["haproxy"]["release_date"] = haproxy_info["release_date"]
 
         # Add API information if available
-        if api_info_response.api:
-            api_info = api_info_response.api.to_dict()
+        # TODO Check for type instead of assuming Information
+        if api_info_response.api:  # type: ignore[union-attr]
+            api_info = api_info_response.api.to_dict()  # type: ignore[union-attr]
             result.update(api_info)
 
         # Add system information if available
-        if api_info_response.system:
-            result.update(api_info_response.system.to_dict())
+        # TODO Check for type instead of assuming Information
+        if api_info_response.system:  # type: ignore[union-attr]
+            result.update(api_info_response.system.to_dict())  # type: ignore[union-attr]
 
         return result
 
@@ -1184,7 +1189,7 @@ class DataplaneClient:
             config = _STORAGE_SYNC_CONFIGS["maps"]
 
             # Get existing map files
-            existing = await config["get_all_func"](client=client)
+            existing = await config["get_all_func"](client=client)  # type: ignore[operator]
             existing_dict = {
                 f.storage_name: f for f in (existing or []) if f.storage_name
             }
@@ -1203,10 +1208,10 @@ class DataplaneClient:
                     file_upload=File(
                         payload=io.BytesIO(maps[name].encode("utf-8")),
                         file_name=name,
-                        mime_type=config["mime_type"],
+                        mime_type=config["mime_type"],  # type: ignore[arg-type]
                     )
-                )
-                await config["create_func"](client=client, body=body)
+                )  # type: ignore[operator]
+                await config["create_func"](client=client, body=body)  # type: ignore[operator]
                 created_count += 1
                 logger.info(f"🗺️  Created new map file: {name}")
 
@@ -1218,7 +1223,7 @@ class DataplaneClient:
                 try:
                     existing_resource = await config["get_one_func"](
                         client=client, name=name
-                    )
+                    )  # type: ignore[operator]
                     existing_content = self._extract_storage_content(existing_resource)
 
                     if existing_content == new_content:
@@ -1256,7 +1261,7 @@ class DataplaneClient:
                     # Fallback to full file replacement
                     await config["replace_func"](
                         client=client, name=name, body=new_content
-                    )
+                    )  # type: ignore[operator]
                     updated_count += 1
                     logger.info(f"🗺️  Updated map {name} via file replacement")
 
@@ -1266,12 +1271,12 @@ class DataplaneClient:
                     )
                     await config["replace_func"](
                         client=client, name=name, body=new_content
-                    )
+                    )  # type: ignore[operator]
                     updated_count += 1
 
             # Delete obsolete map files
             for name in existing_names - target_names:
-                await config["delete_func"](client=client, name=name)
+                await config["delete_func"](client=client, name=name)  # type: ignore[operator]
                 logger.info(f"🗺️  Deleted obsolete map file: {name}")
 
             # Enhanced logging with runtime statistics
@@ -1349,7 +1354,10 @@ class DataplaneClient:
             # Get existing resources
             existing = await get_all_storage_general_files.asyncio(client=client)
             existing_dict = {
-                f.storage_name: f for f in (existing or []) if f.storage_name
+                # TODO: Check for type instead of assuming list[GeneralUseFile]
+                f.storage_name: f
+                for f in (existing or [])  # type: ignore[union-attr]
+                if f.storage_name
             }
 
             target_names = set(files.keys())
@@ -1361,15 +1369,17 @@ class DataplaneClient:
 
             # Create new files
             for name in target_names - existing_names:
-                body = CreateStorageGeneralFileBody(
+                create_body = CreateStorageGeneralFileBody(
                     file_upload=File(
                         payload=io.BytesIO(files[name].encode("utf-8")),
                         file_name=name,
                         mime_type="text/plain",
                     )
                 )
-                body["description"] = compute_content_hash(files[name])
-                await create_storage_general_file.asyncio(client=client, body=body)
+                create_body["description"] = compute_content_hash(files[name])
+                await create_storage_general_file.asyncio(
+                    client=client, body=create_body
+                )
                 created_count += 1
                 logger.debug(f"Created file {name}")
 
@@ -1728,7 +1738,8 @@ class DataplaneClient:
                     transaction = await start_transaction.asyncio(
                         client=client, version=current_version
                     )
-                    transaction_id = transaction.id if transaction else None
+                    # TODO: Check for type instead of assuming ConfigurationTransaction
+                    transaction_id = transaction.id if transaction else None  # type: ignore[union-attr]
 
                 logger.debug(
                     f"📦 Started transaction {transaction_id} for {len(other_changes)} remaining changes"
@@ -1747,7 +1758,9 @@ class DataplaneClient:
                     # Commit the transaction
                     with metrics.time_dataplane_api_operation("commit_transaction"):
                         commit_response = await commit_transaction.asyncio_detailed(
-                            client=client, id=transaction_id
+                            client=client,
+                            # TODO: Fix transaction_id can not be None
+                            id=transaction_id,  # type: ignore[arg-type]
                         )
 
                     logger.info(
@@ -1808,7 +1821,9 @@ class DataplaneClient:
                             f"⚠️  Rolling back transaction {transaction_id} due to error: {apply_error}"
                         )
                         await delete_transaction.asyncio(
-                            client=client, id=transaction_id
+                            client=client,
+                            # TODO: Fix transaction_id can not be None
+                            id=transaction_id,  # type: ignore[arg-type]
                         )
                     except Exception as rollback_error:
                         logger.error(
@@ -2015,15 +2030,13 @@ class DataplaneClient:
                             f"🗺️  Deleted map entry from {map_filename}: {change.key}"
                         )
                     elif change.operation == "replace":
-                        # Create OneMapEntry object for replacement
-                        entry = OneMapEntry(
-                            key=change.key, value=getattr(change, "value", "")
-                        )
                         await replace_runtime_map_entry.asyncio(
                             client=client,
                             parent_name=map_filename,
                             id=change.key,
-                            body=entry,
+                            body=ReplaceRuntimeMapEntryBody(
+                                value=getattr(change, "value", "")
+                            ),
                         )
                         logger.debug(
                             f"🗺️  Replaced map entry in {map_filename}: {change.key}"
