@@ -6,47 +6,91 @@ ingress infrastructure.
 
 ## Contents
 
-- [Monitoring](#monitoring)
-- [Troubleshooting](#troubleshooting)
+- [Monitoring and Observability](#monitoring-and-observability)
 - [Production Deployment](#production-deployment)
+- [Error Recovery](#error-recovery)
+- [Performance Optimization](#performance-optimization)
 
-## Monitoring
+## Monitoring and Observability
 
 ### Prometheus Metrics
 
-Port 9090 exposes metrics:
+**Structured Logging**: Uses structlog with operation correlation, component context, JSON output (set `logging.structured: true` in ConfigMap)
+
+**Prometheus Metrics**: Port 9090, tracks application/resources/templates/dataplane/errors
 
 ```bash
-# Port forward
+# Port forward metrics
 kubectl port-forward deployment/haproxy-template-ic 9090:9090
 
-# View metrics
+# View all metrics
+curl http://localhost:9090/metrics
+
+# Key metrics to monitor
+curl http://localhost:9090/metrics | grep -E "(haproxy_template_ic_|up|process_)"
+```
+
+**Important metrics**:
+- `haproxy_template_ic_resources_total`: Resource counts by type
+- `haproxy_template_ic_template_renders_total`: Template rendering frequency
+- `haproxy_template_ic_dataplane_requests_total`: API request patterns
+- `haproxy_template_ic_errors_total`: Error tracking by component
+
+### Health Endpoints
+
+```bash
+# Health check
+kubectl port-forward deployment/haproxy-template-ic 8080:8080
+curl http://localhost:8080/healthz
+
+# Metrics endpoint
 curl http://localhost:9090/metrics
 ```
 
-Check the [API docs for metrics](API.md#prometheus-metrics)
+### Distributed Tracing
 
-### Health Check
+OpenTelemetry tracing for end-to-end observability across template rendering and deployment pipeline.
 
-Port 8080 provides a health endpoint:
-
-```bash
-kubectl port-forward deployment/haproxy-template-ic 8080:8080
-curl http://localhost:8080/healthz
+**Development setup**:
+```yaml
+tracing:
+  enabled: true
+  console_export: true  # Console output for development
+  sample_rate: 1.0     # Trace all operations
 ```
 
-### Runtime Inspection
-
-Check logs for detailed information:
-
-```bash
-# Check logs for detailed information
-kubectl logs -f deployment/haproxy-template-ic
+**Production setup**:
+```yaml
+tracing:
+  enabled: true
+  jaeger_endpoint: "jaeger-collector:14268"
+  sample_rate: 0.1     # Sample 10% for reduced overhead
+  console_export: false
 ```
+
+**Operations traced**: Template rendering, dataplane API, Kubernetes operations, pod discovery
 
 ### Structured Logging
 
-Enable JSON logging in the ConfigMap:
+Enable JSON output for production log aggregation:
+
+```yaml
+logging:
+  structured: true    # Enable JSON structured logging output
+  verbose: 1         # Log level (0=WARNING, 1=INFO, 2=DEBUG)
+```
+
+**Log analysis**:
+```bash
+# Real-time logs with JSON parsing
+kubectl logs -f deployment/haproxy-template-ic | jq .
+
+# Filter for errors
+kubectl logs deployment/haproxy-template-ic | jq 'select(.level=="ERROR")'
+
+# Track template rendering
+kubectl logs deployment/haproxy-template-ic | jq 'select(.event=="template_rendered")'
+```
 
 ```yaml
 apiVersion: v1
@@ -195,14 +239,72 @@ Solutions:
 #### High Memory Usage
 
 ```bash
-# Check memory
+# Check memory usage
 kubectl top pod -l app=haproxy-template-ic
 
-# Reduce memory:
+# Reduce memory by ignoring unnecessary fields:
 watched_resources_ignore_fields:
-  - metadata.managedFields
-  - status
-  - metadata.annotations
+  - metadata.managedFields         # Large server-side apply metadata
+  - status                        # If not used in templates
+  - metadata.annotations['kubectl.kubernetes.io/last-applied-configuration']  # Can be very large
+```
+
+## Error Recovery
+
+**Error recovery**: Graceful degradation, validation isolation, state consistency, operational visibility
+
+**Validation-first approach**: Configuration tested before production deployment
+
+**Robust deployment**: Smart change detection, version tracking, deployment rollback
+
+### Recovery Procedures
+
+```bash
+# Restart controller
+kubectl rollout restart deployment/haproxy-template-ic
+
+# Reset ConfigMap if corrupted
+kubectl patch configmap haproxy-template-ic-config --patch '{"data":null}'
+kubectl apply -f your-good-config.yaml
+
+# Check HAProxy pod health
+kubectl get pods -l app=haproxy -o wide
+kubectl describe pod -l app=haproxy
+```
+
+## Performance Optimization
+
+### Runtime API Optimization for Zero-Reload Deployments
+
+The controller optimizes deployments by separating runtime-eligible operations from configuration operations to avoid unnecessary HAProxy reloads.
+
+**Benefits**: Zero reloads for most server operations, instant updates for map/ACL entries, improved availability, smart fallback to transaction/reload for complex configurations.
+
+**Monitoring**: Look for "server added through runtime" log messages from dataplane API.
+
+### Template Rendering Performance
+
+```yaml
+# Optimize template rendering intervals
+template_rendering:
+  min_render_interval: 5   # Minimum seconds between renders (rate limiting)
+  max_render_interval: 60  # Maximum seconds without render (guaranteed refresh)
+```
+
+**Environment-specific settings**:
+
+**Production (High Change Rate)**:
+```yaml
+template_rendering:
+  min_render_interval: 5   # Protect against rapid changes
+  max_render_interval: 60  # Balance freshness with stability
+```
+
+**Production (Low Change Rate)**:
+```yaml
+template_rendering:
+  min_render_interval: 10  # Conservative rate limiting
+  max_render_interval: 300 # 5 minutes for stable environments
 ```
 
 #### Dataplane API Slow Startup
