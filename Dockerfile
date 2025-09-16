@@ -4,11 +4,11 @@ ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim-bookworm AS system-deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        dumb-init \
-        libssl3 \
-        libssl-dev \
         ca-certificates \
+        dumb-init \
         git \
+        libssl-dev \
+        libssl3 \
         socat && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
