@@ -1,5 +1,15 @@
 # Operations
 
+This document provides information for deploying, monitoring, and maintaining the controller in production environments.
+It covers observability, troubleshooting, and recovery procedures to ensure the reliability and efficiency of your
+ingress infrastructure.
+
+## Contents
+
+- [Monitoring](#monitoring)
+- [Troubleshooting](#troubleshooting)
+- [Production Deployment](#production-deployment)
+
 ## Monitoring
 
 ### Prometheus Metrics
@@ -14,15 +24,11 @@ kubectl port-forward deployment/haproxy-template-ic 9090:9090
 curl http://localhost:9090/metrics
 ```
 
-Key metrics:
-- `haproxy_template_ic_rendered_templates_total` - Template render count
-- `haproxy_template_ic_template_render_duration_seconds` - Render time
-- `haproxy_template_ic_dataplane_api_duration_seconds` - Dataplane API time
-- `haproxy_template_ic_errors_total` - Error count by type
+Check the [API docs for metrics](API.md#prometheus-metrics)
 
 ### Health Check
 
-Port 8080 health endpoint:
+Port 8080 provides a health endpoint:
 
 ```bash
 kubectl port-forward deployment/haproxy-template-ic 8080:8080
@@ -135,6 +141,7 @@ curl http://localhost:9090/metrics | grep duration
 ```
 
 Solutions:
+
 - Use field filtering to reduce resource size
 - Optimize template logic
 - Increase reconciliation interval
@@ -157,6 +164,7 @@ watched_resources_ignore_fields:
 **Critical**: Use HAProxy 3.1+
 
 Version comparison:
+
 - HAProxy 3.0: 30-60 second startup
 - HAProxy 3.1+: 3-5 second startup
 
@@ -208,32 +216,32 @@ spec:
     matchLabels:
       app: haproxy-template-ic
   policyTypes:
-  - Ingress
-  - Egress
+    - Ingress
+    - Egress
   ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: prometheus
-    ports:
-    - port: 9090  # Metrics
-  - from:
-    - namespaceSelector: {}
-    ports:
-    - port: 9443  # Webhook
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 9090  # Metrics
+    - from:
+        - namespaceSelector: { }
+      ports:
+        - port: 9443  # Webhook
   egress:
-  - to:
-    - podSelector:
-        matchLabels:
-          app: haproxy
-    ports:
-    - port: 5555  # Dataplane API
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          name: kube-system
-    ports:
-    - port: 443  # Kubernetes API
+    - to:
+        - podSelector:
+            matchLabels:
+              app: haproxy
+      ports:
+        - port: 5555  # Dataplane API
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - port: 443  # Kubernetes API
 ```
 
 ### Monitoring Setup
@@ -248,9 +256,9 @@ spec:
     matchLabels:
       app: haproxy-template-ic
   endpoints:
-  - port: metrics
-    interval: 30s
-    path: /metrics
+    - port: metrics
+      interval: 30s
+      path: /metrics
 ```
 
 ### Backup and Recovery

@@ -67,6 +67,7 @@ watched_resources:
 # HAProxy map files for dynamic routing
 maps:
   /etc/haproxy/maps/host.map:
+    # language=jinja
     template: |
       # Host to backend mapping
       {% for _, ingress in resources.get('ingresses', {}).items() %}
@@ -83,6 +84,7 @@ maps:
       default default_backend
       
   /etc/haproxy/maps/path-exact.map:
+    # language=jinja
     template: |
       # Exact path matching
       {% for _, ingress in resources.get('ingresses', {}).items() %}
@@ -100,6 +102,7 @@ maps:
       {% endfor %}
       
   /etc/haproxy/maps/path-prefix.map:
+    # language=jinja
     template: |
       # Prefix path matching
       {% for _, ingress in resources.get('ingresses', {}).items() %}
@@ -142,6 +145,7 @@ template_snippets:
       
   ingress-routing:
     name: ingress-routing
+    # language=jinja
     template: |
       # Dynamic backend definitions from Ingress resources
       {% for _, ingress in resources.get('ingresses', {}).items() %}
@@ -182,6 +186,7 @@ template_snippets:
 # TLS certificates from Kubernetes Secrets
 certificates:
   /etc/haproxy/certs/tls.pem:
+    # language=jinja
     template: |
       {% for _, secret in resources.get('secrets', {}).items() %}
       {% if secret.type == "kubernetes.io/tls" %}
@@ -193,6 +198,7 @@ certificates:
       {% endfor %}
       
   /etc/haproxy/certs/ca-bundle.pem:
+    # language=jinja
     template: |
       {% for _, secret in resources.get('secrets', {}).items() %}
       {% if secret.type == "Opaque" and secret.metadata.labels.get('haproxy-template-ic/ca-bundle') == 'true' %}
