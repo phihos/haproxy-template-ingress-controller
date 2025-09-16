@@ -10,8 +10,13 @@ Use this guide to identify symptoms, diagnose root causes, and apply effective s
 
 - [Diagnostic Commands](#diagnostic-commands)
 - [Common Issues](#common-issues)
-- [Recover from failures](#recover-from-failures)
-- [Fix performance issues](#fix-performance-issues)
+- [Template Issues](#template-issues)
+- [Dataplane API Issues](#dataplane-api-issues)
+- [Runtime API Issues](#runtime-api-issues)
+- [Performance Issues](#performance-issues)
+- [Configuration Validation](#configuration-validation)
+- [Test Failures](#test-failures)
+- [Recovery Procedures](#recovery-procedures)
 
 ## Diagnostic Commands
 
@@ -181,6 +186,110 @@ from haproxy_template_ic.models.config import Config
 3. Run `uv sync` to ensure all dependencies are updated
 4. Check for any cached bytecode: `find . -name "*.pyc" -delete`
 4. Confirm HAProxy 3.1+ for fast startup
+
+## Template Issues
+
+Use correct resource access patterns: `resources.get('type', {}).items()`
+
+```jinja2
+# ✅ Correct pattern
+{% for _, ingress in resources.get('ingresses', {}).items() %}
+  {{ ingress.metadata.name }}
+{% endfor %}
+
+# ❌ Wrong - missing .items()
+{% for ingress in resources.get('ingresses', {}) %}
+  {{ ingress.metadata.name }}
+{% endfor %}
+```
+
+**Common fixes**:
+- Match snippet names exactly: `{% include "snippet-name" %}`
+- Define all referenced maps and certificates in ConfigMap
+- Use IP addresses not hostnames in tests (avoid DNS resolution)
+
+## Dataplane API Issues
+
+Check pod selectors/labels match `pod_selector.match_labels` exactly:
+
+```bash
+# Verify pod labels
+kubectl get pods -l app=haproxy --show-labels
+
+# Check selector in ConfigMap
+kubectl get configmap haproxy-config -o yaml | grep -A5 pod_selector
+```
+
+**Common fixes**:
+- Ensure pods are Running with assigned IPs before controller starts
+- Verify dataplaneapi port 5555 accessible with correct authentication
+- Check HAProxy config syntax before deployment
+- **Version 3.0**: Increase `failureThreshold: 10` for slow dataplaneapi startup
+- **Version 3.1+**: Use `failureThreshold: 3` for fast startup
+
+## Runtime API Issues
+
+**"Runtime API not configured, not using it"**: Ensure HAProxy runs with `-S` master socket flag and `master_runtime` in dataplane config
+
+```bash
+# Check HAProxy command line
+kubectl exec deployment/haproxy -- ps aux | grep haproxy
+
+# Should include: -S "/etc/haproxy/haproxy-master.sock,level,admin"
+```
+
+**HTTP 400 "version or transaction not specified"**: Verify current version is fetched before runtime operations
+
+**Common fixes**:
+- **Missing master socket**: Ensure HAProxy starts with `-S "/etc/haproxy/haproxy-master.sock,level,admin"`
+- **Missing master runtime**: Add `master_runtime: /etc/haproxy/haproxy-master.sock` to dataplane config
+- Check `/home/phil/Quellcode/haproxy-template-ic/deploy/base/configmap-universal.yaml` for proper dataplane configuration
+
+## Performance Issues
+
+HAProxy 3.0: dataplaneapi startup takes 30-60+ seconds
+HAProxy 3.1+: dataplaneapi startup takes 3-5 seconds
+
+```bash
+# Monitor pod startup time
+kubectl get events --sort-by='.firstTimestamp'
+```
+
+## Configuration Validation
+
+Use `kubectl apply --dry-run=server` to test webhook validation:
+
+```bash
+# Test webhook validation
+kubectl apply --dry-run=server -f my-ingress.yaml
+```
+
+**Common fixes**:
+- Check controller logs for template rendering errors
+- Validate Jinja2 syntax with `--webhook-enabled=true`
+- Check logs to inspect rendered templates
+
+## Test Failures
+
+Kind conflicts: Use `--keep-namespaces` for debugging, clean with `kind delete cluster`
+
+```bash
+# Debug integration tests
+uv run pytest -m integration --keep-containers=on-failure --show-container-logs
+
+# Debug E2E tests  
+uv run pytest -m acceptance --keep-namespaces --keep-namespace-on-failure
+
+# Serial debugging
+uv run pytest -n 0 -s -v
+```
+
+**Common fixes**:
+- Import errors: Run `uv sync --group dev` to install test dependencies
+- Docker permissions: Ensure Docker daemon accessible without sudo
+- Timing issues: Use `since_milliseconds` parameter for log assertions that need recent context
+
+## Recovery Procedures
 
 ### Resources Deleted While In Use
 

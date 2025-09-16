@@ -176,15 +176,35 @@ certificates:
       {% endfor %}
 ```
 
-## Operator Configuration
+## Runtime Configuration
 
-Core operator runtime settings:
+All runtime settings configured via ConfigMap using grouped structure:
 
 ```yaml
+# Operator runtime settings
 operator:
-  healthz_port: 8080                    # Health check port
-  metrics_port: 9090                    # Prometheus metrics port  
+  healthz_port: 8080                    # Health check port  
+  metrics_port: 9090                    # Prometheus metrics port
   index_initialization_timeout: 5       # Index sync timeout for zero-resource cases (seconds)
+
+# Logging configuration
+logging:
+  verbose: 1                # Log level (0=WARNING, 1=INFO, 2=DEBUG)
+  structured: false         # Enable JSON structured logging output
+
+# Distributed tracing configuration
+tracing:
+  enabled: false            # Enable distributed tracing with OpenTelemetry
+  service_name: haproxy-template-ic
+  service_version: ""       # Empty uses application version
+  jaeger_endpoint: ""       # e.g., "jaeger-collector:14268"
+  sample_rate: 1.0         # Tracing sample rate (0.0 to 1.0)
+  console_export: false    # Export traces to console for debugging
+
+# Validation sidecar configuration
+validation:
+  dataplane_host: localhost  # Host for validation dataplane API
+  dataplane_port: 5555      # Port for validation dataplane API
 ```
 
 ### Index Initialization Timeout
@@ -206,6 +226,42 @@ The `index_initialization_timeout` setting controls how long the operator waits 
 - **1-3 seconds**: Fast startup, suitable for development
 - **5 seconds (default)**: Balanced for most environments  
 - **10+ seconds**: Conservative for slow clusters or complex deployments
+
+### Logging Configuration
+
+**Structured Logging**: Enable JSON output for production environments:
+
+```yaml
+logging:
+  structured: true    # Enables JSON structured logging
+  verbose: 1         # INFO level logging
+```
+
+**Log Levels**:
+- `0`: WARNING and above
+- `1`: INFO and above (default)
+- `2`: DEBUG and above (verbose)
+
+### Tracing Configuration
+
+**Development Setup**:
+
+```yaml
+tracing:
+  enabled: true
+  console_export: true    # Output traces to console
+  sample_rate: 1.0       # Trace all operations
+```
+
+**Production Setup**:
+
+```yaml
+tracing:
+  enabled: true
+  jaeger_endpoint: "jaeger-collector:14268"
+  sample_rate: 0.1       # Sample 10% for performance
+  console_export: false
+```
 
 ## Template Rendering Configuration
 

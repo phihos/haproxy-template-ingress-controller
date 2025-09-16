@@ -352,6 +352,73 @@ Never edit generated code directly.
     git push origin v.x.y.z
     ```
 
+## Debugging
+
+The project uses [Telepresence](https://www.telepresence.io/) for debugging in Kubernetes:
+
+1. **Setup**: Install Telepresence via package manager or direct download
+2. **Start environment**: `./scripts/start-dev-env.sh up`
+3. **Enable debug mode**: `./scripts/start-dev-env.sh debug` (sleeps in-cluster controller)
+4. **Connect via Telepresence**: `./scripts/start-dev-env.sh telepresence-connect`
+5. **Debug locally**: `CONFIGMAP_NAME=haproxy-template-ic-config-dev SECRET_NAME=haproxy-template-ic-credentials uv run haproxy-template-ic run`
+6. **Clean up**: `./scripts/start-dev-env.sh telepresence-disconnect && ./scripts/start-dev-env.sh no-debug`
+
+No Docker rebuilds needed for code changes. Application runs locally with full cluster access.
+
+### Monitoring and Observability
+
+```bash
+# Port forward metrics for monitoring
+kubectl port-forward deployment/haproxy-template-ic 9090:9090
+
+# Access metrics at localhost:9090/metrics
+```
+
+Enable structured logging and tracing in ConfigMap:
+
+```yaml
+logging:
+  structured: true    # JSON output
+  verbose: 2         # Debug level
+
+tracing:
+  enabled: true
+  console_export: true  # Console output for development
+```
+
+### Performance Profiling
+
+```python
+# Add profiling to investigate performance issues
+import cProfile
+import pstats
+
+profiler = cProfile.Profile()
+profiler.enable()
+# ... code to profile ...
+profiler.disable()
+stats = pstats.Stats(profiler)
+stats.sort_stats('cumulative')
+stats.print_stats(20)
+```
+
+## Generated Code
+
+### Dataplane API Client
+
+```bash
+# Regenerate client from latest HAProxy Dataplane API v3 spec
+bash ./scripts/regenerate_client.sh
+
+# With custom JAR for latest features
+bash ./scripts/regenerate_client.sh --jar openapi-generator.jar
+
+# Files generated in:
+codegen/haproxy_dataplane_v3/
+```
+
+**Never edit generated code directly** - regenerate from source specifications.
+
 ## Troubleshooting Development
 
 ### Import Errors
@@ -389,4 +456,7 @@ uv run pytest tests/unit/test_specific.py::test_name -xvs
 uv run pytest -m integration --keep-containers=always
 docker ps
 docker logs <container-id>
+
+# Keep namespaces for E2E debugging
+uv run pytest -m acceptance --keep-namespaces
 ```
