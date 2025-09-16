@@ -1,5 +1,18 @@
 # Troubleshooting
 
+This document provides guidance for diagnosing and resolving common issues with the ingress controller. It
+includes diagnostic commands, solutions for frequent problems, and recovery procedures to maintain a stable and reliable
+deployment.
+
+Use this guide to identify symptoms, diagnose root causes, and apply effective solutions for operational issues.
+
+## Contents
+
+- [Diagnostic Commands](#diagnostic-commands)
+- [Common Issues](#common-issues)
+- [Recover from failures](#recover-from-failures)
+- [Fix performance issues](#fix-performance-issues)
+
 ## Diagnostic Commands
 
 ### Check Controller Status

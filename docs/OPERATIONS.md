@@ -1,5 +1,15 @@
 # Operations
 
+This document provides information for deploying, monitoring, and maintaining the controller in production environments.
+It covers observability, troubleshooting, and recovery procedures to ensure the reliability and efficiency of your
+ingress infrastructure.
+
+## Contents
+
+- [Monitoring](#monitoring)
+- [Troubleshooting](#troubleshooting)
+- [Production Deployment](#production-deployment)
+
 ## Monitoring
 
 ### Prometheus Metrics

@@ -1,6 +1,19 @@
 # Configuration
 
-## ConfigMap Structure
+This document provides a comprehensive guide to configuring the HAProxy Ingress Controller via a ConfigMap. It details
+the structure and sections.
+
+## Contents
+
+- [High-level Structure](#high-level-structure)
+- [Template Snippets](#template-snippets)
+- [Maps](#maps)
+- [Certificates](#certificates)
+- [Template Rendering Configuration](#template-rendering-configuration)
+- [HAProxy Configuration](#haproxy-configuration)
+- [Complete Example](#complete-example)
+
+## High-level Structure
 
 ```yaml
 apiVersion: v1

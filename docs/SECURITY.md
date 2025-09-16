@@ -1,8 +1,21 @@
 # Security
 
-## Overview
+This document outlines essential security practices for deploying the HAProxy Ingress Controller in production
+environments. It covers RBAC configuration, network policies, secret management, pod security, and TLS setup to ensure
+a secure and compliant deployment.
 
-Security considerations for production HAProxy Template IC deployments.
+Follow these guidelines to minimize attack surfaces, protect sensitive data, and enforce security best practices for
+your ingress infrastructure.
+
+## Contents
+
+- [RBAC Configuration](#rbac-configuration)
+- [Network Policies](#network-policies)
+- [Secrets Management](#secrets-management)
+- [Pod Security](#pod-security)
+- [Webhook TLS](#webhook-tls)
+- [Security Checklist](#security-checklist)
+- [Security Scanning](#security-scanning)
 
 ## RBAC Configuration
 

@@ -1,5 +1,11 @@
 # Quick Start
 
+This guide provides a step-by-step introduction to deploying the controller in a Kubernetes
+environment. It covers the prerequisites, installation process, and basic configuration to get you up and
+running quickly.
+
+By the end of this guide, you'll have a functional HAProxy Ingress Controller managing traffic in your local cluster.
+
 ## Prerequisites
 
 - Docker

@@ -1,5 +1,17 @@
 # API Reference
 
+This document serves as a comprehensive guide to all APIs offered by the Ingress Controller.
+
+It includes detailed coverage of the API itself, Python interfaces, and documentation for HaProxy components.
+
+## Contents
+
+- [CLI Commands](#cli-commands)
+- [HTTP Endpoints](#http-endpoints)
+- [Management Socket](#management-socket)
+- [Dataplane API](#dataplane-api)
+- [Python API](#python-api)
+
 ## CLI Commands
 
 ### haproxy-template-ic

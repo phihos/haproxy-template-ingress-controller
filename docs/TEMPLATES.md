@@ -1,5 +1,21 @@
 # Templates
 
+This document provides a comprehensive guide to using Jinja2 templates in the HAProxy Ingress Controller. It covers
+syntax, available variables, filters, resource access patterns, and common template patterns for configuring HAProxy
+dynamically.
+
+Learn how to efficiently create and debug templates that transform Kubernetes resources into HAProxy configurations.
+
+## Contents
+
+- [Jinja2 Basics](#jinja2-basics)
+- [Available Variables](#available-variables)
+- [Available Filters](#available-filters)
+- [Resource Access Patterns](#resource-access-patterns)
+- [Reusable Snippets](#reusable-snippets)
+- [Common Patterns](#common-patterns)
+- [Debugging Templates](#debugging-templates)
+
 ## Jinja2 Basics
 
 Templates use standard Jinja2 syntax with custom filters and variables.

@@ -1,5 +1,23 @@
 # Architecture
 
+This document provides a detailed architectural overview of the HAProxy Ingress Controller. It explains the
+template-driven configuration management** system, runtime components, and deployment workflows that enable
+dynamic HAProxy orchestration in Kubernetes.
+
+The guide covers the modular code structure, production pod architecture, data flow, and critical design
+decisions that ensure reliability, performance, and maintainability in production environments.
+
+## Contents
+
+- [Overview](#overview)
+- [Code Structure](#code-structure)
+- [Runtime components](#runtime-components)
+- [Data flow](#data-flow)
+- [Resource Indexing](#resource-indexing)
+- [Template System](#template-system)
+- [Deployment Models](#deployment-models)
+- [Critical Design Decisions](#critical-design-decisions)
+
 ## Overview
 
 Template-driven HAProxy configuration management for Kubernetes. The controller watches Kubernetes resources, renders Jinja2 templates, and deploys validated configurations to HAProxy instances via Dataplane API.

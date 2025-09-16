@@ -1,5 +1,10 @@
 # Development
 
+This document provides a overview of the development workflow and setup.
+
+Learn how to efficiently develop, test, and debug the controller using modern Python tooling, Docker-based
+workflows, and Kubernetes integration for rapid iteration.
+
 ## Setup
 
 ### Prerequisites
