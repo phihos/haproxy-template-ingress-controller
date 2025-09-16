@@ -112,7 +112,7 @@ E2E tests use Telepresence for enhanced debugging:
 **LocalOperatorRunner**
 
 ```python
-from tests.e2e.utils import LocalOperatorRunner
+from tests.e2e.utils import LocalOperatorRunner, assert_log_line
 
 with LocalOperatorRunner("config-name", "secret-name", "namespace") as operator:
     # Operator runs locally via Telepresence
@@ -129,6 +129,8 @@ with LocalOperatorRunner("config-name", "secret-name", "namespace") as operator:
 **Log Analysis Utilities:**
 
 ```python
+from tests.e2e.utils import assert_log_line, send_socket_command
+
 # Time-based log searching
 operator.get_log_position_at_time(500)  # Position 500ms ago
 
@@ -262,15 +264,14 @@ FROM production AS coverage
 #### Local Debugging
 
 ```python
-# Add breakpoint
-import pdb;
+import pdb
+import debugpy
 
+# Add breakpoint
 pdb.set_trace()
 
 # Or use IDE debugger with:
 if __name__ == "__main__":
-    import debugpy
-
     debugpy.listen(5678)
     debugpy.wait_for_client()
 ```
@@ -389,17 +390,18 @@ tracing:
 ### Performance Profiling
 
 ```python
-# Add profiling to investigate performance issues
 import cProfile
 import pstats
 
-profiler = cProfile.Profile()
-profiler.enable()
-# ... code to profile ...
-profiler.disable()
-stats = pstats.Stats(profiler)
-stats.sort_stats('cumulative')
-stats.print_stats(20)
+# Add profiling to investigate performance issues
+def profile_code():
+    profiler = cProfile.Profile()
+    profiler.enable()
+    # ... code to profile ...
+    profiler.disable()
+    stats = pstats.Stats(profiler)
+    stats.sort_stats('cumulative')
+    stats.print_stats(20)
 ```
 
 ## Generated Code
