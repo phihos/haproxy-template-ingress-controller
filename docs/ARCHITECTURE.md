@@ -50,8 +50,7 @@ haproxy_template_ic/
 ├── operator/          # Operator lifecycle management
 │   ├── configmap.py   # ConfigMap change handling
 │   ├── initialization.py # Startup and cleanup
-│   └── utils.py       # Operator utilities
-└── [legacy files]     # Backward compatibility wrappers
+└   └── utils.py       # Operator utilities
 ```
 
 ### Package Responsibilities
@@ -61,11 +60,6 @@ haproxy_template_ic/
 - **k8s/**: Kubernetes-specific operations and resource handling
 - **models/**: Type-safe data models with Pydantic validation
 - **operator/**: Operator lifecycle, event handling, and configuration management
-
-### Backward Compatibility
-
-Legacy import paths are preserved through wrapper modules that re-export from new packages, ensuring smooth migration
-without breaking changes.
 
 ## Runtime Components
 

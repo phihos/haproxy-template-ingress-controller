@@ -373,15 +373,6 @@ For developers and contributors, the **Python API** covers the python code for t
 
 The codebase uses a modular package structure with backward compatibility:
 
-#### Legacy Imports (Deprecated but Functional)
-
-```python
-# Old flat structure - still works via wrapper modules
-from haproxy_template_ic.config_models import Config
-from haproxy_template_ic.dataplane import DataplaneClient
-from haproxy_template_ic.debouncer import Debouncer
-```
-
 #### Modern Modular Imports (Recommended)
 
 ```python
