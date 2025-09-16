@@ -7,6 +7,7 @@ metadata:
     app: haproxy-template-ic
     component: universal-config
 data:
+  # language=sh
   startup.sh: |
     #!/bin/sh
     set -e
@@ -49,7 +50,8 @@ data:
     frontend status
         bind *:8404
         http-request return status 200 content-type text/plain string "OK" if { path /healthz }
-        
+
+  # language=yaml
   dataplane.template: |
     config_version: 2
     name: haproxy-dataplaneapi
@@ -85,14 +87,15 @@ data:
         log_types:
         - access
         - app
-        
+
+  # language=sh
   reload.sh: |
     #!/bin/sh
     set -e
-
+    
     # Send reload command and capture output
     output=$(echo reload | nc local:/etc/haproxy/haproxy-master.sock 2>&1)
-
+    
     # Check if reload was successful
     if echo "$output" | grep -q "Success=1"; then
         # Success - output to stdout for logging
