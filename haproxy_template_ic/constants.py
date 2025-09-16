@@ -5,6 +5,7 @@ used throughout the application to improve maintainability and reduce
 duplication.
 """
 
+from datetime import timedelta
 from typing import Final
 
 # Port Numbers
@@ -14,11 +15,11 @@ DEFAULT_METRICS_PORT: Final[int] = 9090
 DEFAULT_WEBHOOK_PORT: Final[int] = 9443
 DEFAULT_HEALTHZ_PORT: Final[int] = 8080
 
-# Timeouts (in seconds)
+# Timeouts
 DEFAULT_API_TIMEOUT: Final[float] = 30.0
-CONNECT_TIMEOUT_MS: Final[int] = 5000
-CLIENT_TIMEOUT_MS: Final[int] = 50000
-SERVER_TIMEOUT_MS: Final[int] = 50000
+CONNECT_TIMEOUT: Final[timedelta] = timedelta(milliseconds=5000)
+CLIENT_TIMEOUT: Final[timedelta] = timedelta(milliseconds=50000)
+SERVER_TIMEOUT: Final[timedelta] = timedelta(milliseconds=50000)
 
 # Retry Configuration
 MAX_RETRY_WAIT_SECONDS: Final[int] = 30

@@ -12,10 +12,10 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from haproxy_template_ic.constants import (
-    CLIENT_TIMEOUT_MS,
-    CONNECT_TIMEOUT_MS,
+    CLIENT_TIMEOUT,
+    CONNECT_TIMEOUT,
     DEFAULT_HEALTH_PORT,
-    SERVER_TIMEOUT_MS,
+    SERVER_TIMEOUT,
 )
 
 from ..k8s.field_filter import validate_ignore_fields
@@ -333,7 +333,7 @@ class Config(BaseModel):
                         "match_labels": {"app": "haproxy", "component": "loadbalancer"}
                     },
                     "haproxy_config": {
-                        "template": f'global\n    daemon\n\ndefaults\n    mode http\n    timeout connect {CONNECT_TIMEOUT_MS}ms\n    timeout client {CLIENT_TIMEOUT_MS}ms\n    timeout server {SERVER_TIMEOUT_MS}ms\n\nfrontend health\n    bind *:{DEFAULT_HEALTH_PORT}\n    http-request return status 200 content-type text/plain string "OK" if {{ path /healthz }}\n\nfrontend main\n    bind *:80\n    # Add your routing logic here'
+                        "template": f'global\n    daemon\n\ndefaults\n    mode http\n    timeout connect {int(CONNECT_TIMEOUT.total_seconds() * 1000)}ms\n    timeout client {int(CLIENT_TIMEOUT.total_seconds() * 1000)}ms\n    timeout server {int(SERVER_TIMEOUT.total_seconds() * 1000)}ms\n\nfrontend health\n    bind *:{DEFAULT_HEALTH_PORT}\n    http-request return status 200 content-type text/plain string "OK" if {{ path /healthz }}\n\nfrontend main\n    bind *:80\n    # Add your routing logic here'
                     },
                     "watched_resources": {
                         "ingresses": {
