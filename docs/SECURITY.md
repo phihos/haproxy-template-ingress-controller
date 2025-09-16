@@ -1,8 +1,21 @@
 # Security
 
-## Overview
+This document outlines essential security practices for deploying the HAProxy Ingress Controller in production
+environments. It covers RBAC configuration, network policies, secret management, pod security, and TLS setup to ensure
+a secure and compliant deployment.
 
-Security considerations for production HAProxy Template IC deployments.
+Follow these guidelines to minimize attack surfaces, protect sensitive data, and enforce security best practices for
+your ingress infrastructure.
+
+## Contents
+
+- [RBAC Configuration](#rbac-configuration)
+- [Network Policies](#network-policies)
+- [Secrets Management](#secrets-management)
+- [Pod Security](#pod-security)
+- [Webhook TLS](#webhook-tls)
+- [Security Checklist](#security-checklist)
+- [Security Scanning](#security-scanning)
 
 ## RBAC Configuration
 
@@ -14,26 +27,26 @@ kind: ClusterRole
 metadata:
   name: haproxy-template-ic
 rules:
-# Read ConfigMaps for configuration
-- apiGroups: [""]
-  resources: ["configmaps"]
-  verbs: ["get", "list", "watch"]
-# Read Services and Endpoints for backend discovery  
-- apiGroups: [""]
-  resources: ["services", "endpoints"]
-  verbs: ["get", "list", "watch"]
-# Read Pods for HAProxy instance discovery
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
-# Read Secrets for TLS certificates (if needed)
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["get", "list", "watch"]
-# Read Ingresses for routing rules
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses"]
-  verbs: ["get", "list", "watch"]
+  # Read ConfigMaps for configuration
+  - apiGroups: [ "" ]
+    resources: [ "configmaps" ]
+    verbs: [ "get", "list", "watch" ]
+  # Read Services and Endpoints for backend discovery  
+  - apiGroups: [ "" ]
+    resources: [ "services", "endpoints" ]
+    verbs: [ "get", "list", "watch" ]
+  # Read Pods for HAProxy instance discovery
+  - apiGroups: [ "" ]
+    resources: [ "pods" ]
+    verbs: [ "get", "list", "watch" ]
+  # Read Secrets for TLS certificates (if needed)
+  - apiGroups: [ "" ]
+    resources: [ "secrets" ]
+    verbs: [ "get", "list", "watch" ]
+  # Read Ingresses for routing rules
+  - apiGroups: [ "networking.k8s.io" ]
+    resources: [ "ingresses" ]
+    verbs: [ "get", "list", "watch" ]
 ```
 
 ### Namespace-Scoped Deployment
@@ -47,9 +60,9 @@ metadata:
   name: haproxy-template-ic
   namespace: haproxy-system
 rules:
-- apiGroups: [""]
-  resources: ["configmaps", "services", "endpoints", "pods", "secrets"]
-  verbs: ["get", "list", "watch"]
+  - apiGroups: [ "" ]
+    resources: [ "configmaps", "services", "endpoints", "pods", "secrets" ]
+    verbs: [ "get", "list", "watch" ]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -61,9 +74,9 @@ roleRef:
   kind: Role
   name: haproxy-template-ic
 subjects:
-- kind: ServiceAccount
-  name: haproxy-template-ic
-  namespace: haproxy-system
+  - kind: ServiceAccount
+    name: haproxy-template-ic
+    namespace: haproxy-system
 ```
 
 ## Network Policies
@@ -81,55 +94,55 @@ spec:
     matchLabels:
       app: haproxy-template-ic
   policyTypes:
-  - Ingress
-  - Egress
-  
+    - Ingress
+    - Egress
+
   ingress:
-  # Prometheus scraping
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          name: monitoring
-    ports:
-    - port: 9090
-      protocol: TCP
-  
-  # Webhook from API server
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          name: kube-system
-    ports:
-    - port: 9443
-      protocol: TCP
-  
+    # Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+
+    # Webhook from API server
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - port: 9443
+          protocol: TCP
+
   egress:
-  # Kubernetes API
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          name: kube-system
-    ports:
-    - port: 443
-      protocol: TCP
-  
-  # HAProxy Dataplane API
-  - to:
-    - podSelector:
-        matchLabels:
-          app: haproxy
-    ports:
-    - port: 5555
-      protocol: TCP
-  
-  # DNS
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          name: kube-system
-    ports:
-    - port: 53
-      protocol: UDP
+    # Kubernetes API
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - port: 443
+          protocol: TCP
+
+    # HAProxy Dataplane API
+    - to:
+        - podSelector:
+            matchLabels:
+              app: haproxy
+      ports:
+        - port: 5555
+          protocol: TCP
+
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
 ```
 
 ### HAProxy Pod Isolation
@@ -145,36 +158,36 @@ spec:
     matchLabels:
       app: haproxy
   policyTypes:
-  - Ingress
-  
+    - Ingress
+
   ingress:
-  # Allow traffic on service ports
-  - from:
-    - podSelector: {}
-    - namespaceSelector: {}
-    ports:
-    - port: 80
-      protocol: TCP
-    - port: 443
-      protocol: TCP
-  
-  # Health checks
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          name: kube-system
-    ports:
-    - port: 8404
-      protocol: TCP
-  
-  # Dataplane API from controller only
-  - from:
-    - podSelector:
-        matchLabels:
-          app: haproxy-template-ic
-    ports:
-    - port: 5555
-      protocol: TCP
+    # Allow traffic on service ports
+    - from:
+        - podSelector: { }
+        - namespaceSelector: { }
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
+
+    # Health checks
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - port: 8404
+          protocol: TCP
+
+    # Dataplane API from controller only
+    - from:
+        - podSelector:
+            matchLabels:
+              app: haproxy-template-ic
+      ports:
+        - port: 5555
+          protocol: TCP
 ```
 
 ## Secrets Management
@@ -218,18 +231,18 @@ spec:
   template:
     spec:
       containers:
-      - name: dataplane
-        env:
-        - name: DATAPLANE_USER
-          valueFrom:
-            secretKeyRef:
-              name: dataplane-credentials
-              key: username
-        - name: DATAPLANE_PASS
-          valueFrom:
-            secretKeyRef:
-              name: dataplane-credentials
-              key: password
+        - name: dataplane
+          env:
+            - name: DATAPLANE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: dataplane-credentials
+                  key: username
+            - name: DATAPLANE_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: dataplane-credentials
+                  key: password
 ```
 
 ## Pod Security
@@ -251,23 +264,23 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - name: controller
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
-          readOnlyRootFilesystem: true
-        volumeMounts:
-        - name: tmp
-          mountPath: /tmp
-        - name: socket
-          mountPath: /run/haproxy-template-ic
+        - name: controller
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: socket
+              mountPath: /run/haproxy-template-ic
       volumes:
-      - name: tmp
-        emptyDir: {}
-      - name: socket
-        emptyDir: {}
+        - name: tmp
+          emptyDir: { }
+        - name: socket
+          emptyDir: { }
 ```
 
 ### Pod Security Standards
@@ -303,8 +316,8 @@ spec:
     name: internal-ca
     kind: ClusterIssuer
   dnsNames:
-  - haproxy-template-ic-webhook.haproxy-system.svc
-  - haproxy-template-ic-webhook.haproxy-system.svc.cluster.local
+    - haproxy-template-ic-webhook.haproxy-system.svc
+    - haproxy-template-ic-webhook.haproxy-system.svc.cluster.local
 ```
 
 ### Webhook Configuration
@@ -315,23 +328,22 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: haproxy-template-ic
 webhooks:
-- name: configmap.haproxy-template-ic
-  clientConfig:
-    service:
-      name: haproxy-template-ic-webhook
-      namespace: haproxy-system
-      path: /validate
-    caBundle: <base64-encoded-ca>
-  rules:
-  - apiGroups: [""]
-    apiVersions: ["v1"]
-    resources: ["configmaps"]
-    operations: ["CREATE", "UPDATE"]
-  sideEffects: None
-  admissionReviewVersions: ["v1"]
-  failurePolicy: Fail
+  - name: configmap.haproxy-template-ic
+    clientConfig:
+      service:
+        name: haproxy-template-ic-webhook
+        namespace: haproxy-system
+        path: /validate
+      caBundle: <base64-encoded-ca>
+    rules:
+      - apiGroups: [ "" ]
+        apiVersions: [ "v1" ]
+        resources: [ "configmaps" ]
+        operations: [ "CREATE", "UPDATE" ]
+    sideEffects: None
+    admissionReviewVersions: [ "v1" ]
+    failurePolicy: Fail
 ```
-
 
 ## Security Checklist
 

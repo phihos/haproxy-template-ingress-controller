@@ -4,6 +4,7 @@ metadata:
   name: haproxy-template-ic-config
   namespace: haproxy-template-ic
 data:
+  # language=yaml
   config: |
     pod_selector:
       match_labels:
