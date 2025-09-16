@@ -1693,7 +1693,6 @@ class DataplaneClient:
                 change_types=[str(c.change_type.value) for c in changes],
             )
 
-            metrics = get_metrics_collector()
             client = self._get_client()
 
             # Separate server changes from other changes for runtime API optimization
@@ -1722,139 +1721,224 @@ class DataplaneClient:
             # Sort other_changes to ensure consistent ordering
             self._sort_other_changes(other_changes)
 
-            # Start a transaction to batch remaining changes atomically
+            # Deploy remaining changes using transaction
+            return await self._deploy_changes_with_transaction(
+                client,
+                other_changes,
+                server_changes,
+                runtime_failed_servers,
+                len(changes),
+            )
+
+    async def _deploy_changes_with_transaction(
+        self,
+        client: Any,
+        other_changes: List[ConfigChange],
+        server_changes: List[ConfigChange],
+        runtime_failed_servers: List[ConfigChange],
+        total_changes: int,
+    ) -> Dict[str, Any]:
+        """Deploy changes using a transaction."""
+        metrics = get_metrics_collector()
+
+        try:
+            # Start transaction
+            transaction_id = await self._start_transaction(client, metrics)
+
             try:
-                # Get current configuration version for transaction consistency
-                current_version = await _get_configuration_version(client)
-                if current_version is None:
-                    raise DataplaneAPIError(
-                        "Failed to get current configuration version for transaction",
-                        endpoint=self.base_url,
-                        operation="get_configuration_version",
-                    )
-
-                # Start transaction with version
-                with metrics.time_dataplane_api_operation("start_transaction"):
-                    transaction = await start_transaction.asyncio(
-                        client=client, version=current_version
-                    )
-                    # TODO: Check for type instead of assuming ConfigurationTransaction
-                    transaction_id = transaction.id if transaction else None  # type: ignore[union-attr]
-
-                logger.debug(
-                    f"📦 Started transaction {transaction_id} for {len(other_changes)} remaining changes"
+                # Apply changes within transaction
+                await self._apply_changes_in_transaction(
+                    client, other_changes, transaction_id
                 )
 
-                try:
-                    # Apply remaining changes within the transaction
-                    for i, change in enumerate(other_changes):
-                        logger.debug(
-                            f"📝 Applying change {i + 1}/{len(other_changes)}: {change}"
-                        )
-                        await self._apply_config_change(
-                            client, change, transaction_id or ""
-                        )
-
-                    # Commit the transaction
-                    with metrics.time_dataplane_api_operation("commit_transaction"):
-                        commit_response = await commit_transaction.asyncio_detailed(
-                            client=client,
-                            # TODO: Fix transaction_id can not be None
-                            id=transaction_id,  # type: ignore[arg-type]
-                        )
-
-                    logger.info(
-                        f"✅ Successfully deployed {len(other_changes)} structured changes in transaction {transaction_id}"
-                    )
-
-                    # Get the new configuration version
-                    version_response = await _get_configuration_version(client)
-                    new_version = (
-                        str(version_response) if version_response else "unknown"
-                    )
-
-                    record_span_event(
-                        "structured_deployment_successful",
-                        {
-                            "transaction_id": transaction_id,
-                            "changes_count": len(changes),
-                            "server_changes_runtime": len(server_changes)
-                            - len(runtime_failed_servers),
-                            "server_changes_transaction": len(runtime_failed_servers),
-                            "other_changes": len(other_changes)
-                            - len(runtime_failed_servers),
-                            "version": new_version,
-                        },
-                    )
-
-                    # Check if transaction commit triggered a reload based on HTTP 202 status and Reload-ID header
-                    reload_triggered = commit_response.status_code == 202
-                    # Try different cases for Reload-ID header (HTTP headers are case-insensitive)
-                    reload_id = None
-                    if reload_triggered:
-                        for header_name in [
-                            "Reload-ID",
-                            "reload-id",
-                            "RELOAD-ID",
-                            "reload_id",
-                        ]:
-                            reload_id = commit_response.headers.get(header_name)
-                            if reload_id:
-                                break
-
-                    logger.debug(
-                        f"🔍 Transaction commit response: status={commit_response.status_code}, "
-                        f"reload_triggered={reload_triggered}, reload_id={reload_id}, "
-                        f"headers={dict(commit_response.headers)}"
-                    )
-
-                    return {
-                        "version": new_version,
-                        "reload_triggered": reload_triggered,
-                        "reload_id": reload_id,
-                    }
-
-                except Exception as apply_error:
-                    # Rollback transaction on failure
-                    try:
-                        logger.warning(
-                            f"⚠️  Rolling back transaction {transaction_id} due to error: {apply_error}"
-                        )
-                        await delete_transaction.asyncio(
-                            client=client,
-                            # TODO: Fix transaction_id can not be None
-                            id=transaction_id,  # type: ignore[arg-type]
-                        )
-                    except Exception as rollback_error:
-                        logger.error(
-                            f"❌ Failed to rollback transaction {transaction_id}: {rollback_error}"
-                        )
-
-                    record_span_event(
-                        "structured_deployment_failed",
-                        {"transaction_id": transaction_id, "error": str(apply_error)},
-                    )
-                    set_span_error(apply_error, "Structured deployment failed")
-
-                    raise DataplaneAPIError(
-                        f"Structured deployment failed in transaction {transaction_id}: {apply_error}",
-                        endpoint=self.base_url,
-                        operation="deploy_structured",
-                        original_error=apply_error,
-                    ) from apply_error
-
-            except Exception as transaction_error:
-                record_span_event(
-                    "transaction_start_failed", {"error": str(transaction_error)}
+                # Commit transaction and get result
+                return await self._commit_transaction_and_get_result(
+                    client,
+                    metrics,
+                    transaction_id,
+                    server_changes,
+                    runtime_failed_servers,
+                    other_changes,
+                    total_changes,
                 )
-                set_span_error(transaction_error, "Failed to start transaction")
 
-                raise DataplaneAPIError(
-                    f"Failed to start transaction for structured deployment: {transaction_error}",
-                    endpoint=self.base_url,
-                    operation="deploy_structured",
-                    original_error=transaction_error,
-                ) from transaction_error
+            except Exception as apply_error:
+                await self._rollback_transaction(client, transaction_id, apply_error)
+                raise
+
+        except Exception as transaction_error:
+            self._handle_transaction_start_error(transaction_error)
+            raise  # This should never be reached due to _handle_transaction_start_error raising
+
+    async def _start_transaction(self, client: Any, metrics: Any) -> str:
+        """Start a new transaction and return the transaction ID."""
+        # Get current configuration version for transaction consistency
+        current_version = await _get_configuration_version(client)
+        if current_version is None:
+            raise DataplaneAPIError(
+                "Failed to get current configuration version for transaction",
+                endpoint=self.base_url,
+                operation="get_configuration_version",
+            )
+
+        # Start transaction with version
+        with metrics.time_dataplane_api_operation("start_transaction"):
+            transaction = await start_transaction.asyncio(
+                client=client, version=current_version
+            )
+            # TODO: Check for type instead of assuming ConfigurationTransaction
+            transaction_id = transaction.id if transaction else None  # type: ignore[union-attr]
+
+        if not transaction_id:
+            raise DataplaneAPIError(
+                "Failed to get transaction ID from started transaction",
+                endpoint=self.base_url,
+                operation="start_transaction",
+            )
+
+        logger.debug(f"📦 Started transaction {transaction_id}")
+        return transaction_id
+
+    async def _apply_changes_in_transaction(
+        self, client: Any, changes: List[ConfigChange], transaction_id: str
+    ) -> None:
+        """Apply all changes within the transaction."""
+        for i, change in enumerate(changes):
+            logger.debug(f"📝 Applying change {i + 1}/{len(changes)}: {change}")
+            await self._apply_config_change(client, change, transaction_id)
+
+    async def _commit_transaction_and_get_result(
+        self,
+        client: Any,
+        metrics: Any,
+        transaction_id: str,
+        server_changes: List[ConfigChange],
+        runtime_failed_servers: List[ConfigChange],
+        other_changes: List[ConfigChange],
+        total_changes: int,
+    ) -> Dict[str, Any]:
+        """Commit the transaction and return the deployment result."""
+        # Commit the transaction
+        with metrics.time_dataplane_api_operation("commit_transaction"):
+            commit_response = await commit_transaction.asyncio_detailed(
+                client=client,
+                # TODO: Fix transaction_id can not be None
+                id=transaction_id,  # type: ignore[arg-type]
+            )
+
+        logger.info(
+            f"✅ Successfully deployed {len(other_changes)} structured changes in transaction {transaction_id}"
+        )
+
+        # Get the new configuration version
+        version_response = await _get_configuration_version(client)
+        new_version = str(version_response) if version_response else "unknown"
+
+        # Record success metrics
+        self._record_deployment_success(
+            transaction_id,
+            total_changes,
+            server_changes,
+            runtime_failed_servers,
+            other_changes,
+            new_version,
+        )
+
+        # Extract reload information from commit response
+        reload_triggered, reload_id = self._extract_reload_info(commit_response)
+
+        logger.debug(
+            f"🔍 Transaction commit response: status={commit_response.status_code}, "
+            f"reload_triggered={reload_triggered}, reload_id={reload_id}, "
+            f"headers={dict(commit_response.headers)}"
+        )
+
+        return {
+            "version": new_version,
+            "reload_triggered": reload_triggered,
+            "reload_id": reload_id,
+        }
+
+    def _record_deployment_success(
+        self,
+        transaction_id: str,
+        total_changes: int,
+        server_changes: List[ConfigChange],
+        runtime_failed_servers: List[ConfigChange],
+        other_changes: List[ConfigChange],
+        version: str,
+    ) -> None:
+        """Record success metrics for the deployment."""
+        record_span_event(
+            "structured_deployment_successful",
+            {
+                "transaction_id": transaction_id,
+                "changes_count": total_changes,
+                "server_changes_runtime": len(server_changes)
+                - len(runtime_failed_servers),
+                "server_changes_transaction": len(runtime_failed_servers),
+                "other_changes": len(other_changes) - len(runtime_failed_servers),
+                "version": version,
+            },
+        )
+
+    def _extract_reload_info(self, commit_response: Any) -> Tuple[bool, Optional[str]]:
+        """Extract reload information from the commit response."""
+        # Check if transaction commit triggered a reload based on HTTP 202 status and Reload-ID header
+        reload_triggered = commit_response.status_code == 202
+
+        # Try different cases for Reload-ID header (HTTP headers are case-insensitive)
+        reload_id = None
+        if reload_triggered:
+            for header_name in ["Reload-ID", "reload-id", "RELOAD-ID", "reload_id"]:
+                reload_id = commit_response.headers.get(header_name)
+                if reload_id:
+                    break
+
+        return reload_triggered, reload_id
+
+    async def _rollback_transaction(
+        self, client: Any, transaction_id: str, apply_error: Exception
+    ) -> None:
+        """Rollback the transaction and handle any rollback errors."""
+        try:
+            logger.warning(
+                f"⚠️  Rolling back transaction {transaction_id} due to error: {apply_error}"
+            )
+            await delete_transaction.asyncio(
+                client=client,
+                # TODO: Fix transaction_id can not be None
+                id=transaction_id,  # type: ignore[arg-type]
+            )
+        except Exception as rollback_error:
+            logger.error(
+                f"❌ Failed to rollback transaction {transaction_id}: {rollback_error}"
+            )
+
+        record_span_event(
+            "structured_deployment_failed",
+            {"transaction_id": transaction_id, "error": str(apply_error)},
+        )
+        set_span_error(apply_error, "Structured deployment failed")
+
+        raise DataplaneAPIError(
+            f"Structured deployment failed in transaction {transaction_id}: {apply_error}",
+            endpoint=self.base_url,
+            operation="deploy_structured",
+            original_error=apply_error,
+        ) from apply_error
+
+    def _handle_transaction_start_error(self, transaction_error: Exception) -> None:
+        """Handle errors that occur when starting a transaction."""
+        record_span_event("transaction_start_failed", {"error": str(transaction_error)})
+        set_span_error(transaction_error, "Failed to start transaction")
+
+        raise DataplaneAPIError(
+            f"Failed to start transaction for structured deployment: {transaction_error}",
+            endpoint=self.base_url,
+            operation="deploy_structured",
+            original_error=transaction_error,
+        ) from transaction_error
 
     async def _apply_server_without_transaction(
         self, client: Any, change: ConfigChange
@@ -2259,82 +2343,8 @@ class DataplaneClient:
                 await self._apply_nested_element_change(client, change, transaction_id)
                 return
 
-            # Handle top-level section changes using registry
-            handler_config = _SECTION_HANDLERS.get(change.section_type)
-            if not handler_config:
-                logger.warning(
-                    f"⚠️  Unsupported section type for structured deployment: {change.section_type}"
-                )
-                return
-
-            # Prepare base parameters
-            base_params = {
-                "client": client,
-                "transaction_id": transaction_id,
-            }
-
-            # Handle different change types
-            if change.change_type == ConfigChangeType.CREATE:
-                if not handler_config.get("supports_create", False):
-                    if change.section_type == ConfigSectionType.GLOBAL:
-                        # Global CREATE is treated as UPDATE
-                        change.change_type = ConfigChangeType.UPDATE
-                    else:
-                        logger.debug(
-                            f"Section type {change.section_type} doesn't support CREATE"
-                        )
-                        return
-
-                if (
-                    change.change_type == ConfigChangeType.CREATE
-                ):  # Still CREATE after potential conversion
-                    clean_config = self._get_clean_config_object(change.new_config)
-                    params = {**base_params, "body": clean_config}
-                    await handler_config["create"](**params)
-                else:
-                    # Fall through to UPDATE handling for converted GLOBAL operations
-                    pass
-
-            if change.change_type == ConfigChangeType.UPDATE:
-                if not handler_config.get("supports_update", False):
-                    logger.debug(
-                        f"Section type {change.section_type} doesn't support UPDATE"
-                    )
-                    return
-
-                # Handle different update strategies
-                if handler_config.get("update_strategy") == "delete_create":
-                    # Userlist: delete then create
-                    if handler_config.get("supports_delete", False):
-                        params = {**base_params}
-                        if handler_config["id_field"]:
-                            params[handler_config["id_field"]] = change.section_name
-                        await handler_config["delete"](**params)
-
-                    clean_config = self._get_clean_config_object(change.new_config)
-                    params = {**base_params, "body": clean_config}
-                    await handler_config["create"](**params)
-                else:
-                    # Standard update
-                    clean_config = self._get_clean_config_object(change.new_config)
-                    params = {**base_params, "body": clean_config}
-                    if handler_config["id_field"]:
-                        params[handler_config["id_field"]] = change.section_name
-                    if handler_config.get("full_section"):
-                        params["full_section"] = True
-                    await handler_config["update"](**params)
-
-            elif change.change_type == ConfigChangeType.DELETE:
-                if not handler_config.get("supports_delete", False):
-                    logger.debug(
-                        f"Section type {change.section_type} doesn't support DELETE"
-                    )
-                    return
-
-                params = {**base_params}
-                if handler_config["id_field"]:
-                    params[handler_config["id_field"]] = change.section_name
-                await handler_config["delete"](**params)
+            # Handle top-level section changes
+            await self._apply_section_change(client, change, transaction_id)
 
         except Exception as e:
             raise DataplaneAPIError(
@@ -2343,6 +2353,129 @@ class DataplaneClient:
                 operation=f"apply_{change.change_type.value}_{change.section_type.value}",
                 original_error=e,
             ) from e
+
+    async def _apply_section_change(
+        self, client: Any, change: ConfigChange, transaction_id: str
+    ) -> None:
+        """Apply a top-level section change using the appropriate handler."""
+        # Get handler configuration for this section type
+        handler_config = _SECTION_HANDLERS.get(change.section_type)
+        if not handler_config:
+            logger.warning(
+                f"⚠️  Unsupported section type for structured deployment: {change.section_type}"
+            )
+            return
+
+        # Prepare base parameters
+        base_params = {
+            "client": client,
+            "transaction_id": transaction_id,
+        }
+
+        # Route to appropriate change type handler
+        if change.change_type == ConfigChangeType.CREATE:
+            await self._apply_create_change(change, handler_config, base_params)
+        elif change.change_type == ConfigChangeType.UPDATE:
+            await self._apply_update_change(change, handler_config, base_params)
+        elif change.change_type == ConfigChangeType.DELETE:
+            await self._apply_delete_change(change, handler_config, base_params)
+
+    async def _apply_create_change(
+        self,
+        change: ConfigChange,
+        handler_config: Dict[str, Any],
+        base_params: Dict[str, Any],
+    ) -> None:
+        """Apply a CREATE change to a configuration section."""
+        if not handler_config.get("supports_create", False):
+            if change.section_type == ConfigSectionType.GLOBAL:
+                # Global CREATE is treated as UPDATE
+                change.change_type = ConfigChangeType.UPDATE
+                await self._apply_update_change(change, handler_config, base_params)
+                return
+            else:
+                logger.debug(
+                    f"Section type {change.section_type} doesn't support CREATE"
+                )
+                return
+
+        # Perform CREATE operation
+        clean_config = self._get_clean_config_object(change.new_config)
+        params = {**base_params, "body": clean_config}
+        await handler_config["create"](**params)
+
+    async def _apply_update_change(
+        self,
+        change: ConfigChange,
+        handler_config: Dict[str, Any],
+        base_params: Dict[str, Any],
+    ) -> None:
+        """Apply an UPDATE change to a configuration section."""
+        if not handler_config.get("supports_update", False):
+            logger.debug(f"Section type {change.section_type} doesn't support UPDATE")
+            return
+
+        # Handle different update strategies
+        if handler_config.get("update_strategy") == "delete_create":
+            await self._apply_delete_create_update(change, handler_config, base_params)
+        else:
+            await self._apply_standard_update(change, handler_config, base_params)
+
+    async def _apply_delete_create_update(
+        self,
+        change: ConfigChange,
+        handler_config: Dict[str, Any],
+        base_params: Dict[str, Any],
+    ) -> None:
+        """Apply an UPDATE using delete-then-create strategy (for userlists)."""
+        # First delete the existing section
+        if handler_config.get("supports_delete", False):
+            params = {**base_params}
+            if handler_config["id_field"]:
+                params[handler_config["id_field"]] = change.section_name
+            await handler_config["delete"](**params)
+
+        # Then create the new section
+        clean_config = self._get_clean_config_object(change.new_config)
+        params = {**base_params, "body": clean_config}
+        await handler_config["create"](**params)
+
+    async def _apply_standard_update(
+        self,
+        change: ConfigChange,
+        handler_config: Dict[str, Any],
+        base_params: Dict[str, Any],
+    ) -> None:
+        """Apply a standard UPDATE operation."""
+        clean_config = self._get_clean_config_object(change.new_config)
+        params = {**base_params, "body": clean_config}
+
+        # Add section identifier if needed
+        if handler_config["id_field"]:
+            params[handler_config["id_field"]] = change.section_name
+
+        # Add full_section flag if needed
+        if handler_config.get("full_section"):
+            params["full_section"] = True
+
+        await handler_config["update"](**params)
+
+    async def _apply_delete_change(
+        self,
+        change: ConfigChange,
+        handler_config: Dict[str, Any],
+        base_params: Dict[str, Any],
+    ) -> None:
+        """Apply a DELETE change to a configuration section."""
+        if not handler_config.get("supports_delete", False):
+            logger.debug(f"Section type {change.section_type} doesn't support DELETE")
+            return
+
+        # Perform DELETE operation
+        params = {**base_params}
+        if handler_config["id_field"]:
+            params[handler_config["id_field"]] = change.section_name
+        await handler_config["delete"](**params)
 
     async def fetch_structured_configuration(self) -> Dict[str, Any]:
         """Fetch complete structured configuration components from this HAProxy instance.
@@ -2377,167 +2510,19 @@ class DataplaneClient:
             client = self._get_client()
 
             try:
-                # Fetch all top-level components with timing using helper
-                backends = await _fetch_with_metrics(
-                    "fetch_backends", get_backends.asyncio, client, metrics, []
-                )
-                frontends = await _fetch_with_metrics(
-                    "fetch_frontends", get_frontends.asyncio, client, metrics, []
-                )
-                defaults = await _fetch_with_metrics(
-                    "fetch_defaults", get_defaults_sections.asyncio, client, metrics, []
-                )
-                global_config = await _fetch_with_metrics(
-                    "fetch_global", get_global.asyncio, client, metrics
-                )
-                userlists = await _fetch_with_metrics(
-                    "fetch_userlists", get_userlists.asyncio, client, metrics, []
-                )
-                caches = await _fetch_with_metrics(
-                    "fetch_caches", get_caches.asyncio, client, metrics, []
-                )
-                mailers = await _fetch_with_metrics(
-                    "fetch_mailers", get_mailers_sections.asyncio, client, metrics, []
-                )
-                resolvers = await _fetch_with_metrics(
-                    "fetch_resolvers", get_resolvers.asyncio, client, metrics, []
-                )
-                peers = await _fetch_with_metrics(
-                    "fetch_peers", get_peer_sections.asyncio, client, metrics, []
-                )
-                fcgi_apps = await _fetch_with_metrics(
-                    "fetch_fcgi_apps", get_fcgi_apps.asyncio, client, metrics, []
-                )
-                http_errors = await _fetch_with_metrics(
-                    "fetch_http_errors",
-                    get_http_errors_sections.asyncio,
-                    client,
-                    metrics,
-                    [],
-                )
-                rings = await _fetch_with_metrics(
-                    "fetch_rings", get_rings.asyncio, client, metrics, []
-                )
-                log_forwards = await _fetch_with_metrics(
-                    "fetch_log_forwards", get_log_forwards.asyncio, client, metrics, []
-                )
-                programs = await _fetch_with_metrics(
-                    "fetch_programs", get_programs.asyncio, client, metrics, []
+                # Fetch all top-level configuration sections
+                config_sections = await self._fetch_top_level_sections(client, metrics)
+
+                # Fetch nested elements for sections that support them
+                nested_elements = await self._fetch_nested_elements(
+                    client, config_sections
                 )
 
-                # Create storage for nested elements to avoid modifying frozen models
-                nested_elements: Dict[str, Dict[str, Dict[str, Any]]] = {
-                    "backends": {},
-                    "frontends": {},
-                    "defaults": {},
-                    "global": {},
-                }
-
-                # Now fetch detailed configurations for each section using registry-based approach
-                section_configs = [
-                    (ConfigSectionType.BACKEND, backends, "backends"),
-                    (ConfigSectionType.FRONTEND, frontends, "frontends"),
-                ]
-
-                for section_type, sections, section_key in section_configs:
-                    fetch_apis = _ELEMENT_FETCH_APIS.get(section_type, {})
-
-                    for section in sections:
-                        if section.name:
-                            section_name = section.name
-                            nested_elements[section_key][section_name] = {}
-
-                            try:
-                                # Fetch all element types for this section
-                                for attr_name, fetch_func in fetch_apis.items():
-                                    if fetch_func is None:
-                                        # Handle unsupported operations (like tcp_response_rules for frontends)
-                                        nested_elements[section_key][section_name][
-                                            attr_name
-                                        ] = []
-                                    else:
-                                        nested_elements[section_key][section_name][
-                                            attr_name
-                                        ] = (
-                                            await fetch_func(
-                                                client=client, parent_name=section_name
-                                            )
-                                            or []
-                                        )
-                            except Exception as e:
-                                logger.debug(
-                                    f"Failed to fetch details for {section_type.value} {section_name}: {e}"
-                                )
-                                # Continue with other sections even if one fails
-
-                # Skip nested element fetching for defaults sections
-                # HAProxy Dataplane API v3 limitation: nested element endpoints for defaults sections
-                # return HTTP 501 Not Implemented. Instead, defaults are handled as atomic units
-                # using full_section=true in deployment operations.
-                # The main defaults configuration already includes all nested elements.
-
-                # Fetch nested elements for global configuration
-                if global_config:
-                    nested_elements["global"] = {}
-                    global_fetch_apis = _ELEMENT_FETCH_APIS.get(
-                        ConfigSectionType.GLOBAL, {}
-                    )
-
-                    try:
-                        for attr_name, fetch_func in global_fetch_apis.items():
-                            result = await fetch_func(client=client) or []
-                            if isinstance(result, list):
-                                nested_elements["global"][attr_name] = {}
-                                for idx, item in enumerate(result):
-                                    nested_elements["global"][attr_name][str(idx)] = (
-                                        item
-                                    )
-                            else:
-                                nested_elements["global"][attr_name] = {}
-                    except Exception as e:
-                        logger.debug(f"Failed to fetch global configuration: {e}")
-
-                # Skip fcgi_apps nested elements for now - they have minimal nested configuration
-                # and are not commonly used in most HAProxy setups
-
-                # Record successful fetch
-                metrics.record_dataplane_api_request("fetch_structured", "success")
-
-                # Record component counts
-                add_span_attributes(
-                    backends_count=len(backends),
-                    frontends_count=len(frontends),
-                    defaults_count=len(defaults),
-                    has_global=global_config is not None,
-                    userlists_count=len(userlists),
-                    caches_count=len(caches),
-                    mailers_count=len(mailers),
-                    resolvers_count=len(resolvers),
-                    peers_count=len(peers),
-                    fcgi_apps_count=len(fcgi_apps),
-                    http_errors_count=len(http_errors),
-                    rings_count=len(rings),
-                    log_forwards_count=len(log_forwards),
-                    programs_count=len(programs),
+                # Record success metrics and return combined result
+                return self._build_configuration_result(
+                    config_sections, nested_elements, metrics
                 )
 
-                return {
-                    "backends": backends,
-                    "frontends": frontends,
-                    "defaults": defaults,
-                    "global": global_config,
-                    "userlists": userlists,
-                    "caches": caches,
-                    "mailers": mailers,
-                    "resolvers": resolvers,
-                    "peers": peers,
-                    "fcgi_apps": fcgi_apps,
-                    "http_errors": http_errors,
-                    "rings": rings,
-                    "log_forwards": log_forwards,
-                    "programs": programs,
-                    "nested_elements": nested_elements,
-                }
             except Exception as e:
                 metrics.record_dataplane_api_request("fetch_structured", "error")
                 _log_fetch_error("structured configuration", "all", e)
@@ -2547,3 +2532,191 @@ class DataplaneClient:
                     operation="fetch_structured",
                     original_error=e,
                 ) from e
+
+    async def _fetch_top_level_sections(
+        self, client: Any, metrics: Any
+    ) -> Dict[str, Any]:
+        """Fetch all top-level configuration sections."""
+        return {
+            "backends": await _fetch_with_metrics(
+                "fetch_backends", get_backends.asyncio, client, metrics, []
+            ),
+            "frontends": await _fetch_with_metrics(
+                "fetch_frontends", get_frontends.asyncio, client, metrics, []
+            ),
+            "defaults": await _fetch_with_metrics(
+                "fetch_defaults", get_defaults_sections.asyncio, client, metrics, []
+            ),
+            "global": await _fetch_with_metrics(
+                "fetch_global", get_global.asyncio, client, metrics
+            ),
+            "userlists": await _fetch_with_metrics(
+                "fetch_userlists", get_userlists.asyncio, client, metrics, []
+            ),
+            "caches": await _fetch_with_metrics(
+                "fetch_caches", get_caches.asyncio, client, metrics, []
+            ),
+            "mailers": await _fetch_with_metrics(
+                "fetch_mailers", get_mailers_sections.asyncio, client, metrics, []
+            ),
+            "resolvers": await _fetch_with_metrics(
+                "fetch_resolvers", get_resolvers.asyncio, client, metrics, []
+            ),
+            "peers": await _fetch_with_metrics(
+                "fetch_peers", get_peer_sections.asyncio, client, metrics, []
+            ),
+            "fcgi_apps": await _fetch_with_metrics(
+                "fetch_fcgi_apps", get_fcgi_apps.asyncio, client, metrics, []
+            ),
+            "http_errors": await _fetch_with_metrics(
+                "fetch_http_errors",
+                get_http_errors_sections.asyncio,
+                client,
+                metrics,
+                [],
+            ),
+            "rings": await _fetch_with_metrics(
+                "fetch_rings", get_rings.asyncio, client, metrics, []
+            ),
+            "log_forwards": await _fetch_with_metrics(
+                "fetch_log_forwards", get_log_forwards.asyncio, client, metrics, []
+            ),
+            "programs": await _fetch_with_metrics(
+                "fetch_programs", get_programs.asyncio, client, metrics, []
+            ),
+        }
+
+    async def _fetch_nested_elements(
+        self, client: Any, config_sections: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Fetch nested elements for configuration sections."""
+        # Create storage for nested elements to avoid modifying frozen models
+        nested_elements: Dict[str, Dict[str, Dict[str, Any]]] = {
+            "backends": {},
+            "frontends": {},
+            "defaults": {},
+            "global": {},
+        }
+
+        # Fetch nested elements for backends and frontends
+        await self._fetch_section_nested_elements(
+            client,
+            config_sections["backends"],
+            ConfigSectionType.BACKEND,
+            "backends",
+            nested_elements,
+        )
+        await self._fetch_section_nested_elements(
+            client,
+            config_sections["frontends"],
+            ConfigSectionType.FRONTEND,
+            "frontends",
+            nested_elements,
+        )
+
+        # Fetch nested elements for global configuration
+        await self._fetch_global_nested_elements(
+            client, config_sections["global"], nested_elements
+        )
+
+        return nested_elements
+
+    async def _fetch_section_nested_elements(
+        self,
+        client: Any,
+        sections: List[Any],
+        section_type: ConfigSectionType,
+        section_key: str,
+        nested_elements: Dict[str, Dict[str, Dict[str, Any]]],
+    ) -> None:
+        """Fetch nested elements for a specific section type."""
+        fetch_apis = _ELEMENT_FETCH_APIS.get(section_type, {})
+
+        for section in sections:
+            if section.name:
+                section_name = section.name
+                nested_elements[section_key][section_name] = {}
+
+                try:
+                    # Fetch all element types for this section
+                    for attr_name, fetch_func in fetch_apis.items():
+                        if fetch_func is None:
+                            # Handle unsupported operations (like tcp_response_rules for frontends)
+                            nested_elements[section_key][section_name][attr_name] = []
+                        else:
+                            nested_elements[section_key][section_name][attr_name] = (
+                                await fetch_func(
+                                    client=client, parent_name=section_name
+                                )
+                                or []
+                            )
+                except Exception as e:
+                    logger.debug(
+                        f"Failed to fetch details for {section_type.value} {section_name}: {e}"
+                    )
+                    # Continue with other sections even if one fails
+
+    async def _fetch_global_nested_elements(
+        self,
+        client: Any,
+        global_config: Any,
+        nested_elements: Dict[str, Dict[str, Dict[str, Any]]],
+    ) -> None:
+        """Fetch nested elements for global configuration."""
+        # Skip nested element fetching for defaults sections
+        # HAProxy Dataplane API v3 limitation: nested element endpoints for defaults sections
+        # return HTTP 501 Not Implemented. Instead, defaults are handled as atomic units
+        # using full_section=true in deployment operations.
+        # The main defaults configuration already includes all nested elements.
+
+        if global_config:
+            nested_elements["global"] = {}
+            global_fetch_apis = _ELEMENT_FETCH_APIS.get(ConfigSectionType.GLOBAL, {})
+
+            try:
+                for attr_name, fetch_func in global_fetch_apis.items():
+                    result = await fetch_func(client=client) or []
+                    if isinstance(result, list):
+                        nested_elements["global"][attr_name] = {}
+                        for idx, item in enumerate(result):
+                            nested_elements["global"][attr_name][str(idx)] = item
+                    else:
+                        nested_elements["global"][attr_name] = {}
+            except Exception as e:
+                logger.debug(f"Failed to fetch global configuration: {e}")
+
+        # Skip fcgi_apps nested elements for now - they have minimal nested configuration
+        # and are not commonly used in most HAProxy setups
+
+    def _build_configuration_result(
+        self,
+        config_sections: Dict[str, Any],
+        nested_elements: Dict[str, Dict[str, Dict[str, Any]]],
+        metrics: Any,
+    ) -> Dict[str, Any]:
+        """Build the final configuration result with metrics."""
+        # Record successful fetch
+        metrics.record_dataplane_api_request("fetch_structured", "success")
+
+        # Record component counts
+        add_span_attributes(
+            backends_count=len(config_sections["backends"]),
+            frontends_count=len(config_sections["frontends"]),
+            defaults_count=len(config_sections["defaults"]),
+            has_global=config_sections["global"] is not None,
+            userlists_count=len(config_sections["userlists"]),
+            caches_count=len(config_sections["caches"]),
+            mailers_count=len(config_sections["mailers"]),
+            resolvers_count=len(config_sections["resolvers"]),
+            peers_count=len(config_sections["peers"]),
+            fcgi_apps_count=len(config_sections["fcgi_apps"]),
+            http_errors_count=len(config_sections["http_errors"]),
+            rings_count=len(config_sections["rings"]),
+            log_forwards_count=len(config_sections["log_forwards"]),
+            programs_count=len(config_sections["programs"]),
+        )
+
+        return {
+            **config_sections,
+            "nested_elements": nested_elements,
+        }

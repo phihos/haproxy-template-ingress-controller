@@ -806,70 +806,116 @@ class ConfigSynchronizer:
         changes: List[str] = []
         max_changes_before_exit = MAX_CONFIG_COMPARISON_CHANGES
 
-        # Compare backends - optimized with dict comprehensions
-        current_backends = {
-            b.name: _to_dict_safe(b)
-            for b in current.get("backends", [])
-            if hasattr(b, "name")
-        }
-        new_backends = {
-            b.name: _to_dict_safe(b)
-            for b in new.get("backends", [])
-            if hasattr(b, "name")
-        }
-
-        # Find changes in backends efficiently
-        current_names = set(current_backends.keys())
-        new_names = set(new_backends.keys())
-
-        changes.extend(f"remove backend {name}" for name in current_names - new_names)
-        if _check_early_exit_condition(changes, max_changes_before_exit):
-            return changes
-
-        changes.extend(f"add backend {name}" for name in new_names - current_names)
-        if _check_early_exit_condition(changes, max_changes_before_exit):
-            return changes
-
-        changes.extend(
-            f"modify backend {name}"
-            for name in current_names & new_names
-            if current_backends[name] != new_backends[name]
-        )
-        if _check_early_exit_condition(changes, max_changes_before_exit):
-            return changes
-
-        # Compare frontends - same optimization
-        current_frontends = {
-            f.name: _to_dict_safe(f)
-            for f in current.get("frontends", [])
-            if hasattr(f, "name")
-        }
-        new_frontends = {
-            f.name: _to_dict_safe(f)
-            for f in new.get("frontends", [])
-            if hasattr(f, "name")
-        }
-
-        current_names = set(current_frontends.keys())
-        new_names = set(new_frontends.keys())
-
-        changes.extend(f"remove frontend {name}" for name in current_names - new_names)
-        if _check_early_exit_condition(changes, max_changes_before_exit):
-            return changes
-
-        changes.extend(f"add frontend {name}" for name in new_names - current_names)
-        if _check_early_exit_condition(changes, max_changes_before_exit):
-            return changes
-
-        changes.extend(
-            f"modify frontend {name}"
-            for name in current_names & new_names
-            if current_frontends[name] != new_frontends[name]
-        )
-        if _check_early_exit_condition(changes, max_changes_before_exit):
+        # Compare main configuration sections
+        if self._compare_backends_and_frontends(
+            current, new, changes, max_changes_before_exit
+        ):
             return changes
 
         # Compare defaults sections
+        self._compare_defaults_sections(current, new, changes)
+
+        # Compare all named sections
+        named_sections = [
+            "userlists",
+            "caches",
+            "mailers",
+            "resolvers",
+            "peers",
+            "fcgi_apps",
+            "http_errors",
+            "rings",
+            "log_forwards",
+            "programs",
+        ]
+
+        for section_name in named_sections:
+            if self._compare_named_config_sections(
+                section_name, current, new, changes, max_changes_before_exit
+            ):
+                return changes
+
+        # Compare global section
+        self._compare_global_section(current, new, changes)
+
+        # Record performance metrics
+        self._record_comparison_metrics(start_time, len(changes))
+
+        return changes
+
+    def _compare_backends_and_frontends(
+        self,
+        current: Dict[str, Any],
+        new: Dict[str, Any],
+        changes: List[str],
+        max_changes: int,
+    ) -> bool:
+        """Compare backends and frontends sections. Returns True if early exit needed."""
+        # Compare backends
+        if self._compare_named_section_type(
+            current, new, "backends", "backend", changes, max_changes
+        ):
+            return True
+
+        # Compare frontends
+        if self._compare_named_section_type(
+            current, new, "frontends", "frontend", changes, max_changes
+        ):
+            return True
+
+        return False
+
+    def _compare_named_section_type(
+        self,
+        current: Dict[str, Any],
+        new: Dict[str, Any],
+        section_key: str,
+        section_label: str,
+        changes: List[str],
+        max_changes: int,
+    ) -> bool:
+        """Compare a named section type (like backends or frontends). Returns True if early exit needed."""
+        # Build name-indexed dictionaries
+        current_sections = {
+            item.name: _to_dict_safe(item)
+            for item in current.get(section_key, [])
+            if hasattr(item, "name")
+        }
+        new_sections = {
+            item.name: _to_dict_safe(item)
+            for item in new.get(section_key, [])
+            if hasattr(item, "name")
+        }
+
+        current_names = set(current_sections.keys())
+        new_names = set(new_sections.keys())
+
+        # Check for removals
+        changes.extend(
+            f"remove {section_label} {name}" for name in current_names - new_names
+        )
+        if _check_early_exit_condition(changes, max_changes):
+            return True
+
+        # Check for additions
+        changes.extend(
+            f"add {section_label} {name}" for name in new_names - current_names
+        )
+        if _check_early_exit_condition(changes, max_changes):
+            return True
+
+        # Check for modifications
+        changes.extend(
+            f"modify {section_label} {name}"
+            for name in current_names & new_names
+            if current_sections[name] != new_sections[name]
+        )
+        return _check_early_exit_condition(changes, max_changes)
+
+    def _compare_defaults_sections(
+        self, current: Dict[str, Any], new: Dict[str, Any], changes: List[str]
+    ) -> None:
+        """Compare defaults sections."""
         current_defaults = [_to_dict_safe(d) for d in current.get("defaults", [])]
         new_defaults = [_to_dict_safe(d) for d in new.get("defaults", [])]
 
@@ -884,133 +930,18 @@ class ConfigSynchronizer:
                 if curr != new_def
             )
 
-        # Helper function to compare named sections (similar to backends/frontends)
-        def compare_named_sections(section_name: str) -> bool:
-            """Compare named configuration sections and return True if early exit needed."""
-            nonlocal changes
-            try:
-                current_sections = {
-                    s.name: _to_dict_safe(s)
-                    for s in current.get(section_name, [])
-                    if hasattr(s, "name") and s.name
-                }
-                new_sections = {
-                    s.name: _to_dict_safe(s)
-                    for s in new.get(section_name, [])
-                    if hasattr(s, "name") and s.name
-                }
-
-                current_names = set(current_sections.keys())
-                new_names = set(new_sections.keys())
-
-                changes.extend(
-                    f"remove {section_name[:-1]} {name}"
-                    for name in current_names - new_names
-                )
-                if _check_early_exit_condition(changes, max_changes_before_exit):
-                    return True
-
-                changes.extend(
-                    f"add {section_name[:-1]} {name}"
-                    for name in new_names - current_names
-                )
-                if _check_early_exit_condition(changes, max_changes_before_exit):
-                    return True
-
-                changes.extend(
-                    f"modify {section_name[:-1]} {name}"
-                    for name in current_names & new_names
-                    if current_sections[name] != new_sections[name]
-                )
-                return _check_early_exit_condition(changes, max_changes_before_exit)
-            except Exception as e:
-                logger.debug(f"Error comparing {section_name}: {type(e).__name__}: {e}")
-                changes.append(f"error comparing {section_name}: {type(e).__name__}")
-                return _check_early_exit_condition(changes, max_changes_before_exit)
-
-        # Helper function to compare list sections (similar to defaults)
-        def compare_list_sections(section_name: str) -> bool:
-            """Compare list configuration sections and return True if early exit needed."""
-            nonlocal changes
-            try:
-                current_list = [_to_dict_safe(s) for s in current.get(section_name, [])]
-                new_list = [_to_dict_safe(s) for s in new.get(section_name, [])]
-
-                if len(current_list) != len(new_list):
-                    changes.append(
-                        f"{section_name} count changed from {len(current_list)} to {len(new_list)}"
-                    )
-                    return _check_early_exit_condition(changes, max_changes_before_exit)
-                else:
-                    changes.extend(
-                        f"modify {section_name} section {i}"
-                        for i, (curr, new_item) in enumerate(
-                            zip(current_list, new_list)
-                        )
-                        if curr != new_item
-                    )
-                    return _check_early_exit_condition(changes, max_changes_before_exit)
-            except Exception as e:
-                logger.debug(f"Error comparing {section_name}: {type(e).__name__}: {e}")
-                changes.append(f"error comparing {section_name}: {type(e).__name__}")
-                return _check_early_exit_condition(changes, max_changes_before_exit)
-
-        # Compare all named sections
-        if compare_named_sections("userlists"):
-            return changes
-
-        if compare_named_sections("caches"):
-            return changes
-
-        if compare_named_sections("mailers"):
-            return changes
-
-        if compare_named_sections("resolvers"):
-            return changes
-
-        if compare_named_sections("peers"):
-            return changes
-
-        if compare_named_sections("fcgi_apps"):
-            return changes
-
-        if compare_named_sections("http_errors"):
-            return changes
-
-        if compare_named_sections("rings"):
-            return changes
-
-        if compare_named_sections("log_forwards"):
-            return changes
-
-        if compare_named_sections("programs"):
-            return changes
-
-        # Compare global section
-        current_global = _to_dict_safe(current.get("global"))
-        new_global = _to_dict_safe(new.get("global"))
-
-        if current_global and new_global:
-            if current_global != new_global:
-                changes.append("modify global")
-        elif new_global and not current_global:
-            changes.append("add global")
-        elif current_global and not new_global:
-            changes.append("remove global")
-
-        # Log comparison performance
+    def _record_comparison_metrics(self, start_time: float, changes_count: int) -> None:
+        """Record performance metrics for the comparison operation."""
         elapsed = time.time() - start_time
         logger.debug(
-            f"⏱️ Structured config comparison took {elapsed:.3f}s, found {len(changes)} changes"
+            f"⏱️ Structured config comparison took {elapsed:.3f}s, found {changes_count} changes"
         )
 
         # Record metrics
         metrics = get_metrics_collector()
         if hasattr(metrics, "record_custom_metric"):
             metrics.record_custom_metric("structured_comparison_time", elapsed)
-            metrics.record_custom_metric("structured_changes_count", len(changes))
-
-        return changes
+            metrics.record_custom_metric("structured_changes_count", changes_count)
 
     async def _deploy_to_single_instance(
         self,
@@ -1171,16 +1102,40 @@ class ConfigSynchronizer:
         if not config_context.rendered_config:
             raise DataplaneAPIError("No rendered HAProxy configuration available")
 
+        # Prepare configuration content
         config = config_context.rendered_config.content
-        maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync = (
-            self._prepare_sync_content(config_context)
-        )
+        sync_content = self._prepare_sync_content(config_context)
 
         # Compute template hashes for deployment history tracking
         _ = self._compute_template_hashes(config_context)
 
         # Update production clients to handle dynamic URL changes
         self.update_production_clients(self.production_urls)
+
+        # Validate configuration using validation instance
+        validation_structured = await self._validate_and_prepare_config(
+            config, sync_content
+        )
+
+        # Deploy to production instances
+        results = await self._deploy_to_production_instances(
+            config, sync_content, validation_structured
+        )
+
+        # Log final results
+        self._log_sync_results(results)
+
+        return results
+
+    async def _validate_and_prepare_config(
+        self,
+        config: str,
+        sync_content: Tuple[
+            Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]
+        ],
+    ) -> Dict[str, Any]:
+        """Validate configuration and prepare structured config for deployment."""
+        maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync = sync_content
 
         # Step 1: Sync content to validation instance and validate
         logger.debug("🔍 Validating configuration and syncing auxiliary content")
@@ -1203,9 +1158,20 @@ class ConfigSynchronizer:
 
         # Fetch structured config from validation instance
         logger.debug("🔍 Fetching structured configuration from validation instance")
-        validation_structured = await validation_client.fetch_structured_configuration()
+        return await validation_client.fetch_structured_configuration()
 
-        # Step 3: Deploy to production instances using structured comparison
+    async def _deploy_to_production_instances(
+        self,
+        config: str,
+        sync_content: Tuple[
+            Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]
+        ],
+        validation_structured: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Deploy configuration to production instances in parallel."""
+        maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync = sync_content
+
+        # Initialize results tracking
         results: Dict[str, Any] = {
             "successful": 0,
             "failed": 0,
@@ -1236,48 +1202,22 @@ class ConfigSynchronizer:
             *deployment_tasks, return_exceptions=True
         )
 
-        # Process results
+        # Process deployment results
+        self._process_deployment_results(deployment_results, config, results)
+
+        return results
+
+    def _process_deployment_results(
+        self, deployment_results: List[Any], config: str, results: Dict[str, Any]
+    ) -> None:
+        """Process the results from parallel deployment tasks."""
         for url, result in zip(self.production_urls, deployment_results):
             if isinstance(result, Exception):
                 # Task failed with exception
                 self._handle_deployment_error(url, result, config, results)
             elif isinstance(result, dict):
-                # Successful result
-                if result["method"] == "skipped":
-                    results["skipped"] += 1
-                else:
-                    results["successful"] += 1
-
-                    method_emojis = {
-                        "structured": "🏗️",
-                        "conditional": "✅",
-                        "raw_fallback": "🔄",
-                        "fallback": "🔄",
-                    }
-                    method_emoji = method_emojis.get(result["method"], "✅")
-                    pod_info = self._extract_pod_info_from_url(url)
-                    logger.info(
-                        f"{method_emoji} Deployed to {pod_info['pod_name']} ({url}) ({result['method']}), version: {result['version']}"
-                    )
-
-                # Use actual reload information from dataplane API response
-                reload_triggered = result.get("reload_triggered", False)
-                reload_id = result.get("reload_id")
-
-                logger.debug(
-                    f"🔍 Processing deployment result for {url}: reload_triggered={reload_triggered}, "
-                    f"reload_id={reload_id}, method={result.get('method')}, version={result.get('version')}"
-                )
-                pod_info = self._extract_pod_info_from_url(url)
-
-                if result["method"] == "skipped":
-                    logger.debug(
-                        f"ℹ️  Configuration unchanged on {pod_info['pod_name']} ({url})"
-                    )
-                else:
-                    logger.debug(
-                        f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result['method']}"
-                    )
+                # Process successful result
+                self._process_successful_deployment(url, result, results)
             else:
                 # Unexpected result type
                 error_msg = f"Unexpected result type from deployment: {type(result)}"
@@ -1285,7 +1225,55 @@ class ConfigSynchronizer:
                     url, Exception(error_msg), config, results
                 )
 
-        # Enhanced logging with skip information
+    def _process_successful_deployment(
+        self, url: str, result: Dict[str, Any], results: Dict[str, Any]
+    ) -> None:
+        """Process a successful deployment result."""
+        if result["method"] == "skipped":
+            results["skipped"] += 1
+        else:
+            results["successful"] += 1
+            self._log_successful_deployment(url, result)
+
+        # Log detailed deployment information
+        self._log_deployment_details(url, result)
+
+    def _log_successful_deployment(self, url: str, result: Dict[str, Any]) -> None:
+        """Log information about successful deployment."""
+        method_emojis = {
+            "structured": "🏗️",
+            "conditional": "✅",
+            "raw_fallback": "🔄",
+            "fallback": "🔄",
+        }
+        method_emoji = method_emojis.get(result["method"], "✅")
+        pod_info = self._extract_pod_info_from_url(url)
+        logger.info(
+            f"{method_emoji} Deployed to {pod_info['pod_name']} ({url}) ({result['method']}), version: {result['version']}"
+        )
+
+    def _log_deployment_details(self, url: str, result: Dict[str, Any]) -> None:
+        """Log detailed deployment information for debugging."""
+        reload_triggered = result.get("reload_triggered", False)
+        reload_id = result.get("reload_id")
+
+        logger.debug(
+            f"🔍 Processing deployment result for {url}: reload_triggered={reload_triggered}, "
+            f"reload_id={reload_id}, method={result.get('method')}, version={result.get('version')}"
+        )
+
+        pod_info = self._extract_pod_info_from_url(url)
+        if result["method"] == "skipped":
+            logger.debug(
+                f"ℹ️  Configuration unchanged on {pod_info['pod_name']} ({url})"
+            )
+        else:
+            logger.debug(
+                f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result['method']}"
+            )
+
+    def _log_sync_results(self, results: Dict[str, Any]) -> None:
+        """Log the final synchronization results."""
         total_instances = len(self.production_urls)
         if results["successful"] > 0:
             # Log at INFO when we actually deployed something
@@ -1306,8 +1294,6 @@ class ConfigSynchronizer:
                 f"{results['skipped']} skipped (unchanged), "
                 f"{results['failed']} failed out of {total_instances} instances"
             )
-
-        return results
 
     def _extract_pod_info_from_url(self, url: str) -> Dict[str, str]:
         """Extract pod information from dataplane URL.
