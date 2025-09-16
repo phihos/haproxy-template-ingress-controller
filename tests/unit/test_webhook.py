@@ -6,10 +6,11 @@ WebhookRegistry classes.
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 import yaml
 import kopf
 
+import haproxy_template_ic.webhook as webhook_module
 from haproxy_template_ic.webhook import (
     register_validation_webhooks_from_config,
     _is_haproxy_template_ic_configmap,
@@ -71,16 +72,18 @@ class TestHelperFunctions:
         }
         assert not _is_haproxy_template_ic_configmap(configmap_data)
 
-    def test_is_haproxy_template_ic_configmap_type_error(self):
+    def test_is_haproxy_template_ic_configmap_type_error(self, monkeypatch):
         """Test handling of type errors in YAML processing."""
-        with patch("yaml.safe_load") as mock_yaml:
-            mock_yaml.side_effect = TypeError("Invalid type for YAML parsing")
+        import yaml
 
-            configmap_data = {
-                "metadata": {"name": "test"},
-                "data": {"config": "some config"},
-            }
-            assert not _is_haproxy_template_ic_configmap(configmap_data)
+        mock_yaml = Mock(side_effect=TypeError("Invalid type for YAML parsing"))
+        monkeypatch.setattr(yaml, "safe_load", mock_yaml)
+
+        configmap_data = {
+            "metadata": {"name": "test"},
+            "data": {"config": "some config"},
+        }
+        assert not _is_haproxy_template_ic_configmap(configmap_data)
 
     def test_extract_config_data_success(self):
         """Test successful config data extraction."""
@@ -277,9 +280,11 @@ class TestStatelessRegistrationFromConfig:
         # Should not raise any exceptions
         register_validation_webhooks_from_config(config)
 
-    @patch("haproxy_template_ic.webhook.logger")
-    def test_register_validation_webhooks_logs_enabled_webhooks(self, mock_logger):
+    def test_register_validation_webhooks_logs_enabled_webhooks(self, monkeypatch):
         """Test that enabled webhooks are logged correctly."""
+        mock_logger = Mock()
+        monkeypatch.setattr(webhook_module, "logger", mock_logger)
+
         config = Mock()
         resource_config1 = Mock()
         resource_config1.enable_validation_webhook = True
