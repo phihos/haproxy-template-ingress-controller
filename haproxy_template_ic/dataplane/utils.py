@@ -285,7 +285,7 @@ def _log_fetch_error(resource_type: str, identifier: str, error: Exception) -> N
     logger.debug(f"Could not fetch {resource_type} {identifier}: {error}")
 
 
-async def _get_configuration_version(client: Any) -> Optional[int]:
+async def _get_configuration_version(client: Any) -> int | None:
     """Get the current HAProxy configuration version.
 
     Args:
@@ -295,7 +295,8 @@ async def _get_configuration_version(client: Any) -> Optional[int]:
         Configuration version number or None if failed to fetch
     """
     try:
-        return await get_configuration_version.asyncio(client=client)
+        # TODO Check for type instead of assuming int
+        return await get_configuration_version.asyncio(client=client)  # type: ignore[return-value]
     except Exception:
         # Silently return None for version fetch failures
         return None
