@@ -116,18 +116,11 @@ def _record_resource_metrics(metrics: Any, indices: Dict[str, Any]) -> None:
     metrics.record_watched_resources(metrics_data)
 
 
-async def handle_resource_event(memo: ApplicationState, **kwargs: Any) -> None:
+async def handle_resource_event(**kwargs: Any) -> None:
     """Event handler that triggers template rendering debouncer."""
-    await memo.operations.debouncer.trigger("resource_changes")
-
-
-def _create_tracked_event_handler(track, resource_id: str, memo: ApplicationState):
-    """Factory function to create event handler with proper closure capture."""
-
-    async def tracked_event_handler(**kwargs):
-        return await track(resource_id)(handle_resource_event)(memo=memo, **kwargs)
-
-    return tracked_event_handler
+    memo = kwargs.get("memo")
+    if memo:
+        await memo.operations.debouncer.trigger("resource_changes")
 
 
 def setup_resource_watchers(memo: ApplicationState) -> None:
@@ -160,12 +153,12 @@ def setup_resource_watchers(memo: ApplicationState) -> None:
                 param=resource_id,
             )(track(resource_id)(update_resource_index))
 
-            # Register event handler with tracking (using factory to fix closure capture)
+            # Register event handler with tracking
             kopf.on.event(
                 api_version,
                 kind,
                 id=f"{resource_id}_events",
-            )(_create_tracked_event_handler(track, resource_id, memo))
+            )(track(resource_id)(handle_resource_event))
 
             logger.debug(f"✅ Registered event handler for {resource_id}")
 

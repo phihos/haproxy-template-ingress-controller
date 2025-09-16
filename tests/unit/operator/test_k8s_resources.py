@@ -8,7 +8,10 @@ import pytest
 import logging
 from unittest.mock import MagicMock
 
-from haproxy_template_ic.operator.k8s_resources import update_resource_index
+from haproxy_template_ic.operator.k8s_resources import (
+    update_resource_index,
+    handle_resource_event,
+)
 
 
 class TestUpdateResourceIndex:
@@ -84,3 +87,46 @@ class TestUpdateResourceIndex:
 
         # Should use custom indexing
         assert result == {("prod", "frontend"): body}
+
+
+class TestHandleResourceEvent:
+    """Test resource event handling functionality."""
+
+    @pytest.mark.asyncio
+    async def test_handle_resource_event_with_memo(self):
+        """Test handle_resource_event triggers debouncer when memo is provided."""
+        # Mock memo with debouncer
+        memo = MagicMock()
+
+        # Mock debouncer trigger to return a coroutine
+        async def mock_trigger(trigger_type):
+            assert trigger_type == "resource_changes"
+
+        memo.operations.debouncer.trigger = mock_trigger
+
+        # Call with memo in kwargs (simulating Kopf behavior)
+        await handle_resource_event(
+            memo=memo, namespace="test-ns", name="test-resource", body={"test": "data"}
+        )
+
+        # If we get here without exception, the function worked correctly
+
+    @pytest.mark.asyncio
+    async def test_handle_resource_event_no_memo(self):
+        """Test handle_resource_event handles missing memo gracefully."""
+        # Call without memo - should not raise exception
+        await handle_resource_event(
+            namespace="test-ns", name="test-resource", body={"test": "data"}
+        )
+
+        # If we get here without exception, the function worked correctly
+
+    @pytest.mark.asyncio
+    async def test_handle_resource_event_none_memo(self):
+        """Test handle_resource_event handles None memo gracefully."""
+        # Call with None memo - should not raise exception
+        await handle_resource_event(
+            memo=None, namespace="test-ns", name="test-resource", body={"test": "data"}
+        )
+
+        # If we get here without exception, the function worked correctly

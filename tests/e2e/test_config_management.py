@@ -107,6 +107,7 @@ def test_no_reload_loop_on_repeated_events(
         operator,
         "Template debouncer started (",  # Should still be running the same instance
         timeout=5,
+        since_milliseconds=120000,  # Look back 2 minutes to find the original startup message
     )
 
     print(
