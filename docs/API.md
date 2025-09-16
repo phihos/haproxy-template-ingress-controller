@@ -332,7 +332,42 @@ Validation sidecar:
 curl -u admin:validationpass http://localhost:5555/v3/
 ```
 
+
+### Key Endpoints
+
+#### Configuration
+
+```http
+GET /v3/services/haproxy/configuration/global
+GET /v3/services/haproxy/configuration/frontends
+GET /v3/services/haproxy/configuration/backends
+```
+
+#### Maps
+
+```http
+GET /v3/services/haproxy/runtime/maps
+POST /v3/services/haproxy/runtime/maps
+PUT /v3/services/haproxy/runtime/maps/{name}
+```
+
+#### Certificates
+
+```http
+GET /v3/services/haproxy/storage/ssl_certificates
+POST /v3/services/haproxy/storage/ssl_certificates
+PUT /v3/services/haproxy/storage/ssl_certificates/{name}
+```
+
+#### Reload
+
+```http
+PUT /v3/services/haproxy/actions/reload
+```
+
 ## Python API
+
+For developers and contributors, the **Python API** covers the python code for the controller.
 
 ### Import Paths
 
@@ -450,41 +485,6 @@ operator.get_log_position_at_time(milliseconds_ago=1500)
 assert_log_line(operator, "message", since_milliseconds=1000)
 ```
 
-### Key Endpoints
-
-#### Configuration
-
-```http
-GET /v3/services/haproxy/configuration/global
-GET /v3/services/haproxy/configuration/frontends
-GET /v3/services/haproxy/configuration/backends
-```
-
-#### Maps
-
-```http
-GET /v3/services/haproxy/runtime/maps
-POST /v3/services/haproxy/runtime/maps
-PUT /v3/services/haproxy/runtime/maps/{name}
-```
-
-#### Certificates
-
-```http
-GET /v3/services/haproxy/storage/ssl_certificates
-POST /v3/services/haproxy/storage/ssl_certificates
-PUT /v3/services/haproxy/storage/ssl_certificates/{name}
-```
-
-#### Reload
-
-```http
-PUT /v3/services/haproxy/actions/reload
-```
-
-## Python API
-
-For developers and contributors, the **Python API** covers the python code for the controller.
 
 ### Operator
 
