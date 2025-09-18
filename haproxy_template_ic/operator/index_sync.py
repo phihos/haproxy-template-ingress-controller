@@ -15,7 +15,9 @@ from haproxy_template_ic.models.config import Config
 logger = logging.getLogger(__name__)
 
 
-def create_tracking_decorator(tracker: "IndexSynchronizationTracker"):
+def create_tracking_decorator(
+    tracker: "IndexSynchronizationTracker",
+) -> Callable[[str], Callable[[Callable], Callable]]:
     """Factory function that creates tracking decorators with injected tracker."""
 
     def track_index_sync(resource_type: str):

@@ -8,7 +8,7 @@ and recovery mechanisms to reduce code duplication across the codebase.
 import asyncio
 import functools
 import logging
-from typing import Any, Callable, TypeVar, Optional, Union, cast
+from typing import Any, Callable, TypeVar, Optional, cast
 
 import structlog
 
@@ -17,7 +17,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def handle_exceptions(
-    logger: Optional[Union[logging.Logger, structlog.BoundLogger]] = None,
+    logger: Optional[logging.Logger | structlog.BoundLogger] = None,
     default_return: Any = None,
     reraise: bool = False,
     context: Optional[str] = None,
@@ -113,7 +113,7 @@ def handle_exceptions(
 
 
 def log_and_ignore_errors(
-    logger: Optional[Union[logging.Logger, structlog.BoundLogger]] = None,
+    logger: Optional[logging.Logger | structlog.BoundLogger] = None,
     message: str = "Ignoring non-critical error",
 ) -> Callable[[F], F]:
     """
@@ -131,7 +131,7 @@ def log_and_ignore_errors(
 
 def safe_operation(
     default: Any = None,
-    logger: Optional[Union[logging.Logger, structlog.BoundLogger]] = None,
+    logger: Optional[logging.Logger | structlog.BoundLogger] = None,
 ) -> Callable[[F], F]:
     """
     Decorator for operations that should never crash the application.

@@ -10,7 +10,7 @@ import functools
 import inspect
 import logging
 from functools import lru_cache
-from typing import Any, Callable, TypeVar, Awaitable, Dict, Union, cast
+from typing import Any, Callable, TypeVar, Awaitable, Dict, cast
 from uuid import uuid4
 
 import structlog
@@ -66,7 +66,6 @@ def _extract_context_from_parameters(
         # This looks like a kopf event handler
         context.setdefault("kubernetes_event", bound_args.arguments["type"])
 
-    # Note: Removed fragile function name inference as per code review
     # Resource types should come from event objects or explicit decorator parameters
 
     # Auto-generate operation_id if not provided
@@ -310,7 +309,7 @@ def setup_structured_logging(verbose_level: int, use_json: bool = False) -> None
     ]
 
     # Choose renderer based on output format
-    renderer: Union[structlog.processors.JSONRenderer, structlog.dev.ConsoleRenderer]
+    renderer: structlog.processors.JSONRenderer | structlog.dev.ConsoleRenderer
     if use_json:
         # For JSON mode, mark it so emoji processor knows not to add emojis
         shared_processors.append(

@@ -8,59 +8,112 @@ across multiple instances with validation-first deployment and structured compar
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext
 
-from .client import _SECTION_ELEMENTS, DataplaneClient
-from .errors import DataplaneAPIError, ValidationError
-from .models import ConfigChange, compute_content_hash
-from .types import ConfigChangeType, ConfigElementType, ConfigSectionType
+from .client import DataplaneClient
+from .client_pool import DataplaneClientPool
+from .endpoint import DataplaneEndpoint, DataplaneEndpointSet
+from .types import (
+    ConfigChange,
+    ConfigChangeType,
+    ConfigElementType,
+    ConfigSectionType,
+    DataplaneAPIError,
+    ValidationError,
+    SynchronizationResult,
+    ValidationDeploymentResult,
+    compute_content_hash,
+)
 from .utils import (
-    MAX_CONFIG_COMPARISON_CHANGES,
     _check_early_exit_condition,
-    _natural_sort_key,
+    extract_exception_origin,
+    natural_sort_key,
     _to_dict_safe,
     extract_hostname_from_url,
     parse_validation_error_details,
 )
 
-if TYPE_CHECKING:
-    from haproxy_template_ic.credentials import Credentials
 
 logger = logging.getLogger(__name__)
 
 
 class ConfigSynchronizer:
-    """Simple configuration synchronizer for HAProxy instances."""
+    """Configuration synchronizer owning persistent client pool and using endpoint bundling."""
 
-    def __init__(
-        self,
-        production_urls: List[str],
-        validation_url: str,
-        credentials: "Credentials",
-        url_to_pod_name: Optional[Dict[str, str]] = None,
-    ):
-        self.production_urls = production_urls
-        self.validation_url = validation_url
-        self.credentials = credentials
-        self.url_to_pod_name = url_to_pod_name or {}
+    def __init__(self, endpoints: DataplaneEndpointSet):
+        self.endpoints = endpoints
 
+        # ConfigSynchronizer owns the client pool - single responsibility
+        self.client_pool = DataplaneClientPool()
+
+        # Lazy-initialized clients using owned pool
         self._validation_client: Optional[DataplaneClient] = None
         self._production_clients: Dict[str, DataplaneClient] = {}
 
+    def create_client(
+        self, endpoint: DataplaneEndpoint, timeout: float = 30.0
+    ) -> DataplaneClient:
+        """Factory method for creating clients with shared pool."""
+        return DataplaneClient(endpoint=endpoint, timeout=timeout)
+
+    def create_client_for_url(self, url: str, timeout: float = 30.0) -> DataplaneClient:
+        """Factory method for creating clients by URL (convenience method)."""
+        endpoint = self.endpoints.find_by_url(url)
+        if not endpoint:
+            raise ValueError(f"No endpoint found for URL: {url}")
+        return self.create_client(endpoint, timeout)
+
+    def get_client_pool(self) -> DataplaneClientPool:
+        """Access to the persistent client pool for external clients."""
+        return self.client_pool
+
+    async def close_all_connections(self) -> None:
+        """Close all persistent connections owned by this synchronizer."""
+        await self.client_pool.close_all()
+
     def _get_validation_client(self) -> DataplaneClient:
-        """Get validation client, creating it if needed (lazy initialization)."""
+        """Get validation client using owned pool."""
         if self._validation_client is None:
-            self._validation_client = DataplaneClient(
-                self.validation_url,
-                auth=(
-                    self.credentials.validation.username,
-                    self.credentials.validation.password.get_secret_value(),
-                ),
-            )
+            self._validation_client = self.create_client(self.endpoints.validation)
         return self._validation_client
+
+    def _get_production_client(self, endpoint: DataplaneEndpoint) -> DataplaneClient:
+        """Get production client using owned pool."""
+        if endpoint.url not in self._production_clients:
+            self._production_clients[endpoint.url] = self.create_client(endpoint)
+        return self._production_clients[endpoint.url]
+
+    def get_pool_metrics(self) -> Dict[str, Any]:
+        """Get connection pool metrics for monitoring."""
+        return self.client_pool.get_pool_stats()
+
+    def get_endpoint_health(self) -> Dict[str, str]:
+        """Get health status of all endpoints."""
+        health = {}
+        for endpoint in self.endpoints.all_endpoints():
+            # Could add health check logic here in the future
+            health[endpoint.display_name] = "unknown"
+        return health
+
+    def _record_pool_metrics(self) -> None:
+        """Record connection pool metrics for monitoring."""
+        try:
+            pool_stats = self.get_pool_metrics()
+            metrics = get_metrics_collector()
+            metrics.record_pool_statistics(pool_stats)
+
+            # Log pool health for debugging
+            logger.debug(
+                f"📊 Pool stats: {pool_stats['active_connections']} active, "
+                f"{pool_stats['total_references']} refs, "
+                f"{pool_stats['statistics']['clients_created']} created, "
+                f"{pool_stats['statistics']['clients_cleaned']} cleaned"
+            )
+        except Exception as e:
+            logger.debug(f"Failed to record pool metrics: {e}")
 
     def _prepare_sync_content(
         self, config_context: HAProxyConfigContext
@@ -80,7 +133,6 @@ class ConfigSynchronizer:
 
         template_hashes = {}
 
-        # Add main HAProxy config
         if config_context.rendered_config:
             template_hashes["haproxy.cfg"] = compute_content_hash(
                 config_context.rendered_config.content
@@ -92,20 +144,19 @@ class ConfigSynchronizer:
 
         return template_hashes
 
-    def update_production_clients(
-        self, new_urls: List[str], url_to_pod_name: Optional[Dict[str, str]] = None
-    ) -> None:
-        """Update production clients based on current URLs.
+    def update_production_clients(self, new_endpoints: List[DataplaneEndpoint]) -> None:
+        """Update production clients based on current endpoints.
 
         This method handles dynamic HAProxy pod lifecycle by:
-        - Creating clients for newly discovered URLs
-        - Removing clients for URLs that are no longer present
-        - Preserving existing clients for stable URLs to maintain connection pooling
+        - Creating clients for newly discovered endpoints
+        - Removing clients for endpoints that are no longer present
+        - Preserving existing clients for stable endpoints to maintain connection pooling
 
         Args:
-            new_urls: Current list of production HAProxy URLs
-            url_to_pod_name: Optional mapping from URLs to pod names
+            new_endpoints: Current list of production HAProxy endpoints
         """
+        new_urls = [ep.url for ep in new_endpoints]
+
         # Remove clients for URLs that are no longer present
         removed_urls = set(self._production_clients.keys()) - set(new_urls)
         for url in removed_urls:
@@ -120,56 +171,16 @@ class ConfigSynchronizer:
         newly_added_urls = new_urls_set - existing_urls
 
         for url in newly_added_urls:
-            self._production_clients[url] = DataplaneClient(
-                url,
-                auth=(
-                    self.credentials.dataplane.username,
-                    self.credentials.dataplane.password.get_secret_value(),
-                ),
-            )
+            # Find endpoint with auth from new_endpoints list
+            endpoint = next(ep for ep in new_endpoints if ep.url == url)
+            self._production_clients[url] = DataplaneClient(endpoint)
             logger.debug(f"Created cached client for {url}")
 
-        # Update the production URLs list
-        self.production_urls = new_urls
-
-        # Update pod name mapping if provided
-        if url_to_pod_name is not None:
-            self.url_to_pod_name = url_to_pod_name
-
-    def add_production_url(self, url: str) -> None:
-        """Add a single production URL and create its client.
-
-        Args:
-            url: The production HAProxy dataplane URL to add
-        """
-        if url not in self._production_clients:
-            self._production_clients[url] = DataplaneClient(
-                url,
-                auth=(
-                    self.credentials.dataplane.username,
-                    self.credentials.dataplane.password.get_secret_value(),
-                ),
-            )
-            logger.debug(f"➕ Added production client for {url}")
-
-            # Update the URLs list
-            if url not in self.production_urls:
-                self.production_urls.append(url)
-
-    def remove_production_url(self, url: str) -> None:
-        """Remove a single production URL and cleanup its client.
-
-        Args:
-            url: The production HAProxy dataplane URL to remove
-        """
-        if url in self._production_clients:
-            # Remove the client
-            del self._production_clients[url]
-            logger.debug(f"➖ Removed production client for {url}")
-
-            # Update the URLs list
-            if url in self.production_urls:
-                self.production_urls.remove(url)
+        # Update the endpoint set with new endpoints
+        self.endpoints = DataplaneEndpointSet(
+            validation=self.endpoints.validation,  # Keep the existing validation endpoint
+            production=new_endpoints,
+        )
 
     async def _sync_content_to_client(
         self,
@@ -199,7 +210,7 @@ class ConfigSynchronizer:
 
     async def _validate_configuration(self, config: str) -> None:
         """Validate configuration using the validation instance."""
-        logger.debug(f"Validating configuration at {self.validation_url}")
+        logger.debug(f"Validating configuration at {self.endpoints.validation.url}")
         try:
             validation_client = self._get_validation_client()
             await validation_client.validate_configuration(config)
@@ -226,8 +237,8 @@ class ConfigSynchronizer:
             section_name: Name of the parent section
             changes: List to append detected changes to
         """
-        # Get element mappings from registry
-        elements_to_compare = _SECTION_ELEMENTS.get(section_type, [])
+        # Define elements to compare for this section type
+        elements_to_compare: list = []
 
         # Compare each type of nested element
         for attr_name, element_type, is_named in elements_to_compare:
@@ -235,7 +246,6 @@ class ConfigSynchronizer:
             current_items = current_nested.get(attr_name, []) or []
             new_items = new_nested.get(attr_name, []) or []
 
-            # Ensure we have lists
             if not isinstance(current_items, list):
                 current_items = []
             if not isinstance(new_items, list):
@@ -320,7 +330,7 @@ class ConfigSynchronizer:
         new_names = set(new_dict.keys())
 
         # Deletions
-        for name in sorted(current_names - new_names, key=_natural_sort_key):
+        for name in sorted(current_names - new_names, key=natural_sort_key):
             changes.append(
                 ConfigChange.create_element_change(
                     change_type=ConfigChangeType.DELETE,
@@ -332,8 +342,7 @@ class ConfigSynchronizer:
                 )
             )
 
-        # Additions
-        for name in sorted(new_names - current_names, key=_natural_sort_key):
+        for name in sorted(new_names - current_names, key=natural_sort_key):
             changes.append(
                 ConfigChange.create_element_change(
                     change_type=ConfigChangeType.CREATE,
@@ -346,7 +355,7 @@ class ConfigSynchronizer:
             )
 
         # Modifications
-        for name in sorted(current_names & new_names, key=_natural_sort_key):
+        for name in sorted(current_names & new_names, key=natural_sort_key):
             if _to_dict_safe(current_dict[name]) != _to_dict_safe(new_dict[name]):
                 changes.append(
                     ConfigChange.create_element_change(
@@ -456,7 +465,6 @@ class ConfigSynchronizer:
                 )
             )
 
-        # Additions
         for name in new_names - current_names:
             changes.append(
                 ConfigChange(
@@ -607,16 +615,15 @@ class ConfigSynchronizer:
                     )
                 )
 
-            # Additions
-            for name in new_names - current_names:
-                changes.append(
-                    ConfigChange(
-                        change_type=ConfigChangeType.CREATE,
-                        section_type=section_type,
-                        section_name=name,
-                        new_config=new_sections[name],
+                for name in new_names - current_names:
+                    changes.append(
+                        ConfigChange(
+                            change_type=ConfigChangeType.CREATE,
+                            section_type=section_type,
+                            section_name=name,
+                            new_config=new_sections[name],
+                        )
                     )
-                )
 
             # Modifications
             for name in current_names & new_names:
@@ -791,7 +798,7 @@ class ConfigSynchronizer:
         Performance considerations:
         - For large configurations (>100 backends/frontends), this method may consume
           significant memory as it loads all configuration sections into memory
-        - Early exit after MAX_CONFIG_COMPARISON_CHANGES changes to avoid expensive
+        - Early exit after a maximum number of changes to avoid expensive
           deep comparisons when many changes are detected
         - Uses xxHash-based serialization with defensive error handling
 
@@ -804,7 +811,7 @@ class ConfigSynchronizer:
         """
         start_time = time.time()
         changes: List[str] = []
-        max_changes_before_exit = MAX_CONFIG_COMPARISON_CHANGES
+        max_changes_before_exit = 10  # Stop comparison after finding this many changes
 
         # Compare main configuration sections
         if self._compare_backends_and_frontends(
@@ -890,7 +897,6 @@ class ConfigSynchronizer:
         current_names = set(current_sections.keys())
         new_names = set(new_sections.keys())
 
-        # Check for removals
         changes.extend(
             f"remove {section_label} {name}" for name in current_names - new_names
         )
@@ -952,7 +958,7 @@ class ConfigSynchronizer:
         acls_to_sync: Dict[str, str],
         files_to_sync: Dict[str, str],
         validation_structured: Dict[str, Any],
-    ) -> Dict[str, Any]:
+    ) -> SynchronizationResult:
         """Deploy to a single production instance with structured comparison.
 
         Returns:
@@ -978,12 +984,12 @@ class ConfigSynchronizer:
             if not config_changes:
                 # No changes needed - skip deployment
                 logger.debug(f"⏭️  No structural changes for {url}, skipping deployment")
-                return {
-                    "method": "skipped",
-                    "version": "unchanged",
-                    "reload_triggered": False,
-                    "reload_id": None,
-                }
+                return SynchronizationResult(
+                    method="skipped",
+                    version="unchanged",
+                    reload_triggered=False,
+                    reload_id=None,
+                )
             else:
                 # Changes detected - use structured deployment
                 change_descriptions = [str(change) for change in config_changes]
@@ -995,29 +1001,37 @@ class ConfigSynchronizer:
                     deploy_result = await client.deploy_structured_configuration(
                         config_changes
                     )
-                    return {
-                        "method": "structured",
-                        "version": deploy_result["version"],
-                        "reload_triggered": deploy_result["reload_triggered"],
-                        "reload_id": deploy_result.get("reload_id"),
-                    }
+                    return SynchronizationResult(
+                        method="structured",
+                        version=deploy_result.version,
+                        reload_triggered=False,  # StructuredDeploymentResult doesn't have reload_triggered
+                        reload_id=None,  # StructuredDeploymentResult doesn't have reload_id
+                    )
                 except DataplaneAPIError as structured_error:
                     # If structured deployment fails, fall back to raw deployment
+                    # Extract origin details from the original error if available
+                    origin_details = ""
+                    if structured_error.original_error:
+                        origin_details = f"\n{extract_exception_origin(structured_error.original_error)}"
+
                     logger.warning(
-                        f"⚠️  Structured deployment failed for {url}, falling back to raw: {structured_error}"
+                        f"⚠️  Structured deployment failed for {url}, falling back to raw: {structured_error}{origin_details}"
                     )
 
                     # Record structured deployment failure metrics
                     metrics = get_metrics_collector()
                     metrics.increment_dataplane_fallback("structured_to_raw")
 
-                    deploy_result = await client.deploy_configuration(config)
-                    return {
-                        "method": "raw_fallback",
-                        "version": deploy_result["version"],
-                        "reload_triggered": deploy_result["reload_triggered"],
-                        "reload_id": deploy_result.get("reload_id"),
-                    }
+                    fallback_result: ValidationDeploymentResult = (
+                        await client.deploy_configuration(config)
+                    )
+                    return SynchronizationResult(
+                        method="raw_fallback",
+                        version=fallback_result.version,
+                        reload_triggered=fallback_result.reload_id
+                        is not None,  # ValidationDeploymentResult has reload_id
+                        reload_id=fallback_result.reload_id,
+                    )
 
         except Exception as fetch_error:
             # Fallback to conditional deployment if structured comparison fails
@@ -1030,29 +1044,36 @@ class ConfigSynchronizer:
             metrics.increment_dataplane_fallback("structured_to_conditional")
 
             try:
-                deploy_result = await client.deploy_configuration_conditionally(config)
-                return {
-                    "method": "conditional",
-                    "version": deploy_result["version"],
-                    "reload_triggered": deploy_result["reload_triggered"],
-                    "reload_id": deploy_result.get("reload_id"),
-                }
+                conditional_result: ValidationDeploymentResult = (
+                    await client.deploy_configuration(config)
+                )
+                return SynchronizationResult(
+                    method="conditional",
+                    version=conditional_result.version,
+                    reload_triggered=conditional_result.reload_id is not None,
+                    reload_id=conditional_result.reload_id,
+                )
             except Exception as conditional_error:
                 # Final fallback to regular deployment
+                # Extract origin details for debugging
+                origin_details = f"\n{extract_exception_origin(conditional_error)}"
+
                 logger.warning(
-                    f"⚠️  Conditional deployment also failed for {url}, using regular deployment: {conditional_error}"
+                    f"⚠️  Conditional deployment also failed for {url}, using regular deployment: {conditional_error}{origin_details}"
                 )
 
                 # Record double fallback metrics
                 metrics.increment_dataplane_fallback("conditional_to_regular")
 
-                deploy_result = await client.deploy_configuration(config)
-                return {
-                    "method": "fallback",
-                    "version": deploy_result["version"],
-                    "reload_triggered": deploy_result["reload_triggered"],
-                    "reload_id": deploy_result.get("reload_id"),
-                }
+                final_result: ValidationDeploymentResult = (
+                    await client.deploy_configuration(config)
+                )
+                return SynchronizationResult(
+                    method="fallback",
+                    version=final_result.version,
+                    reload_triggered=final_result.reload_id is not None,
+                    reload_id=final_result.reload_id,
+                )
 
     def _handle_deployment_error(
         self, url: str, error: Exception, config: str, results: Dict[str, Any]
@@ -1100,7 +1121,10 @@ class ConfigSynchronizer:
             config_context: The rendered configuration context
         """
         if not config_context.rendered_config:
-            raise DataplaneAPIError("No rendered HAProxy configuration available")
+            raise DataplaneAPIError(
+                "No rendered HAProxy configuration available",
+                operation="sync_configuration",
+            )
 
         # Prepare configuration content
         config = config_context.rendered_config.content
@@ -1110,7 +1134,7 @@ class ConfigSynchronizer:
         _ = self._compute_template_hashes(config_context)
 
         # Update production clients to handle dynamic URL changes
-        self.update_production_clients(self.production_urls)
+        self.update_production_clients(self.endpoints.production)
 
         # Validate configuration using validation instance
         validation_structured = await self._validate_and_prepare_config(
@@ -1121,6 +1145,9 @@ class ConfigSynchronizer:
         results = await self._deploy_to_production_instances(
             config, sync_content, validation_structured
         )
+
+        # Record pool metrics after deployment operations
+        self._record_pool_metrics()
 
         # Log final results
         self._log_sync_results(results)
@@ -1180,14 +1207,14 @@ class ConfigSynchronizer:
         }
 
         logger.debug(
-            f"🚀 Deploying to {len(self.production_urls)} production instances"
+            f"🚀 Deploying to {len(self.endpoints.production)} production instances"
         )
 
         # Create deployment tasks for parallel execution
         deployment_tasks = []
-        for url in self.production_urls:
+        for endpoint in self.endpoints.production:
             task = self._deploy_to_single_instance(
-                url,
+                endpoint.url,
                 config,
                 maps_to_sync,
                 certificates_to_sync,
@@ -1211,25 +1238,25 @@ class ConfigSynchronizer:
         self, deployment_results: List[Any], config: str, results: Dict[str, Any]
     ) -> None:
         """Process the results from parallel deployment tasks."""
-        for url, result in zip(self.production_urls, deployment_results):
+        for endpoint, result in zip(self.endpoints.production, deployment_results):
             if isinstance(result, Exception):
                 # Task failed with exception
-                self._handle_deployment_error(url, result, config, results)
-            elif isinstance(result, dict):
+                self._handle_deployment_error(endpoint.url, result, config, results)
+            elif isinstance(result, SynchronizationResult):
                 # Process successful result
-                self._process_successful_deployment(url, result, results)
+                self._process_successful_deployment(endpoint.url, result, results)
             else:
                 # Unexpected result type
                 error_msg = f"Unexpected result type from deployment: {type(result)}"
                 self._handle_deployment_error(
-                    url, Exception(error_msg), config, results
+                    endpoint.url, Exception(error_msg), config, results
                 )
 
     def _process_successful_deployment(
-        self, url: str, result: Dict[str, Any], results: Dict[str, Any]
+        self, url: str, result: SynchronizationResult, results: Dict[str, Any]
     ) -> None:
         """Process a successful deployment result."""
-        if result["method"] == "skipped":
+        if result.method == "skipped":
             results["skipped"] += 1
         else:
             results["successful"] += 1
@@ -1238,7 +1265,9 @@ class ConfigSynchronizer:
         # Log detailed deployment information
         self._log_deployment_details(url, result)
 
-    def _log_successful_deployment(self, url: str, result: Dict[str, Any]) -> None:
+    def _log_successful_deployment(
+        self, url: str, result: SynchronizationResult
+    ) -> None:
         """Log information about successful deployment."""
         method_emojis = {
             "structured": "🏗️",
@@ -1246,35 +1275,35 @@ class ConfigSynchronizer:
             "raw_fallback": "🔄",
             "fallback": "🔄",
         }
-        method_emoji = method_emojis.get(result["method"], "✅")
+        method_emoji = method_emojis.get(result.method, "✅")
         pod_info = self._extract_pod_info_from_url(url)
         logger.info(
-            f"{method_emoji} Deployed to {pod_info['pod_name']} ({url}) ({result['method']}), version: {result['version']}"
+            f"{method_emoji} Deployed to {pod_info['pod_name']} ({url}) ({result.method}), version: {result.version}"
         )
 
-    def _log_deployment_details(self, url: str, result: Dict[str, Any]) -> None:
+    def _log_deployment_details(self, url: str, result: SynchronizationResult) -> None:
         """Log detailed deployment information for debugging."""
-        reload_triggered = result.get("reload_triggered", False)
-        reload_id = result.get("reload_id")
+        reload_triggered = result.reload_triggered
+        reload_id = result.reload_id
 
         logger.debug(
             f"🔍 Processing deployment result for {url}: reload_triggered={reload_triggered}, "
-            f"reload_id={reload_id}, method={result.get('method')}, version={result.get('version')}"
+            f"reload_id={reload_id}, method={result.method}, version={result.version}"
         )
 
         pod_info = self._extract_pod_info_from_url(url)
-        if result["method"] == "skipped":
+        if result.method == "skipped":
             logger.debug(
                 f"ℹ️  Configuration unchanged on {pod_info['pod_name']} ({url})"
             )
         else:
             logger.debug(
-                f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result['method']}"
+                f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result.method}"
             )
 
     def _log_sync_results(self, results: Dict[str, Any]) -> None:
         """Log the final synchronization results."""
-        total_instances = len(self.production_urls)
+        total_instances = len(self.endpoints.production)
         if results["successful"] > 0:
             # Log at INFO when we actually deployed something
             logger.info(
@@ -1311,8 +1340,13 @@ class ConfigSynchronizer:
             if not pod_ip:
                 return {"pod_ip": "unknown", "pod_name": "unknown"}
 
-            # Use actual pod name from mapping if available, otherwise fallback to IP-based name
-            pod_name = self.url_to_pod_name.get(url, f"pod-{pod_ip.replace('.', '-')}")
+            # Use actual pod name from endpoint if available, otherwise fallback to IP-based name
+            endpoint = self.endpoints.find_by_url(url)
+            pod_name = (
+                endpoint.pod_name
+                if endpoint and endpoint.pod_name
+                else f"pod-{pod_ip.replace('.', '-')}"
+            )
 
             return {"pod_ip": pod_ip, "pod_name": pod_name}
 

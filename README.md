@@ -94,6 +94,7 @@ data:
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Diagnostic commands and recovery
 - [Security](docs/SECURITY.md) - RBAC, network policies, and hardening
 - [Development](docs/DEVELOPMENT.md) - Modular architecture, optimized builds, Telepresence testing
+- [Debugging](docs/DEBUGGING.md) - Telepresence setup and debugging workflows
 - [API Reference](docs/API.md) - CLI, environment variables, endpoints
 
 ## Requirements

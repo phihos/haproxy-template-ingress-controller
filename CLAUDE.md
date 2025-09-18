@@ -55,6 +55,18 @@ This file provides guidance to Claude Code when working with this repository.
 - **No defensive programming**: Leverage type safety instead of getattr()/hasattr() patterns
 - **Package exports**: Import from packages (`from haproxy_template_ic.dataplane import DataplaneClient`), not submodules
 
+### Comment Quality Standards
+- **No meta-comments**: Remove comments about code history, cleanup status, or implementation decisions
+- **No obvious comments**: Comments should explain WHY, never WHAT the code does
+- **No phase/DRY/library comments**: Remove development artifact comments like "Phase 2 DRY: Extended Mock Factory Library"
+- **Code should be self-documenting**: Use descriptive names instead of comments
+- **Modern Python syntax**: Use pipe syntax (`str | None`) instead of `Union[str, None]` for type hints
+
+### Documentation Standards
+- **No performance claims**: Never include performance metrics, timing claims, or scale assertions without measured data
+- **Factual information only**: Document only verified, testable behavior and requirements
+- **No speculation**: Avoid "should", "typically", "usually" - use definitive statements based on facts
+
 ## Critical Architectural Decisions
 
 ### Index Synchronization System

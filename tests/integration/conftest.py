@@ -15,16 +15,8 @@ from typing import Dict, Tuple
 import httpx
 import pytest
 import pytest_asyncio
+from pydantic import SecretStr
 from pytest import CollectReport, StashKey
-
-# HAProxyInstance removed in simplification - using direct URLs now
-
-from .utils import (
-    DockerComposeManager,
-    allocate_test_ports,
-    read_config_file,
-    wait_for_dataplane_api,
-)
 
 # Import for shared session fixtures
 from pytest_shared_session_scope import (
@@ -33,6 +25,19 @@ from pytest_shared_session_scope import (
 )
 from python_on_whales import DockerClient
 
+from haproxy_template_ic.credentials import DataplaneAuth
+from haproxy_template_ic.dataplane import (
+    DataplaneClient,
+    DataplaneEndpoint,
+)
+
+# HAProxyInstance removed in simplification - using direct URLs now
+from .utils import (
+    DockerComposeManager,
+    allocate_test_ports,
+    read_config_file,
+    wait_for_dataplane_api,
+)
 
 # Store test results for --keep-containers on-failure
 phase_report_key = StashKey[Dict[str, CollectReport]]()
@@ -143,38 +148,85 @@ async def docker_compose_dataplane(
         docker_resource_semaphore.release()
 
 
+async def assert_dataplane_api_ready(
+    base_url: str, auth: tuple[str, str], compose_manager: DockerComposeManager
+):
+    # Verify service is ready (additional check if needed)
+    ready = await wait_for_dataplane_api(
+        base_url,
+        auth,
+        timeout=30,
+        service_name="Production Dataplane API (client fixture)",
+    )
+    assert ready, "Production Dataplane API not ready for client fixture"
+
+
 @pytest_asyncio.fixture
-async def validation_dataplane_client(docker_compose_dataplane):
-    """Dataplane API client for validation sidecar."""
-    ports, _ = docker_compose_dataplane
-
-    base_url = f"http://localhost:{ports['validation_port']}"
-    auth = ("admin", "adminpass")
-
-    async with httpx.AsyncClient(base_url=base_url, auth=auth, timeout=30.0) as client:
-        yield client
-
-
-@pytest_asyncio.fixture
-async def production_dataplane_client(docker_compose_dataplane):
+async def production_dataplane_client_raw(docker_compose_dataplane):
     """Dataplane API client for production instance."""
     ports, compose_manager = docker_compose_dataplane
 
     base_url = f"http://localhost:{ports['production_port']}"
     auth = ("admin", "adminpass")
 
-    # Verify service is ready (additional check if needed)
-    ready = await wait_for_dataplane_api(
-        base_url,
-        auth,
-        timeout=30,
-        reporter=compose_manager.reporter,
-        service_name="Production Dataplane API (client fixture)",
-    )
-    assert ready, "Production Dataplane API not ready for client fixture"
+    await assert_dataplane_api_ready(base_url, auth, compose_manager)
 
     async with httpx.AsyncClient(base_url=base_url, auth=auth, timeout=30.0) as client:
         yield client
+
+
+@pytest_asyncio.fixture
+async def validation_dataplane_client_raw(docker_compose_dataplane):
+    """Validation Dataplane API client (raw httpx)."""
+    ports, compose_manager = docker_compose_dataplane
+
+    base_url = f"http://localhost:{ports['validation_port']}"
+    auth = ("admin", "adminpass")
+
+    await assert_dataplane_api_ready(base_url, auth, compose_manager)
+
+    async with httpx.AsyncClient(base_url=base_url, auth=auth, timeout=30.0) as client:
+        yield client
+
+
+@pytest_asyncio.fixture
+async def validation_dataplane_client(docker_compose_dataplane):
+    """Ready-to-use DataplaneClient instance for validation integration tests."""
+    ports, compose_manager = docker_compose_dataplane
+
+    base_url = f"http://localhost:{ports['validation_port']}"
+    # Check readiness with base URL (without /v3)
+    await assert_dataplane_api_ready(base_url, ("admin", "adminpass"), compose_manager)
+
+    # Add /v3 for the actual client
+    if not base_url.endswith("/v3"):
+        base_url += "/v3"
+
+    auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
+    endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
+    client = DataplaneClient(endpoint)
+
+    yield client
+
+
+@pytest_asyncio.fixture
+async def production_dataplane_client(docker_compose_dataplane):
+    """Ready-to-use DataplaneClient instance for integration tests."""
+    ports, compose_manager = docker_compose_dataplane
+
+    base_url = f"http://localhost:{ports['production_port']}"
+    # Check readiness with base URL (without /v3)
+    await assert_dataplane_api_ready(base_url, ("admin", "adminpass"), compose_manager)
+
+    # Add /v3 for the actual client
+    if not base_url.endswith("/v3"):
+        base_url += "/v3"
+
+    auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
+    endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
+    client = DataplaneClient(endpoint)
+
+    yield client
 
 
 @pytest_asyncio.fixture

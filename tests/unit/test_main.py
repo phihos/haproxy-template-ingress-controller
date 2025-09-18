@@ -14,6 +14,7 @@ from click.testing import CliRunner
 import haproxy_template_ic.__main__ as main_module
 from haproxy_template_ic.__main__ import cli
 from haproxy_template_ic.credentials import validate_k8s_name
+from tests.unit.conftest import mock_module_attributes, generate_k8s_name_test_cases
 
 
 # =============================================================================
@@ -59,69 +60,75 @@ def test_cli_help_mentions_configmap_only():
 # =============================================================================
 
 
-def test_run_command_with_defaults(monkeypatch):
+def test_run_command_with_defaults():
     """Test run command with default parameters."""
     mock_run = MagicMock()
-    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        ["run", "--configmap-name", "test-config", "--secret-name", "test-credentials"],
-    )
+    with mock_module_attributes(main_module, run_operator_loop=mock_run):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--configmap-name",
+                "test-config",
+                "--secret-name",
+                "test-credentials",
+            ],
+        )
 
-    assert result.exit_code == 0
-    mock_run.assert_called_once()
+        assert result.exit_code == 0
+        mock_run.assert_called_once()
 
-    # Check that the CLI options were passed correctly (only bootstrap parameters)
-    cli_options = mock_run.call_args[0][0]
-    assert cli_options.configmap_name == "test-config"
-    assert cli_options.secret_name == "test-credentials"
-    # Runtime settings are no longer in CLI options - they're in the ConfigMap
+        # Check that the CLI options were passed correctly (only bootstrap parameters)
+        cli_options = mock_run.call_args[0][0]
+        assert cli_options.configmap_name == "test-config"
+        assert cli_options.secret_name == "test-credentials"
+        # Runtime settings are no longer in CLI options - they're in the ConfigMap
 
 
-def test_run_command_bootstrap_params_only(monkeypatch):
+def test_run_command_bootstrap_params_only():
     """Test run command only accepts bootstrap parameters (configmap and secret names)."""
     mock_run = MagicMock()
-    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "run",
-            "--configmap-name",
-            "my-config",
-            "--secret-name",
-            "my-credentials",
-        ],
-    )
+    with mock_module_attributes(main_module, run_operator_loop=mock_run):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--configmap-name",
+                "my-config",
+                "--secret-name",
+                "my-credentials",
+            ],
+        )
 
-    assert result.exit_code == 0
-    cli_options = mock_run.call_args[0][0]
-    assert cli_options.configmap_name == "my-config"
-    assert cli_options.secret_name == "my-credentials"
-    # Runtime settings are configured via ConfigMap, not CLI
+        assert result.exit_code == 0
+        cli_options = mock_run.call_args[0][0]
+        assert cli_options.configmap_name == "my-config"
+        assert cli_options.secret_name == "my-credentials"
+        # Runtime settings are configured via ConfigMap, not CLI
 
 
-def test_run_command_with_env_vars(monkeypatch):
+def test_run_command_with_env_vars():
     """Test run command with environment variables for bootstrap parameters only."""
     mock_run = MagicMock()
-    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
 
-    runner = CliRunner(
-        env={
-            "CONFIGMAP_NAME": "env-config",
-            "SECRET_NAME": "env-credentials",
-        }
-    )
-    result = runner.invoke(cli, ["run"])
+    with mock_module_attributes(main_module, run_operator_loop=mock_run):
+        runner = CliRunner(
+            env={
+                "CONFIGMAP_NAME": "env-config",
+                "SECRET_NAME": "env-credentials",
+            }
+        )
+        result = runner.invoke(cli, ["run"])
 
-    assert result.exit_code == 0
-    cli_options = mock_run.call_args[0][0]
-    assert cli_options.configmap_name == "env-config"
-    assert cli_options.secret_name == "env-credentials"
-    # Runtime settings are configured via ConfigMap, not environment variables
+        assert result.exit_code == 0
+        cli_options = mock_run.call_args[0][0]
+        assert cli_options.configmap_name == "env-config"
+        assert cli_options.secret_name == "env-credentials"
+        # Runtime settings are configured via ConfigMap, not environment variables
 
 
 def test_run_command_missing_configmap_name():
@@ -147,20 +154,26 @@ def test_run_command_help_mentions_configmap():
     )
 
 
-def test_run_command_basic_functionality(monkeypatch):
+def test_run_command_basic_functionality():
     """Test that run command executes successfully."""
     mock_run = MagicMock()
-    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        ["run", "--configmap-name", "test-config", "--secret-name", "test-credentials"],
-    )
+    with mock_module_attributes(main_module, run_operator_loop=mock_run):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--configmap-name",
+                "test-config",
+                "--secret-name",
+                "test-credentials",
+            ],
+        )
 
-    assert result.exit_code == 0
-    mock_run.assert_called_once()
-    # Tracing is now configured from ConfigMap, not CLI
+        assert result.exit_code == 0
+        mock_run.assert_called_once()
+        # Tracing is now configured from ConfigMap, not CLI
 
 
 # =============================================================================
@@ -193,28 +206,23 @@ def test_run_command_invalid_configmap_name():
     assert "Invalid K8s name format" in result.output
 
 
-def test_run_command_valid_configmap_names(monkeypatch):
+def test_run_command_valid_configmap_names():
     """Test run command with valid ConfigMap names."""
     mock_run = MagicMock()
-    monkeypatch.setattr(main_module, "run_operator_loop", mock_run)
 
-    runner = CliRunner()
+    with mock_module_attributes(main_module, run_operator_loop=mock_run):
+        runner = CliRunner()
 
-    valid_names = [
-        "valid-name",
-        "valid123",
-        "123valid",
-        "v",  # Single character
-        "a1b2c3",
-        "my-app-config",
-        "haproxy-template-ic-config",
-    ]
+        # Use the generated test cases for valid names only
+        test_cases = generate_k8s_name_test_cases()
+        valid_names = [name for name, is_valid, _ in test_cases if is_valid]
 
-    for name in valid_names:
-        result = runner.invoke(
-            cli, ["run", "--configmap-name", name, "--secret-name", "test-credentials"]
-        )
-        assert result.exit_code == 0, f"Failed for valid name: {name}"
+        for name in valid_names:
+            result = runner.invoke(
+                cli,
+                ["run", "--configmap-name", name, "--secret-name", "test-credentials"],
+            )
+            assert result.exit_code == 0, f"Failed for valid name: {name}"
 
 
 def test_configmap_validation_edge_cases():
@@ -260,13 +268,13 @@ def test_version_command():
     assert "0.1.0" in result.output or "(development)" in result.output
 
 
-def test_version_command_development_fallback(monkeypatch):
+def test_version_command_development_fallback():
     """Test version command fallback when package not found."""
     mock_version = MagicMock(side_effect=PackageNotFoundError())
-    monkeypatch.setattr(main_module.metadata, "version", mock_version)
 
-    runner = CliRunner()
-    result = runner.invoke(cli, ["version"])
+    with mock_module_attributes(main_module.metadata, version=mock_version):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["version"])
 
-    assert result.exit_code == 0
-    assert "haproxy-template-ic (development)" in result.output
+        assert result.exit_code == 0
+        assert "haproxy-template-ic (development)" in result.output

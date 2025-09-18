@@ -27,12 +27,11 @@ dependencies = [
     "python-jsonpath>=1.2.0",
     "pyyaml>=6.0.2",
     "structlog>=25.4.0",
-    "tenacity>=9.1.0",
     "typing-extensions>=4.0.0", # Required by generated client
     "urllib3>=2.0.0", # Required by generated client (with asyncio support)
     "uvloop>=0.21.0",
     "xxhash>=3.5.0", # Fast non-cryptographic hashing for content change detection
-    "haproxy_dataplane_v3"
+    "haproxy_dataplane_v3",
 ]
 
 [dependency-groups]
@@ -98,6 +97,7 @@ addopts = [
     "--strict-config",
     "--cluster-name=haproxy-template-ic-test",
     "--kubeconfig=.pytest-kind/haproxy-template-ic-test/kubeconfig",
+    "-n=auto",
 ]
 markers = [
     "acceptance: marks tests as acceptance/end-to-end tests (deselect with '-m \"not acceptance\"')",

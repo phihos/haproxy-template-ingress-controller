@@ -7,7 +7,7 @@ including support for template snippets and custom filters.
 
 import base64
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from jinja2 import TemplateSyntaxError, TemplateNotFound, Environment, Template
 
 from haproxy_template_ic.templating import (
@@ -25,7 +25,16 @@ from haproxy_template_ic.templating import (
     _extract_snippet_name,
     _get_context_lines,
 )
-from haproxy_template_ic.models import TemplateSnippet
+from tests.unit.conftest import (
+    assert_type_instance,
+    assert_raises_value_error,
+    assert_raises_template_error,
+    create_jinja_environment_mock,
+    create_template_config_mock,
+    create_template_snippet_mock,
+    create_fallback_snippet_mock,
+    create_template_snippet_factory,
+)
 
 
 # TestB64DecodeFilter tests
@@ -39,7 +48,7 @@ def test_b64decode_filter_success():
 
 def test_b64decode_filter_invalid_base64():
     """Test b64decode filter with invalid base64."""
-    with pytest.raises(ValueError, match="Failed to decode base64 value"):
+    with assert_raises_value_error("Failed to decode base64 value"):
         b64decode_filter("invalid-base64!")
 
 
@@ -62,10 +71,10 @@ def test_b64decode_filter_unicode():
 def sample_snippets():
     """Create sample template snippets."""
     return {
-        "backend-name": TemplateSnippet(
+        "backend-name": create_template_snippet_factory(
             name="backend-name", template="backend_{{ service_name }}_{{ port }}"
         ),
-        "frontend-config": TemplateSnippet(
+        "frontend-config": create_template_snippet_factory(
             name="frontend-config", template="bind *:{{ port }}\nmode http"
         ),
     }
@@ -92,7 +101,7 @@ def test_snippet_loader_init_none_snippets():
 def test_snippet_loader_get_source_existing_snippet(sample_snippets):
     """Test getting source for existing snippet."""
     loader = SnippetLoader(sample_snippets)
-    env = Mock()
+    env = create_jinja_environment_mock()
 
     source, filename, uptodate = loader.get_source(env, "backend-name")
 
@@ -104,9 +113,9 @@ def test_snippet_loader_get_source_existing_snippet(sample_snippets):
 def test_snippet_loader_get_source_nonexistent_snippet(sample_snippets):
     """Test getting source for non-existent snippet."""
     loader = SnippetLoader(sample_snippets)
-    env = Mock()
+    env = create_jinja_environment_mock()
 
-    with pytest.raises(TemplateNotFound):
+    with assert_raises_template_error(TemplateNotFound):
         loader.get_source(env, "nonexistent")
 
 
@@ -114,7 +123,7 @@ def test_snippet_loader_get_source_string_snippet():
     """Test getting source for string-based snippet."""
     snippets = {"simple": "template content"}
     loader = SnippetLoader(snippets)
-    env = Mock()
+    env = create_jinja_environment_mock()
 
     source, filename, uptodate = loader.get_source(env, "simple")
 
@@ -126,11 +135,13 @@ def test_snippet_loader_get_source_string_snippet():
 # TestGetTemplateEnvironment tests
 def test_get_template_environment_with_snippets():
     """Test creating environment with snippets."""
-    snippets = {"test": TemplateSnippet(name="test", template="test content")}
+    snippets = {
+        "test": create_template_snippet_factory(name="test", template="test content")
+    }
 
     env = get_template_environment(snippets)
 
-    assert isinstance(env, Environment)
+    assert_type_instance(env, Environment, "template environment")
     assert env.autoescape is False
     assert env.trim_blocks is False
     assert env.lstrip_blocks is False
@@ -141,7 +152,7 @@ def test_get_template_environment_without_snippets():
     """Test creating environment without snippets."""
     env = get_template_environment()
 
-    assert isinstance(env, Environment)
+    assert_type_instance(env, Environment, "template environment")
     assert "b64decode" in env.filters
 
 
@@ -158,7 +169,9 @@ def test_get_template_environment_b64decode_filter():
 # TestTemplateEnvironmentFactory tests
 def test_template_environment_factory_create_environment_with_snippets():
     """Test creating environment with snippets."""
-    snippets = {"test": TemplateSnippet(name="test", template="test content")}
+    snippets = {
+        "test": create_template_snippet_factory(name="test", template="test content")
+    }
 
     env = TemplateEnvironmentFactory.create_environment(snippets)
 
@@ -229,7 +242,7 @@ def test_template_environment_factory_create_environment_with_problematic_config
 def template_compiler_sample_snippets():
     """Create sample template snippets for template compiler tests."""
     return {
-        "backend-name": TemplateSnippet(
+        "backend-name": create_template_snippet_factory(
             name="backend-name", template="backend_{{ service_name }}_{{ port }}"
         ),
     }
@@ -345,7 +358,9 @@ def test_render_template_function_with_snippets():
     """Test template rendering with snippets."""
     # Use TemplateRenderer instead of render_template for TemplateSnippet objects
     snippets = {
-        "greeting": TemplateSnippet(name="greeting", template="Hello {{ name }}!")
+        "greeting": create_template_snippet_factory(
+            name="greeting", template="Hello {{ name }}!"
+        )
     }
     template_str = "{% include 'greeting' %}"
     context = {"name": "World"}
@@ -370,8 +385,12 @@ def test_render_template_function_error():
 def template_renderer_sample_snippets():
     """Create sample template snippets for template renderer tests."""
     return {
-        "backend": TemplateSnippet(name="backend", template="backend {{ name }}"),
-        "frontend": TemplateSnippet(name="frontend", template="frontend {{ name }}"),
+        "backend": create_template_snippet_factory(
+            name="backend", template="backend {{ name }}"
+        ),
+        "frontend": create_template_snippet_factory(
+            name="frontend", template="frontend {{ name }}"
+        ),
     }
 
 
@@ -391,8 +410,7 @@ def test_template_renderer_init_without_snippets():
 
 def test_template_renderer_from_config():
     """Test creating TemplateRenderer from config."""
-    mock_config = Mock()
-    mock_config.template_snippets = {"test": "template"}
+    mock_config = create_template_config_mock({"test": "template"})
 
     renderer = TemplateRenderer.from_config(mock_config)
 
@@ -602,8 +620,7 @@ def test_validate_config_templates_string_snippets():
 
 def test_validate_config_templates_object_snippets():
     """Test validation with object-based snippets."""
-    mock_snippet = Mock()
-    mock_snippet.template = "template content"
+    mock_snippet = create_template_snippet_mock("template content")
 
     config_dict = {
         "template_snippets": {
@@ -618,9 +635,7 @@ def test_validate_config_templates_object_snippets():
 
 def test_validate_config_templates_fallback_snippets():
     """Test validation with snippets that need fallback."""
-    mock_snippet = Mock()
-    del mock_snippet.template  # Remove template attribute
-    mock_snippet.__str__ = Mock(return_value="fallback content")
+    mock_snippet = create_fallback_snippet_mock("fallback content")
 
     config_dict = {
         "template_snippets": {
@@ -885,10 +900,11 @@ def test_get_path_filter_invalid_content_types():
 
 def test_get_path_filter_with_custom_config():
     """Test get_path_filter with custom configuration directories."""
-    mock_config = Mock()
-    mock_config.storage_maps_dir = "/custom/maps"
-    mock_config.storage_ssl_dir = "/custom/ssl"
-    mock_config.storage_general_dir = "/custom/files"
+    mock_config = create_template_config_mock(
+        storage_maps_dir="/custom/maps",
+        storage_ssl_dir="/custom/ssl",
+        storage_general_dir="/custom/files",
+    )
 
     # Test custom paths
     assert get_path_filter("host.map", "map", mock_config) == "/custom/maps/host.map"
@@ -1143,14 +1159,13 @@ def test_format_template_error_deeply_nested_includes():
 
     # Create snippets for testing
     snippets = {
-        "level1": TemplateSnippet(
+        "level1": create_template_snippet_factory(
             name="level1", template='First level\n{% include "level2" %}\nEnd first'
         ),
-        "level2": TemplateSnippet(
-            name="level2",
-            template='Second level\n{% include "level3" %}\nEnd second',
+        "level2": create_template_snippet_factory(
+            name="level2", template='Second level\n{% include "level3" %}\nEnd second'
         ),
-        "level3": TemplateSnippet(
+        "level3": create_template_snippet_factory(
             name="level3", template="Third level\n{{ undefined_var }}\nEnd third"
         ),
     }
@@ -1245,7 +1260,7 @@ def test_format_template_error_two_level_include():
     error = ValueError("Error in snippet")
 
     snippets = {
-        "backend-servers": TemplateSnippet(
+        "backend-servers": create_template_snippet_factory(
             name="backend-servers",
             template="{% for server in servers %}\n  server {{ server }}\n{% endfor %}",
         ),

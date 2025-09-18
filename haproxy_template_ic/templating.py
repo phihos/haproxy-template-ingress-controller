@@ -47,7 +47,7 @@ def b64decode_filter(value: str) -> str:
         raise ValueError(f"Failed to decode base64 value: {e}") from e
 
 
-def logarithm_filter(x, base=math.e):
+def logarithm_filter(x, base=math.e) -> float:
     """Ansible-style logarithm filter."""
     try:
         if base == 10:
@@ -513,6 +513,7 @@ def get_template_environment(
         autoescape=False,  # HAProxy config shouldn't be HTML-escaped  # nosec B701
         trim_blocks=False,  # Rely on manual whitespace control to create fewer surprises
         lstrip_blocks=False,  # Rely on manual whitespace control to create fewer surprises
+        keep_trailing_newline=True,  # HAProxy requires configs to end with newline
         extensions=["jinja2.ext.do"],  # Enable do extension for {% do %} statements
     )
 
