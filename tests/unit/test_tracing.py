@@ -237,16 +237,17 @@ def test_trace_operation_with_exception(mock_tracer, mock_span):
 def test_add_span_attributes(mock_span, monkeypatch):
     """Test adding attributes to current span."""
     mock_span.is_recording.return_value = True
+    # Reset the mock to ensure clean state
+    mock_span.set_attribute.reset_mock()
     mock_get_current_span = MagicMock(return_value=mock_span)
     monkeypatch.setattr(tracing_module.trace, "get_current_span", mock_get_current_span)
 
     add_span_attributes(key1="value1", key2="value2")
 
-    expected_args = [("key1", "value1"), ("key2", "value2")]
+    # Verify exactly 2 calls were made with the expected arguments
     assert mock_span.set_attribute.call_count == 2
-    actual_args = [call.args for call in mock_span.set_attribute.call_args_list]
-    for expected_arg in expected_args:
-        assert expected_arg in actual_args
+    mock_span.set_attribute.assert_any_call("key1", "value1")
+    mock_span.set_attribute.assert_any_call("key2", "value2")
 
 
 def test_record_span_event(mock_span, monkeypatch):

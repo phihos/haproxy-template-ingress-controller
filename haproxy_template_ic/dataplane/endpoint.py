@@ -136,8 +136,9 @@ class DataplaneEndpointSet:
 
     def __str__(self) -> str:
         """String representation for logging."""
-        prod_str = ", ".join(str(ep) for ep in self.production)
-        return f"DataplaneEndpointSet(validation={self.validation}, production=[{prod_str}])"
+        prod_count = len(self.production)
+        prod_text = f"{prod_count} production endpoint{'s' if prod_count != 1 else ''}"
+        return f"validation={self.validation}, {prod_text}"
 
     def __repr__(self) -> str:
         """Developer-friendly representation."""

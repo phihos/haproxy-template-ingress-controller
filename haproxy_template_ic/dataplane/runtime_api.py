@@ -14,7 +14,12 @@ from haproxy_dataplane_v3 import AuthenticatedClient
 
 if TYPE_CHECKING:
     from .endpoint import DataplaneEndpoint
-from haproxy_dataplane_v3.models import ReplaceRuntimeMapEntryBody
+from haproxy_dataplane_v3.models import (
+    ReplaceRuntimeMapEntryBody,
+    OneMapEntry,
+    OneACLFileEntry,
+    RuntimeServer,
+)
 
 # Runtime APIs
 from haproxy_dataplane_v3.api.acl_runtime import (
@@ -85,10 +90,11 @@ class RuntimeAPI:
             with metrics.time_dataplane_api_operation(f"map_{operation.operation}"):
                 try:
                     if operation.operation == "add":
+                        body = OneMapEntry(key=operation.key, value=operation.value)
                         await add_map_entry.asyncio(
                             client=client,
                             name=map_name,
-                            body={"key": operation.key, "value": operation.value},
+                            body=body,
                         )
                         logger.debug(
                             f"Added map entry: {operation.key} -> {operation.value}"
@@ -170,10 +176,11 @@ class RuntimeAPI:
             with metrics.time_dataplane_api_operation(f"acl_{operation.operation}"):
                 try:
                     if operation.operation == "add":
+                        body = OneACLFileEntry(value=operation.value)
                         await post_services_haproxy_runtime_acls_parent_name_entries.asyncio(
                             client=client,
                             parent_name=acl_id,
-                            body={"value": operation.value},
+                            body=body,
                         )
                         logger.debug(f"Added ACL entry: {operation.value}")
 
@@ -239,11 +246,12 @@ class RuntimeAPI:
 
         with metrics.time_dataplane_api_operation("server_state_update"):
             try:
+                body = RuntimeServer(admin_state=state)
                 await replace_runtime_server.asyncio(
                     client=client,
                     backend=backend_name,
                     name=server_name,
-                    body={"admin_state": state},
+                    body=body,
                 )
 
                 record_span_event(
