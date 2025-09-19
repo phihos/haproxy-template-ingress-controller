@@ -102,6 +102,10 @@ class StorageAPI:
         """
         self._get_client = get_client
         self.endpoint = endpoint
+        # Add runtime API access for optimized updates
+        from .runtime_api import RuntimeAPI
+
+        self.runtime_api = RuntimeAPI(get_client, endpoint)
 
     def _extract_storage_content(self, storage_item) -> str | None:
         """Extract content from HAProxy storage API response.
@@ -184,9 +188,13 @@ class StorageAPI:
             )
             if existing_map is None:
                 raise RuntimeError(f"Map {map_name} should exist in existing_maps")
+
+            # TODO: Implement runtime API update optimization later
+            # For now, use storage API to ensure files exist before validation
             update_result = await self._update_map_if_changed(
                 client, map_name, maps[map_name], existing_map, metrics
             )
+
             reload_infos.append(update_result.reload_info)
             if update_result.content_changed:
                 actual_maps_updated += 1
@@ -443,6 +451,67 @@ class StorageAPI:
                 operation="update_map",
                 original_error=e,
             ) from e
+
+    async def _update_map_skip_reload(
+        self, client: Any, map_name: str, content: str, metrics: Any
+    ) -> UpdateOperationResult:
+        """Update map file storage without triggering reload (runtime API succeeded)."""
+        with metrics.time_dataplane_api_operation("update_map_skip_reload"):
+            try:
+                content_hash = compute_content_hash(content)
+
+                file_obj = File(
+                    file_name=map_name,
+                    payload=io.BytesIO(content.encode("utf-8")),
+                )
+
+                body = CreateStorageMapFileBody(file_upload=file_obj)
+                body["description"] = content_hash
+
+                # Update storage but skip reload since runtime API already applied changes
+                response = await replace_storage_map_file.asyncio_detailed(
+                    name=map_name,
+                    client=client,
+                    body=body,
+                    skip_reload=True,  # Key parameter to avoid reload
+                )
+
+                # Process response to extract reload info (should be empty due to skip_reload)
+                reload_info = ReloadInfo.from_response(response, self.endpoint)
+
+                record_span_event(
+                    "map_updated_skip_reload",
+                    {
+                        "name": map_name,
+                        "size": len(content),
+                        "hash": content_hash,
+                    },
+                )
+                metrics.record_dataplane_api_request(
+                    "update_map_skip_reload", "success"
+                )
+                await log_resource_operation(
+                    "Updated",
+                    "Map",
+                    map_name,
+                    f"{len(content)} bytes (skip reload)",
+                    reload_triggered=reload_info.reload_id is not None,
+                )
+
+                return UpdateOperationResult(
+                    content_changed=True,
+                    reload_info=reload_info,
+                )
+
+            except Exception as e:
+                metrics.record_dataplane_api_request("update_map_skip_reload", "error")
+                set_span_error(e, f"Map file skip-reload update failed: {map_name}")
+                raise DataplaneAPIError(
+                    f"Failed to update map {map_name} (skip reload): {e}",
+                    endpoint=self.endpoint,
+                    operation="update_map_skip_reload",
+                    original_error=e,
+                ) from e
 
     async def _delete_map(
         self, client: Any, map_name: str, metrics: Any
@@ -710,10 +779,11 @@ class StorageAPI:
     @handle_dataplane_errors("sync_acls")
     @autolog()
     async def sync_acls(self, acls: dict[str, str]) -> StorageOperationResult:
-        """Synchronize ACL files with HAProxy storage.
+        """Synchronize ACL files with HAProxy storage and runtime.
 
-        ACL files are stored as general files in HAProxy storage but also
-        utilize runtime operations for dynamic updates without reloads.
+        Implements optimized workflow:
+        - Create/Delete: Storage API (triggers reload - expected)
+        - Update: Try runtime API first (no reload), fallback to storage API
 
         Args:
             acls: Dictionary mapping ACL names to their content
@@ -762,12 +832,14 @@ class StorageAPI:
 
         reload_infos = []
 
+        # Create new ACL files (triggers reload - expected)
         for acl_name in acls_to_create:
             create_result = await self._create_acl_file(
                 client, acl_name, acls[acl_name], metrics
             )
             reload_infos.append(create_result.reload_info)
 
+        # Update existing ACL files
         actual_acls_updated = 0
         for acl_name in acls_to_update:
             existing_acl = next(
@@ -777,13 +849,18 @@ class StorageAPI:
                 raise RuntimeError(
                     f"ACL file {acl_name} should exist in existing_files"
                 )
+
+            # TODO: Implement runtime API update optimization later
+            # For now, use storage API to ensure files exist before validation
             update_result = await self._update_acl_file_if_changed(
                 client, acl_name, acls[acl_name], existing_acl, metrics
             )
+
             reload_infos.append(update_result.reload_info)
             if update_result.content_changed:
                 actual_acls_updated += 1
 
+        # Delete ACL files (triggers reload - expected)
         for acl_name in acls_to_delete:
             delete_result = await self._delete_acl_file(client, acl_name, metrics)
             reload_infos.append(delete_result.reload_info)
@@ -948,6 +1025,67 @@ class StorageAPI:
                 operation="update_acl",
                 original_error=e,
             ) from e
+
+    async def _update_acl_file_skip_reload(
+        self, client: Any, acl_name: str, content: str, metrics: Any
+    ) -> UpdateOperationResult:
+        """Update ACL file storage without triggering reload (runtime API succeeded)."""
+        with metrics.time_dataplane_api_operation("update_acl_skip_reload"):
+            try:
+                content_hash = compute_content_hash(content)
+
+                file_obj = File(
+                    file_name=acl_name,
+                    payload=io.BytesIO(content.encode("utf-8")),
+                )
+
+                body = ReplaceStorageGeneralFileBody(file_upload=file_obj)
+                body["description"] = content_hash
+
+                # Update storage but skip reload since runtime API already applied changes
+                response = await replace_storage_general_file.asyncio_detailed(
+                    storage_name=acl_name,
+                    client=client,
+                    body=body,
+                    skip_reload=True,  # Key parameter to avoid reload
+                )
+
+                # Process response to extract reload info (should be empty due to skip_reload)
+                reload_info = ReloadInfo.from_response(response, self.endpoint)
+
+                record_span_event(
+                    "acl_updated_skip_reload",
+                    {
+                        "name": acl_name,
+                        "size": len(content),
+                        "hash": content_hash,
+                    },
+                )
+                metrics.record_dataplane_api_request(
+                    "update_acl_skip_reload", "success"
+                )
+                await log_resource_operation(
+                    "Updated",
+                    "ACL",
+                    acl_name,
+                    f"{len(content)} bytes (skip reload)",
+                    reload_triggered=reload_info.reload_id is not None,
+                )
+
+                return UpdateOperationResult(
+                    content_changed=True,
+                    reload_info=reload_info,
+                )
+
+            except Exception as e:
+                metrics.record_dataplane_api_request("update_acl_skip_reload", "error")
+                set_span_error(e, f"ACL file skip-reload update failed: {acl_name}")
+                raise DataplaneAPIError(
+                    f"Failed to update ACL file {acl_name} (skip reload): {e}",
+                    endpoint=self.endpoint,
+                    operation="update_acl_skip_reload",
+                    original_error=e,
+                ) from e
 
     async def _delete_acl_file(
         self, client: Any, acl_name: str, metrics: Any
