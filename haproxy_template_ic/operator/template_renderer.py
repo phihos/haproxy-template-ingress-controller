@@ -281,7 +281,7 @@ async def render_haproxy_templates(
         # Trigger synchronization with HAProxy instances
         try:
             await synchronize_with_haproxy_instances(
-                config, haproxy_config_context, kopf_indices, config_synchronizer
+                haproxy_config_context, config_synchronizer
             )
             logger.debug("🚀 HAProxy synchronization completed successfully")
         except Exception as sync_error:

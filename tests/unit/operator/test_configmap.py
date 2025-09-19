@@ -5,16 +5,15 @@ Tests for load_config_from_configmap function.
 """
 
 import pytest
-from unittest.mock import MagicMock
 
 from haproxy_template_ic.operator.configmap import load_config_from_configmap
+from tests.unit.conftest import create_configmap_mock
 
 
 @pytest.mark.asyncio
 async def test_configmap_load_config_from_configmap_success():
     """Test successful config loading from ConfigMap."""
-    mock_configmap = MagicMock()
-    mock_configmap.data = {
+    config_data = {
         "config": """
 pod_selector:
   match_labels:
@@ -29,6 +28,7 @@ haproxy_config:
         mode http
 """
     }
+    mock_configmap = create_configmap_mock(config_data)
 
     config = await load_config_from_configmap(mock_configmap)
 
@@ -41,8 +41,7 @@ haproxy_config:
 @pytest.mark.asyncio
 async def test_configmap_load_config_from_configmap_invalid_yaml():
     """Test config loading with invalid YAML."""
-    mock_configmap = MagicMock()
-    mock_configmap.data = {"config": "invalid: yaml: [unclosed"}
+    mock_configmap = create_configmap_mock({"config": "invalid: yaml: [unclosed"})
 
     with pytest.raises(Exception):  # Should raise YAML parsing error
         await load_config_from_configmap(mock_configmap)

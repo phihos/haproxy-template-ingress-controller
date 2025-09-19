@@ -9,7 +9,7 @@ import logging
 import time
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar, cast
+from typing import Any, Callable, Dict, Iterator, List, Tuple, TypeVar, cast
 
 from prometheus_async import aio
 from prometheus_client import (
@@ -163,6 +163,37 @@ debouncer_batched_changes = Histogram(
 debouncer_time_since_last_render = Gauge(
     "haproxy_template_ic_debouncer_time_since_last_render_seconds",
     "Time since last template render in seconds",
+)
+
+# Connection pool metrics
+dataplane_pool_active_connections = Gauge(
+    "haproxy_template_ic_dataplane_pool_active_connections",
+    "Number of active connections in the dataplane client pool",
+)
+
+dataplane_pool_total_references = Gauge(
+    "haproxy_template_ic_dataplane_pool_total_references",
+    "Total reference count across all pooled connections",
+)
+
+dataplane_pool_clients_created_total = Counter(
+    "haproxy_template_ic_dataplane_pool_clients_created_total",
+    "Total number of dataplane clients created",
+)
+
+dataplane_pool_clients_reused_total = Counter(
+    "haproxy_template_ic_dataplane_pool_clients_reused_total",
+    "Total number of dataplane clients reused",
+)
+
+dataplane_pool_clients_cleaned_total = Counter(
+    "haproxy_template_ic_dataplane_pool_clients_cleaned_total",
+    "Total number of dataplane clients cleaned up",
+)
+
+dataplane_pool_cleanup_runs_total = Counter(
+    "haproxy_template_ic_dataplane_pool_cleanup_runs_total",
+    "Total number of pool cleanup runs",
 )
 
 
@@ -381,6 +412,35 @@ class MetricsCollector:
         """
         debouncer_time_since_last_render.set(time_since_last_render)
 
+    def record_pool_statistics(self, pool_stats: Dict[str, Any]) -> None:
+        """Record connection pool statistics from get_pool_stats().
+
+        Args:
+            pool_stats: Pool statistics dictionary from DataplaneClientPool.get_pool_stats()
+        """
+        # Update gauges for current state
+        dataplane_pool_active_connections.set(pool_stats.get("active_connections", 0))
+        dataplane_pool_total_references.set(pool_stats.get("total_references", 0))
+
+        # Update counters with current totals (Prometheus counters track cumulative values)
+        stats = pool_stats.get("statistics", {})
+
+        # Set counter values to current totals (counters should only increase)
+        clients_created = stats.get("clients_created", 0)
+        clients_reused = stats.get("clients_reused", 0)
+        clients_cleaned = stats.get("clients_cleaned", 0)
+        cleanup_runs = stats.get("cleanup_runs", 0)
+
+        # Use _value._value to set counter values directly (internal Prometheus client API)
+        if hasattr(dataplane_pool_clients_created_total, "_value"):
+            dataplane_pool_clients_created_total._value._value = clients_created
+        if hasattr(dataplane_pool_clients_reused_total, "_value"):
+            dataplane_pool_clients_reused_total._value._value = clients_reused
+        if hasattr(dataplane_pool_clients_cleaned_total, "_value"):
+            dataplane_pool_clients_cleaned_total._value._value = clients_cleaned
+        if hasattr(dataplane_pool_cleanup_runs_total, "_value"):
+            dataplane_pool_cleanup_runs_total._value._value = cleanup_runs
+
     def record_haproxy_sync(self, successful_count: int, failed_count: int) -> None:
         """Record HAProxy synchronization results.
 
@@ -414,7 +474,7 @@ class MetricsCollector:
 
 
 def timed_operation(
-    metric_name: str, labels: Optional[Dict[str, str]] = None
+    metric_name: str, labels: Dict[str, str] | None = None
 ) -> Callable[[F], F]:
     """Decorator to time function execution and record in metrics."""
 

@@ -9,15 +9,12 @@ import logging
 import traceback
 from typing import Any
 
-from kopf._core.engines.indexing import Index, OperatorIndices
-
-from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
-from haproxy_template_ic.dataplane.errors import DataplaneAPIError, ValidationError
-from haproxy_template_ic.dataplane.models import get_production_urls_from_index
+from haproxy_template_ic.dataplane.types import (
+    DataplaneAPIError,
+    ValidationError,
+)
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
-from haproxy_template_ic.k8s.kopf_utils import get_resource_collection_from_indices
 from haproxy_template_ic.metrics import get_metrics_collector
-from haproxy_template_ic.models.config import Config
 from haproxy_template_ic.models.context import HAProxyConfigContext
 from haproxy_template_ic.tracing import trace_async_function
 
@@ -26,7 +23,6 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "synchronize_with_haproxy_instances",
     "_validate_sync_prerequisites",
-    "_get_haproxy_pod_collection",
     "_record_sync_metrics",
     "_log_haproxy_error_hints",
 ]
@@ -40,17 +36,6 @@ def _validate_sync_prerequisites(haproxy_config_context: HAProxyConfigContext) -
         return False
 
     return True
-
-
-def _get_haproxy_pod_collection(
-    indices: OperatorIndices,
-) -> Index[Any, Any] | None:
-    """Get HAProxy pod collection from indices."""
-    if HAPROXY_PODS_INDEX not in indices:
-        logger.warning("⚠️ No HAProxy pods index available")
-        return None
-
-    return indices[HAPROXY_PODS_INDEX]
 
 
 def _record_sync_metrics(
@@ -119,17 +104,14 @@ def _log_haproxy_error_hints(
     attributes={"operation.category": "synchronization"},
 )
 async def synchronize_with_haproxy_instances(
-    config: Config,
     haproxy_config_context: HAProxyConfigContext,
-    indices: OperatorIndices,
     config_synchronizer: ConfigSynchronizer,
-    force: bool = False,
 ) -> None:
     """Synchronize rendered configuration with HAProxy instances via Dataplane API.
 
     Args:
-        memo: Operator memo object
-        force: Whether to force synchronization regardless of content changes
+        haproxy_config_context: HAProxy configuration context with rendered config
+        config_synchronizer: Synchronizer with current production endpoints
     """
     logger.debug("🚀 SYNC FUNCTION CALLED - Starting synchronization...")
     metrics = get_metrics_collector()
@@ -138,38 +120,28 @@ async def synchronize_with_haproxy_instances(
         return
 
     try:
-        haproxy_pods_store = _get_haproxy_pod_collection(indices)
-        if haproxy_pods_store is None:
-            return
-
-        # Convert kopf Store to IndexedResourceCollection
-        haproxy_pods_collection = get_resource_collection_from_indices(
-            indices, HAPROXY_PODS_INDEX
-        )
-
-        production_urls, url_to_pod_name = get_production_urls_from_index(
-            haproxy_pods_collection
-        )
-        if not production_urls:
+        # Check if we have production endpoints to synchronize with
+        if not config_synchronizer.endpoints.production:
             logger.warning(
-                "⚠️ No production HAProxy pods found - skipping synchronization"
+                "⚠️ No production HAProxy endpoints available - skipping synchronization"
             )
             return
 
-        # Update production URLs in case there were missed pod events
-        config_synchronizer.update_production_clients(production_urls, url_to_pod_name)
-        logger.debug("♻️ Updated ConfigSynchronizer with current configuration")
+        results = await config_synchronizer.sync_configuration(haproxy_config_context)
 
-        synchronizer = config_synchronizer
+        successful_count = results.successful
+        failed_count = results.failed
+        errors = results.errors
 
-        results = await synchronizer.sync_configuration(haproxy_config_context)
-
-        successful_count = results.get("successful", 0)
-        failed_count = results.get("failed", 0)
-        errors = results.get("errors", [])
+        # Log reload information if available
+        if results.reload_info.reload_triggered:
+            logger.info(f"🔄 HAProxy reload triggered: {results.reload_info.reload_id}")
 
         _record_sync_metrics(
-            metrics, successful_count, failed_count, len(production_urls)
+            metrics,
+            successful_count,
+            failed_count,
+            len(config_synchronizer.endpoints.production),
         )
         for error in errors:
             logger.error(f"   - {error}")

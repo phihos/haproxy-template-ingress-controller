@@ -1,25 +1,37 @@
 import base64
-import pytest
 import unicodedata
-from pydantic import ValidationError
 from unittest.mock import MagicMock, PropertyMock, patch
 
+import pytest
 from jinja2 import Template, TemplateNotFound
-from haproxy_template_ic.templating import TemplateRenderer
+from pydantic import ValidationError
+
 from haproxy_template_ic.models import (
     Config,
     ContentType,
     HAProxyConfigContext,
     IndexedResourceCollection,
     PodSelector,
-    RenderedContent,
     RenderedConfig,
+    RenderedContent,
     ResourceFilter,
     TemplateConfig,
     TemplateContext,
     TemplateSnippet,
     WatchResourceConfig,
     config_from_dict,
+)
+from haproxy_template_ic.templating import TemplateRenderer
+
+from .conftest import (
+    create_base_config_dict,
+    create_ingress_watch_config,
+    create_template_maps_config,
+)
+from tests.unit.conftest import (
+    create_kopf_index_mock,
+    create_logger_with_handlers_mock,
+    mock_module_attributes,
 )
 
 
@@ -41,78 +53,47 @@ def ensure_auth_fields_REMOVED(config_dict):
     [
         # Basic config with only required fields
         (
-            {
-                "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-            },
+            create_base_config_dict(),
             {"app": "myapp"},
             0,
             0,
         ),
         # Config with empty optional fields
         (
-            {
-                "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "watched_resources": {},
-                "maps": {},
-            },
+            create_base_config_dict(include_optional_fields=True),
             {"app": "myapp"},
             0,
             0,
         ),
         # Config with watched_resources
         (
-            {
-                "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "watched_resources": {
-                    "ingresses": {
-                        "api_version": "networking.k8s.io/v1",
-                        "kind": "Ingress",
-                    },
-                    "services": {"api_version": "v1", "kind": "Service"},
-                },
-            },
+            create_base_config_dict(watched_resources=create_ingress_watch_config()),
             {"app": "myapp"},
             2,
             0,
         ),
         # Config with maps
         (
-            {
-                "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "maps": {
-                    "path-prefix.map": {
-                        "template": "server {{ name }} {{ ip }}:{{ port }}",
-                    },
-                    "backend-servers.map": {
-                        "template": "server {{ name }} {{ ip }}:{{ port }}",
-                    },
-                },
-            },
+            create_base_config_dict(maps=create_template_maps_config()),
             {"app": "myapp"},
             0,
             2,
         ),
         # Config with all fields
         (
-            {
-                "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "watched_resources": {
+            create_base_config_dict(
+                watched_resources={
                     "ingresses": {
                         "api_version": "networking.k8s.io/v1",
                         "kind": "Ingress",
                     }
                 },
-                "maps": {
+                maps={
                     "path-prefix.map": {
-                        "template": "server {{ name }} {{ ip }}:{{ port }}",
+                        "template": "server {{ name }} {{ ip }}:{{ port }}"
                     }
                 },
-            },
+            ),
             {"app": "myapp"},
             1,
             1,
@@ -138,16 +119,14 @@ def test_valid_configs(
     "config_dict,expected_watch_resource",
     [
         (
-            {
-                "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "watched_resources": {
+            create_base_config_dict(
+                watched_resources={
                     "ingresses": {
                         "api_version": "networking.k8s.io/v1",
                         "kind": "Ingress",
                     }
-                },
-            },
+                }
+            ),
             {
                 "name": "ingresses",
                 "api_version": "networking.k8s.io/v1",
@@ -155,21 +134,15 @@ def test_valid_configs(
             },
         ),
         (
-            {
-                "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "watched_resources": {
-                    "services": {"api_version": "v1", "kind": "Service"}
-                },
-            },
+            create_base_config_dict(
+                watched_resources={"services": {"api_version": "v1", "kind": "Service"}}
+            ),
             {"name": "services", "api_version": "v1", "kind": "Service"},
         ),
         (
-            {
-                "pod_selector": {"match_labels": {"app": "myapp"}},
-                "haproxy_config": {"template": "global\n    daemon"},
-                "watched_resources": {"pods": {"api_version": "v1", "kind": "Pod"}},
-            },
+            create_base_config_dict(
+                watched_resources={"pods": {"api_version": "v1", "kind": "Pod"}}
+            ),
             {"name": "pods", "api_version": "v1", "kind": "Pod"},
         ),
     ],
@@ -1844,277 +1817,284 @@ def test_pod_selector_frozen():
         selector.match_labels = {"app": "modified"}
 
 
-class TestFilenameSecurity:
-    """Security tests for Filename validation to prevent path traversal attacks."""
+def test_filename_validation_valid_cases():
+    """Test that valid filenames are accepted."""
 
-    def test_filename_validation_valid_cases(self):
-        """Test that valid filenames are accepted."""
+    valid_filenames = [
+        "host.map",
+        "tls.pem",
+        "error404.http",
+        "host_backend.map",
+        "tls-cert-2024.pem",
+        "error-404.http",
+        "file123.txt",
+        "a",  # Single character
+        "file.with.multiple.dots.map",
+        "A123",  # Start with uppercase
+        "test_file_v2.config",
+        "backend-config.conf",
+    ]
 
-        valid_filenames = [
-            "host.map",
-            "tls.pem",
-            "error404.http",
-            "host_backend.map",
-            "tls-cert-2024.pem",
-            "error-404.http",
-            "file123.txt",
-            "a",  # Single character
-            "file.with.multiple.dots.map",
-            "A123",  # Start with uppercase
-            "test_file_v2.config",
-            "backend-config.conf",
-        ]
-
-        for filename in valid_filenames:
-            # Should not raise ValidationError
-            content = RenderedContent(
-                filename=filename, content="test content", content_type=ContentType.MAP
-            )
-            assert content.filename == filename
-
-    def test_filename_validation_invalid_characters_blocked(self):
-        """Test that filenames with invalid characters are blocked (now includes spaces and Unicode)."""
-
-        invalid_filenames = [
-            "host file.map",  # Spaces no longer allowed for security
-            "файл.map",  # Unicode characters no longer allowed
-            "αρχείο.map",  # Greek characters no longer allowed
-            "host@file.map",  # Special characters blocked
-            "host#file.map",  # Hash
-            "host&file.map",  # Ampersand
-            "!host.map",  # Starts with special char
-            ".host.map",  # Starts with dot
-            "_host.map",  # Starts with underscore
-            "-host.map",  # Starts with dash
-        ]
-
-        for filename in invalid_filenames:
-            with pytest.raises(ValidationError, match="String should match pattern"):
-                RenderedContent(
-                    filename=filename,
-                    content="test content",
-                    content_type=ContentType.MAP,
-                )
-
-    def test_filename_validation_path_traversal_blocked(self):
-        """Test that path traversal attempts in filenames are blocked."""
-
-        path_traversal_attempts = [
-            "../../../etc/passwd",
-            "..\\..\\..\\windows\\system32\\config\\sam",
-            "host/../../../etc/passwd",
-            "tls/../../etc/passwd",
-            "../../../../../../root/.ssh/id_rsa",
-            "..\\..\\..\\..\\.ssh\\id_rsa",
-            "normal/../../../etc/shadow",
-            "file.map/../../../etc/hosts",
-            "subdir/host.map",
-            "dir\\host.map",
-            "a/b/c/host.map",
-            "dir\\subdir\\host.map",
-            "//host.map",
-            "\\\\host.map",
-        ]
-
-        for malicious_filename in path_traversal_attempts:
-            with pytest.raises(ValidationError, match="String should match pattern"):
-                RenderedContent(
-                    filename=malicious_filename,
-                    content="test content",
-                    content_type=ContentType.MAP,
-                )
-
-    def test_filename_validation_directory_names_blocked(self):
-        """Test that directory names like '.' and '..' are blocked by pattern validation."""
-
-        directory_names = [".", ".."]
-
-        for dir_name in directory_names:
-            with pytest.raises(ValidationError, match="String should match pattern"):
-                RenderedContent(
-                    filename=dir_name,
-                    content="test content",
-                    content_type=ContentType.MAP,
-                )
-
-    def test_filename_validation_null_byte_blocked(self):
-        """Test that null byte injection in filenames is blocked."""
-
-        null_byte_attempts = [
-            "host.map\x00",
-            "\x00host.map",
-            "host\x00.map",
-            "host.map\x00../../../etc/passwd",
-        ]
-
-        for malicious_filename in null_byte_attempts:
-            with pytest.raises(ValidationError, match="String should match pattern"):
-                RenderedContent(
-                    filename=malicious_filename,
-                    content="test content",
-                    content_type=ContentType.MAP,
-                )
-
-    def test_filename_validation_length_limits(self):
-        """Test filename length validation."""
-
-        # Test maximum length (255 characters)
-        max_valid_filename = "a" * 255
+    for filename in valid_filenames:
+        # Should not raise ValidationError
         content = RenderedContent(
-            filename=max_valid_filename,
-            content="test content",
-            content_type=ContentType.MAP,
+            filename=filename, content="test content", content_type=ContentType.MAP
         )
-        assert content.filename == max_valid_filename
+        assert content.filename == filename
 
-        # Test exceeding maximum length
-        too_long_filename = "a" * 256
-        with pytest.raises(
-            ValidationError, match="String should have at most 255 characters"
-        ):
+
+def test_filename_validation_invalid_characters_blocked():
+    """Test that filenames with invalid characters are blocked (now includes spaces and Unicode)."""
+
+    invalid_filenames = [
+        "host file.map",  # Spaces no longer allowed for security
+        "файл.map",  # Unicode characters no longer allowed
+        "αρχείο.map",  # Greek characters no longer allowed
+        "host@file.map",  # Special characters blocked
+        "host#file.map",  # Hash
+        "host&file.map",  # Ampersand
+        "!host.map",  # Starts with special char
+        ".host.map",  # Starts with dot
+        "_host.map",  # Starts with underscore
+        "-host.map",  # Starts with dash
+    ]
+
+    for filename in invalid_filenames:
+        with pytest.raises(ValidationError, match="String should match pattern"):
             RenderedContent(
-                filename=too_long_filename,
+                filename=filename,
                 content="test content",
                 content_type=ContentType.MAP,
             )
 
-        # Test empty filename
-        with pytest.raises(
-            ValidationError, match="String should have at least 1 character"
-        ):
+
+def test_filename_validation_path_traversal_blocked():
+    """Test that path traversal attempts in filenames are blocked."""
+
+    path_traversal_attempts = [
+        "../../../etc/passwd",
+        "..\\..\\..\\windows\\system32\\config\\sam",
+        "host/../../../etc/passwd",
+        "tls/../../etc/passwd",
+        "../../../../../../root/.ssh/id_rsa",
+        "..\\..\\..\\..\\.ssh\\id_rsa",
+        "normal/../../../etc/shadow",
+        "file.map/../../../etc/hosts",
+        "subdir/host.map",
+        "dir\\host.map",
+        "a/b/c/host.map",
+        "dir\\subdir\\host.map",
+        "//host.map",
+        "\\\\host.map",
+    ]
+
+    for malicious_filename in path_traversal_attempts:
+        with pytest.raises(ValidationError, match="String should match pattern"):
             RenderedContent(
-                filename="", content="test content", content_type=ContentType.MAP
-            )
-
-    def test_filename_validation_in_config_maps(self):
-        """Test that filename validation applies to maps in Config."""
-        # Test valid map filename
-        valid_config = {
-            "pod_selector": {"match_labels": {"app": "haproxy"}},
-            "haproxy_config": {"template": "global\n    daemon"},
-            "maps": {"host.map": {"template": "{{ host }} {{ backend }}"}},
-        }
-
-        config = config_from_dict(valid_config)
-        assert "host.map" in config.maps
-
-        # Test invalid map filename with path traversal
-        invalid_config = {
-            "pod_selector": {"match_labels": {"app": "haproxy"}},
-            "haproxy_config": {"template": "global\n    daemon"},
-            "maps": {"../../../etc/passwd": {"template": "malicious content"}},
-        }
-
-        with pytest.raises(ValueError):
-            config_from_dict(invalid_config)
-
-    def test_filename_validation_in_config_certificates(self):
-        """Test that filename validation applies to certificates in Config."""
-        # Test valid certificate filename
-        valid_config = {
-            "pod_selector": {"match_labels": {"app": "haproxy"}},
-            "haproxy_config": {"template": "global\n    daemon"},
-            "certificates": {"tls.pem": {"template": "{{ cert_data }}"}},
-        }
-
-        config = config_from_dict(valid_config)
-        assert "tls.pem" in config.certificates
-
-        # Test invalid certificate filename with path traversal
-        invalid_config = {
-            "pod_selector": {"match_labels": {"app": "haproxy"}},
-            "haproxy_config": {"template": "global\n    daemon"},
-            "certificates": {
-                "../../etc/ssl/private/key.pem": {"template": "malicious content"}
-            },
-        }
-
-        with pytest.raises(ValueError):
-            config_from_dict(invalid_config)
-
-    def test_filename_validation_in_config_files(self):
-        """Test that filename validation applies to files in Config."""
-        # Test valid file filename
-        valid_config = {
-            "pod_selector": {"match_labels": {"app": "haproxy"}},
-            "haproxy_config": {"template": "global\n    daemon"},
-            "files": {"500.http": {"template": "HTTP/1.0 500 Server Error\\r\\n"}},
-        }
-
-        config = config_from_dict(valid_config)
-        assert "500.http" in config.files
-
-        # Test invalid file filename with path traversal
-        invalid_config = {
-            "pod_selector": {"match_labels": {"app": "haproxy"}},
-            "haproxy_config": {"template": "global\n    daemon"},
-            "files": {"../../../etc/shadow": {"template": "malicious content"}},
-        }
-
-        with pytest.raises(ValueError):
-            config_from_dict(invalid_config)
-
-    def test_filename_validation_comprehensive_attacks(self):
-        """Test comprehensive filename attack scenarios."""
-
-        # These attacks should be blocked by the regex pattern
-        path_attacks = [
-            "../../../etc/passwd",
-            "..\\..\\..\\windows\\system32\\config\\sam",
-            "./../../etc/shadow",
-            ".\\..\\..\\etc\\hosts",
-            "normal/../../etc/passwd",
-            "normal\\..\\..\\etc\\passwd",
-            "../..\\../etc/passwd",
-        ]
-
-        for attack in path_attacks:
-            with pytest.raises(ValidationError, match="String should match pattern"):
-                RenderedContent(
-                    filename=attack,
-                    content="malicious content",
-                    content_type=ContentType.MAP,
-                )
-
-        # These might not be caught by regex but would be handled by get_path_filter
-        encoded_attacks = [
-            "host.map%2e%2e%2f%2e%2e%2fetc%2fpasswd",
-            "host.map%252e%252e%252f",
-        ]
-
-        for attack in encoded_attacks:
-            # These should pass Pydantic validation but be caught at application level
-            try:
-                content = RenderedContent(
-                    filename=attack,
-                    content="test content",
-                    content_type=ContentType.MAP,
-                )
-                # If it passes Pydantic, that's expected for encoded attacks
-                assert content.filename == attack
-            except ValidationError:
-                # Also acceptable if Pydantic catches it
-                pass
-
-    def test_content_type_enum_security(self):
-        """Test that ContentType enum prevents invalid content types."""
-
-        # Valid content types
-        valid_types = [ContentType.MAP, ContentType.CERTIFICATE, ContentType.FILE]
-
-        for content_type in valid_types:
-            content = RenderedContent(
-                filename="test.txt", content="test content", content_type=content_type
-            )
-            assert content.content_type == content_type
-
-        # Invalid content type strings should be rejected
-        with pytest.raises(ValidationError):
-            RenderedContent(
-                filename="test.txt",
+                filename=malicious_filename,
                 content="test content",
-                content_type="invalid_type",  # Not a valid ContentType enum value
+                content_type=ContentType.MAP,
             )
+
+
+def test_filename_validation_directory_names_blocked():
+    """Test that directory names like '.' and '..' are blocked by pattern validation."""
+
+    directory_names = [".", ".."]
+
+    for dir_name in directory_names:
+        with pytest.raises(ValidationError, match="String should match pattern"):
+            RenderedContent(
+                filename=dir_name,
+                content="test content",
+                content_type=ContentType.MAP,
+            )
+
+
+def test_filename_validation_null_byte_blocked():
+    """Test that null byte injection in filenames is blocked."""
+
+    null_byte_attempts = [
+        "host.map\x00",
+        "\x00host.map",
+        "host\x00.map",
+        "host.map\x00../../../etc/passwd",
+    ]
+
+    for malicious_filename in null_byte_attempts:
+        with pytest.raises(ValidationError, match="String should match pattern"):
+            RenderedContent(
+                filename=malicious_filename,
+                content="test content",
+                content_type=ContentType.MAP,
+            )
+
+
+def test_filename_validation_length_limits():
+    """Test filename length validation."""
+
+    # Test maximum length (255 characters)
+    max_valid_filename = "a" * 255
+    content = RenderedContent(
+        filename=max_valid_filename,
+        content="test content",
+        content_type=ContentType.MAP,
+    )
+    assert content.filename == max_valid_filename
+
+    # Test exceeding maximum length
+    too_long_filename = "a" * 256
+    with pytest.raises(
+        ValidationError, match="String should have at most 255 characters"
+    ):
+        RenderedContent(
+            filename=too_long_filename,
+            content="test content",
+            content_type=ContentType.MAP,
+        )
+
+    # Test empty filename
+    with pytest.raises(
+        ValidationError, match="String should have at least 1 character"
+    ):
+        RenderedContent(
+            filename="", content="test content", content_type=ContentType.MAP
+        )
+
+
+def test_filename_validation_in_config_maps():
+    """Test that filename validation applies to maps in Config."""
+    # Test valid map filename
+    valid_config = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "maps": {"host.map": {"template": "{{ host }} {{ backend }}"}},
+    }
+
+    config = config_from_dict(valid_config)
+    assert "host.map" in config.maps
+
+    # Test invalid map filename with path traversal
+    invalid_config = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "maps": {"../../../etc/passwd": {"template": "malicious content"}},
+    }
+
+    with pytest.raises(ValueError):
+        config_from_dict(invalid_config)
+
+
+def test_filename_validation_in_config_certificates():
+    """Test that filename validation applies to certificates in Config."""
+    # Test valid certificate filename
+    valid_config = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "certificates": {"tls.pem": {"template": "{{ cert_data }}"}},
+    }
+
+    config = config_from_dict(valid_config)
+    assert "tls.pem" in config.certificates
+
+    # Test invalid certificate filename with path traversal
+    invalid_config = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "certificates": {
+            "../../etc/ssl/private/key.pem": {"template": "malicious content"}
+        },
+    }
+
+    with pytest.raises(ValueError):
+        config_from_dict(invalid_config)
+
+
+def test_filename_validation_in_config_files():
+    """Test that filename validation applies to files in Config."""
+    # Test valid file filename
+    valid_config = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "files": {"500.http": {"template": "HTTP/1.0 500 Server Error\\r\\n"}},
+    }
+
+    config = config_from_dict(valid_config)
+    assert "500.http" in config.files
+
+    # Test invalid file filename with path traversal
+    invalid_config = {
+        "pod_selector": {"match_labels": {"app": "haproxy"}},
+        "haproxy_config": {"template": "global\n    daemon"},
+        "files": {"../../../etc/shadow": {"template": "malicious content"}},
+    }
+
+    with pytest.raises(ValueError):
+        config_from_dict(invalid_config)
+
+
+def test_filename_validation_comprehensive_attacks():
+    """Test comprehensive filename attack scenarios."""
+
+    # These attacks should be blocked by the regex pattern
+    path_attacks = [
+        "../../../etc/passwd",
+        "..\\..\\..\\windows\\system32\\config\\sam",
+        "./../../etc/shadow",
+        ".\\..\\..\\etc\\hosts",
+        "normal/../../etc/passwd",
+        "normal\\..\\..\\etc\\passwd",
+        "../..\\../etc/passwd",
+    ]
+
+    for attack in path_attacks:
+        with pytest.raises(ValidationError, match="String should match pattern"):
+            RenderedContent(
+                filename=attack,
+                content="malicious content",
+                content_type=ContentType.MAP,
+            )
+
+    # These might not be caught by regex but would be handled by get_path_filter
+    encoded_attacks = [
+        "host.map%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+        "host.map%252e%252e%252f",
+    ]
+
+    for attack in encoded_attacks:
+        # These should pass Pydantic validation but be caught at application level
+        try:
+            content = RenderedContent(
+                filename=attack,
+                content="test content",
+                content_type=ContentType.MAP,
+            )
+            # If it passes Pydantic, that's expected for encoded attacks
+            assert content.filename == attack
+        except ValidationError:
+            # Also acceptable if Pydantic catches it
+            pass
+
+
+def test_content_type_enum_security():
+    """Test that ContentType enum prevents invalid content types."""
+
+    # Valid content types
+    valid_types = [ContentType.MAP, ContentType.CERTIFICATE, ContentType.FILE]
+
+    for content_type in valid_types:
+        content = RenderedContent(
+            filename="test.txt", content="test content", content_type=content_type
+        )
+        assert content.content_type == content_type
+
+    # Invalid content type strings should be rejected
+    with pytest.raises(ValidationError):
+        RenderedContent(
+            filename="test.txt",
+            content="test content",
+            content_type="invalid_type",  # Not a valid ContentType enum value
+        )
 
 
 # =============================================================================
@@ -2122,515 +2102,525 @@ class TestFilenameSecurity:
 # =============================================================================
 
 
-class TestFieldValidators:
-    """Test field validator functions."""
-
-    def test_validate_storage_dir_non_absolute_path(self):
-        """Test that non-absolute paths raise ValueError."""
-        with pytest.raises(ValueError, match="Storage directory must be absolute path"):
-            Config(
-                pod_selector={"match_labels": {"app": "test"}},
-                haproxy_config={"template": "test"},
-                storage_maps_dir="relative/path",  # Non-absolute path
-            )
-
-    def test_validate_storage_ssl_dir_non_absolute_path(self):
-        """Test SSL dir validation with non-absolute path."""
-        with pytest.raises(ValueError, match="Storage directory must be absolute path"):
-            Config(
-                pod_selector={"match_labels": {"app": "test"}},
-                haproxy_config={"template": "test"},
-                storage_ssl_dir="ssl",  # Non-absolute path
-            )
-
-    def test_validate_ignore_fields_with_invalid_expressions(self):
-        """Test that invalid JSONPath expressions trigger warning."""
-
-        with patch(
-            "haproxy_template_ic.k8s.field_filter.validate_ignore_fields"
-        ) as mock_validate:
-            # Return fewer fields than input (simulating some invalid)
-            mock_validate.return_value = ["metadata.managedFields"]
-
-            with patch("haproxy_template_ic.models.config.logger") as mock_logger:
-                config = Config(
-                    pod_selector={"match_labels": {"app": "test"}},
-                    haproxy_config={"template": "test"},
-                    watched_resources_ignore_fields=[
-                        "metadata.managedFields",
-                        "[[[invalid",  # Invalid expression
-                        "",  # Empty
-                    ],
-                )
-
-                # Check that warning was logged
-                mock_logger.warning.assert_called_once()
-                assert "Some ignore field expressions were invalid" in str(
-                    mock_logger.warning.call_args
-                )
-
-                # Check that only valid fields remain
-                assert config.watched_resources_ignore_fields == [
-                    "metadata.managedFields"
-                ]
-
-
-class TestIndexedResourceCollectionFromKopfIndex:
-    """Test IndexedResourceCollection.from_kopf_index error paths."""
-
-    def test_from_kopf_index_size_limit_reached(self):
-        """Test warning when size limit is reached."""
-
-        # Create a mock index with more items than max_size
-        mock_index = MagicMock()
-
-        # Create many keys to exceed size limit
-        keys = [f"key{i}" for i in range(100)]
-        mock_index.__iter__.return_value = iter(keys)
-
-        # Return a generator for each key
-        def get_resources(key):
-            return iter(
-                [{"metadata": {"name": f"resource{key}", "namespace": "default"}}]
-            )
-
-        mock_index.__getitem__.side_effect = get_resources
-
-        with patch("logging.getLogger") as mock_get_logger:
-            mock_logger = MagicMock()
-            mock_get_logger.return_value = mock_logger
-
-            # Create collection with patched _max_size
-            with patch.object(IndexedResourceCollection, "_max_size", 5):
-                collection = IndexedResourceCollection.from_kopf_index(mock_index)
-
-                # Should have logged size limit warning
-                warning_found = any(
-                    "Size limit reached" in str(call)
-                    for call in mock_logger.warning.call_args_list
-                )
-                assert warning_found or len(collection) <= 5
-
-    def test_from_kopf_index_normalization_failure(self):
-        """Test handling of resource normalization failures."""
-
-        mock_index = MagicMock()
-        mock_index.__iter__.return_value = iter([("key1",)])
-        mock_index.__getitem__.return_value = iter(
-            [
-                "invalid_resource_type"  # This should fail normalization
-            ]
+def test_validate_storage_dir_non_absolute_path():
+    """Test that non-absolute paths raise ValueError."""
+    with pytest.raises(ValueError, match="Storage directory must be absolute path"):
+        Config(
+            pod_selector={"match_labels": {"app": "test"}},
+            haproxy_config={"template": "test"},
+            storage_maps_dir="relative/path",  # Non-absolute path
         )
 
-        with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
-            collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
-            # Should log warning about normalization failure
-            assert any(
-                "Failed to normalize resource" in str(call)
-                for call in mock_logger.warning.call_args_list
-            )
-
-            # Collection should be empty
-            assert len(collection) == 0
-
-    def test_from_kopf_index_invalid_resource(self):
-        """Test warning for invalid resources."""
-
-        mock_index = MagicMock()
-        mock_index.__iter__.return_value = iter([("key1",)])
-        mock_index.__getitem__.return_value = iter(
-            [
-                {"metadata": {"no_name": "missing_name"}}  # Invalid: no name
-            ]
+def test_validate_storage_ssl_dir_non_absolute_path():
+    """Test SSL dir validation with non-absolute path."""
+    with pytest.raises(ValueError, match="Storage directory must be absolute path"):
+        Config(
+            pod_selector={"match_labels": {"app": "test"}},
+            haproxy_config={"template": "test"},
+            storage_ssl_dir="ssl",  # Non-absolute path
         )
 
-        with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
-            collection = IndexedResourceCollection.from_kopf_index(mock_index)
 
-            # Should log warning about invalid resource
-            assert any(
-                "Skipping invalid resource" in str(call)
-                for call in mock_logger.warning.call_args_list
-            )
-
-            # Collection should be empty
-            assert len(collection) == 0
-
-    def test_from_kopf_index_general_exception(self):
-        """Test handling of general exceptions during indexing."""
-
-        mock_index = MagicMock()
-        mock_index.__iter__.return_value = iter([("key1",)])
-        mock_index.__getitem__.side_effect = RuntimeError("Unexpected error")
-
-        with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
-            collection = IndexedResourceCollection.from_kopf_index(mock_index)
-
-            # Should log warning about error
-            assert any(
-                "Error with key" in str(call)
-                for call in mock_logger.warning.call_args_list
-            )
-
-            # Collection should be empty
-            assert len(collection) == 0
-
-
-class TestIndexedResourceCollectionHelperMethods:
-    """Test IndexedResourceCollection helper methods."""
-
-    def test_normalize_key_with_tuple_input(self):
-        """Test _normalize_key with tuple input."""
-
-        collection = IndexedResourceCollection()
-
-        # Test with tuple input (single arg that is tuple)
-        key = collection._normalize_key(("namespace", "name"))
-        assert key == (
-            unicodedata.normalize("NFC", "namespace"),
-            unicodedata.normalize("NFC", "name"),
-        )
-
-        # Test with list input (single arg that is list)
-        key = collection._normalize_key(["namespace", "name"])
-        assert key == (
-            unicodedata.normalize("NFC", "namespace"),
-            unicodedata.normalize("NFC", "name"),
-        )
-
-        # Test with multiple args
-        key = collection._normalize_key("namespace", "name")
-        assert key == (
-            unicodedata.normalize("NFC", "namespace"),
-            unicodedata.normalize("NFC", "name"),
-        )
-
-        # Test with None values
-        key = collection._normalize_key(None, "name")
-        assert key == ("", unicodedata.normalize("NFC", "name"))
-
-    def test_validate_resource_with_object(self):
-        """Test _validate_resource with object having metadata attribute."""
-
-        collection = IndexedResourceCollection()
-
-        # Create mock object with metadata
-        mock_resource = MagicMock()
-        mock_resource.metadata.name = "test-resource"
-
-        assert collection._validate_resource(mock_resource) is True
-
-        # Test with empty name
-        mock_resource.metadata.name = ""
-        assert collection._validate_resource(mock_resource) is False
-
-        # Test with None name
-        mock_resource.metadata.name = None
-        assert collection._validate_resource(mock_resource) is False
-
-    def test_validate_resource_edge_cases(self):
-        """Test _validate_resource with edge cases."""
-
-        collection = IndexedResourceCollection()
-
-        # Test with non-dict metadata
-        resource = {"metadata": "not_a_dict"}
-        assert collection._validate_resource(resource) is False
-
-        # Test with empty name after strip
-        resource = {"metadata": {"name": "   "}}
-        assert collection._validate_resource(resource) is False
-
-        # Test with missing metadata
-        resource = {"no_metadata": {}}
-        assert collection._validate_resource(resource) is False
-
-    def test_extract_resource_id_with_object(self):
-        """Test _extract_resource_id with object having metadata."""
-
-        collection = IndexedResourceCollection()
-
-        # Create mock object with metadata
-        mock_resource = MagicMock()
-        mock_resource.kind = "Service"
-        mock_resource.metadata.namespace = "default"
-        mock_resource.metadata.name = "my-service"
-
-        resource_id = collection._extract_resource_id(mock_resource)
-        assert resource_id == "Service:default/my-service"
-
-        # Test with missing kind
-        del mock_resource.kind
-        resource_id = collection._extract_resource_id(mock_resource)
-        assert resource_id == "unknown:default/my-service"
-
-    def test_extract_resource_id_with_dict(self):
-        """Test _extract_resource_id with dictionary."""
-
-        collection = IndexedResourceCollection()
-
-        resource = {
-            "kind": "Pod",
-            "metadata": {"namespace": "kube-system", "name": "coredns"},
-        }
-
-        resource_id = collection._extract_resource_id(resource)
-        assert resource_id == "Pod:kube-system/coredns"
-
-        # Test with missing fields
-        resource = {"metadata": {"name": "test"}}
-        resource_id = collection._extract_resource_id(resource)
-        assert resource_id == "unknown:unknown/test"
-
-    def test_extract_resource_id_exception(self):
-        """Test _extract_resource_id exception handling."""
-
-        collection = IndexedResourceCollection()
-
-        # Test with object that causes exception when accessing metadata.name
-        # We need to mock the actual property access
-        resource = MagicMock()
-        mock_metadata = MagicMock()
-        resource.metadata = mock_metadata
-        # Make the name property raise an exception
-        type(mock_metadata).name = PropertyMock(side_effect=RuntimeError("Error"))
-
-        resource_id = collection._extract_resource_id(resource)
-        assert resource_id == "<error>"
-
-        # Test with None - this returns "<unknown>" because None doesn't have
-        # a metadata attribute, not because of an exception
-        resource_id = collection._extract_resource_id(None)
-        assert resource_id == "<unknown>"
-
-
-class TestIndexedResourceCollectionQueryMethods:
-    """Test IndexedResourceCollection query methods."""
-
-    def test_get_indexed_iter(self):
-        """Test get_indexed_iter method."""
-
-        # Create mock index data
-        mock_index = {
-            ("default", "service1"): [
-                {"metadata": {"name": "resource1"}, "name": "resource1"},
-                {"metadata": {"name": "resource2"}, "name": "resource2"},
-            ]
-        }
-
-        collection = IndexedResourceCollection.from_kopf_index(mock_index)
-
-        # Test iterator
-        resources = list(collection.get_indexed_iter("default", "service1"))
-        assert len(resources) == 2
-        assert resources[0]["name"] == "resource1"
-        assert resources[1]["name"] == "resource2"
-
-        # Test with non-existent key
-        resources = list(collection.get_indexed_iter("other", "service"))
-        assert len(resources) == 0
-
-    def test_get_indexed_single_multiple_resources(self):
-        """Test get_indexed_single with multiple resources."""
-
-        # Create mock index data with multiple resources
-        mock_index = {
-            ("default", "service1"): [
-                {"metadata": {"name": "resource1"}},
-                {"metadata": {"name": "resource2"}},
-                {"metadata": {"name": "resource3"}},
-            ]
-        }
-
-        collection = IndexedResourceCollection.from_kopf_index(mock_index)
-
-        with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
-            # Should raise ValueError
-            with pytest.raises(ValueError, match="Multiple resources found"):
-                collection.get_indexed_single("default", "service1")
-
-            # Should have logged error
-            mock_logger.error.assert_called_once()
-
-    def test_items_iteration(self):
-        """Test items method."""
-
-        # Create mock index data
-        mock_index = {
-            ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
-            ("ns2", "res2"): [
-                {"metadata": {"name": "r2"}, "name": "r2"},
-                {"metadata": {"name": "r3"}, "name": "r3"},
-            ],
-        }
-
-        collection = IndexedResourceCollection.from_kopf_index(mock_index)
-
-        items = list(collection.items())
-        assert len(items) == 3
-
-        # Check that we get tuples of (key, resource)
-        assert items[0][0] == ("ns1", "res1")
-        assert items[0][1]["name"] == "r1"
-
-    def test_values_iteration(self):
-        """Test values method."""
-
-        # Create mock index data
-        mock_index = {
-            ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
-            ("ns2", "res2"): [
-                {"metadata": {"name": "r2"}, "name": "r2"},
-                {"metadata": {"name": "r3"}, "name": "r3"},
-            ],
-        }
-
-        collection = IndexedResourceCollection.from_kopf_index(mock_index)
-
-        values = list(collection.values())
-        assert len(values) == 3
-        assert values[0]["name"] == "r1"
-        assert values[1]["name"] == "r2"
-        assert values[2]["name"] == "r3"
-
-    def test_contains_check(self):
-        """Test __contains__ method."""
-
-        # Create mock index data
-        mock_index = {("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}]}
-
-        collection = IndexedResourceCollection.from_kopf_index(mock_index)
-
-        # Test with tuple key
-        assert ("ns1", "res1") in collection
-        assert ("ns2", "res2") not in collection
-
-    def test_keys_iteration(self):
-        """Test keys method."""
-
-        # Create mock index data
-        mock_index = {
-            ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
-            ("ns2", "res2"): [{"metadata": {"name": "r2"}, "name": "r2"}],
-        }
-
-        collection = IndexedResourceCollection.from_kopf_index(mock_index)
-
-        keys = list(collection.keys())
-        assert len(keys) == 2
-        assert ("ns1", "res1") in keys
-        assert ("ns2", "res2") in keys
-
-
-class TestHAProxyConfigContextMethods:
-    """Test HAProxyConfigContext methods."""
-
-    def test_get_content_by_filename_not_found(self):
-        """Test get_content_by_filename when content not found."""
-
-        context = HAProxyConfigContext(
-            template_context=TemplateContext(),
-            rendered_content=[
-                RenderedContent(filename="file1.txt", content="content1"),
-                RenderedContent(filename="file2.txt", content="content2"),
+def test_validate_ignore_fields_with_invalid_expressions():
+    """Test that invalid JSONPath expressions trigger warning."""
+
+    mock_logger = create_logger_with_handlers_mock()
+
+    with (
+        mock_module_attributes(
+            __import__("haproxy_template_ic.k8s.field_filter", fromlist=[""]),
+            validate_ignore_fields=lambda fields: ["metadata.managedFields"],
+        ),
+        mock_module_attributes(
+            __import__("haproxy_template_ic.models.config", fromlist=[""]),
+            logger=mock_logger,
+        ),
+    ):
+        config = Config(
+            pod_selector={"match_labels": {"app": "test"}},
+            haproxy_config={"template": "test"},
+            watched_resources_ignore_fields=[
+                "metadata.managedFields",
+                "[[[invalid",  # Invalid expression
+                "",  # Empty
             ],
         )
 
-        # Test finding existing file
-        content = context.get_content_by_filename("file1.txt")
-        assert content is not None
-        assert content.filename == "file1.txt"
-        assert content.content == "content1"
-
-        # Test not finding file (lines 574-575)
-        content = context.get_content_by_filename("nonexistent.txt")
-        assert content is None
-
-
-class TestConfigFromDictErrorHandling:
-    """Test config_from_dict error handling."""
-
-    def test_config_from_dict_template_snippets_error(self):
-        """Test helpful error message for template_snippets format error."""
-        data = {
-            "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": {"template": "test"},
-            "template_snippets": {
-                # Wrong format - should be dict with name and template
-                "snippet1": "just a string"
-            },
-        }
-
-        with pytest.raises(ValueError) as exc_info:
-            config_from_dict(data)
-
-        error_msg = str(exc_info.value)
-        assert "TEMPLATE SNIPPETS FORMAT ERROR" in error_msg
-        assert "INCORRECT FORMAT" in error_msg
-        assert "CORRECT FORMAT" in error_msg
-
-    def test_config_from_dict_watched_resources_error(self):
-        """Test helpful error message for watched_resources error."""
-        data = {
-            "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": {"template": "test"},
-            "watched_resources": {
-                "invalid": {
-                    # Missing required fields
-                    "kind": "Service"
-                }
-            },
-        }
-
-        with pytest.raises(ValueError) as exc_info:
-            config_from_dict(data)
-
-        error_msg = str(exc_info.value)
-        assert "WATCHED RESOURCES ERROR" in error_msg or "api_version" in error_msg
-
-    def test_config_from_dict_pod_selector_error(self):
-        """Test helpful error message for pod_selector error."""
-        data = {
-            "pod_selector": "invalid",  # Should be dict
-            "haproxy_config": {"template": "test"},
-        }
-
-        with pytest.raises(ValueError) as exc_info:
-            config_from_dict(data)
-
-        error_msg = str(exc_info.value)
-        assert "POD SELECTOR ERROR" in error_msg or "pod_selector" in error_msg.lower()
-
-    def test_config_from_dict_haproxy_config_error(self):
-        """Test helpful error message for haproxy_config error."""
-        data = {
-            "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": "invalid",  # Should be dict with template
-        }
-
-        with pytest.raises(ValueError) as exc_info:
-            config_from_dict(data)
-
-        error_msg = str(exc_info.value)
-        assert (
-            "HAPROXY CONFIG ERROR" in error_msg or "haproxy_config" in error_msg.lower()
+        # Check that warning was logged
+        mock_logger.warning.assert_called_once()
+        assert "Some ignore field expressions were invalid" in str(
+            mock_logger.warning.call_args
         )
 
-    def test_config_from_dict_auth_fields_error(self):
-        """Test error message for deprecated auth fields."""
-        data = {
-            "pod_selector": {"match_labels": {"app": "test"}},
-            "haproxy_config": {"template": "test"},
-            "dataplane_auth": {"username": "admin"},  # Deprecated field
-        }
+        # Check that only valid fields remain
+        assert config.watched_resources_ignore_fields == ["metadata.managedFields"]
 
-        with pytest.raises(ValueError) as exc_info:
-            config_from_dict(data)
 
-        error_msg = str(exc_info.value)
-        # Could be either the custom message or Pydantic's forbid extra message
-        assert (
-            "CREDENTIALS MOVED TO SECRET" in error_msg
-            or "Extra inputs are not permitted" in error_msg.lower()
+def test_from_kopf_index_size_limit_reached():
+    """Test warning when size limit is reached."""
+
+    # Create a mock index with more items than max_size
+    resources = {}
+    for i in range(100):
+        key = f"key{i}"
+        resources[key] = [
+            {"metadata": {"name": f"resource{key}", "namespace": "default"}}
+        ]
+
+    mock_index = create_kopf_index_mock(resources=resources)
+
+    mock_logger = create_logger_with_handlers_mock()
+
+    with (
+        mock_module_attributes(
+            __import__("logging", fromlist=[""]), getLogger=lambda name: mock_logger
+        ),
+        patch.object(IndexedResourceCollection, "_max_size", 5),
+    ):
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+        # Should have logged size limit warning
+        warning_found = any(
+            "Size limit reached" in str(call)
+            for call in mock_logger.warning.call_args_list
         )
+        assert warning_found or len(collection) <= 5
+
+
+def test_from_kopf_index_normalization_failure():
+    """Test handling of resource normalization failures."""
+
+    mock_index = create_kopf_index_mock(
+        resources={"key1": ["invalid_resource_type"]}  # This should fail normalization
+    )
+
+    mock_logger = create_logger_with_handlers_mock()
+
+    with mock_module_attributes(
+        __import__("haproxy_template_ic.k8s.kopf_utils", fromlist=[""]),
+        logger=mock_logger,
+    ):
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+        # Should log warning about normalization failure
+        assert any(
+            "Failed to normalize resource" in str(call)
+            for call in mock_logger.warning.call_args_list
+        )
+
+        # Collection should be empty
+        assert len(collection) == 0
+
+
+def test_from_kopf_index_invalid_resource():
+    """Test warning for invalid resources."""
+
+    mock_index = create_kopf_index_mock(
+        resources={
+            "key1": [{"metadata": {"no_name": "missing_name"}}]
+        }  # Invalid: no name
+    )
+
+    mock_logger = create_logger_with_handlers_mock()
+
+    with mock_module_attributes(
+        __import__("haproxy_template_ic.k8s.kopf_utils", fromlist=[""]),
+        logger=mock_logger,
+    ):
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+        # Should log warning about invalid resource
+        assert any(
+            "Skipping invalid resource" in str(call)
+            for call in mock_logger.warning.call_args_list
+        )
+
+        # Collection should be empty
+        assert len(collection) == 0
+
+
+def test_from_kopf_index_general_exception():
+    """Test handling of general exceptions during indexing."""
+
+    # Create a mock index that throws an exception on access
+    from unittest.mock import MagicMock
+
+    mock_index = MagicMock()
+    mock_index.__iter__.return_value = iter(["key1"])
+    mock_index.__getitem__.side_effect = RuntimeError("Unexpected error")
+
+    mock_logger = create_logger_with_handlers_mock()
+
+    with mock_module_attributes(
+        __import__("haproxy_template_ic.k8s.kopf_utils", fromlist=[""]),
+        logger=mock_logger,
+    ):
+        collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+        # Should log warning about error
+        assert any(
+            "Error with key" in str(call) for call in mock_logger.warning.call_args_list
+        )
+
+        # Collection should be empty
+        assert len(collection) == 0
+
+
+def test_normalize_key_with_tuple_input():
+    """Test _normalize_key with tuple input."""
+
+    collection = IndexedResourceCollection()
+
+    # Test with tuple input (single arg that is tuple)
+    key = collection._normalize_key(("namespace", "name"))
+    assert key == (
+        unicodedata.normalize("NFC", "namespace"),
+        unicodedata.normalize("NFC", "name"),
+    )
+
+    # Test with list input (single arg that is list)
+    key = collection._normalize_key(["namespace", "name"])
+    assert key == (
+        unicodedata.normalize("NFC", "namespace"),
+        unicodedata.normalize("NFC", "name"),
+    )
+
+    # Test with multiple args
+    key = collection._normalize_key("namespace", "name")
+    assert key == (
+        unicodedata.normalize("NFC", "namespace"),
+        unicodedata.normalize("NFC", "name"),
+    )
+
+    # Test with None values
+    key = collection._normalize_key(None, "name")
+    assert key == ("", unicodedata.normalize("NFC", "name"))
+
+
+def test_validate_resource_with_object():
+    """Test _validate_resource with object having metadata attribute."""
+
+    collection = IndexedResourceCollection()
+
+    # Create mock object with metadata
+    mock_resource = MagicMock()
+    mock_resource.metadata.name = "test-resource"
+
+    assert collection._validate_resource(mock_resource) is True
+
+    # Test with empty name
+    mock_resource.metadata.name = ""
+    assert collection._validate_resource(mock_resource) is False
+
+    # Test with None name
+    mock_resource.metadata.name = None
+    assert collection._validate_resource(mock_resource) is False
+
+
+def test_validate_resource_edge_cases():
+    """Test _validate_resource with edge cases."""
+
+    collection = IndexedResourceCollection()
+
+    # Test with non-dict metadata
+    resource = {"metadata": "not_a_dict"}
+    assert collection._validate_resource(resource) is False
+
+    # Test with empty name after strip
+    resource = {"metadata": {"name": "   "}}
+    assert collection._validate_resource(resource) is False
+
+    # Test with missing metadata
+    resource = {"no_metadata": {}}
+    assert collection._validate_resource(resource) is False
+
+
+def test_extract_resource_id_with_object():
+    """Test _extract_resource_id with object having metadata."""
+
+    collection = IndexedResourceCollection()
+
+    # Create mock object with metadata
+    mock_resource = MagicMock()
+    mock_resource.kind = "Service"
+    mock_resource.metadata.namespace = "default"
+    mock_resource.metadata.name = "my-service"
+
+    resource_id = collection._extract_resource_id(mock_resource)
+    assert resource_id == "Service:default/my-service"
+
+    # Test with missing kind
+    del mock_resource.kind
+    resource_id = collection._extract_resource_id(mock_resource)
+    assert resource_id == "unknown:default/my-service"
+
+
+def test_extract_resource_id_with_dict():
+    """Test _extract_resource_id with dictionary."""
+
+    collection = IndexedResourceCollection()
+
+    resource = {
+        "kind": "Pod",
+        "metadata": {"namespace": "kube-system", "name": "coredns"},
+    }
+
+    resource_id = collection._extract_resource_id(resource)
+    assert resource_id == "Pod:kube-system/coredns"
+
+    # Test with missing fields
+    resource = {"metadata": {"name": "test"}}
+    resource_id = collection._extract_resource_id(resource)
+    assert resource_id == "unknown:unknown/test"
+
+
+def test_extract_resource_id_exception():
+    """Test _extract_resource_id exception handling."""
+
+    collection = IndexedResourceCollection()
+
+    # Test with object that causes exception when accessing metadata.name
+    # We need to mock the actual property access
+    resource = MagicMock()
+    mock_metadata = MagicMock()
+    resource.metadata = mock_metadata
+    # Make the name property raise an exception
+    type(mock_metadata).name = PropertyMock(side_effect=RuntimeError("Error"))
+
+    resource_id = collection._extract_resource_id(resource)
+    assert resource_id == "<error>"
+
+    # Test with None - this returns "<unknown>" because None doesn't have
+    # a metadata attribute, not because of an exception
+    resource_id = collection._extract_resource_id(None)
+    assert resource_id == "<unknown>"
+
+
+def test_get_indexed_iter():
+    """Test get_indexed_iter method."""
+
+    # Create mock index data
+    mock_index = {
+        ("default", "service1"): [
+            {"metadata": {"name": "resource1"}, "name": "resource1"},
+            {"metadata": {"name": "resource2"}, "name": "resource2"},
+        ]
+    }
+
+    collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+    # Test iterator
+    resources = list(collection.get_indexed_iter("default", "service1"))
+    assert len(resources) == 2
+    assert resources[0]["name"] == "resource1"
+    assert resources[1]["name"] == "resource2"
+
+    # Test with non-existent key
+    resources = list(collection.get_indexed_iter("other", "service"))
+    assert len(resources) == 0
+
+
+def test_get_indexed_single_multiple_resources():
+    """Test get_indexed_single with multiple resources."""
+
+    # Create mock index data with multiple resources
+    mock_index = {
+        ("default", "service1"): [
+            {"metadata": {"name": "resource1"}},
+            {"metadata": {"name": "resource2"}},
+            {"metadata": {"name": "resource3"}},
+        ]
+    }
+
+    collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+    with patch("haproxy_template_ic.k8s.kopf_utils.logger") as mock_logger:
+        # Should raise ValueError
+        with pytest.raises(ValueError, match="Multiple resources found"):
+            collection.get_indexed_single("default", "service1")
+
+        # Should have logged error
+        mock_logger.error.assert_called_once()
+
+
+def test_items_iteration():
+    """Test items method."""
+
+    # Create mock index data
+    mock_index = {
+        ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
+        ("ns2", "res2"): [
+            {"metadata": {"name": "r2"}, "name": "r2"},
+            {"metadata": {"name": "r3"}, "name": "r3"},
+        ],
+    }
+
+    collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+    items = list(collection.items())
+    assert len(items) == 3
+
+    # Check that we get tuples of (key, resource)
+    assert items[0][0] == ("ns1", "res1")
+    assert items[0][1]["name"] == "r1"
+
+
+def test_values_iteration():
+    """Test values method."""
+
+    # Create mock index data
+    mock_index = {
+        ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
+        ("ns2", "res2"): [
+            {"metadata": {"name": "r2"}, "name": "r2"},
+            {"metadata": {"name": "r3"}, "name": "r3"},
+        ],
+    }
+
+    collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+    values = list(collection.values())
+    assert len(values) == 3
+    assert values[0]["name"] == "r1"
+    assert values[1]["name"] == "r2"
+    assert values[2]["name"] == "r3"
+
+
+def test_contains_check():
+    """Test __contains__ method."""
+
+    # Create mock index data
+    mock_index = {("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}]}
+
+    collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+    # Test with tuple key
+    assert ("ns1", "res1") in collection
+    assert ("ns2", "res2") not in collection
+
+
+def test_keys_iteration():
+    """Test keys method."""
+
+    # Create mock index data
+    mock_index = {
+        ("ns1", "res1"): [{"metadata": {"name": "r1"}, "name": "r1"}],
+        ("ns2", "res2"): [{"metadata": {"name": "r2"}, "name": "r2"}],
+    }
+
+    collection = IndexedResourceCollection.from_kopf_index(mock_index)
+
+    keys = list(collection.keys())
+    assert len(keys) == 2
+    assert ("ns1", "res1") in keys
+    assert ("ns2", "res2") in keys
+
+
+def test_get_content_by_filename_not_found():
+    """Test get_content_by_filename when content not found."""
+
+    context = HAProxyConfigContext(
+        template_context=TemplateContext(),
+        rendered_content=[
+            RenderedContent(filename="file1.txt", content="content1"),
+            RenderedContent(filename="file2.txt", content="content2"),
+        ],
+    )
+
+    # Test finding existing file
+    content = context.get_content_by_filename("file1.txt")
+    assert content is not None
+    assert content.filename == "file1.txt"
+    assert content.content == "content1"
+
+    # Test not finding file (lines 574-575)
+    content = context.get_content_by_filename("nonexistent.txt")
+    assert content is None
+
+
+def test_config_from_dict_template_snippets_error():
+    """Test helpful error message for template_snippets format error."""
+    data = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "test"},
+        "template_snippets": {
+            # Wrong format - should be dict with name and template
+            "snippet1": "just a string"
+        },
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        config_from_dict(data)
+
+    error_msg = str(exc_info.value)
+    assert "TEMPLATE SNIPPETS FORMAT ERROR" in error_msg
+    assert "INCORRECT FORMAT" in error_msg
+    assert "CORRECT FORMAT" in error_msg
+
+
+def test_config_from_dict_watched_resources_error():
+    """Test helpful error message for watched_resources error."""
+    data = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "test"},
+        "watched_resources": {
+            "invalid": {
+                # Missing required fields
+                "kind": "Service"
+            }
+        },
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        config_from_dict(data)
+
+    error_msg = str(exc_info.value)
+    assert "WATCHED RESOURCES ERROR" in error_msg or "api_version" in error_msg
+
+
+def test_config_from_dict_pod_selector_error():
+    """Test helpful error message for pod_selector error."""
+    data = {
+        "pod_selector": "invalid",  # Should be dict
+        "haproxy_config": {"template": "test"},
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        config_from_dict(data)
+
+    error_msg = str(exc_info.value)
+    assert "POD SELECTOR ERROR" in error_msg or "pod_selector" in error_msg.lower()
+
+
+def test_config_from_dict_haproxy_config_error():
+    """Test helpful error message for haproxy_config error."""
+    data = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": "invalid",  # Should be dict with template
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        config_from_dict(data)
+
+    error_msg = str(exc_info.value)
+    assert "HAPROXY CONFIG ERROR" in error_msg or "haproxy_config" in error_msg.lower()
+
+
+def test_config_from_dict_auth_fields_error():
+    """Test error message for deprecated auth fields."""
+    data = {
+        "pod_selector": {"match_labels": {"app": "test"}},
+        "haproxy_config": {"template": "test"},
+        "dataplane_auth": {"username": "admin"},  # Deprecated field
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        config_from_dict(data)
+
+    error_msg = str(exc_info.value)
+    # Could be either the custom message or Pydantic's forbid extra message
+    assert (
+        "CREDENTIALS MOVED TO SECRET" in error_msg
+        or "Extra inputs are not permitted" in error_msg.lower()
+    )

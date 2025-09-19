@@ -10,21 +10,13 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import httpx
 import pytest
 import pytest_asyncio
+from pydantic import SecretStr
 from pytest import CollectReport, StashKey
-
-# HAProxyInstance removed in simplification - using direct URLs now
-
-from .utils import (
-    DockerComposeManager,
-    allocate_test_ports,
-    read_config_file,
-    wait_for_dataplane_api,
-)
 
 # Import for shared session fixtures
 from pytest_shared_session_scope import (
@@ -33,6 +25,19 @@ from pytest_shared_session_scope import (
 )
 from python_on_whales import DockerClient
 
+from haproxy_template_ic.credentials import DataplaneAuth
+from haproxy_template_ic.dataplane import (
+    DataplaneClient,
+    DataplaneEndpoint,
+)
+
+# HAProxyInstance removed in simplification - using direct URLs now
+from .utils import (
+    DockerComposeManager,
+    allocate_test_ports,
+    read_config_file,
+    wait_for_dataplane_api,
+)
 
 # Store test results for --keep-containers on-failure
 phase_report_key = StashKey[Dict[str, CollectReport]]()
@@ -143,38 +148,85 @@ async def docker_compose_dataplane(
         docker_resource_semaphore.release()
 
 
+async def assert_dataplane_api_ready(
+    base_url: str, auth: tuple[str, str], compose_manager: DockerComposeManager
+):
+    # Verify service is ready (additional check if needed)
+    ready = await wait_for_dataplane_api(
+        base_url,
+        auth,
+        timeout=30,
+        service_name="Production Dataplane API (client fixture)",
+    )
+    assert ready, "Production Dataplane API not ready for client fixture"
+
+
 @pytest_asyncio.fixture
-async def validation_dataplane_client(docker_compose_dataplane):
-    """Dataplane API client for validation sidecar."""
-    ports, _ = docker_compose_dataplane
-
-    base_url = f"http://localhost:{ports['validation_port']}"
-    auth = ("admin", "adminpass")
-
-    async with httpx.AsyncClient(base_url=base_url, auth=auth, timeout=30.0) as client:
-        yield client
-
-
-@pytest_asyncio.fixture
-async def production_dataplane_client(docker_compose_dataplane):
+async def production_dataplane_client_raw(docker_compose_dataplane):
     """Dataplane API client for production instance."""
     ports, compose_manager = docker_compose_dataplane
 
     base_url = f"http://localhost:{ports['production_port']}"
     auth = ("admin", "adminpass")
 
-    # Verify service is ready (additional check if needed)
-    ready = await wait_for_dataplane_api(
-        base_url,
-        auth,
-        timeout=30,
-        reporter=compose_manager.reporter,
-        service_name="Production Dataplane API (client fixture)",
-    )
-    assert ready, "Production Dataplane API not ready for client fixture"
+    await assert_dataplane_api_ready(base_url, auth, compose_manager)
 
     async with httpx.AsyncClient(base_url=base_url, auth=auth, timeout=30.0) as client:
         yield client
+
+
+@pytest_asyncio.fixture
+async def validation_dataplane_client_raw(docker_compose_dataplane):
+    """Validation Dataplane API client (raw httpx)."""
+    ports, compose_manager = docker_compose_dataplane
+
+    base_url = f"http://localhost:{ports['validation_port']}"
+    auth = ("admin", "adminpass")
+
+    await assert_dataplane_api_ready(base_url, auth, compose_manager)
+
+    async with httpx.AsyncClient(base_url=base_url, auth=auth, timeout=30.0) as client:
+        yield client
+
+
+@pytest_asyncio.fixture
+async def validation_dataplane_client(docker_compose_dataplane):
+    """Ready-to-use DataplaneClient instance for validation integration tests."""
+    ports, compose_manager = docker_compose_dataplane
+
+    base_url = f"http://localhost:{ports['validation_port']}"
+    # Check readiness with base URL (without /v3)
+    await assert_dataplane_api_ready(base_url, ("admin", "adminpass"), compose_manager)
+
+    # Add /v3 for the actual client
+    if not base_url.endswith("/v3"):
+        base_url += "/v3"
+
+    auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
+    endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
+    client = DataplaneClient(endpoint)
+
+    yield client
+
+
+@pytest_asyncio.fixture
+async def production_dataplane_client(docker_compose_dataplane):
+    """Ready-to-use DataplaneClient instance for integration tests."""
+    ports, compose_manager = docker_compose_dataplane
+
+    base_url = f"http://localhost:{ports['production_port']}"
+    # Check readiness with base URL (without /v3)
+    await assert_dataplane_api_ready(base_url, ("admin", "adminpass"), compose_manager)
+
+    # Add /v3 for the actual client
+    if not base_url.endswith("/v3"):
+        base_url += "/v3"
+
+    auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
+    endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
+    client = DataplaneClient(endpoint)
+
+    yield client
 
 
 @pytest_asyncio.fixture
@@ -201,6 +253,172 @@ def haproxy_configs() -> Dict[str, str]:
         "invalid": read_config_file("haproxy-invalid.cfg"),
         "with_health": read_config_file("haproxy-with-health.cfg"),
     }
+
+
+@pytest.fixture
+def haproxy_config_with_acl() -> str:
+    """HAProxy configuration with ACL file reference for ConfigSynchronizer testing."""
+    return """
+global
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend main
+    bind *:80
+    # Reference ACL file from general storage directory
+    acl blocked_ips src -f /etc/haproxy/general/blocked.acl
+    http-request deny if blocked_ips
+    default_backend servers
+
+frontend status
+    bind *:8404
+    http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+
+backend servers
+    balance roundrobin
+    server web1 192.168.1.100:8080 check
+"""
+
+
+@pytest_asyncio.fixture
+async def config_synchronizer(mock_haproxy_urls):
+    """ConfigSynchronizer using existing URL infrastructure for integration testing.
+
+    This fixture creates a ConfigSynchronizer with validation and production endpoints
+    using the existing mock_haproxy_urls fixture, leveraging the established Docker
+    container infrastructure.
+    """
+    from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
+    from haproxy_template_ic.dataplane.endpoint import (
+        DataplaneEndpoint,
+        DataplaneEndpointSet,
+    )
+    from haproxy_template_ic.credentials import DataplaneAuth
+    from pydantic import SecretStr
+
+    validation_url, production_url = mock_haproxy_urls
+
+    # Create auth objects
+    auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
+
+    # Create endpoints with /v3 suffix for API
+    validation_endpoint = DataplaneEndpoint(
+        url=f"{validation_url}/v3", dataplane_auth=auth
+    )
+    production_endpoint = DataplaneEndpoint(
+        url=f"{production_url}/v3", dataplane_auth=auth
+    )
+
+    # Create endpoint set
+    endpoint_set = DataplaneEndpointSet(
+        validation=validation_endpoint, production=[production_endpoint]
+    )
+
+    # Create and return ConfigSynchronizer
+    synchronizer = ConfigSynchronizer(endpoint_set)
+
+    yield synchronizer
+
+    # Cleanup connections
+    await synchronizer.close_all_connections()
+
+
+@pytest.fixture
+def haproxy_context_factory():
+    """Factory for creating HAProxyConfigContext objects for testing.
+
+    This factory provides a convenient way to create HAProxyConfigContext instances
+    with various configurations and content types for ConfigSynchronizer testing.
+    """
+    from haproxy_template_ic.models.context import HAProxyConfigContext, RenderedConfig
+
+    def _create_context(
+        config_content: str,
+        acl_files: Optional[Dict[str, str]] = None,
+        map_files: Optional[Dict[str, str]] = None,
+        cert_files: Optional[Dict[str, str]] = None,
+        other_files: Optional[Dict[str, str]] = None,
+    ) -> HAProxyConfigContext:
+        """Create HAProxyConfigContext with specified content.
+
+        Args:
+            config_content: Main HAProxy configuration content
+            acl_files: Dictionary of ACL filename -> content
+            map_files: Dictionary of map filename -> content
+            cert_files: Dictionary of certificate filename -> content
+            other_files: Dictionary of other filename -> content
+
+        Returns:
+            HAProxyConfigContext with rendered content
+        """
+        from haproxy_template_ic.models.templates import RenderedContent, ContentType
+        from haproxy_template_ic.models.context import TemplateContext
+
+        # Create main config
+        rendered_config = RenderedConfig(content=config_content)
+
+        # Create rendered content list for all additional files
+        rendered_content = []
+
+        if acl_files:
+            rendered_content.extend(
+                [
+                    RenderedContent(
+                        filename=filename, content=content, content_type=ContentType.ACL
+                    )
+                    for filename, content in acl_files.items()
+                ]
+            )
+
+        if map_files:
+            rendered_content.extend(
+                [
+                    RenderedContent(
+                        filename=filename, content=content, content_type=ContentType.MAP
+                    )
+                    for filename, content in map_files.items()
+                ]
+            )
+
+        if cert_files:
+            rendered_content.extend(
+                [
+                    RenderedContent(
+                        filename=filename,
+                        content=content,
+                        content_type=ContentType.CERTIFICATE,
+                    )
+                    for filename, content in cert_files.items()
+                ]
+            )
+
+        if other_files:
+            rendered_content.extend(
+                [
+                    RenderedContent(
+                        filename=filename,
+                        content=content,
+                        content_type=ContentType.FILE,
+                    )
+                    for filename, content in other_files.items()
+                ]
+            )
+
+        # Create minimal template context (empty resources)
+        template_context = TemplateContext()
+
+        return HAProxyConfigContext(
+            template_context=template_context,
+            rendered_config=rendered_config,
+            rendered_content=rendered_content,
+        )
+
+    return _create_context
 
 
 @pytest.fixture(scope="session")

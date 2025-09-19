@@ -35,6 +35,7 @@ curl http://localhost:9090/metrics | grep -E "(haproxy_template_ic_|up|process_)
 - `haproxy_template_ic_template_renders_total`: Template rendering frequency
 - `haproxy_template_ic_dataplane_requests_total`: API request patterns
 - `haproxy_template_ic_errors_total`: Error tracking by component
+- `haproxy_template_ic_dataplane_pool_*`: Connection pool health and statistics
 
 ### Health Endpoints
 
@@ -45,6 +46,39 @@ curl http://localhost:8080/healthz
 
 # Metrics endpoint
 curl http://localhost:9090/metrics
+```
+
+### Connection Pool Monitoring
+
+Monitor dataplane API connection pool health for debugging connectivity issues:
+
+```bash
+# View pool metrics
+curl http://localhost:9090/metrics | grep dataplane_pool
+
+# Key pool metrics
+curl http://localhost:9090/metrics | grep -E "(active_connections|total_references|clients_created|clients_cleaned)"
+```
+
+**Pool metrics**:
+- `haproxy_template_ic_dataplane_pool_active_connections`: Current active connections
+- `haproxy_template_ic_dataplane_pool_total_references`: Total connection references in use
+- `haproxy_template_ic_dataplane_pool_clients_created_total`: Cumulative clients created
+- `haproxy_template_ic_dataplane_pool_clients_reused_total`: Cumulative clients reused
+- `haproxy_template_ic_dataplane_pool_clients_cleaned_total`: Cumulative clients cleaned up
+- `haproxy_template_ic_dataplane_pool_cleanup_runs_total`: Pool cleanup operations
+
+**Monitoring queries**:
+```promql
+# Connection pool utilization rate
+rate(haproxy_template_ic_dataplane_pool_clients_reused_total[5m]) / 
+rate(haproxy_template_ic_dataplane_pool_clients_created_total[5m])
+
+# Pool cleanup efficiency
+rate(haproxy_template_ic_dataplane_pool_clients_cleaned_total[5m])
+
+# Active connections per instance
+haproxy_template_ic_dataplane_pool_active_connections
 ```
 
 ### Distributed Tracing

@@ -13,6 +13,9 @@ from kr8s.asyncio.objects import Pod
 
 from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
 from haproxy_template_ic.core.logging import autolog
+from haproxy_template_ic.dataplane.endpoint import DataplaneEndpoint
+from haproxy_template_ic.dataplane.types import get_production_urls_from_index
+from haproxy_template_ic.k8s.kopf_utils import get_resource_collection_from_indices
 from haproxy_template_ic.models.state import ApplicationState
 from haproxy_template_ic.operator.index_sync import create_tracking_decorator
 from haproxy_template_ic.operator.utils import get_current_namespace
@@ -29,6 +32,7 @@ __all__ = [
     "handle_haproxy_pod_event",
     "setup_haproxy_pod_indexing",
     "fetch_haproxy_pods",
+    "create_production_endpoints_from_index",
 ]
 
 
@@ -122,6 +126,41 @@ async def fetch_haproxy_pods(match_labels: Dict[str, str], namespace: str) -> Li
         raise kopf.TemporaryError(f"Failed to retrieve HAProxy pods: {e}") from e
 
 
+def create_production_endpoints_from_index(
+    memo: ApplicationState,
+) -> List[DataplaneEndpoint]:
+    """Create production DataplaneEndpoint objects from HAProxy pod index.
+
+    Args:
+        memo: ApplicationState containing kopf indices and credentials
+
+    Returns:
+        List of DataplaneEndpoint objects for current HAProxy pods
+    """
+    # Get HAProxy pod collection from kopf indices
+    haproxy_pods = get_resource_collection_from_indices(
+        memo.resources.indices, HAPROXY_PODS_INDEX
+    )
+
+    # Convert pod data to URLs and pod names using existing function
+    urls, url_to_pod_name = get_production_urls_from_index(haproxy_pods)
+
+    # Create DataplaneEndpoint objects with production credentials
+    endpoints = []
+    for url in urls:
+        pod_name = url_to_pod_name.get(url)
+        endpoint = DataplaneEndpoint(
+            url=url,
+            dataplane_auth=memo.configuration.credentials.dataplane,
+            pod_name=pod_name,
+        )
+        endpoints.append(endpoint)
+        logger.debug(f"Created production endpoint: {url} for pod: {pod_name}")
+
+    logger.info(f"Created {len(endpoints)} production endpoints from HAProxy pod index")
+    return endpoints
+
+
 @autolog(component="operator")
 async def handle_haproxy_pod_event(
     body: Dict[str, Any] | None = None,
@@ -157,6 +196,18 @@ async def handle_haproxy_pod_event(
     status = body.get("status", {})
     phase = status.get("phase", "Unknown")
     pod_ip = status.get("podIP", "Not assigned")
+
+    # Update production endpoints from current HAProxy pod index
+    try:
+        production_endpoints = create_production_endpoints_from_index(memo)
+        memo.operations.config_synchronizer.update_production_clients(
+            production_endpoints
+        )
+        logger.debug(
+            f"🔄 Updated ConfigSynchronizer with {len(production_endpoints)} production endpoints"
+        )
+    except Exception as e:
+        logger.error(f"❌ Failed to update production endpoints: {e}")
 
     if type == "ADDED":
         logger.info(f"🆕 HAProxy pod created: {namespace}/{name}")
