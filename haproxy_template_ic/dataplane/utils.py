@@ -10,7 +10,7 @@ import functools
 import logging
 import re
 import traceback
-from typing import Any, Dict, List, TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable, Dict, List
 from urllib.parse import urlparse, urlunparse
 
 import httpx

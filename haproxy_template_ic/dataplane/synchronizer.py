@@ -23,8 +23,10 @@ from .types import (
     ConfigSectionType,
     DataplaneAPIError,
     ValidationError,
+    ReloadInfo,
     SynchronizationResult,
     ValidationDeploymentResult,
+    ConfigSynchronizerResult,
     compute_content_hash,
 )
 from .utils import (
@@ -46,10 +48,7 @@ class ConfigSynchronizer:
     def __init__(self, endpoints: DataplaneEndpointSet):
         self.endpoints = endpoints
 
-        # ConfigSynchronizer owns the client pool - single responsibility
         self.client_pool = DataplaneClientPool()
-
-        # Lazy-initialized clients using owned pool
         self._validation_client: Optional[DataplaneClient] = None
         self._production_clients: Dict[str, DataplaneClient] = {}
 
@@ -138,7 +137,6 @@ class ConfigSynchronizer:
                 config_context.rendered_config.content
             )
 
-        # Add all rendered content (maps, certificates, ACLs, files)
         for content in config_context.rendered_content:
             template_hashes[content.filename] = compute_content_hash(content.content)
 
@@ -557,7 +555,9 @@ class ConfigSynchronizer:
         current_global = current.get("global")
         new_global = new.get("global")
 
+        # Determine change type for global section
         if current_global and new_global:
+            # Both exist - check if they differ
             if _to_dict_safe(current_global) != _to_dict_safe(new_global):
                 changes.append(
                     ConfigChange(
@@ -568,7 +568,8 @@ class ConfigSynchronizer:
                         old_config=current_global,
                     )
                 )
-        elif new_global and not current_global:
+        elif new_global:
+            # Only new exists - create
             changes.append(
                 ConfigChange(
                     change_type=ConfigChangeType.CREATE,
@@ -577,7 +578,8 @@ class ConfigSynchronizer:
                     new_config=new_global,
                 )
             )
-        elif current_global and not new_global:
+        elif current_global:
+            # Only current exists - delete
             changes.append(
                 ConfigChange(
                     change_type=ConfigChangeType.DELETE,
@@ -987,8 +989,7 @@ class ConfigSynchronizer:
                 return SynchronizationResult(
                     method="skipped",
                     version="unchanged",
-                    reload_triggered=False,
-                    reload_id=None,
+                    reload_info=ReloadInfo(),
                 )
             else:
                 # Changes detected - use structured deployment
@@ -1004,8 +1005,7 @@ class ConfigSynchronizer:
                     return SynchronizationResult(
                         method="structured",
                         version=deploy_result.version,
-                        reload_triggered=False,  # StructuredDeploymentResult doesn't have reload_triggered
-                        reload_id=None,  # StructuredDeploymentResult doesn't have reload_id
+                        reload_info=deploy_result.reload_info,
                     )
                 except DataplaneAPIError as structured_error:
                     # If structured deployment fails, fall back to raw deployment
@@ -1028,9 +1028,7 @@ class ConfigSynchronizer:
                     return SynchronizationResult(
                         method="raw_fallback",
                         version=fallback_result.version,
-                        reload_triggered=fallback_result.reload_id
-                        is not None,  # ValidationDeploymentResult has reload_id
-                        reload_id=fallback_result.reload_id,
+                        reload_info=fallback_result.reload_info,
                     )
 
         except Exception as fetch_error:
@@ -1050,8 +1048,7 @@ class ConfigSynchronizer:
                 return SynchronizationResult(
                     method="conditional",
                     version=conditional_result.version,
-                    reload_triggered=conditional_result.reload_id is not None,
-                    reload_id=conditional_result.reload_id,
+                    reload_info=conditional_result.reload_info,
                 )
             except Exception as conditional_error:
                 # Final fallback to regular deployment
@@ -1071,8 +1068,7 @@ class ConfigSynchronizer:
                 return SynchronizationResult(
                     method="fallback",
                     version=final_result.version,
-                    reload_triggered=final_result.reload_id is not None,
-                    reload_id=final_result.reload_id,
+                    reload_info=final_result.reload_info,
                 )
 
     def _handle_deployment_error(
@@ -1109,7 +1105,7 @@ class ConfigSynchronizer:
 
     async def sync_configuration(
         self, config_context: HAProxyConfigContext
-    ) -> Dict[str, Any]:
+    ) -> ConfigSynchronizerResult:
         """Synchronize configuration to all endpoints with validation-first deployment.
 
         This method implements an improved approach that minimizes HAProxy reloads:
@@ -1142,7 +1138,7 @@ class ConfigSynchronizer:
         )
 
         # Deploy to production instances
-        results = await self._deploy_to_production_instances(
+        result = await self._deploy_to_production_instances(
             config, sync_content, validation_structured
         )
 
@@ -1150,9 +1146,9 @@ class ConfigSynchronizer:
         self._record_pool_metrics()
 
         # Log final results
-        self._log_sync_results(results)
+        self._log_sync_results(result)
 
-        return results
+        return result
 
     async def _validate_and_prepare_config(
         self,
@@ -1181,7 +1177,14 @@ class ConfigSynchronizer:
         logger.debug(
             "📤 Deploying config to validation instance for structured comparison"
         )
-        await validation_client.deploy_configuration(config)
+        validation_result = await validation_client.deploy_configuration(config)
+
+        # Log validation reload if it occurred
+        if validation_result.reload_info.reload_triggered:
+            logger.info(
+                f"🔄 Validation instance reload triggered: {validation_result.reload_info.reload_id} "
+                f"({self.endpoints.validation.url})"
+            )
 
         # Fetch structured config from validation instance
         logger.debug("🔍 Fetching structured configuration from validation instance")
@@ -1194,7 +1197,7 @@ class ConfigSynchronizer:
             Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]
         ],
         validation_structured: Dict[str, Any],
-    ) -> Dict[str, Any]:
+    ) -> ConfigSynchronizerResult:
         """Deploy configuration to production instances in parallel."""
         maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync = sync_content
 
@@ -1204,6 +1207,8 @@ class ConfigSynchronizer:
             "failed": 0,
             "skipped": 0,
             "errors": [],
+            "reload_triggered": False,
+            "reload_ids": [],
         }
 
         logger.debug(
@@ -1232,7 +1237,18 @@ class ConfigSynchronizer:
         # Process deployment results
         self._process_deployment_results(deployment_results, config, results)
 
-        return results
+        # Create reload info based on collected data
+        # Use the first reload ID if available, or None if no reloads occurred
+        reload_id = results["reload_ids"][0] if results["reload_ids"] else None
+        reload_info = ReloadInfo(reload_id=reload_id)
+
+        return ConfigSynchronizerResult(
+            successful=results["successful"],
+            failed=results["failed"],
+            skipped=results["skipped"],
+            errors=results["errors"],
+            reload_info=reload_info,
+        )
 
     def _process_deployment_results(
         self, deployment_results: List[Any], config: str, results: Dict[str, Any]
@@ -1262,6 +1278,12 @@ class ConfigSynchronizer:
             results["successful"] += 1
             self._log_successful_deployment(url, result)
 
+        # Collect reload information
+        if result.reload_info.reload_triggered:
+            results["reload_triggered"] = True
+            if result.reload_info.reload_id:
+                results["reload_ids"].append(result.reload_info.reload_id)
+
         # Log detailed deployment information
         self._log_deployment_details(url, result)
 
@@ -1283,8 +1305,8 @@ class ConfigSynchronizer:
 
     def _log_deployment_details(self, url: str, result: SynchronizationResult) -> None:
         """Log detailed deployment information for debugging."""
-        reload_triggered = result.reload_triggered
-        reload_id = result.reload_id
+        reload_triggered = result.reload_info.reload_triggered
+        reload_id = result.reload_info.reload_id
 
         logger.debug(
             f"🔍 Processing deployment result for {url}: reload_triggered={reload_triggered}, "
@@ -1301,27 +1323,44 @@ class ConfigSynchronizer:
                 f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result.method}"
             )
 
-    def _log_sync_results(self, results: Dict[str, Any]) -> None:
+        # Log INFO-level message when reload is triggered on production instance
+        if reload_triggered and reload_id:
+            logger.info(
+                f"🔄 Production instance reload triggered: {reload_id} "
+                f"({pod_info['pod_name']} - {url})"
+            )
+
+    def _log_sync_results(self, result: ConfigSynchronizerResult) -> None:
         """Log the final synchronization results."""
         total_instances = len(self.endpoints.production)
-        if results["successful"] > 0:
+
+        # Format reload information
+        if result.reload_info.reload_triggered:
+            if result.reload_info.reload_id:
+                reload_suffix = f" (reload triggered: {result.reload_info.reload_id})"
+            else:
+                reload_suffix = " (reload triggered)"
+        else:
+            reload_suffix = " (no reload)"
+
+        if result.successful > 0:
             # Log at INFO when we actually deployed something
             logger.info(
-                f"🎯 Sync complete: {results['successful']} deployed, "
-                f"{results['skipped']} skipped (unchanged), "
-                f"{results['failed']} failed out of {total_instances} instances"
+                f"🎯 Sync complete: {result.successful} deployed, "
+                f"{result.skipped} skipped (unchanged), "
+                f"{result.failed} failed out of {total_instances} instances{reload_suffix}"
             )
-        elif results["failed"] > 0:
+        elif result.failed > 0:
             # Log at INFO when there were failures (important to know)
             logger.info(
-                f"Sync complete: {results['successful']} successful, {results['failed']} failed"
+                f"Sync complete: {result.successful} successful, {result.failed} failed{reload_suffix}"
             )
         else:
             # Log at DEBUG when nothing changed (all skipped)
             logger.debug(
-                f"🎯 Sync complete: {results['successful']} deployed, "
-                f"{results['skipped']} skipped (unchanged), "
-                f"{results['failed']} failed out of {total_instances} instances"
+                f"🎯 Sync complete: {result.successful} deployed, "
+                f"{result.skipped} skipped (unchanged), "
+                f"{result.failed} failed out of {total_instances} instances{reload_suffix}"
             )
 
     def _extract_pod_info_from_url(self, url: str) -> Dict[str, str]:

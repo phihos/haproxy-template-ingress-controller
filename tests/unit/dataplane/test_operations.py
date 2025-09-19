@@ -51,10 +51,12 @@ async def test_deploy_with_transaction_success(operations):
     """Test successful deployment with transaction."""
     changes = [create_frontend_config_change()]
 
-    from haproxy_template_ic.dataplane.types import TransactionCommitResult
+    from haproxy_template_ic.dataplane.types import TransactionCommitResult, ReloadInfo
 
     mock_commit_result = TransactionCommitResult(
-        transaction_id="txn-123", reload_id="reload-456", status="committed"
+        transaction_id="txn-123",
+        status="committed",
+        reload_info=ReloadInfo(reload_id="reload-456"),
     )
 
     with (
@@ -160,23 +162,29 @@ async def test_sync_storage_resources(operations, mock_metrics):
     with (
         patch.object(operations.storage, "sync_maps") as mock_sync_maps,
         patch.object(operations.storage, "sync_certificates") as mock_sync_certs,
-        patch("haproxy_template_ic.dataplane.operations.asyncio.gather") as mock_gather,
         patch(
             "haproxy_template_ic.dataplane.operations.get_metrics_collector",
             return_value=mock_metrics,
         ),
     ):
         # Setup async mocks
-        mock_sync_maps.return_value = create_async_mock_coroutine()
-        mock_sync_certs.return_value = create_async_mock_coroutine()
-        mock_gather.return_value = create_async_mock_coroutine()
+        from haproxy_template_ic.dataplane.types import (
+            StorageOperationResult,
+            ReloadInfo,
+        )
+
+        mock_storage_result = StorageOperationResult(
+            operation_applied=True, reload_info=ReloadInfo()
+        )
+        mock_sync_maps.return_value = create_async_mock_coroutine(mock_storage_result)
+        mock_sync_certs.return_value = create_async_mock_coroutine(mock_storage_result)
 
         await operations.sync_storage_resources(maps=maps, certificates=certificates)
 
         # Verify storage sync calls
         mock_sync_maps.assert_called_once_with(maps)
         mock_sync_certs.assert_called_once_with(certificates)
-        mock_gather.assert_called_once()
+        # Note: sync_storage_resources runs operations sequentially, not with gather
 
 
 @pytest.mark.asyncio
@@ -194,8 +202,21 @@ async def test_apply_runtime_changes(operations, mock_metrics):
         ),
     ):
         # Setup async mocks
-        mock_map_updates.return_value = create_async_mock_coroutine()
-        mock_server_update.return_value = create_async_mock_coroutine()
+        from haproxy_template_ic.dataplane.types import (
+            RuntimeOperationResult,
+            ReloadInfo,
+        )
+
+        mock_result = RuntimeOperationResult(
+            operation_applied=True, reload_info=ReloadInfo()
+        )
+        mock_map_updates.return_value = create_async_mock_coroutine(mock_result)
+        mock_server_result = RuntimeOperationResult(
+            operation_applied=True, reload_info=ReloadInfo()
+        )
+        mock_server_update.return_value = create_async_mock_coroutine(
+            mock_server_result
+        )
 
         await operations.apply_runtime_changes(
             map_changes=map_changes, server_changes=server_changes

@@ -129,9 +129,13 @@ async def synchronize_with_haproxy_instances(
 
         results = await config_synchronizer.sync_configuration(haproxy_config_context)
 
-        successful_count = results.get("successful", 0)
-        failed_count = results.get("failed", 0)
-        errors = results.get("errors", [])
+        successful_count = results.successful
+        failed_count = results.failed
+        errors = results.errors
+
+        # Log reload information if available
+        if results.reload_info.reload_triggered:
+            logger.info(f"🔄 HAProxy reload triggered: {results.reload_info.reload_id}")
 
         _record_sync_metrics(
             metrics,

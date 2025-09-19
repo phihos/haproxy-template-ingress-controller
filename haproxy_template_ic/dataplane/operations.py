@@ -10,11 +10,10 @@ modules and provides transaction management, error handling, and consistent
 behavior across different types of dataplane operations.
 """
 
-import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from haproxy_dataplane_v3 import AuthenticatedClient
 
@@ -27,6 +26,7 @@ from .types import (
     ConfigChange,
     DataplaneAPIError,
     MapChange,
+    ReloadInfo,
     StructuredDeploymentResult,
     ValidateAndDeployResult,
 )
@@ -81,11 +81,11 @@ class DataplaneOperations:
     @handle_dataplane_errors("sync_storage_resources")
     async def sync_storage_resources(
         self,
-        maps: Optional[Dict[str, str]] = None,
-        certificates: Optional[Dict[str, str]] = None,
-        acls: Optional[Dict[str, str]] = None,
-        files: Optional[Dict[str, str]] = None,
-    ) -> None:
+        maps: dict[str, str] | None = None,
+        certificates: dict[str, str] | None = None,
+        acls: dict[str, str] | None = None,
+        files: dict[str, str] | None = None,
+    ) -> ReloadInfo:
         """Synchronize multiple storage resource types.
 
         Args:
@@ -94,71 +94,61 @@ class DataplaneOperations:
             acls: ACL files to synchronize (name -> content)
             files: Other files to synchronize (name -> content)
 
+        Returns:
+            ReloadInfo aggregated from all storage operations
+
         Raises:
             DataplaneAPIError: If any synchronization fails
         """
         metrics = get_metrics_collector()
 
         with metrics.time_dataplane_api_operation("sync_storage_resources"):
-            tasks = []
+            reload_infos = []
 
             if maps:
                 logger.info(f"Synchronizing {len(maps)} map files")
-                tasks.append(self.storage.sync_maps(maps))
+                result = await self.storage.sync_maps(maps)
+                reload_infos.append(result.reload_info)
 
             if certificates:
                 logger.info(f"Synchronizing {len(certificates)} certificates")
-                tasks.append(self.storage.sync_certificates(certificates))
+                result = await self.storage.sync_certificates(certificates)
+                reload_infos.append(result.reload_info)
 
-            # Note: ACL and general file sync would need additional API methods
             if acls:
-                logger.warning("ACL file sync not yet implemented")
+                logger.info(f"Synchronizing {len(acls)} ACL files")
+                result = await self.storage.sync_acls(acls)
+                reload_infos.append(result.reload_info)
 
             if files:
-                logger.warning("General file sync not yet implemented")
+                logger.info(f"Synchronizing {len(files)} general files")
+                result = await self.storage.sync_files(files)
+                reload_infos.append(result.reload_info)
 
-            # Execute all sync operations
-            if tasks:
-                try:
-                    # Run all synchronization tasks
-                    await asyncio.gather(*tasks)
+            # Record success metrics and return aggregated reload information
+            record_span_event(
+                "storage_sync_complete",
+                {
+                    "maps_count": len(maps) if maps else 0,
+                    "certificates_count": len(certificates) if certificates else 0,
+                    "acls_count": len(acls) if acls else 0,
+                    "files_count": len(files) if files else 0,
+                },
+            )
+            metrics.record_dataplane_api_request("sync_storage_resources", "success")
+            logger.info("Storage resource synchronization completed successfully")
 
-                    record_span_event(
-                        "storage_sync_complete",
-                        {
-                            "maps_count": len(maps) if maps else 0,
-                            "certificates_count": len(certificates)
-                            if certificates
-                            else 0,
-                        },
-                    )
-                    metrics.record_dataplane_api_request(
-                        "sync_storage_resources", "success"
-                    )
-                    logger.info(
-                        "Storage resource synchronization completed successfully"
-                    )
-
-                except Exception as e:
-                    metrics.record_dataplane_api_request(
-                        "sync_storage_resources", "error"
-                    )
-                    raise DataplaneAPIError(
-                        f"Storage synchronization failed: {e}",
-                        endpoint=self.endpoint,
-                        operation="sync_storage_resources",
-                        original_error=e,
-                    ) from e
+            return ReloadInfo.combine(*reload_infos)
 
     # === Runtime Operations ===
 
     @handle_dataplane_errors("apply_runtime_changes")
     async def apply_runtime_changes(
         self,
-        map_changes: Optional[Dict[str, List[MapChange]]] = None,
-        acl_changes: Optional[Dict[str, List[MapChange]]] = None,
-        server_changes: Optional[List[Dict[str, Any]]] = None,
-    ) -> None:
+        map_changes: dict[str, list[MapChange]] | None = None,
+        acl_changes: dict[str, list[MapChange]] | None = None,
+        server_changes: list[dict[str, Any]] | None = None,
+    ) -> ReloadInfo:
         """Apply runtime changes without HAProxy reload.
 
         Args:
@@ -166,54 +156,54 @@ class DataplaneOperations:
             acl_changes: ACL changes grouped by ACL ID
             server_changes: Server state changes
 
+        Returns:
+            ReloadInfo aggregated from all runtime operations
+
         Raises:
             DataplaneAPIError: If any runtime operation fails
         """
         metrics = get_metrics_collector()
 
         with metrics.time_dataplane_api_operation("apply_runtime_changes"):
-            try:
-                # Apply map changes
-                if map_changes:
-                    await self.runtime.bulk_map_updates(map_changes)
+            reload_infos = []
 
-                # Apply ACL changes
-                if acl_changes:
-                    await self.runtime.bulk_acl_updates(acl_changes)
+            # Apply map changes
+            if map_changes:
+                result = await self.runtime.bulk_map_updates(map_changes)
+                reload_infos.append(result.reload_info)
 
-                # Apply server changes
-                if server_changes:
-                    for change in server_changes:
-                        await self.runtime.update_server_state(
-                            change["backend"], change["server"], change["state"]
-                        )
+            # Apply ACL changes
+            if acl_changes:
+                result = await self.runtime.bulk_acl_updates(acl_changes)
+                reload_infos.append(result.reload_info)
 
-                record_span_event(
-                    "runtime_changes_applied",
-                    {
-                        "map_changes": len(map_changes) if map_changes else 0,
-                        "acl_changes": len(acl_changes) if acl_changes else 0,
-                        "server_changes": len(server_changes) if server_changes else 0,
-                    },
-                )
-                metrics.record_dataplane_api_request("apply_runtime_changes", "success")
-                logger.info("Runtime changes applied successfully")
+            # Apply server changes
+            if server_changes:
+                for change in server_changes:
+                    result = await self.runtime.update_server_state(
+                        change["backend"], change["server"], change["state"]
+                    )
+                    reload_infos.append(result.reload_info)
 
-            except Exception as e:
-                metrics.record_dataplane_api_request("apply_runtime_changes", "error")
-                raise DataplaneAPIError(
-                    f"Runtime changes failed: {e}",
-                    endpoint=self.endpoint,
-                    operation="apply_runtime_changes",
-                    original_error=e,
-                ) from e
+            record_span_event(
+                "runtime_changes_applied",
+                {
+                    "map_changes": len(map_changes) if map_changes else 0,
+                    "acl_changes": len(acl_changes) if acl_changes else 0,
+                    "server_changes": len(server_changes) if server_changes else 0,
+                },
+            )
+            metrics.record_dataplane_api_request("apply_runtime_changes", "success")
+            logger.info("Runtime changes applied successfully")
+
+            return ReloadInfo.combine(*reload_infos)
 
     # === Configuration Operations ===
 
     @handle_dataplane_errors("deploy_structured_configuration")
     async def deploy_structured_configuration(
         self,
-        changes: List[ConfigChange],
+        changes: list[ConfigChange],
         use_transaction: bool = True,
     ) -> StructuredDeploymentResult:
         """Deploy structured configuration changes.
@@ -237,6 +227,7 @@ class DataplaneOperations:
                     changes_applied=0,
                     transaction_used=False,
                     version="unchanged",
+                    reload_info=ReloadInfo(),  # No reload for empty changes
                 )
 
             logger.info(f"Deploying {len(changes)} structured configuration changes")
@@ -263,7 +254,7 @@ class DataplaneOperations:
                 ) from e
 
     async def _deploy_with_transaction(
-        self, changes: List[ConfigChange]
+        self, changes: list[ConfigChange]
     ) -> StructuredDeploymentResult:
         """Deploy changes within a transaction."""
         transaction_id = None
@@ -297,6 +288,7 @@ class DataplaneOperations:
                 transaction_used=True,
                 transaction_id=transaction_id,
                 version=str(final_version) if final_version is not None else "unknown",
+                reload_info=commit_result.reload_info,  # Propagate reload info from transaction commit
             )
 
             record_span_event(
@@ -323,19 +315,23 @@ class DataplaneOperations:
             raise
 
     async def _deploy_without_transaction(
-        self, changes: List[ConfigChange]
+        self, changes: list[ConfigChange]
     ) -> StructuredDeploymentResult:
         """Deploy changes without transaction (less atomic)."""
         client = self._get_client()
         version = await get_configuration_version(client)
 
         applied_changes = 0
+        reload_infos = []
 
         for change in changes:
             try:
                 if version is not None:
-                    await self.config.apply_config_change(change, version)
+                    change_result = await self.config.apply_config_change(
+                        change, version
+                    )
                     applied_changes += 1
+                    reload_infos.append(change_result.reload_info)
             except Exception as e:
                 logger.error(f"Failed to apply change {change}: {e}")
                 # Continue with remaining changes
@@ -343,15 +339,18 @@ class DataplaneOperations:
         # Get final configuration version after changes
         final_version = await get_configuration_version(client)
 
-        result = StructuredDeploymentResult(
+        deployment_result = StructuredDeploymentResult(
             changes_applied=applied_changes,
             transaction_used=False,
             version=str(final_version) if final_version is not None else "unknown",
             total_changes=len(changes),
+            reload_info=ReloadInfo.combine(
+                *reload_infos
+            ),  # Aggregate reload info from individual changes
         )
 
-        record_span_event("structured_config_deployed", asdict(result))
-        return result
+        record_span_event("structured_config_deployed", asdict(deployment_result))
+        return deployment_result
 
     # === Validation Operations ===
 
@@ -393,7 +392,7 @@ class DataplaneOperations:
     # === Information Operations ===
 
     @handle_dataplane_errors("get_cluster_info")
-    async def get_cluster_info(self) -> Dict[str, Any]:
+    async def get_cluster_info(self) -> dict[str, Any]:
         """Get comprehensive cluster information.
 
         Returns:

@@ -50,12 +50,13 @@ class TestRuntimeAPIMapOperations:
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.add_map_entry"
         ) as mock_add:
-            mock_add.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_add.asyncio_detailed = AsyncMock(return_value=mock_response)
 
             await runtime_api.apply_runtime_map_operations("test.map", operations)
 
             # Verify API call was made
-            mock_add.asyncio.assert_called_once()
+            mock_add.asyncio_detailed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_apply_runtime_map_operations_set(self):
@@ -72,12 +73,13 @@ class TestRuntimeAPIMapOperations:
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.replace_runtime_map_entry"
         ) as mock_replace:
-            mock_replace.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_replace.asyncio_detailed = AsyncMock(return_value=mock_response)
 
             await runtime_api.apply_runtime_map_operations("test.map", operations)
 
             # Verify API call was made
-            mock_replace.asyncio.assert_called_once()
+            mock_replace.asyncio_detailed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_apply_runtime_map_operations_del(self):
@@ -94,12 +96,13 @@ class TestRuntimeAPIMapOperations:
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.delete_runtime_map_entry"
         ) as mock_delete:
-            mock_delete.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_delete.asyncio_detailed = AsyncMock(return_value=mock_response)
 
             await runtime_api.apply_runtime_map_operations("test.map", operations)
 
             # Verify API call was made
-            mock_delete.asyncio.assert_called_once()
+            mock_delete.asyncio_detailed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_apply_runtime_map_operations_empty(self):
@@ -131,12 +134,13 @@ class TestRuntimeAPIACLOperations:
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.post_services_haproxy_runtime_acls_parent_name_entries"
         ) as mock_post:
-            mock_post.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_post.asyncio_detailed = AsyncMock(return_value=mock_response)
 
             await runtime_api.apply_runtime_acl_operations("blocked_ips", operations)
 
             # Verify API call was made
-            mock_post.asyncio.assert_called_once()
+            mock_post.asyncio_detailed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_apply_runtime_acl_operations_del(self):
@@ -153,12 +157,13 @@ class TestRuntimeAPIACLOperations:
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.delete_services_haproxy_runtime_acls_parent_name_entries_id"
         ) as mock_delete:
-            mock_delete.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_delete.asyncio_detailed = AsyncMock(return_value=mock_response)
 
             await runtime_api.apply_runtime_acl_operations("blocked_ips", operations)
 
             # Verify API call was made
-            mock_delete.asyncio.assert_called_once()
+            mock_delete.asyncio_detailed.assert_called_once()
 
 
 class TestRuntimeAPIServerOperations:
@@ -177,12 +182,13 @@ class TestRuntimeAPIServerOperations:
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.replace_runtime_server"
         ) as mock_replace:
-            mock_replace.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_replace.asyncio_detailed = AsyncMock(return_value=mock_response)
 
             await runtime_api.update_server_state("backend1", "server1", "drain")
 
             # Verify API call was made
-            mock_replace.asyncio.assert_called_once()
+            mock_replace.asyncio_detailed.assert_called_once()
 
 
 class TestRuntimeAPIBulkOperations:
@@ -215,8 +221,9 @@ class TestRuntimeAPIBulkOperations:
                 "haproxy_template_ic.dataplane.runtime_api.replace_runtime_map_entry"
             ) as mock_replace,
         ):
-            mock_add.asyncio = AsyncMock(return_value=None)
-            mock_replace.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_add.asyncio_detailed = AsyncMock(return_value=mock_response)
+            mock_replace.asyncio_detailed = AsyncMock(return_value=mock_response)
 
             await runtime_api.bulk_map_updates(map_updates)
 
@@ -237,7 +244,8 @@ class TestRuntimeAPIBulkOperations:
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.post_services_haproxy_runtime_acls_parent_name_entries"
         ) as mock_post:
-            mock_post.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_post.asyncio_detailed = AsyncMock(return_value=mock_response)
 
             await runtime_api.bulk_acl_updates(acl_updates)
 
@@ -260,7 +268,7 @@ class TestRuntimeAPIErrorHandling:
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.add_map_entry"
         ) as mock_add:
-            mock_add.asyncio = AsyncMock(side_effect=Exception("API Error"))
+            mock_add.asyncio_detailed = AsyncMock(side_effect=Exception("API Error"))
 
             with pytest.raises(DataplaneAPIError):
                 await runtime_api.apply_runtime_map_operations("test.map", operations)

@@ -5,12 +5,14 @@ This module handles transaction lifecycle management for atomic
 configuration changes in HAProxy.
 """
 
-import logging
+import structlog
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from haproxy_dataplane_v3 import AuthenticatedClient
+
+from haproxy_template_ic.core.logging import autolog
 
 if TYPE_CHECKING:
     from .endpoint import DataplaneEndpoint
@@ -27,6 +29,7 @@ from haproxy_template_ic.tracing import record_span_event, set_span_error
 from .types import (
     DataplaneAPIError,
     TransactionCommitResult,
+    ReloadInfo,
 )
 from .utils import (
     handle_dataplane_errors,
@@ -38,7 +41,7 @@ __all__ = [
     "TransactionAPI",
 ]
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class TransactionAPI:
@@ -59,6 +62,7 @@ class TransactionAPI:
         self.endpoint = endpoint
 
     @handle_dataplane_errors("start_transaction")
+    @autolog()
     async def start(self) -> str:
         """Start a new transaction for configuration changes.
 
@@ -82,8 +86,11 @@ class TransactionAPI:
                         operation="start_transaction",
                     )
 
+                response = await start_transaction.asyncio_detailed(
+                    client=client, version=version
+                )
                 transaction = check_dataplane_response(
-                    await start_transaction.asyncio(client=client, version=version),
+                    response.parsed,
                     "start_transaction",
                     self.endpoint,
                 )
@@ -102,7 +109,7 @@ class TransactionAPI:
                     "transaction_started",
                     {"transaction_id": transaction_id, "version": version},
                 )
-                logger.debug(
+                await logger.adebug(
                     f"Started transaction {transaction_id} (version {version})"
                 )
 
@@ -119,6 +126,7 @@ class TransactionAPI:
                 ) from e
 
     @handle_dataplane_errors("commit_transaction")
+    @autolog()
     async def commit(self, transaction_id: str) -> TransactionCommitResult:
         """Commit a transaction to apply configuration changes.
 
@@ -136,21 +144,30 @@ class TransactionAPI:
 
         with metrics.time_dataplane_api_operation("commit_transaction"):
             try:
-                result = check_dataplane_response(
-                    await commit_transaction.asyncio(client=client, id=transaction_id),
+                # Get detailed response for reload detection
+                response = await commit_transaction.asyncio_detailed(
+                    client=client, id=transaction_id
+                )
+
+                # Check response for errors
+                check_dataplane_response(
+                    response.parsed,
                     "commit_transaction",
                     self.endpoint,
                 )
 
+                # Extract reload information from HTTP response
+                reload_info = ReloadInfo.from_response(response, self.endpoint)
+
                 commit_info = TransactionCommitResult(
                     transaction_id=transaction_id,
-                    reload_id=getattr(result, "reload_id", None),
                     status="committed",
+                    reload_info=reload_info,
                 )
 
                 metrics.record_dataplane_api_request("commit_transaction", "success")
                 record_span_event("transaction_committed", asdict(commit_info))
-                logger.debug(f"Committed transaction {transaction_id}")
+                await logger.adebug(f"Committed transaction {transaction_id}")
 
                 return commit_info
 
@@ -165,6 +182,7 @@ class TransactionAPI:
                 ) from e
 
     @handle_dataplane_errors("rollback_transaction")
+    @autolog()
     async def rollback(self, transaction_id: str) -> None:
         """Rollback a transaction to discard configuration changes.
 
@@ -179,8 +197,11 @@ class TransactionAPI:
 
         with metrics.time_dataplane_api_operation("rollback_transaction"):
             try:
+                response = await delete_transaction.asyncio_detailed(
+                    client=client, id=transaction_id
+                )
                 check_dataplane_response(
-                    await delete_transaction.asyncio(client=client, id=transaction_id),
+                    response.parsed,
                     "rollback_transaction",
                     self.endpoint,
                 )
@@ -190,7 +211,7 @@ class TransactionAPI:
                     "transaction_rolled_back",
                     {"transaction_id": transaction_id},
                 )
-                logger.debug(f"Rolled back transaction {transaction_id}")
+                await logger.adebug(f"Rolled back transaction {transaction_id}")
 
             except Exception as e:
                 metrics.record_dataplane_api_request("rollback_transaction", "error")

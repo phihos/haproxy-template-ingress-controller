@@ -644,9 +644,9 @@ def create_haproxy_response_mock(status="success", data=None, reload_id=None):
     response = MagicMock()
     response.status = status
     response.data = data or {}
-    response.reload_id = reload_id or "reload-123"
+    response.status_code = 202 if reload_id else (200 if status == "success" else 400)
+    response.headers = {"Reload-ID": reload_id} if reload_id else {}
     response.json = MagicMock(return_value=response.data)
-    response.status_code = 200 if status == "success" else 400
     return response
 
 
@@ -1650,7 +1650,8 @@ def create_validation_response(valid=True, errors=None):
 def create_deployment_response(reload_id="reload-123", status="success"):
     """Create a deployment response mock with reload_id."""
     response = Mock()
-    response.reload_id = reload_id
+    response.status_code = 202 if reload_id else 200
+    response.headers = {"Reload-ID": reload_id} if reload_id else {}
     response.status = status
     return response
 
@@ -1862,6 +1863,7 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
     # These API functions have .asyncio attributes that need to be mocked
     post_ha_proxy_config_mock = Mock()
     post_ha_proxy_config_mock.asyncio = AsyncMock()
+    post_ha_proxy_config_mock.asyncio_detailed = AsyncMock()
 
     get_ha_proxy_config_mock = Mock()
     get_ha_proxy_config_mock.asyncio = AsyncMock()
@@ -1885,11 +1887,24 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
         "get_configuration_version": AsyncMock(),
     }
 
+    # Transaction API mocks need both asyncio and asyncio_detailed
+    start_transaction_mock = Mock()
+    start_transaction_mock.asyncio = AsyncMock()
+    start_transaction_mock.asyncio_detailed = AsyncMock()
+
+    commit_transaction_mock = Mock()
+    commit_transaction_mock.asyncio = AsyncMock()
+    commit_transaction_mock.asyncio_detailed = AsyncMock()
+
+    delete_transaction_mock = Mock()
+    delete_transaction_mock.asyncio = AsyncMock()
+    delete_transaction_mock.asyncio_detailed = AsyncMock()
+
     transaction_patches = {
         **patches,
-        "start_transaction": AsyncMock(),
-        "commit_transaction": AsyncMock(),
-        "delete_transaction": AsyncMock(),
+        "start_transaction": start_transaction_mock,
+        "commit_transaction": commit_transaction_mock,
+        "delete_transaction": delete_transaction_mock,
     }
 
     with (
@@ -1911,6 +1926,9 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
             "get_ha_proxy_configuration": get_ha_proxy_config_mock,
             "get_info": get_info_mock,
             "get_haproxy_process_info": get_haproxy_process_info_mock,
+            "start_transaction": start_transaction_mock,
+            "commit_transaction": commit_transaction_mock,
+            "delete_transaction": delete_transaction_mock,
         }
         yield {
             "client": mock_client,

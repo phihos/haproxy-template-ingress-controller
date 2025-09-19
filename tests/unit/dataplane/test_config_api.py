@@ -100,7 +100,7 @@ class TestConfigAPIFetchOperations:
                 "haproxy_template_ic.dataplane.config_api.get_programs"
             ) as mock_get_programs,
         ):
-            # Mock the asyncio attribute directly as an async function
+            # Mock the asyncio attribute (config API uses .asyncio for fetch operations)
             mock_get_backends.asyncio = AsyncMock(return_value=mock_backends)
             mock_get_frontends.asyncio = AsyncMock(return_value=mock_frontends)
             mock_get_defaults.asyncio = AsyncMock(return_value=mock_defaults)
@@ -150,12 +150,15 @@ class TestConfigAPIApplyConfigChange:
         with patch(
             "haproxy_template_ic.dataplane.config_api.create_frontend"
         ) as mock_create:
-            mock_create.asyncio = AsyncMock(return_value=mock_frontend)
+            mock_create.asyncio_detailed = AsyncMock(
+                return_value=Mock(parsed=mock_frontend)
+            )
+            mock_create.asyncio_detailed.__name__ = "create_frontend_asyncio_detailed"
 
             await config_api.apply_config_change(config_change, version=1)
 
             # Verify the mock was called (method returns None)
-            mock_create.asyncio.assert_called_once()
+            mock_create.asyncio_detailed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_apply_backend_update_change(self):
@@ -179,12 +182,15 @@ class TestConfigAPIApplyConfigChange:
         with patch(
             "haproxy_template_ic.dataplane.config_api.replace_backend"
         ) as mock_replace:
-            mock_replace.asyncio = AsyncMock(return_value=mock_backend)
+            mock_replace.asyncio_detailed = AsyncMock(
+                return_value=Mock(parsed=mock_backend)
+            )
+            mock_replace.asyncio_detailed.__name__ = "replace_backend_asyncio_detailed"
 
             await config_api.apply_config_change(config_change, version=1)
 
             # Verify the mock was called (method returns None)
-            mock_replace.asyncio.assert_called_once()
+            mock_replace.asyncio_detailed.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_apply_delete_change(self):
@@ -205,12 +211,14 @@ class TestConfigAPIApplyConfigChange:
         with patch(
             "haproxy_template_ic.dataplane.config_api.delete_backend"
         ) as mock_delete:
-            mock_delete.asyncio = AsyncMock(return_value=None)
+            mock_response = Mock(status_code=200, headers={})
+            mock_delete.asyncio_detailed = AsyncMock(return_value=mock_response)
+            mock_delete.asyncio_detailed.__name__ = "delete_backend_asyncio_detailed"
 
             await config_api.apply_config_change(config_change, version=1)
 
             # Verify the mock was called (method returns None)
-            mock_delete.asyncio.assert_called_once()
+            mock_delete.asyncio_detailed.assert_called_once()
 
 
 class TestConfigAPIErrorHandling:
@@ -236,9 +244,10 @@ class TestConfigAPIErrorHandling:
         with patch(
             "haproxy_template_ic.dataplane.config_api.create_backend"
         ) as mock_create:
-            mock_create.asyncio = AsyncMock(
+            mock_create.asyncio_detailed = AsyncMock(
                 side_effect=Exception("Backend creation failed")
             )
+            mock_create.asyncio_detailed.__name__ = "create_backend_asyncio_detailed"
 
             with pytest.raises(Exception, match="Backend creation failed"):
                 await config_api.apply_config_change(config_change, version=1)

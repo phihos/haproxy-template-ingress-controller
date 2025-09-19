@@ -5,12 +5,14 @@ This module handles configuration validation and deployment
 for HAProxy configuration changes.
 """
 
-import logging
+import structlog
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from haproxy_dataplane_v3 import AuthenticatedClient
+
+from haproxy_template_ic.core.logging import autolog
 
 if TYPE_CHECKING:
     from .endpoint import DataplaneEndpoint
@@ -28,6 +30,7 @@ from .types import (
     DataplaneAPIError,
     ValidationError,
     ValidationDeploymentResult,
+    ReloadInfo,
 )
 from .utils import (
     handle_dataplane_errors,
@@ -42,7 +45,7 @@ __all__ = [
     "ValidationAPI",
 ]
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ValidationAPI:
@@ -115,6 +118,7 @@ class ValidationAPI:
                 ) from e
 
     @handle_dataplane_errors("validate_configuration")
+    @autolog()
     async def validate_configuration(self, config_content: str) -> None:
         """Validate HAProxy configuration without applying it.
 
@@ -131,15 +135,19 @@ class ValidationAPI:
                 endpoint=self.endpoint,
             )
 
+        # Ensure configuration ends with newline to avoid "Missing LF on last line" error
+        if not config_content.endswith("\n"):
+            config_content = config_content + "\n"
+
         metrics = get_metrics_collector()
         client = self._get_client()
 
-        logger.info(f"Validating configuration ({len(config_content)} bytes)")
+        await logger.ainfo(f"Validating configuration ({len(config_content)} bytes)")
 
         with metrics.time_dataplane_api_operation("validate"):
             try:
                 # Validate only, don't apply (skip_reload=true)
-                result = await post_ha_proxy_configuration.asyncio(
+                response = await post_ha_proxy_configuration.asyncio_detailed(
                     client=client,
                     body=config_content,
                     skip_reload=True,
@@ -148,15 +156,25 @@ class ValidationAPI:
 
                 # Use specialized configuration error checking
                 check_configuration_response(
-                    result, "validate_configuration", self.endpoint, config_content
+                    response.parsed,
+                    "validate_configuration",
+                    self.endpoint,
+                    config_content,
                 )
+
+                # Extract reload information (should be empty for validation-only)
+                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                if reload_info.reload_triggered:
+                    await logger.ainfo(
+                        f"Unexpected reload triggered during validation: {reload_info.reload_id}"
+                    )
 
                 metrics.record_dataplane_api_request("validate", "success")
                 record_span_event(
                     "configuration_validated",
                     {"size": len(config_content)},
                 )
-                logger.info("Configuration validation successful")
+                await logger.ainfo("Configuration validation successful")
 
             except Exception as e:
                 metrics.record_dataplane_api_request("validate", "error")
@@ -180,6 +198,7 @@ class ValidationAPI:
                 ) from e
 
     @handle_dataplane_errors("deploy_configuration")
+    @autolog()
     async def deploy_configuration(
         self, config_content: str
     ) -> ValidationDeploymentResult:
@@ -201,10 +220,14 @@ class ValidationAPI:
                 endpoint=self.endpoint,
             )
 
+        # Ensure configuration ends with newline to avoid "Missing LF on last line" error
+        if not config_content.endswith("\n"):
+            config_content = config_content + "\n"
+
         metrics = get_metrics_collector()
         client = self._get_client()
 
-        logger.info(f"Deploying configuration ({len(config_content)} bytes)")
+        await logger.ainfo(f"Deploying configuration ({len(config_content)} bytes)")
 
         with metrics.time_dataplane_api_operation("deploy"):
             try:
@@ -216,29 +239,33 @@ class ValidationAPI:
                 if version is None:
                     version = 1
 
-                result = await post_ha_proxy_configuration.asyncio(
+                response = await post_ha_proxy_configuration.asyncio_detailed(
                     client=client,
                     body=config_content,
                     skip_reload=False,
                     only_validate=False,
                     version=version,
                 )
+                reload_info = ReloadInfo.from_response(response, self.endpoint)
 
                 # Use specialized configuration error checking
                 check_configuration_response(
-                    result, "deploy_configuration", self.endpoint, config_content
+                    response.parsed,
+                    "deploy_configuration",
+                    self.endpoint,
+                    config_content,
                 )
 
                 deployment_info = ValidationDeploymentResult(
                     size=len(config_content),
-                    reload_id=getattr(result, "reload_id", None),
                     status="success",
                     version=str(version) if version is not None else "unknown",
+                    reload_info=reload_info,
                 )
 
                 metrics.record_dataplane_api_request("deploy", "success")
                 record_span_event("configuration_deployed", asdict(deployment_info))
-                logger.info(
+                await logger.ainfo(
                     f"Configuration deployment successful: {asdict(deployment_info)}"
                 )
 
@@ -309,7 +336,7 @@ class ValidationAPI:
                     )
                     return config_content
                 else:
-                    logger.warning("No configuration data received")
+                    await logger.awarning("No configuration data received")
                     metrics.record_dataplane_api_request("get_config", "empty")
                     return None
 

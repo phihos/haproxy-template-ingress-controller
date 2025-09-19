@@ -25,7 +25,14 @@ from tests.unit.conftest import (
 @pytest.fixture
 def validation_api(mock_get_client):
     """Create ValidationAPI instance for testing."""
-    return ValidationAPI(mock_get_client, "http://localhost:5555/v3")
+    from haproxy_template_ic.dataplane.endpoint import DataplaneEndpoint
+    from haproxy_template_ic.credentials import DataplaneAuth
+
+    auth = DataplaneAuth(username="admin", password="test")
+    endpoint = DataplaneEndpoint(
+        url="http://localhost:5555/v3", dataplane_auth=auth, pod_name="test-pod"
+    )
+    return ValidationAPI(mock_get_client, endpoint)
 
 
 @pytest.mark.asyncio
@@ -46,15 +53,17 @@ async def test_validate_configuration_success(
         patch("haproxy_template_ic.dataplane.validation_api.check_dataplane_response"),
         patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
     ):
-        mock_post_config.asyncio = create_async_mock_with_return_value(Mock())
+        mock_post_config.asyncio_detailed = create_async_mock_with_return_value(
+            Mock(parsed=Mock())
+        )
 
         # Execute
         await validation_api.validate_configuration(config_content)
 
         # Verify
-        mock_post_config.asyncio.assert_called_once_with(
+        mock_post_config.asyncio_detailed.assert_called_once_with(
             client=mock_client,
-            body=config_content,
+            body=config_content + "\n",  # Expect newline-terminated config
             skip_reload=True,
             only_validate=True,
         )
@@ -83,7 +92,7 @@ async def test_validate_configuration_error(validation_api, mock_metrics):
     ):
         mocks["api_mocks"][
             "post_ha_proxy_configuration"
-        ].asyncio.side_effect = Exception("Validation failed")
+        ].asyncio_detailed.side_effect = Exception("Validation failed")
         mock_parse_error.return_value = ("Invalid syntax", 5, "line context")
 
         with expect_validation_error("Configuration validation failed"):
@@ -108,23 +117,26 @@ async def test_deploy_configuration_success(validation_api, mock_client, mock_me
         mock_get_version.return_value = 3
         mocks["api_mocks"][
             "post_ha_proxy_configuration"
-        ].asyncio.return_value = mock_result
+        ].asyncio_detailed.return_value = Mock(
+            parsed=mock_result, status_code=202, headers={"Reload-ID": "reload-123"}
+        )
 
         # Execute
         result = await validation_api.deploy_configuration(config_content)
 
         # Verify
         assert isinstance(result, ValidationDeploymentResult)
-        assert result.size == len(config_content)
-        assert result.reload_id == "reload-123"
+        assert result.size == len(config_content + "\n")  # Account for appended newline
+        assert result.reload_info.reload_id == "reload-123"
+        assert result.reload_info.reload_triggered
         assert result.status == "success"
         assert result.version == "3"
 
         mocks["api_mocks"][
             "post_ha_proxy_configuration"
-        ].asyncio.assert_called_once_with(
+        ].asyncio_detailed.assert_called_once_with(
             client=mock_client,
-            body=config_content,
+            body=config_content + "\n",  # Expect newline-terminated config
             skip_reload=False,
             only_validate=False,
             version=3,
@@ -150,7 +162,9 @@ async def test_deploy_configuration_no_version(
         mock_get_version.return_value = None
         mocks["api_mocks"][
             "post_ha_proxy_configuration"
-        ].asyncio.return_value = mock_result
+        ].asyncio_detailed.return_value = Mock(
+            parsed=mock_result, status_code=202, headers={"Reload-ID": "reload-456"}
+        )
 
         # Execute
         result = await validation_api.deploy_configuration(config_content)
@@ -158,9 +172,9 @@ async def test_deploy_configuration_no_version(
         # Verify fallback to version 1
         mocks["api_mocks"][
             "post_ha_proxy_configuration"
-        ].asyncio.assert_called_once_with(
+        ].asyncio_detailed.assert_called_once_with(
             client=mock_client,
-            body=config_content,
+            body=config_content + "\n",  # Expect newline-terminated config
             skip_reload=False,
             only_validate=False,
             version=1,

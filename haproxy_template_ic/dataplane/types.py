@@ -8,10 +8,11 @@ for the HAProxy Dataplane API v3 integration.
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, TYPE_CHECKING
+from typing import Any, Dict, List, Tuple, TypeVar, TYPE_CHECKING
 
 import xxhash
 
+from haproxy_dataplane_v3.types import Response
 from haproxy_template_ic.constants import DEFAULT_DATAPLANE_PORT
 from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
 
@@ -19,29 +20,31 @@ if TYPE_CHECKING:
     from .endpoint import DataplaneEndpoint
 
 __all__ = [
-    # Constants
     "XXH64_PREFIX",
     "SHA256_PREFIX",
     "MD5_PREFIX",
     "MIME_TYPE_TEXT_PLAIN",
     "MIME_TYPE_PEM_FILE",
-    # Enums
     "ConfigChangeType",
     "ConfigSectionType",
     "ConfigElementType",
-    # Exceptions
     "DataplaneAPIError",
     "ValidationError",
-    # Models
     "ConfigChange",
     "MapChange",
-    # Deployment Results
+    "ReloadInfo",
     "StructuredDeploymentResult",
     "ValidationDeploymentResult",
     "TransactionCommitResult",
     "SynchronizationResult",
     "ValidateAndDeployResult",
-    # Utility functions
+    "ConfigSynchronizerResult",
+    "ConfigChangeResult",
+    "RuntimeOperationResult",
+    "StorageOperationResult",
+    "CreateOperationResult",
+    "UpdateOperationResult",
+    "DeleteOperationResult",
     "compute_content_hash",
     "extract_hash_from_description",
     "get_production_urls_from_index",
@@ -49,18 +52,12 @@ __all__ = [
 
 T = TypeVar("T")
 
-# ===== CONSTANTS =====
-
-# Hash format prefixes for content change detection
 XXH64_PREFIX = "xxh64:"
 SHA256_PREFIX = "sha256:"
 MD5_PREFIX = "md5:"
 
-# Common MIME types for storage operations
 MIME_TYPE_TEXT_PLAIN = "text/plain"
 MIME_TYPE_PEM_FILE = "application/x-pem-file"
-
-# ===== ENUMS =====
 
 
 class ConfigChangeType(Enum):
@@ -93,16 +90,13 @@ class ConfigSectionType(Enum):
 class ConfigElementType(Enum):
     """Types of nested configuration elements within sections."""
 
-    # Backend-specific elements
     SERVER = "server"
     SERVER_SWITCHING_RULE = "server_switching_rule"
     STICK_RULE = "stick_rule"
 
-    # Frontend-specific elements
     BIND = "bind"
     BACKEND_SWITCHING_RULE = "backend_switching_rule"
 
-    # Common elements for frontends, backends, defaults
     ACL = "acl"
     HTTP_REQUEST_RULE = "http_request_rule"
     HTTP_RESPONSE_RULE = "http_response_rule"
@@ -111,11 +105,7 @@ class ConfigElementType(Enum):
     FILTER = "filter"
     LOG_TARGET = "log_target"
 
-    # Defaults-specific elements
     ERROR_FILE = "error_file"
-
-
-# ===== EXCEPTIONS =====
 
 
 class DataplaneAPIError(Exception):
@@ -130,9 +120,9 @@ class DataplaneAPIError(Exception):
     def __init__(
         self,
         message: str,
-        endpoint: Optional["str | DataplaneEndpoint"] = None,
-        operation: Optional[str] = None,
-        original_error: Optional[Exception] = None,
+        endpoint: "str | DataplaneEndpoint | None" = None,
+        operation: str | None = None,
+        original_error: Exception | None = None,
     ):
         super().__init__(message)
         self.endpoint = endpoint
@@ -168,13 +158,13 @@ class ValidationError(DataplaneAPIError):
     def __init__(
         self,
         message: str,
-        endpoint: Optional["str | DataplaneEndpoint"] = None,
-        config_size: Optional[int] = None,
-        validation_details: Optional[str] = None,
-        error_line: Optional[int] = None,
-        config_content: Optional[str] = None,
-        error_context: Optional[str] = None,
-        original_error: Optional[Exception] = None,
+        endpoint: "str | DataplaneEndpoint | None" = None,
+        config_size: int | None = None,
+        validation_details: str | None = None,
+        error_line: int | None = None,
+        config_content: str | None = None,
+        error_context: str | None = None,
+        original_error: Exception | None = None,
     ):
         super().__init__(
             message,
@@ -210,9 +200,6 @@ class ValidationError(DataplaneAPIError):
         return result
 
 
-# ===== MODELS =====
-
-
 @dataclass
 class MapChange:
     """Represents a change in map file entries."""
@@ -222,7 +209,81 @@ class MapChange:
     value: str = ""
 
 
-def _safe_dict_get(obj: Any, key: str, default: Optional[T] = None) -> Optional[T]:
+@dataclass
+class ReloadInfo:
+    """Information about HAProxy reload detection.
+
+    Captures reload status from HAProxy Dataplane API operations.
+    Any operation that returns HTTP 202 status code triggers a reload.
+    """
+
+    reload_id: str | None = None
+
+    @property
+    def reload_triggered(self) -> bool:
+        """True when reload_id is not None, indicating a reload was triggered."""
+        return self.reload_id is not None
+
+    @classmethod
+    def from_response(
+        cls, response: Response, endpoint: "DataplaneEndpoint"
+    ) -> "ReloadInfo":
+        """Extract reload information from HAProxy Dataplane API response.
+
+        HAProxy operations that trigger reloads return HTTP 202 status code
+        and include a 'Reload-ID' header with the reload identifier.
+
+        Args:
+            response: Response object from haproxy_dataplane_v3 with status_code and headers
+            endpoint: DataplaneEndpoint object for context
+
+        Returns:
+            ReloadInfo instance with reload_id if reload was triggered
+        """
+        reload_id = None
+
+        if response.status_code == 202:
+            for header_name in ["Reload-ID", "reload-id", "RELOAD-ID", "reload_id"]:
+                reload_id = response.headers.get(header_name)
+                if reload_id:
+                    break
+
+        return cls(reload_id=reload_id)
+
+    @classmethod
+    def combine(cls, *reload_infos: "ReloadInfo") -> "ReloadInfo":
+        """Combine multiple ReloadInfo instances using 'any reload wins' logic.
+
+        If any of the provided ReloadInfo instances indicates a reload was triggered,
+        the combined result will show reload_triggered=True. The first non-None
+        reload_id will be preserved.
+
+        Args:
+            *reload_infos: Variable number of ReloadInfo instances to combine
+
+        Returns:
+            Combined ReloadInfo instance
+
+        Examples:
+            >>> r1 = ReloadInfo()  # No reload
+            >>> r2 = ReloadInfo(reload_id="abc123")  # Reload triggered
+            >>> combined = ReloadInfo.combine(r1, r2)
+            >>> combined.reload_triggered
+            True
+            >>> combined.reload_id
+            'abc123'
+        """
+        # Find the first reload_id from any ReloadInfo that triggered a reload
+        combined_reload_id = None
+        for reload_info in reload_infos:
+            if reload_info.reload_triggered:
+                combined_reload_id = reload_info.reload_id
+                break
+
+        return cls(reload_id=combined_reload_id)
+
+
+def _safe_dict_get(obj: Any, key: str, default: T | None = None) -> T | None:
     """Safely get value from dict-like object."""
     return obj.get(key, default) if isinstance(obj, dict) else default
 
@@ -250,12 +311,12 @@ class ConfigChange:
     change_type: ConfigChangeType
     section_type: ConfigSectionType
     section_name: str
-    new_config: Optional[Any] = None
-    old_config: Optional[Any] = None
-    section_index: Optional[int] = None
-    element_type: Optional[ConfigElementType] = None
-    element_index: Optional[int] = None
-    element_id: Optional[str] = None
+    new_config: Any | None = None
+    old_config: Any | None = None
+    section_index: int | None = None
+    element_type: ConfigElementType | None = None
+    element_index: int | None = None
+    element_id: str | None = None
 
     def __str__(self) -> str:
         """Return a human-readable description of the change."""
@@ -284,9 +345,9 @@ class ConfigChange:
         change_type: ConfigChangeType,
         section_type: ConfigSectionType,
         section_name: str,
-        new_config: Optional[Any] = None,
-        old_config: Optional[Any] = None,
-        section_index: Optional[int] = None,
+        new_config: Any | None = None,
+        old_config: Any | None = None,
+        section_index: int | None = None,
     ) -> "ConfigChange":
         """Factory method for creating section-level configuration changes."""
         return cls(
@@ -305,10 +366,10 @@ class ConfigChange:
         section_type: ConfigSectionType,
         section_name: str,
         element_type: ConfigElementType,
-        new_config: Optional[Any] = None,
-        old_config: Optional[Any] = None,
-        element_id: Optional[str] = None,
-        element_index: Optional[int] = None,
+        new_config: Any | None = None,
+        old_config: Any | None = None,
+        element_id: str | None = None,
+        element_index: int | None = None,
     ) -> "ConfigChange":
         """Factory method for creating element-level configuration changes."""
         return cls(
@@ -323,9 +384,6 @@ class ConfigChange:
         )
 
 
-# ===== DEPLOYMENT RESULT DATACLASSES =====
-
-
 @dataclass
 class StructuredDeploymentResult:
     """Result from structured configuration deployment operations.
@@ -336,8 +394,9 @@ class StructuredDeploymentResult:
     changes_applied: int
     transaction_used: bool
     version: str
-    transaction_id: Optional[str] = None
-    total_changes: Optional[int] = None
+    reload_info: ReloadInfo
+    transaction_id: str | None = None
+    total_changes: int | None = None
 
 
 @dataclass
@@ -348,9 +407,9 @@ class ValidationDeploymentResult:
     """
 
     size: int
-    reload_id: Optional[str]
     status: str
     version: str
+    reload_info: ReloadInfo
 
 
 @dataclass
@@ -361,8 +420,8 @@ class TransactionCommitResult:
     """
 
     transaction_id: str
-    reload_id: Optional[str]
     status: str
+    reload_info: ReloadInfo
 
 
 @dataclass
@@ -374,8 +433,7 @@ class SynchronizationResult:
 
     method: str
     version: str
-    reload_triggered: bool
-    reload_id: Optional[str]
+    reload_info: ReloadInfo
 
 
 @dataclass
@@ -389,7 +447,82 @@ class ValidateAndDeployResult:
     deployment: ValidationDeploymentResult
 
 
-# ===== UTILITY FUNCTIONS =====
+@dataclass
+class ConfigSynchronizerResult:
+    """Result from configuration synchronizer operations.
+
+    Used by sync_configuration method in ConfigSynchronizer.
+    """
+
+    successful: int
+    failed: int
+    skipped: int
+    errors: List[str]
+    reload_info: ReloadInfo
+
+
+@dataclass
+class ConfigChangeResult:
+    """Result from applying a single configuration change.
+
+    Used by ConfigAPI operations that may trigger reloads.
+    """
+
+    change_applied: bool
+    reload_info: ReloadInfo
+
+
+@dataclass
+class RuntimeOperationResult:
+    """Result from runtime API operations.
+
+    Used by RuntimeAPI operations like map updates, ACL updates.
+    """
+
+    operation_applied: bool
+    reload_info: ReloadInfo
+
+
+@dataclass
+class StorageOperationResult:
+    """Result from storage API operations.
+
+    Used by StorageAPI operations like map sync, certificate sync.
+    """
+
+    operation_applied: bool
+    reload_info: ReloadInfo
+
+
+@dataclass
+class CreateOperationResult:
+    """Result from storage create operations.
+
+    Used by storage helper methods for creating resources.
+    """
+
+    reload_info: ReloadInfo
+
+
+@dataclass
+class UpdateOperationResult:
+    """Result from storage update operations.
+
+    Used by storage helper methods for updating resources.
+    """
+
+    content_changed: bool
+    reload_info: ReloadInfo
+
+
+@dataclass
+class DeleteOperationResult:
+    """Result from storage delete operations.
+
+    Used by storage helper methods for deleting resources.
+    """
+
+    reload_info: ReloadInfo
 
 
 def compute_content_hash(content: str) -> str:
@@ -407,7 +540,7 @@ def compute_content_hash(content: str) -> str:
     return f"{XXH64_PREFIX}{xxhash.xxh64(content.encode('utf-8')).hexdigest()}"
 
 
-def extract_hash_from_description(description: Optional[str]) -> Optional[str]:
+def extract_hash_from_description(description: str | None) -> str | None:
     """Extract content hash from description field if present.
 
     Args:

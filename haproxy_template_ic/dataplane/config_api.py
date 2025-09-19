@@ -45,13 +45,28 @@ from haproxy_dataplane_v3.api.bind import (
     get_all_bind_frontend,
     replace_bind_frontend,
 )
-from haproxy_dataplane_v3.api.cache import get_caches
+from haproxy_dataplane_v3.api.cache import (
+    create_cache,
+    delete_cache,
+    get_caches,
+    replace_cache,
+)
 from haproxy_dataplane_v3.api.defaults import (
     get_defaults_sections,
     replace_defaults_section,
 )
-from haproxy_dataplane_v3.api.fcgi_app import get_fcgi_apps
-from haproxy_dataplane_v3.api.http_errors import get_http_errors_sections
+from haproxy_dataplane_v3.api.fcgi_app import (
+    create_fcgi_app,
+    delete_fcgi_app,
+    get_fcgi_apps,
+    replace_fcgi_app,
+)
+from haproxy_dataplane_v3.api.http_errors import (
+    create_http_errors_section,
+    delete_http_errors_section,
+    get_http_errors_sections,
+    replace_http_errors_section,
+)
 from haproxy_dataplane_v3.api.filter_ import (
     create_filter_backend,
     create_filter_frontend,
@@ -89,7 +104,12 @@ from haproxy_dataplane_v3.api.http_response_rule import (
     replace_http_response_rule_backend,
     replace_http_response_rule_frontend,
 )
-from haproxy_dataplane_v3.api.log_forward import get_log_forwards
+from haproxy_dataplane_v3.api.log_forward import (
+    create_log_forward,
+    delete_log_forward,
+    get_log_forwards,
+    replace_log_forward,
+)
 from haproxy_dataplane_v3.api.log_target import (
     create_log_target_backend,
     create_log_target_frontend,
@@ -101,26 +121,56 @@ from haproxy_dataplane_v3.api.log_target import (
     replace_log_target_backend,
     replace_log_target_frontend,
 )
-from haproxy_dataplane_v3.api.mailers import get_mailers_sections
-from haproxy_dataplane_v3.api.peer import get_peer_sections
-from haproxy_dataplane_v3.api.process_manager import get_programs
-from haproxy_dataplane_v3.api.resolver import get_resolvers
-from haproxy_dataplane_v3.api.ring import get_rings
+from haproxy_dataplane_v3.api.mailers import (
+    create_mailers_section,
+    delete_mailers_section,
+    edit_mailers_section,
+    get_mailers_sections,
+)
+from haproxy_dataplane_v3.api.peer import (
+    create_peer,
+    delete_peer,
+    get_peer_sections,
+)
+from haproxy_dataplane_v3.api.process_manager import (
+    create_program,
+    delete_program,
+    get_programs,
+    replace_program,
+)
+from haproxy_dataplane_v3.api.resolver import (
+    create_resolver,
+    delete_resolver,
+    get_resolvers,
+    replace_resolver,
+)
+from haproxy_dataplane_v3.api.ring import (
+    create_ring,
+    delete_ring,
+    get_rings,
+    replace_ring,
+)
 from haproxy_dataplane_v3.api.server import (
     create_server_backend,
     delete_server_backend,
     get_all_server_backend,
     replace_server_backend,
 )
-from haproxy_dataplane_v3.api.userlist import get_userlists
+from haproxy_dataplane_v3.api.userlist import (
+    create_userlist,
+    delete_userlist,
+    get_userlists,
+)
 
 from haproxy_template_ic.metrics import get_metrics_collector
 from .types import (
     ConfigChange,
+    ConfigChangeResult,
     ConfigChangeType,
     ConfigElementType,
     ConfigSectionType,
     DataplaneAPIError,
+    ReloadInfo,
 )
 from .utils import fetch_with_metrics, _log_fetch_error, check_dataplane_response
 
@@ -168,6 +218,49 @@ class ConfigAPI:
         """
         self._get_client = get_client
         self.endpoint = endpoint
+
+    async def _call_api_with_reload_info(
+        self,
+        api_function: Callable,
+        *args,
+        **kwargs,
+    ) -> ReloadInfo:
+        """Call an API function and extract reload information from the response.
+
+        This helper method wraps dataplane API calls to extract ReloadInfo from
+        HTTP 202 responses with Reload-ID headers.
+
+        Args:
+            api_function: The API function to call (should be asyncio_detailed variant)
+            *args: Positional arguments to pass to the API function
+            **kwargs: Keyword arguments to pass to the API function
+
+        Returns:
+            ReloadInfo instance with reload_id if reload was triggered
+
+        Raises:
+            DataplaneAPIError: If the API call fails
+        """
+        try:
+            response = await api_function(*args, **kwargs)
+
+            # Check the response for errors first
+            check_dataplane_response(
+                response.parsed,
+                api_function.__name__,
+                self.endpoint,
+            )
+
+            # Extract and return reload information
+            return ReloadInfo.from_response(response, self.endpoint)
+
+        except Exception as e:
+            raise DataplaneAPIError(
+                f"API call {api_function.__name__} failed: {e}",
+                endpoint=self.endpoint,
+                operation=api_function.__name__,
+                original_error=e,
+            ) from e
 
     async def fetch_structured_configuration(self) -> Dict[str, Any]:
         """Fetch complete structured configuration components from HAProxy instance.
@@ -516,7 +609,7 @@ class ConfigAPI:
 
     async def apply_config_change(
         self, change: ConfigChange, version: int, transaction_id: Optional[str] = None
-    ) -> None:
+    ) -> ConfigChangeResult:
         """Apply a single configuration change via structured API.
 
         Args:
@@ -524,17 +617,27 @@ class ConfigAPI:
             version: Configuration version for the transaction
             transaction_id: Optional transaction ID to use for atomic changes
 
+        Returns:
+            ConfigChangeResult containing operation status and reload information
+
         Raises:
             DataplaneAPIError: If the change cannot be applied
         """
         client = self._get_client()
 
         if change.element_type:
-            await self._apply_nested_element_change(
+            reload_info = await self._apply_nested_element_change(
                 client, change, version, transaction_id
             )
         else:
-            await self._apply_section_change(client, change, version, transaction_id)
+            reload_info = await self._apply_section_change(
+                client, change, version, transaction_id
+            )
+
+        return ConfigChangeResult(
+            change_applied=True,
+            reload_info=reload_info,
+        )
 
     async def _apply_section_change(
         self,
@@ -542,32 +645,96 @@ class ConfigAPI:
         change: ConfigChange,
         version: int,
         transaction_id: Optional[str] = None,
-    ) -> None:
-        """Apply a section-level configuration change."""
+    ) -> ReloadInfo:
+        """Apply a section-level configuration change.
+
+        Returns:
+            ReloadInfo indicating if a reload was triggered
+        """
         # Configuration for each section type
         section_handlers: Dict[ConfigSectionType, SectionHandlerConfig] = {
             ConfigSectionType.BACKEND: {
-                "create": create_backend.asyncio,
-                "update": replace_backend.asyncio,
-                "delete": delete_backend.asyncio,
+                "create": create_backend.asyncio_detailed,
+                "update": replace_backend.asyncio_detailed,
+                "delete": delete_backend.asyncio_detailed,
                 "id_field": "name",
             },
             ConfigSectionType.FRONTEND: {
-                "create": create_frontend.asyncio,
-                "update": replace_frontend.asyncio,
-                "delete": delete_frontend.asyncio,
+                "create": create_frontend.asyncio_detailed,
+                "update": replace_frontend.asyncio_detailed,
+                "delete": delete_frontend.asyncio_detailed,
                 "id_field": "name",
             },
             ConfigSectionType.GLOBAL: {
                 "create": None,  # Global cannot be created
-                "update": replace_global.asyncio,
+                "update": replace_global.asyncio_detailed,
                 "delete": None,  # Global cannot be deleted
                 "id_field": None,
             },
             ConfigSectionType.DEFAULTS: {
                 "create": None,  # Use replace to create/update defaults
-                "update": replace_defaults_section.asyncio,
+                "update": replace_defaults_section.asyncio_detailed,
                 "delete": None,  # Defaults cannot be deleted
+                "id_field": "name",
+            },
+            ConfigSectionType.USERLIST: {
+                "create": create_userlist.asyncio_detailed,
+                "update": None,  # No replace API - will use delete+create pattern
+                "delete": delete_userlist.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.CACHE: {
+                "create": create_cache.asyncio_detailed,
+                "update": replace_cache.asyncio_detailed,
+                "delete": delete_cache.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.MAILERS: {
+                "create": create_mailers_section.asyncio_detailed,
+                "update": edit_mailers_section.asyncio_detailed,
+                "delete": delete_mailers_section.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.RESOLVER: {
+                "create": create_resolver.asyncio_detailed,
+                "update": replace_resolver.asyncio_detailed,
+                "delete": delete_resolver.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.PEER: {
+                "create": create_peer.asyncio_detailed,
+                "update": None,  # No replace API - will use delete+create pattern
+                "delete": delete_peer.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.FCGI_APP: {
+                "create": create_fcgi_app.asyncio_detailed,
+                "update": replace_fcgi_app.asyncio_detailed,
+                "delete": delete_fcgi_app.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.HTTP_ERRORS: {
+                "create": create_http_errors_section.asyncio_detailed,
+                "update": replace_http_errors_section.asyncio_detailed,
+                "delete": delete_http_errors_section.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.RING: {
+                "create": create_ring.asyncio_detailed,
+                "update": replace_ring.asyncio_detailed,
+                "delete": delete_ring.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.LOG_FORWARD: {
+                "create": create_log_forward.asyncio_detailed,
+                "update": replace_log_forward.asyncio_detailed,
+                "delete": delete_log_forward.asyncio_detailed,
+                "id_field": "name",
+            },
+            ConfigSectionType.PROGRAM: {
+                "create": create_program.asyncio_detailed,
+                "update": replace_program.asyncio_detailed,
+                "delete": delete_program.asyncio_detailed,
                 "id_field": "name",
             },
         }
@@ -593,25 +760,73 @@ class ConfigAPI:
                     endpoint=self.endpoint,
                     operation="apply_section_change",
                 )
-            await handler_config["create"](body=change.new_config, **base_params)
+            reload_info = await self._call_api_with_reload_info(
+                handler_config["create"], body=change.new_config, **base_params
+            )
+            return reload_info
 
         elif change.change_type == ConfigChangeType.UPDATE:
             if not handler_config["update"]:
-                raise DataplaneAPIError(
-                    f"UPDATE not supported for {change.section_type}",
-                    endpoint=self.endpoint,
-                    operation="apply_section_change",
-                )
-            params = {**base_params, "body": change.new_config}
-            if handler_config["id_field"] == "name":
-                # For APIs that expect name as positional argument (backends, frontends, defaults)
-                await handler_config["update"](change.section_name, **params)
-            elif handler_config["id_field"]:
-                # For other APIs that expect the id as keyword argument
-                params[handler_config["id_field"]] = change.section_name
-                await handler_config["update"](**params)
+                # For sections without replace API (USERLIST, PEER), use delete+create pattern
+                if handler_config["delete"] and handler_config["create"]:
+                    # First try to delete existing section (ignore errors if it doesn't exist)
+                    reload_infos = []
+                    try:
+                        delete_params = {**base_params}
+                        if handler_config["id_field"] == "name":
+                            delete_reload_info = await self._call_api_with_reload_info(
+                                handler_config["delete"],
+                                change.section_name,
+                                **delete_params,
+                            )
+                        elif handler_config["id_field"]:
+                            delete_params[handler_config["id_field"]] = (
+                                change.section_name
+                            )
+                            delete_reload_info = await self._call_api_with_reload_info(
+                                handler_config["delete"], **delete_params
+                            )
+                        else:
+                            delete_reload_info = await self._call_api_with_reload_info(
+                                handler_config["delete"], **delete_params
+                            )
+                        reload_infos.append(delete_reload_info)
+                    except DataplaneAPIError as e:
+                        # Ignore delete errors - section might not exist
+                        logger.debug(
+                            f"Delete section {change.section_name} failed (ignoring): {e}"
+                        )
+
+                    # Then create the new section
+                    create_reload_info = await self._call_api_with_reload_info(
+                        handler_config["create"], body=change.new_config, **base_params
+                    )
+                    reload_infos.append(create_reload_info)
+                    return ReloadInfo.combine(*reload_infos)
+                else:
+                    raise DataplaneAPIError(
+                        f"UPDATE not supported for {change.section_type}",
+                        endpoint=self.endpoint,
+                        operation="apply_section_change",
+                    )
             else:
-                await handler_config["update"](**params)
+                params = {**base_params, "body": change.new_config}
+                if handler_config["id_field"] == "name":
+                    # For APIs that expect name as positional argument (backends, frontends, defaults)
+                    reload_info = await self._call_api_with_reload_info(
+                        handler_config["update"], change.section_name, **params
+                    )
+                elif handler_config["id_field"]:
+                    # For other APIs that expect the id as keyword argument
+                    params[handler_config["id_field"]] = change.section_name
+                    reload_info = await self._call_api_with_reload_info(
+                        handler_config["update"], **params
+                    )
+                else:
+                    reload_info = await self._call_api_with_reload_info(
+                        handler_config["update"], **params
+                    )
+                return reload_info
 
         elif change.change_type == ConfigChangeType.DELETE:
             if not handler_config["delete"]:
@@ -623,13 +838,23 @@ class ConfigAPI:
             params = {**base_params}
             if handler_config["id_field"] == "name":
                 # For APIs that expect name as positional argument (backends, frontends, defaults)
-                await handler_config["delete"](change.section_name, **params)
+                reload_info = await self._call_api_with_reload_info(
+                    handler_config["delete"], change.section_name, **params
+                )
             elif handler_config["id_field"]:
                 # For other APIs that expect the id as keyword argument
                 params[handler_config["id_field"]] = change.section_name
-                await handler_config["delete"](**params)
+                reload_info = await self._call_api_with_reload_info(
+                    handler_config["delete"], **params
+                )
             else:
-                await handler_config["delete"](**params)
+                reload_info = await self._call_api_with_reload_info(
+                    handler_config["delete"], **params
+                )
+            return reload_info
+
+        # This should never be reached, but add a fallback
+        return ReloadInfo()
 
     async def _apply_nested_element_change(
         self,
@@ -637,8 +862,12 @@ class ConfigAPI:
         change: ConfigChange,
         version: int,
         transaction_id: Optional[str] = None,
-    ) -> None:
-        """Apply a nested element configuration change."""
+    ) -> ReloadInfo:
+        """Apply a nested element configuration change.
+
+        Returns:
+            ReloadInfo indicating if a reload was triggered
+        """
         # Configuration for nested elements
         element_handlers: Dict[
             Tuple[ConfigSectionType, ConfigElementType], ElementHandlerConfig
@@ -834,3 +1063,6 @@ class ConfigAPI:
                 await handler_config["delete"](**params)
             else:
                 await handler_config["delete"](**params)
+
+        # Nested element operations within transactions typically don't trigger reloads
+        return ReloadInfo()

@@ -7,7 +7,7 @@ to the cluster, providing immediate feedback on configuration errors.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import kopf
 import yaml
@@ -54,7 +54,7 @@ def _is_haproxy_template_ic_configmap(configmap_data: Dict[str, Any]) -> bool:
     return False
 
 
-def _extract_config_data(configmap_data: Dict[str, Any]) -> Optional[str]:
+def _extract_config_data(configmap_data: Dict[str, Any]) -> str | None:
     """Extract the config data from ConfigMap."""
     return configmap_data.get("data", {}).get("config")
 

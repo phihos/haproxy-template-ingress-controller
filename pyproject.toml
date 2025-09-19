@@ -31,6 +31,7 @@ dependencies = [
     "urllib3>=2.0.0", # Required by generated client (with asyncio support)
     "uvloop>=0.21.0",
     "xxhash>=3.5.0", # Fast non-cryptographic hashing for content change detection
+    "orjson>=3.10.0", # Fast JSON serialization for structured logging
     "haproxy_dataplane_v3",
 ]
 

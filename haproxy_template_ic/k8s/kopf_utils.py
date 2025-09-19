@@ -46,7 +46,7 @@ def convert_kopf_body_to_dict(body: Any) -> Dict[str, Any]:
 
 
 def normalize_kopf_resource(
-    resource: Any, ignore_fields: Optional[List[str]] = None
+    resource: Any, ignore_fields: List[str] | None = None
 ) -> Dict[str, Any]:
     """
     Normalize a Kopf resource (Body object or dict) to a regular dictionary.
@@ -127,7 +127,7 @@ def is_valid_kubernetes_resource(resource_dict: Any) -> bool:
 def get_resource_collection_from_indices(
     indices: OperatorIndices,
     resource_id: str,
-    ignore_fields: Optional[List[str]] = None,
+    ignore_fields: List[str] | None = None,
 ) -> "IndexedResourceCollection":
     """
     Get an IndexedResourceCollection from a memo object for a specific resource type.

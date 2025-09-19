@@ -9,7 +9,7 @@ import logging
 import time
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar, cast
+from typing import Any, Callable, Dict, Iterator, List, Tuple, TypeVar, cast
 
 from prometheus_async import aio
 from prometheus_client import (
@@ -474,7 +474,7 @@ class MetricsCollector:
 
 
 def timed_operation(
-    metric_name: str, labels: Optional[Dict[str, str]] = None
+    metric_name: str, labels: Dict[str, str] | None = None
 ) -> Callable[[F], F]:
     """Decorator to time function execution and record in metrics."""
 

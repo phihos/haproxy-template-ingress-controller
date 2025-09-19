@@ -16,6 +16,9 @@ from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
 from .types import (
     ConfigChange,
     MapChange,
+    ReloadInfo,
+    RuntimeOperationResult,
+    StorageOperationResult,
     StructuredDeploymentResult,
     ValidationDeploymentResult,
     ValidateAndDeployResult,
@@ -66,7 +69,7 @@ class DataplaneClient:
         )
 
         # Defer client creation until first use
-        self._client: Optional[AuthenticatedClient] = None
+        self._client: AuthenticatedClient | None = None
 
         # Initialize unified operations interface
         self.operations = DataplaneOperations(self._get_client, self.endpoint)
@@ -163,44 +166,58 @@ class DataplaneClient:
         """
         return await self.operations.validation.get_current_configuration()
 
-    async def sync_maps(self, maps: Dict[str, str]) -> None:
+    async def sync_maps(self, maps: Dict[str, str]) -> StorageOperationResult:
         """Synchronize map files with HAProxy storage.
 
         Args:
             maps: Dictionary mapping map names to their content
+
+        Returns:
+            StorageOperationResult containing operation status and reload information
 
         Raises:
             DataplaneAPIError: If map synchronization fails
         """
         return await self.operations.storage.sync_maps(maps)
 
-    async def sync_certificates(self, certificates: Dict[str, str]) -> None:
+    async def sync_certificates(
+        self, certificates: Dict[str, str]
+    ) -> StorageOperationResult:
         """Synchronize SSL certificates with HAProxy storage.
 
         Args:
             certificates: Dictionary mapping certificate names to their content
+
+        Returns:
+            StorageOperationResult containing operation status and reload information
 
         Raises:
             DataplaneAPIError: If certificate synchronization fails
         """
         return await self.operations.storage.sync_certificates(certificates)
 
-    async def sync_acls(self, acls: Dict[str, str]) -> None:
+    async def sync_acls(self, acls: Dict[str, str]) -> StorageOperationResult:
         """Synchronize ACL files with HAProxy storage.
 
         Args:
             acls: Dictionary mapping ACL names to their content
 
-        Note:
-            This is a placeholder for future ACL file support
-        """
-        logger.warning("ACL file synchronization not yet implemented")
+        Returns:
+            StorageOperationResult containing operation status and reload information
 
-    async def sync_files(self, files: Dict[str, str]) -> None:
+        Raises:
+            DataplaneAPIError: If ACL synchronization fails
+        """
+        return await self.operations.storage.sync_acls(acls)
+
+    async def sync_files(self, files: Dict[str, str]) -> StorageOperationResult:
         """Synchronize generic files with HAProxy storage.
 
         Args:
             files: Dictionary mapping file names to their content
+
+        Returns:
+            StorageOperationResult containing operation status and reload information
 
         Raises:
             DataplaneAPIError: If file synchronization fails
@@ -209,12 +226,15 @@ class DataplaneClient:
 
     async def apply_runtime_map_operations(
         self, map_name: str, operations: List[MapChange]
-    ) -> None:
+    ) -> RuntimeOperationResult:
         """Apply runtime map operations without HAProxy reload.
 
         Args:
             map_name: Name of the map file to modify
             operations: List of map changes to apply
+
+        Returns:
+            RuntimeOperationResult containing operation status and reload information
 
         Raises:
             DataplaneAPIError: If any map operation fails
@@ -225,12 +245,15 @@ class DataplaneClient:
 
     async def apply_runtime_acl_operations(
         self, acl_id: str, operations: List[MapChange]
-    ) -> None:
+    ) -> RuntimeOperationResult:
         """Apply runtime ACL operations without HAProxy reload.
 
         Args:
             acl_id: ID/name of the ACL to modify
             operations: List of ACL changes to apply
+
+        Returns:
+            RuntimeOperationResult containing operation status and reload information
 
         Raises:
             DataplaneAPIError: If any ACL operation fails
@@ -241,13 +264,16 @@ class DataplaneClient:
 
     async def update_server_state(
         self, backend_name: str, server_name: str, state: str
-    ) -> None:
+    ) -> RuntimeOperationResult:
         """Update server state via runtime API.
 
         Args:
             backend_name: Name of the backend containing the server
             server_name: Name of the server to update
             state: New server state (e.g., 'ready', 'maint', 'drain')
+
+        Returns:
+            RuntimeOperationResult containing operation status and reload information
 
         Raises:
             DataplaneAPIError: If server state update fails
@@ -343,7 +369,7 @@ class DataplaneClient:
         certificates: Optional[Dict[str, str]] = None,
         acls: Optional[Dict[str, str]] = None,
         files: Optional[Dict[str, str]] = None,
-    ) -> None:
+    ) -> ReloadInfo:
         """Synchronize multiple storage resource types.
 
         Args:
@@ -351,6 +377,9 @@ class DataplaneClient:
             certificates: SSL certificates to synchronize (name -> content)
             acls: ACL files to synchronize (name -> content)
             files: Other files to synchronize (name -> content)
+
+        Returns:
+            ReloadInfo aggregated from all storage operations
 
         Raises:
             DataplaneAPIError: If any synchronization fails
@@ -364,13 +393,16 @@ class DataplaneClient:
         map_changes: Optional[Dict[str, List[MapChange]]] = None,
         acl_changes: Optional[Dict[str, List[MapChange]]] = None,
         server_changes: Optional[List[Dict[str, Any]]] = None,
-    ) -> None:
+    ) -> ReloadInfo:
         """Apply runtime changes without HAProxy reload.
 
         Args:
             map_changes: Map changes grouped by map name
             acl_changes: ACL changes grouped by ACL ID
             server_changes: Server state changes
+
+        Returns:
+            ReloadInfo aggregated from all runtime operations
 
         Raises:
             DataplaneAPIError: If any runtime operation fails

@@ -11,7 +11,7 @@ import os
 import re
 import sys
 from functools import lru_cache
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict
 
 import jinja2
 from jinja2 import (
@@ -58,9 +58,7 @@ def logarithm_filter(x, base=math.e) -> float:
         raise ValueError("logarithm() can only be used on numbers") from ex
 
 
-def get_path_filter(
-    filename: str, content_type: str, config: Optional[Any] = None
-) -> str:
+def get_path_filter(filename: str, content_type: str, config: Any | None = None) -> str:
     """Custom Jinja2 filter to resolve full paths from filenames with security validation.
 
     Args:
@@ -150,12 +148,12 @@ def get_path_filter(
 class SnippetLoader(BaseLoader):
     """Custom Jinja2 loader that can resolve template snippets by name."""
 
-    def __init__(self, snippets: Optional[TemplateSnippetCollection] = None):
+    def __init__(self, snippets: TemplateSnippetCollection | None = None):
         self.snippets = snippets if snippets is not None else {}
 
     def get_source(
         self, environment: Environment, template: str
-    ) -> tuple[str, Optional[str], Optional[Callable]]:
+    ) -> tuple[str, str | None, Callable | None]:
         """Get template source for snippet name."""
         # Handle snippets dict (current format)
         snippet = self.snippets.get(template)
@@ -168,7 +166,7 @@ class SnippetLoader(BaseLoader):
         return source, None, lambda: True
 
 
-def _extract_snippet_name(line_text: str) -> Optional[str]:
+def _extract_snippet_name(line_text: str) -> str | None:
     """Extract snippet name from an include statement.
 
     Args:
@@ -218,7 +216,7 @@ def _get_context_lines(
 
 
 def _format_snippet_context(
-    snippet_name: Optional[str],
+    snippet_name: str | None,
     line_no: int,
     lines: list[str],
     line_idx: int,
@@ -266,8 +264,8 @@ def _format_snippet_context(
 
 def _process_include_chain(
     template_frames: list[dict[str, Any]],
-    template_content: Optional[str],
-    snippets: Optional[TemplateSnippetCollection],
+    template_content: str | None,
+    snippets: TemplateSnippetCollection | None,
 ) -> list[str]:
     """Process a chain of includes to build error context.
 
@@ -383,8 +381,8 @@ def _process_include_chain(
 def format_template_error(
     e: Exception,
     template_name: str = "template",
-    template_content: Optional[str] = None,
-    snippets: Optional[TemplateSnippetCollection] = None,
+    template_content: str | None = None,
+    snippets: TemplateSnippetCollection | None = None,
 ) -> str:
     """Format a template error with detailed context for debugging.
 
@@ -500,7 +498,7 @@ def format_template_error(
 
 
 def get_template_environment(
-    snippets: Optional[TemplateSnippetCollection] = None,
+    snippets: TemplateSnippetCollection | None = None,
     config=None,
 ) -> Environment:
     """Get or create a Jinja2 environment with snippet support."""
@@ -537,7 +535,7 @@ class TemplateEnvironmentFactory:
 
     @staticmethod
     def create_environment(
-        snippets: Optional[TemplateSnippetCollection] = None,
+        snippets: TemplateSnippetCollection | None = None,
         config=None,
     ) -> Environment:
         """Create a Jinja2 environment with the given snippets."""
@@ -547,9 +545,7 @@ class TemplateEnvironmentFactory:
 class TemplateCompiler:
     """Service for compiling Jinja2 templates with dependency injection."""
 
-    def __init__(
-        self, snippets: Optional[TemplateSnippetCollection] = None, config=None
-    ):
+    def __init__(self, snippets: TemplateSnippetCollection | None = None, config=None):
         """Initialize the compiler with template snippets."""
         self.environment = TemplateEnvironmentFactory.create_environment(
             snippets, config
@@ -562,7 +558,7 @@ class TemplateCompiler:
 
 @lru_cache(maxsize=TEMPLATE_CACHE_SIZE)
 def compile_template(
-    template_str: str, snippets_tuple: Optional[tuple] = None
+    template_str: str, snippets_tuple: tuple | None = None
 ) -> Template:
     """Compile a template string with caching."""
     # Convert tuple back to dict for snippet environment
@@ -578,7 +574,7 @@ def compile_template(
 def render_template(
     template_str: str,
     context: Dict[str, Any],
-    snippets: Optional[TemplateSnippetCollection] = None,
+    snippets: TemplateSnippetCollection | None = None,
 ) -> str:
     """Render a template with the given context and snippets."""
     # Convert snippets to tuple for caching
@@ -599,7 +595,7 @@ class TemplateRenderer:
     """
 
     def __init__(
-        self, template_snippets: Optional[TemplateSnippetCollection] = None, config=None
+        self, template_snippets: TemplateSnippetCollection | None = None, config=None
     ):
         """Initialize the renderer with template snippets.
 
@@ -623,7 +619,7 @@ class TemplateRenderer:
         return cls(template_snippets=config.template_snippets, config=config)
 
     def render(
-        self, template_str: str, template_name: Optional[str] = None, **context: Any
+        self, template_str: str, template_name: str | None = None, **context: Any
     ) -> str:
         """Compile (with caching) and render a template.
 

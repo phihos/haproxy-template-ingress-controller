@@ -7,7 +7,6 @@ rich context for error reporting and logging.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
 from urllib.parse import urlparse
 
 from haproxy_template_ic.credentials import DataplaneAuth
@@ -20,7 +19,7 @@ class DataplaneEndpoint:
 
     url: str
     dataplane_auth: DataplaneAuth
-    pod_name: Optional[str] = None
+    pod_name: str | None = None
 
     def __post_init__(self):
         """Validate and normalize URL on creation."""
@@ -67,7 +66,7 @@ class DataplaneEndpointSet:
     """Immutable collection of dataplane endpoints with validation."""
 
     validation: DataplaneEndpoint
-    production: List[DataplaneEndpoint]
+    production: list[DataplaneEndpoint]
 
     def __post_init__(self):
         """Validate endpoint set consistency."""
@@ -87,18 +86,18 @@ class DataplaneEndpointSet:
             duplicate_pods = [name for name in pod_names if pod_names.count(name) > 1]
             raise ValueError(f"Duplicate pod names in endpoint set: {duplicate_pods}")
 
-    def all_endpoints(self) -> List[DataplaneEndpoint]:
+    def all_endpoints(self) -> list[DataplaneEndpoint]:
         """Get all endpoints (validation + production)."""
         return [self.validation] + self.production
 
-    def find_by_pod_name(self, pod_name: str) -> Optional[DataplaneEndpoint]:
+    def find_by_pod_name(self, pod_name: str) -> DataplaneEndpoint | None:
         """Find endpoint by pod name."""
         for endpoint in self.all_endpoints():
             if endpoint.pod_name == pod_name:
                 return endpoint
         return None
 
-    def find_by_url(self, url: str) -> Optional[DataplaneEndpoint]:
+    def find_by_url(self, url: str) -> DataplaneEndpoint | None:
         """Find endpoint by URL (with normalization)."""
         try:
             normalized_url = normalize_dataplane_url(url)
@@ -112,7 +111,7 @@ class DataplaneEndpointSet:
                     return endpoint
         return None
 
-    def find_by_hostname(self, hostname: str) -> List[DataplaneEndpoint]:
+    def find_by_hostname(self, hostname: str) -> list[DataplaneEndpoint]:
         """Find endpoints by hostname (may return multiple)."""
         matches = []
         for endpoint in self.all_endpoints():
@@ -120,7 +119,7 @@ class DataplaneEndpointSet:
                 matches.append(endpoint)
         return matches
 
-    def get_production_by_index(self, index: int) -> Optional[DataplaneEndpoint]:
+    def get_production_by_index(self, index: int) -> DataplaneEndpoint | None:
         """Get production endpoint by index (safe access)."""
         if 0 <= index < len(self.production):
             return self.production[index]
@@ -150,7 +149,7 @@ class DataplaneEndpointSet:
 
 
 def create_endpoint_from_url(
-    url: str, dataplane_auth: DataplaneAuth, pod_name: Optional[str] = None
+    url: str, dataplane_auth: DataplaneAuth, pod_name: str | None = None
 ) -> DataplaneEndpoint:
     """Convenience function to create endpoint from URL, auth, and optional pod name."""
     return DataplaneEndpoint(url=url, dataplane_auth=dataplane_auth, pod_name=pod_name)

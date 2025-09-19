@@ -24,7 +24,14 @@ from tests.unit.conftest import (
 @pytest.fixture
 def transaction_api(mock_get_client):
     """Create TransactionAPI instance for testing."""
-    return TransactionAPI(mock_get_client, "http://localhost:5555/v3")
+    from haproxy_template_ic.dataplane.endpoint import DataplaneEndpoint
+    from haproxy_template_ic.credentials import DataplaneAuth
+
+    auth = DataplaneAuth(username="admin", password="test")
+    endpoint = DataplaneEndpoint(
+        url="http://localhost:5555/v3", dataplane_auth=auth, pod_name="test-pod"
+    )
+    return TransactionAPI(mock_get_client, endpoint)
 
 
 @pytest.mark.asyncio
@@ -54,9 +61,9 @@ async def test_start_transaction_success(transaction_api, mock_client, mock_metr
     ):
         # Setup mocks
         mock_get_version.return_value = 5
-        # Make asyncio method return an awaitable
-        mock_start_transaction.asyncio = create_async_mock_with_return_value(
-            mock_transaction
+        # Make asyncio_detailed method return an awaitable
+        mock_start_transaction.asyncio_detailed = create_async_mock_with_return_value(
+            Mock(parsed=mock_transaction)
         )
         mock_check_response.return_value = mock_transaction
 
@@ -66,7 +73,7 @@ async def test_start_transaction_success(transaction_api, mock_client, mock_metr
         # Verify
         assert result == "test-transaction-123"
         mock_get_version.assert_called_once_with(mock_client)
-        mock_start_transaction.asyncio.assert_called_once_with(
+        mock_start_transaction.asyncio_detailed.assert_called_once_with(
             client=mock_client, version=5
         )
         mock_record_event.assert_called_once()
@@ -97,7 +104,8 @@ async def test_commit_transaction_success(transaction_api, mock_client, mock_met
     """Test successful transaction commit."""
     # Mock commit response
     mock_result = Mock()
-    mock_result.reload_id = "reload-456"
+    mock_result.status_code = 202
+    mock_result.headers = {"Reload-ID": "reload-456"}
 
     with (
         patch(
@@ -115,8 +123,10 @@ async def test_commit_transaction_success(transaction_api, mock_client, mock_met
         ) as mock_record_event,
     ):
         # Setup mocks
-        mock_commit_transaction.asyncio = create_async_mock_with_return_value(
-            mock_result
+        mock_commit_transaction.asyncio_detailed = create_async_mock_with_return_value(
+            Mock(
+                parsed=mock_result, status_code=202, headers={"Reload-ID": "reload-456"}
+            )
         )
         mock_check_response.return_value = mock_result
 
@@ -126,10 +136,11 @@ async def test_commit_transaction_success(transaction_api, mock_client, mock_met
         # Verify
         assert isinstance(result, TransactionCommitResult)
         assert result.transaction_id == "test-transaction-123"
-        assert result.reload_id == "reload-456"
+        assert result.reload_info.reload_id == "reload-456"
+        assert result.reload_info.reload_triggered
         assert result.status == "committed"
 
-        mock_commit_transaction.asyncio.assert_called_once_with(
+        mock_commit_transaction.asyncio_detailed.assert_called_once_with(
             client=mock_client, id="test-transaction-123"
         )
         mock_record_event.assert_called_once_with(
@@ -156,14 +167,16 @@ async def test_rollback_transaction_success(transaction_api, mock_client, mock_m
         ) as mock_record_event,
     ):
         # Setup mocks
-        mock_delete_transaction.asyncio = create_async_mock_with_return_value(Mock())
+        mock_delete_transaction.asyncio_detailed = create_async_mock_with_return_value(
+            Mock(parsed=Mock())
+        )
         mock_check_response.return_value = Mock()
 
         # Execute
         await transaction_api.rollback("test-transaction-123")
 
         # Verify
-        mock_delete_transaction.asyncio.assert_called_once_with(
+        mock_delete_transaction.asyncio_detailed.assert_called_once_with(
             client=mock_client, id="test-transaction-123"
         )
         mock_record_event.assert_called_once_with(
@@ -210,7 +223,7 @@ async def test_commit_transaction_error_handling(transaction_api, mock_metrics):
             "haproxy_template_ic.dataplane.transaction_api.set_span_error"
         ) as mock_set_error,
     ):
-        mock_commit_transaction.asyncio = create_async_exception_mock(
+        mock_commit_transaction.asyncio_detailed = create_async_exception_mock(
             message="Commit failed"
         )
 
@@ -238,7 +251,7 @@ async def test_rollback_transaction_error_handling(transaction_api, mock_metrics
             "haproxy_template_ic.dataplane.transaction_api.set_span_error"
         ) as mock_set_error,
     ):
-        mock_delete_transaction.asyncio = create_async_exception_mock(
+        mock_delete_transaction.asyncio_detailed = create_async_exception_mock(
             message="Rollback failed"
         )
 
@@ -272,8 +285,8 @@ async def test_start_transaction_invalid_response(transaction_api, mock_metrics)
         ),
     ):
         mock_get_version.return_value = 5
-        mock_start_transaction.asyncio = create_async_mock_with_config(
-            return_value=mock_transaction
+        mock_start_transaction.asyncio_detailed = create_async_mock_with_config(
+            return_value=Mock(parsed=mock_transaction)
         )
         mock_check_response.return_value = mock_transaction
 

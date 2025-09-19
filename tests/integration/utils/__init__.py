@@ -383,7 +383,7 @@ class DockerComposeManager:
         self.project_name = generate_project_name(test_name)
         self.compose_file = None
         self.temp_dir = None
-        self.docker = None  # Will be initialized with compose file
+        self.docker: DockerClient | None = None  # Will be initialized with compose file
         self.failed_services: List[str] = []
         self.container_logs: Dict[str, str] = {}
         self.shared_images = shared_images or {}
@@ -514,6 +514,9 @@ class DockerComposeManager:
 
             for container in service_containers:
                 try:
+                    assert self.docker is not None, (
+                        "DockerComposeManager not initialized"
+                    )
                     logs = get_container_logs(self.docker, container)
                     self.container_logs[container] = logs
                 except Exception as e:
@@ -558,6 +561,7 @@ class DockerComposeManager:
 
         for container in container_names:
             try:
+                assert self.docker is not None, "DockerComposeManager not initialized"
                 logs = get_container_logs(self.docker, container)
                 if logs and logs.strip():
                     container_logs[container] = logs
@@ -594,3 +598,139 @@ class DockerComposeManager:
             release_test_ports(self.ports)
         except Exception:
             pass
+
+
+# Container interaction utilities for integration tests
+async def exec_container_command(
+    compose_manager: DockerComposeManager, service_name: str, command: str
+) -> str:
+    """Execute command in Docker container using existing DockerComposeManager.
+
+    Args:
+        compose_manager: DockerComposeManager instance from docker_compose_dataplane fixture
+        service_name: Name of the Docker Compose service (e.g., "production-haproxy")
+        command: Command to execute in the container
+
+    Returns:
+        Command output as string
+
+    Raises:
+        RuntimeError: If command execution fails
+    """
+    try:
+        # Use the existing docker client from DockerComposeManager
+        assert compose_manager.docker is not None, (
+            "DockerComposeManager not initialized"
+        )
+        result = compose_manager.docker.container.execute(
+            container=f"{compose_manager.project_name}-{service_name}-1",
+            command=command.split() if isinstance(command, str) else command,
+        )
+        return str(result)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to execute command '{command}' in {service_name}: {e}"
+        ) from e
+
+
+async def read_container_file(
+    compose_manager: DockerComposeManager, service_name: str, file_path: str
+) -> str:
+    """Read file content from Docker container filesystem.
+
+    Args:
+        compose_manager: DockerComposeManager instance from docker_compose_dataplane fixture
+        service_name: Name of the Docker Compose service (e.g., "production-haproxy")
+        file_path: Path to file inside the container
+
+    Returns:
+        File content as string
+
+    Raises:
+        RuntimeError: If file reading fails
+    """
+    try:
+        # Use cat command to read file content
+        content = await exec_container_command(
+            compose_manager, service_name, f"cat {file_path}"
+        )
+        return content
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to read file '{file_path}' from {service_name}: {e}"
+        ) from e
+
+
+async def haproxy_socket_command(
+    compose_manager: DockerComposeManager, service_name: str, socket_cmd: str
+) -> str:
+    """Send command to HAProxy stats socket via socat.
+
+    Args:
+        compose_manager: DockerComposeManager instance from docker_compose_dataplane fixture
+        service_name: Name of the Docker Compose service (e.g., "production-haproxy")
+        socket_cmd: HAProxy socket command (e.g., "show acl", "show map")
+
+    Returns:
+        Socket command output as string
+
+    Raises:
+        RuntimeError: If socket command fails
+    """
+    try:
+        # Use socat to send command to HAProxy stats socket
+        full_command = f'echo "{socket_cmd}" | socat - /etc/haproxy/haproxy-master.sock'
+        result = await exec_container_command(
+            compose_manager, service_name, full_command
+        )
+        return result
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to execute socket command '{socket_cmd}' on {service_name}: {e}"
+        ) from e
+
+
+async def get_haproxy_process_info(
+    compose_manager: DockerComposeManager, service_name: str
+) -> Dict[str, str]:
+    """Get HAProxy process information for reload detection.
+
+    Args:
+        compose_manager: DockerComposeManager instance from docker_compose_dataplane fixture
+        service_name: Name of the Docker Compose service (e.g., "production-haproxy")
+
+    Returns:
+        Dictionary with process information (pid, start_time, etc.)
+
+    Raises:
+        RuntimeError: If process info retrieval fails
+    """
+    try:
+        # Get HAProxy process info using ps command (BusyBox compatible)
+        ps_output = await exec_container_command(
+            compose_manager, service_name, "ps | grep haproxy"
+        )
+
+        # Parse ps output to extract process info
+        lines = ps_output.strip().split("\n")
+        # Filter out the grep command itself
+        haproxy_lines = [line for line in lines if line and "grep haproxy" not in line]
+        if not haproxy_lines:
+            raise RuntimeError("No HAProxy process found")
+
+        # Extract key process information
+        # BusyBox ps format: PID USER TIME COMMAND
+        fields = haproxy_lines[0].split()
+        if len(fields) < 4:
+            raise RuntimeError(f"Unexpected ps output format: {ps_output}")
+
+        return {
+            "pid": fields[0],
+            "start_time": fields[2],  # TIME field in BusyBox ps
+            "command": " ".join(fields[3:]),
+            "full_output": ps_output,
+        }
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to get process info from {service_name}: {e}"
+        ) from e

@@ -1,10 +1,16 @@
 """
 Unit tests for dataplane types, error classes, and utility functions.
 
-Tests DataplaneAPIError, ValidationError, and type-related functionality.
+Tests DataplaneAPIError, ValidationError, result types, and type-related functionality.
 """
 
 from haproxy_template_ic.dataplane import DataplaneAPIError, ValidationError
+from haproxy_template_ic.dataplane.types import (
+    CreateOperationResult,
+    UpdateOperationResult,
+    DeleteOperationResult,
+    ReloadInfo,
+)
 
 
 def test_basic_error_creation():
@@ -112,3 +118,85 @@ def test_validation_error_empty_details():
         validation_details="",
     )
     assert "Validation failed" in str(error)
+
+
+# ===== OPERATION RESULT TYPES TESTS =====
+
+
+def test_create_operation_result_basic():
+    """Test CreateOperationResult with empty ReloadInfo."""
+    reload_info = ReloadInfo()
+    result = CreateOperationResult(reload_info=reload_info)
+
+    assert result.reload_info is reload_info
+    assert not result.reload_info.reload_triggered
+
+
+def test_create_operation_result_with_reload():
+    """Test CreateOperationResult with reload information."""
+    reload_info = ReloadInfo(reload_id="reload-123")
+    result = CreateOperationResult(reload_info=reload_info)
+
+    assert result.reload_info is reload_info
+    assert result.reload_info.reload_triggered
+    assert result.reload_info.reload_id == "reload-123"
+
+
+def test_update_operation_result_no_change():
+    """Test UpdateOperationResult with no content change."""
+    reload_info = ReloadInfo()
+    result = UpdateOperationResult(content_changed=False, reload_info=reload_info)
+
+    assert not result.content_changed
+    assert result.reload_info is reload_info
+    assert not result.reload_info.reload_triggered
+
+
+def test_update_operation_result_with_change():
+    """Test UpdateOperationResult with content change and reload."""
+    reload_info = ReloadInfo(reload_id="reload-456")
+    result = UpdateOperationResult(content_changed=True, reload_info=reload_info)
+
+    assert result.content_changed
+    assert result.reload_info is reload_info
+    assert result.reload_info.reload_triggered
+    assert result.reload_info.reload_id == "reload-456"
+
+
+def test_delete_operation_result_basic():
+    """Test DeleteOperationResult with empty ReloadInfo."""
+    reload_info = ReloadInfo()
+    result = DeleteOperationResult(reload_info=reload_info)
+
+    assert result.reload_info is reload_info
+    assert not result.reload_info.reload_triggered
+
+
+def test_delete_operation_result_with_reload():
+    """Test DeleteOperationResult with reload information."""
+    reload_info = ReloadInfo(reload_id="reload-789")
+    result = DeleteOperationResult(reload_info=reload_info)
+
+    assert result.reload_info is reload_info
+    assert result.reload_info.reload_triggered
+    assert result.reload_info.reload_id == "reload-789"
+
+
+def test_result_types_are_dataclasses():
+    """Test that all result types are properly defined as dataclasses."""
+    reload_info = ReloadInfo()
+
+    # Test that they can be created with keyword arguments
+    create_result = CreateOperationResult(reload_info=reload_info)
+    update_result = UpdateOperationResult(content_changed=True, reload_info=reload_info)
+    delete_result = DeleteOperationResult(reload_info=reload_info)
+
+    # Test that they have the expected attributes
+    assert hasattr(create_result, "reload_info")
+    assert hasattr(update_result, "content_changed")
+    assert hasattr(update_result, "reload_info")
+    assert hasattr(delete_result, "reload_info")
+
+    # Test equality (dataclass generates __eq__ automatically)
+    create_result2 = CreateOperationResult(reload_info=reload_info)
+    assert create_result == create_result2

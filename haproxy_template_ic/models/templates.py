@@ -42,6 +42,7 @@ class ContentType(str, Enum):
 
     MAP = "map"
     CERTIFICATE = "certificate"
+    ACL = "acl"
     FILE = "file"
 
 
