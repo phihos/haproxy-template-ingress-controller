@@ -9,7 +9,7 @@ performance by excluding unnecessary fields like metadata.managedFields.
 import copy
 import logging
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import jsonpath
 from jsonpath.exceptions import JSONPathError
@@ -31,9 +31,9 @@ def _compile_jsonpath_filter(path: str):
 
 
 def remove_fields_from_resource(
-    resource: Dict[str, Any],
-    ignore_fields: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+    resource: dict[str, Any],
+    ignore_fields: list[str] | None = None,
+) -> dict[str, Any]:
     """Remove specified fields from a resource using JSONPath expressions.
 
     Args:
@@ -144,7 +144,7 @@ def _remove_field_at_path(obj: Any, match: Any) -> None:
             pass  # Invalid index
 
 
-def validate_ignore_fields(ignore_fields: List[str]) -> List[str]:
+def validate_ignore_fields(ignore_fields: list[str]) -> list[str]:
     """Validate a list of JSONPath expressions for field filtering.
 
     Args:

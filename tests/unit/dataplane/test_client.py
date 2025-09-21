@@ -94,8 +94,10 @@ async def test_storage_delegation(client):
         await client.sync_maps(maps)
         await client.sync_certificates(certificates)
 
-        mock_sync_maps.assert_called_once_with(maps)
-        mock_sync_certs.assert_called_once_with(certificates)
+        mock_sync_maps.assert_called_once_with(maps, {"create", "update", "delete"})
+        mock_sync_certs.assert_called_once_with(
+            certificates, {"create", "update", "delete"}
+        )
 
 
 @pytest.mark.asyncio

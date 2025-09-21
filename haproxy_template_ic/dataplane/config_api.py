@@ -12,157 +12,117 @@ Key features:
 - Proper handling of different API call patterns (positional vs keyword args)
 """
 
+import asyncio
 import logging
-from collections.abc import Callable
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable
+
 from typing_extensions import TypedDict
 
-from haproxy_dataplane_v3 import AuthenticatedClient
-
-if TYPE_CHECKING:
-    from .endpoint import DataplaneEndpoint
-
-# Configuration APIs
-from haproxy_dataplane_v3.api.acl import (
+from haproxy_template_ic.metrics import get_metrics_collector
+from .endpoint import DataplaneEndpoint
+from .adapter import (
+    ReloadInfo,
     create_acl_backend,
     create_acl_frontend,
-    delete_acl_backend,
-    delete_acl_frontend,
-    get_all_acl_backend,
-    get_all_acl_frontend,
-    replace_acl_backend,
-    replace_acl_frontend,
-)
-from haproxy_dataplane_v3.api.backend import (
     create_backend,
-    delete_backend,
-    get_backends,
-    replace_backend,
-)
-from haproxy_dataplane_v3.api.bind import (
     create_bind_frontend,
-    delete_bind_frontend,
-    get_all_bind_frontend,
-    replace_bind_frontend,
-)
-from haproxy_dataplane_v3.api.cache import (
     create_cache,
-    delete_cache,
-    get_caches,
-    replace_cache,
-)
-from haproxy_dataplane_v3.api.defaults import (
-    get_defaults_sections,
-    replace_defaults_section,
-)
-from haproxy_dataplane_v3.api.fcgi_app import (
     create_fcgi_app,
-    delete_fcgi_app,
-    get_fcgi_apps,
-    replace_fcgi_app,
-)
-from haproxy_dataplane_v3.api.http_errors import (
-    create_http_errors_section,
-    delete_http_errors_section,
-    get_http_errors_sections,
-    replace_http_errors_section,
-)
-from haproxy_dataplane_v3.api.filter_ import (
     create_filter_backend,
     create_filter_frontend,
-    delete_filter_backend,
-    delete_filter_frontend,
-    get_all_filter_backend,
-    get_all_filter_frontend,
-    replace_filter_backend,
-    replace_filter_frontend,
-)
-from haproxy_dataplane_v3.api.frontend import (
     create_frontend,
-    delete_frontend,
-    get_frontends,
-    replace_frontend,
-)
-from haproxy_dataplane_v3.api.global_ import get_global, replace_global
-from haproxy_dataplane_v3.api.http_request_rule import (
+    create_http_errors_section,
     create_http_request_rule_backend,
     create_http_request_rule_frontend,
-    delete_http_request_rule_backend,
-    delete_http_request_rule_frontend,
-    get_all_http_request_rule_backend,
-    get_all_http_request_rule_frontend,
-    replace_http_request_rule_backend,
-    replace_http_request_rule_frontend,
-)
-from haproxy_dataplane_v3.api.http_response_rule import (
     create_http_response_rule_backend,
     create_http_response_rule_frontend,
-    delete_http_response_rule_backend,
-    delete_http_response_rule_frontend,
-    get_all_http_response_rule_backend,
-    get_all_http_response_rule_frontend,
-    replace_http_response_rule_backend,
-    replace_http_response_rule_frontend,
-)
-from haproxy_dataplane_v3.api.log_forward import (
     create_log_forward,
-    delete_log_forward,
-    get_log_forwards,
-    replace_log_forward,
-)
-from haproxy_dataplane_v3.api.log_target import (
     create_log_target_backend,
     create_log_target_frontend,
+    create_mailers_section,
+    create_peer,
+    create_program,
+    create_resolver,
+    create_ring,
+    create_server_backend,
+    create_userlist,
+    delete_acl_backend,
+    delete_acl_frontend,
+    delete_backend,
+    delete_bind_frontend,
+    delete_cache,
+    delete_fcgi_app,
+    delete_filter_backend,
+    delete_filter_frontend,
+    delete_frontend,
+    delete_http_errors_section,
+    delete_http_request_rule_backend,
+    delete_http_request_rule_frontend,
+    delete_http_response_rule_backend,
+    delete_http_response_rule_frontend,
+    delete_log_forward,
     delete_log_target_backend,
     delete_log_target_frontend,
+    delete_mailers_section,
+    delete_peer,
+    delete_program,
+    delete_resolver,
+    delete_ring,
+    delete_server_backend,
+    delete_userlist,
+    edit_mailers_section,
+    get_all_acl_backend,
+    get_all_acl_frontend,
+    get_all_bind_frontend,
+    get_all_filter_backend,
+    get_all_filter_frontend,
+    get_all_http_request_rule_backend,
+    get_all_http_request_rule_frontend,
+    get_all_http_response_rule_backend,
+    get_all_http_response_rule_frontend,
     get_all_log_target_backend,
     get_all_log_target_frontend,
     get_all_log_target_global,
+    get_all_server_backend,
+    get_backends,
+    get_caches,
+    get_defaults_sections,
+    get_fcgi_apps,
+    get_frontends,
+    get_global,
+    get_http_errors_sections,
+    get_log_forwards,
+    get_mailers_sections,
+    get_peer_sections,
+    get_programs,
+    get_resolvers,
+    get_rings,
+    get_userlists,
+    replace_acl_backend,
+    replace_acl_frontend,
+    replace_backend,
+    replace_bind_frontend,
+    replace_cache,
+    replace_defaults_section,
+    replace_fcgi_app,
+    replace_filter_backend,
+    replace_filter_frontend,
+    replace_frontend,
+    replace_global,
+    replace_http_errors_section,
+    replace_http_request_rule_backend,
+    replace_http_request_rule_frontend,
+    replace_http_response_rule_backend,
+    replace_http_response_rule_frontend,
+    replace_log_forward,
     replace_log_target_backend,
     replace_log_target_frontend,
-)
-from haproxy_dataplane_v3.api.mailers import (
-    create_mailers_section,
-    delete_mailers_section,
-    edit_mailers_section,
-    get_mailers_sections,
-)
-from haproxy_dataplane_v3.api.peer import (
-    create_peer,
-    delete_peer,
-    get_peer_sections,
-)
-from haproxy_dataplane_v3.api.process_manager import (
-    create_program,
-    delete_program,
-    get_programs,
     replace_program,
-)
-from haproxy_dataplane_v3.api.resolver import (
-    create_resolver,
-    delete_resolver,
-    get_resolvers,
     replace_resolver,
-)
-from haproxy_dataplane_v3.api.ring import (
-    create_ring,
-    delete_ring,
-    get_rings,
     replace_ring,
-)
-from haproxy_dataplane_v3.api.server import (
-    create_server_backend,
-    delete_server_backend,
-    get_all_server_backend,
     replace_server_backend,
+    APIResponse,
 )
-from haproxy_dataplane_v3.api.userlist import (
-    create_userlist,
-    delete_userlist,
-    get_userlists,
-)
-
-from haproxy_template_ic.metrics import get_metrics_collector
 from .types import (
     ConfigChange,
     ConfigChangeResult,
@@ -170,19 +130,18 @@ from .types import (
     ConfigElementType,
     ConfigSectionType,
     DataplaneAPIError,
-    ReloadInfo,
 )
-from .utils import fetch_with_metrics, _log_fetch_error, check_dataplane_response
+from .utils import _log_fetch_error
 
 
 # TypedDict classes for handler configurations
 class SectionHandlerConfig(TypedDict, total=False):
     """Type definition for section handler configuration."""
 
-    create: Optional[Callable[..., Any]]
-    update: Optional[Callable[..., Any]]
-    delete: Optional[Callable[..., Any]]
-    id_field: Optional[str]
+    create: Callable[..., Any] | None
+    update: Callable[..., Any] | None
+    delete: Callable[..., Any] | None
+    id_field: str | None
 
 
 class ElementHandlerConfig(TypedDict, total=False):
@@ -207,16 +166,13 @@ class ConfigAPI:
 
     def __init__(
         self,
-        get_client: Callable[[], AuthenticatedClient],
-        endpoint: "DataplaneEndpoint",
+        endpoint: DataplaneEndpoint,
     ):
         """Initialize configuration API.
 
         Args:
-            get_client: Factory function that returns an authenticated client
             endpoint: Dataplane endpoint for error context
         """
-        self._get_client = get_client
         self.endpoint = endpoint
 
     async def _call_api_with_reload_info(
@@ -244,25 +200,21 @@ class ConfigAPI:
         try:
             response = await api_function(*args, **kwargs)
 
-            # Check the response for errors first
-            check_dataplane_response(
-                response.parsed,
-                api_function.__name__,
-                self.endpoint,
-            )
+            # APIResponse objects from @api_function() decorated functions already have error handling
+            # No need for additional error checking
 
-            # Extract and return reload information
-            return ReloadInfo.from_response(response, self.endpoint)
+            # Extract reload information from APIResponse
+            return response.reload_info
 
         except Exception as e:
             raise DataplaneAPIError(
-                f"API call {api_function.__name__} failed: {e}",
+                f"API call {getattr(api_function, '__name__', 'unknown')} failed: {e}",
                 endpoint=self.endpoint,
-                operation=api_function.__name__,
+                operation=getattr(api_function, "__name__", "unknown"),
                 original_error=e,
             ) from e
 
-    async def fetch_structured_configuration(self) -> Dict[str, Any]:
+    async def fetch_structured_configuration(self) -> dict[str, Any]:
         """Fetch complete structured configuration components from HAProxy instance.
 
         Returns:
@@ -274,15 +226,13 @@ class ConfigAPI:
         metrics = get_metrics_collector()
 
         with metrics.time_dataplane_api_operation("fetch_structured"):
-            client = self._get_client()
-
             try:
                 # Fetch all top-level configuration sections
-                config_sections = await self._fetch_top_level_sections(client, metrics)
+                config_sections = await self._fetch_top_level_sections(metrics)
 
                 # Fetch nested elements for sections that support them
                 nested_elements = await self._fetch_nested_elements(
-                    client, config_sections
+                    config_sections, metrics
                 )
 
                 # Record success metrics and return combined result
@@ -300,297 +250,388 @@ class ConfigAPI:
                     original_error=e,
                 ) from e
 
-    async def _fetch_top_level_sections(
-        self, client: Any, metrics: Any
-    ) -> Dict[str, Any]:
+    async def _fetch_top_level_sections(self, metrics: Any) -> dict[str, Any]:
         """Fetch all top-level configuration sections."""
+
+        async def _fetch_with_timing(operation_name: str, adapter_func, default_value):
+            with metrics.time_dataplane_api_operation(operation_name):
+                result: APIResponse = await adapter_func(endpoint=self.endpoint)
+                return result.content or default_value
+
         return {
-            "backends": await fetch_with_metrics(
-                "fetch_backends",
-                get_backends.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
+            "backends": await _fetch_with_timing("fetch_backends", get_backends, []),
+            "frontends": await _fetch_with_timing("fetch_frontends", get_frontends, []),
+            "defaults": await _fetch_with_timing(
+                "fetch_defaults", get_defaults_sections, []
             ),
-            "frontends": await fetch_with_metrics(
-                "fetch_frontends",
-                get_frontends.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
+            "global": await _fetch_with_timing("fetch_global", get_global, None),
+            "userlists": await _fetch_with_timing("fetch_userlists", get_userlists, []),
+            "caches": await _fetch_with_timing("fetch_caches", get_caches, []),
+            "mailers": await _fetch_with_timing(
+                "fetch_mailers", get_mailers_sections, []
             ),
-            "defaults": await fetch_with_metrics(
-                "fetch_defaults",
-                get_defaults_sections.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
+            "resolvers": await _fetch_with_timing("fetch_resolvers", get_resolvers, []),
+            "peers": await _fetch_with_timing("fetch_peers", get_peer_sections, []),
+            "fcgi_apps": await _fetch_with_timing("fetch_fcgi_apps", get_fcgi_apps, []),
+            "http_errors": await _fetch_with_timing(
+                "fetch_http_errors", get_http_errors_sections, []
             ),
-            "global": await fetch_with_metrics(
-                "fetch_global", get_global.asyncio, client, metrics, None, self.endpoint
+            "rings": await _fetch_with_timing("fetch_rings", get_rings, []),
+            "log_forwards": await _fetch_with_timing(
+                "fetch_log_forwards", get_log_forwards, []
             ),
-            "userlists": await fetch_with_metrics(
-                "fetch_userlists",
-                get_userlists.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
-            ),
-            "caches": await fetch_with_metrics(
-                "fetch_caches", get_caches.asyncio, client, metrics, [], self.endpoint
-            ),
-            "mailers": await fetch_with_metrics(
-                "fetch_mailers",
-                get_mailers_sections.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
-            ),
-            "resolvers": await fetch_with_metrics(
-                "fetch_resolvers",
-                get_resolvers.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
-            ),
-            "peers": await fetch_with_metrics(
-                "fetch_peers",
-                get_peer_sections.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
-            ),
-            "fcgi_apps": await fetch_with_metrics(
-                "fetch_fcgi_apps",
-                get_fcgi_apps.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
-            ),
-            "http_errors": await fetch_with_metrics(
-                "fetch_http_errors",
-                get_http_errors_sections.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
-            ),
-            "rings": await fetch_with_metrics(
-                "fetch_rings", get_rings.asyncio, client, metrics, [], self.endpoint
-            ),
-            "log_forwards": await fetch_with_metrics(
-                "fetch_log_forwards",
-                get_log_forwards.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
-            ),
-            "programs": await fetch_with_metrics(
-                "fetch_programs",
-                get_programs.asyncio,
-                client,
-                metrics,
-                [],
-                self.endpoint,
-            ),
+            "programs": await _fetch_with_timing("fetch_programs", get_programs, []),
         }
 
-    async def _fetch_nested_elements(
-        self, client: Any, config_sections: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Fetch nested elements for configuration sections."""
-        nested: Dict[str, Any] = {}
+    def _create_backend_tasks(
+        self, backend_name: str, metrics: Any
+    ) -> list[tuple[str, Any]]:
+        """Create concurrent tasks for fetching all nested elements of a backend.
 
-        # Fetch nested elements for backends
+        Returns:
+            List of (nested_key, task) tuples for concurrent execution
+        """
+
+        async def _fetch_with_timing(
+            operation_name: str, adapter_func, *args, **kwargs
+        ):
+            with metrics.time_dataplane_api_operation(operation_name):
+                result: APIResponse = await adapter_func(
+                    *args, endpoint=self.endpoint, **kwargs
+                )
+                return result.content or []
+
+        return [
+            (
+                "backend_servers",
+                _fetch_with_timing(
+                    f"fetch_backend_servers_{backend_name}",
+                    get_all_server_backend,
+                    parent_name=backend_name,
+                ),
+            ),
+            (
+                "backend_acls",
+                _fetch_with_timing(
+                    f"fetch_backend_acls_{backend_name}",
+                    get_all_acl_backend,
+                    parent_name=backend_name,
+                ),
+            ),
+            (
+                "backend_http_request_rules",
+                _fetch_with_timing(
+                    f"fetch_backend_http_request_rules_{backend_name}",
+                    get_all_http_request_rule_backend,
+                    parent_name=backend_name,
+                ),
+            ),
+            (
+                "backend_http_response_rules",
+                _fetch_with_timing(
+                    f"fetch_backend_http_response_rules_{backend_name}",
+                    get_all_http_response_rule_backend,
+                    parent_name=backend_name,
+                ),
+            ),
+            (
+                "backend_filters",
+                _fetch_with_timing(
+                    f"fetch_backend_filters_{backend_name}",
+                    get_all_filter_backend,
+                    parent_name=backend_name,
+                ),
+            ),
+            (
+                "backend_log_targets",
+                _fetch_with_timing(
+                    f"fetch_backend_log_targets_{backend_name}",
+                    get_all_log_target_backend,
+                    parent_name=backend_name,
+                ),
+            ),
+        ]
+
+    def _create_frontend_tasks(
+        self, frontend_name: str, metrics: Any
+    ) -> list[tuple[str, Any]]:
+        """Create concurrent tasks for fetching all nested elements of a frontend.
+
+        Returns:
+            List of (nested_key, task) tuples for concurrent execution
+        """
+
+        async def _fetch_with_timing(
+            operation_name: str, adapter_func, *args, **kwargs
+        ):
+            with metrics.time_dataplane_api_operation(operation_name):
+                result: APIResponse = await adapter_func(
+                    *args, endpoint=self.endpoint, **kwargs
+                )
+                return result.content or []
+
+        return [
+            (
+                "frontend_binds",
+                _fetch_with_timing(
+                    f"fetch_frontend_binds_{frontend_name}",
+                    get_all_bind_frontend,
+                    parent_name=frontend_name,
+                ),
+            ),
+            (
+                "frontend_acls",
+                _fetch_with_timing(
+                    f"fetch_frontend_acls_{frontend_name}",
+                    get_all_acl_frontend,
+                    parent_name=frontend_name,
+                ),
+            ),
+            (
+                "frontend_http_request_rules",
+                _fetch_with_timing(
+                    f"fetch_frontend_http_request_rules_{frontend_name}",
+                    get_all_http_request_rule_frontend,
+                    parent_name=frontend_name,
+                ),
+            ),
+            (
+                "frontend_http_response_rules",
+                _fetch_with_timing(
+                    f"fetch_frontend_http_response_rules_{frontend_name}",
+                    get_all_http_response_rule_frontend,
+                    parent_name=frontend_name,
+                ),
+            ),
+            (
+                "frontend_filters",
+                _fetch_with_timing(
+                    f"fetch_frontend_filters_{frontend_name}",
+                    get_all_filter_frontend,
+                    parent_name=frontend_name,
+                ),
+            ),
+            (
+                "frontend_log_targets",
+                _fetch_with_timing(
+                    f"fetch_frontend_log_targets_{frontend_name}",
+                    get_all_log_target_frontend,
+                    parent_name=frontend_name,
+                ),
+            ),
+        ]
+
+    async def _process_backend_results(
+        self, backend_name: str, results: list[Any], nested: dict[str, Any]
+    ) -> None:
+        """Process results from concurrent backend nested element fetching."""
+        nested_keys = [
+            "backend_servers",
+            "backend_acls",
+            "backend_http_request_rules",
+            "backend_http_response_rules",
+            "backend_filters",
+            "backend_log_targets",
+        ]
+
+        for i, (nested_key, result) in enumerate(zip(nested_keys, results)):
+            if nested_key not in nested:
+                nested[nested_key] = {}
+            nested[nested_key][backend_name] = result or []
+
+    async def _process_frontend_results(
+        self, frontend_name: str, results: list[Any], nested: dict[str, Any]
+    ) -> None:
+        """Process results from concurrent frontend nested element fetching."""
+        nested_keys = [
+            "frontend_binds",
+            "frontend_acls",
+            "frontend_http_request_rules",
+            "frontend_http_response_rules",
+            "frontend_filters",
+            "frontend_log_targets",
+        ]
+
+        for i, (nested_key, result) in enumerate(zip(nested_keys, results)):
+            if nested_key not in nested:
+                nested[nested_key] = {}
+            nested[nested_key][frontend_name] = result or []
+
+    async def _fetch_nested_elements(
+        self, config_sections: dict[str, Any], metrics: Any
+    ) -> dict[str, Any]:
+        """Fetch nested elements for configuration sections using concurrent execution.
+
+        This method uses asyncio.gather to fetch nested elements concurrently,
+        providing significant performance improvements for large configurations.
+        """
+        nested: dict[str, Any] = {}
+
+        # Initialize nested element dictionaries
+        nested_keys = [
+            "backend_servers",
+            "backend_acls",
+            "backend_http_request_rules",
+            "backend_http_response_rules",
+            "backend_filters",
+            "backend_log_targets",
+            "frontend_binds",
+            "frontend_acls",
+            "frontend_http_request_rules",
+            "frontend_http_response_rules",
+            "frontend_filters",
+            "frontend_log_targets",
+        ]
+        for key in nested_keys:
+            nested[key] = {}
+
+        # Concurrent backend processing
         if config_sections.get("backends"):
-            nested["backend_servers"] = {}
-            nested["backend_acls"] = {}
-            nested["backend_http_request_rules"] = {}
-            nested["backend_http_response_rules"] = {}
-            nested["backend_filters"] = {}
-            nested["backend_log_targets"] = {}
+            backend_tasks = []
+            backend_names = []
 
             for backend in config_sections["backends"]:
                 backend_name = backend.name
+                backend_names.append(backend_name)
+
+                # Create concurrent tasks for this backend
+                tasks = self._create_backend_tasks(backend_name, metrics)
+                # Extract just the tasks (second element of each tuple)
+                task_coroutines = [task for _, task in tasks]
+                backend_tasks.append(
+                    asyncio.gather(*task_coroutines, return_exceptions=True)
+                )
+
+            if backend_tasks:
                 try:
-                    nested["backend_servers"][backend_name] = (
-                        check_dataplane_response(
-                            await get_all_server_backend.asyncio(
-                                backend_name, client=client
-                            ),
-                            f"fetch_backend_servers_{backend_name}",
-                            self.endpoint,
-                        )
-                        or []
+                    # Execute all backend tasks concurrently
+                    all_backend_results = await asyncio.gather(
+                        *backend_tasks, return_exceptions=True
                     )
 
-                    nested["backend_acls"][backend_name] = (
-                        check_dataplane_response(
-                            await get_all_acl_backend.asyncio(
-                                backend_name, client=client
-                            ),
-                            f"fetch_backend_acls_{backend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
+                    # Process results for each backend
+                    for i, (backend_name, results) in enumerate(
+                        zip(backend_names, all_backend_results)
+                    ):
+                        if isinstance(results, Exception):
+                            _log_fetch_error(
+                                f"backend {backend_name} nested elements", "", results
+                            )
+                            # Initialize with empty lists for failed backend
+                            for key in [
+                                "backend_servers",
+                                "backend_acls",
+                                "backend_http_request_rules",
+                                "backend_http_response_rules",
+                                "backend_filters",
+                                "backend_log_targets",
+                            ]:
+                                nested[key][backend_name] = []
+                        else:
+                            await self._process_backend_results(
+                                backend_name, results, nested
+                            )
 
-                    nested["backend_http_request_rules"][backend_name] = (
-                        check_dataplane_response(
-                            await get_all_http_request_rule_backend.asyncio(
-                                backend_name, client=client
-                            ),
-                            f"fetch_backend_http_request_rules_{backend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
-
-                    nested["backend_http_response_rules"][backend_name] = (
-                        check_dataplane_response(
-                            await get_all_http_response_rule_backend.asyncio(
-                                backend_name, client=client
-                            ),
-                            f"fetch_backend_http_response_rules_{backend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
-
-                    nested["backend_filters"][backend_name] = (
-                        check_dataplane_response(
-                            await get_all_filter_backend.asyncio(
-                                backend_name, client=client
-                            ),
-                            f"fetch_backend_filters_{backend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
-
-                    nested["backend_log_targets"][backend_name] = (
-                        check_dataplane_response(
-                            await get_all_log_target_backend.asyncio(
-                                backend_name, client=client
-                            ),
-                            f"fetch_backend_log_targets_{backend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
                 except Exception as e:
-                    _log_fetch_error(f"backend {backend_name} nested elements", "", e)
+                    _log_fetch_error("backend concurrent processing", "", e)
+                    # Initialize all backends with empty lists on total failure
+                    for backend in config_sections["backends"]:
+                        backend_name = backend.name
+                        for key in [
+                            "backend_servers",
+                            "backend_acls",
+                            "backend_http_request_rules",
+                            "backend_http_response_rules",
+                            "backend_filters",
+                            "backend_log_targets",
+                        ]:
+                            nested[key][backend_name] = []
 
-        # Fetch nested elements for frontends
+        # Concurrent frontend processing
         if config_sections.get("frontends"):
-            nested["frontend_binds"] = {}
-            nested["frontend_acls"] = {}
-            nested["frontend_http_request_rules"] = {}
-            nested["frontend_http_response_rules"] = {}
-            nested["frontend_filters"] = {}
-            nested["frontend_log_targets"] = {}
+            frontend_tasks = []
+            frontend_names = []
 
             for frontend in config_sections["frontends"]:
                 frontend_name = frontend.name
-                try:
-                    nested["frontend_binds"][frontend_name] = (
-                        check_dataplane_response(
-                            await get_all_bind_frontend.asyncio(
-                                frontend_name, client=client
-                            ),
-                            f"fetch_frontend_binds_{frontend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
+                frontend_names.append(frontend_name)
 
-                    nested["frontend_acls"][frontend_name] = (
-                        check_dataplane_response(
-                            await get_all_acl_frontend.asyncio(
-                                frontend_name, client=client
-                            ),
-                            f"fetch_frontend_acls_{frontend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
-
-                    nested["frontend_http_request_rules"][frontend_name] = (
-                        check_dataplane_response(
-                            await get_all_http_request_rule_frontend.asyncio(
-                                frontend_name, client=client
-                            ),
-                            f"fetch_frontend_http_request_rules_{frontend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
-
-                    nested["frontend_http_response_rules"][frontend_name] = (
-                        check_dataplane_response(
-                            await get_all_http_response_rule_frontend.asyncio(
-                                frontend_name, client=client
-                            ),
-                            f"fetch_frontend_http_response_rules_{frontend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
-
-                    nested["frontend_filters"][frontend_name] = (
-                        check_dataplane_response(
-                            await get_all_filter_frontend.asyncio(
-                                frontend_name, client=client
-                            ),
-                            f"fetch_frontend_filters_{frontend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
-
-                    nested["frontend_log_targets"][frontend_name] = (
-                        check_dataplane_response(
-                            await get_all_log_target_frontend.asyncio(
-                                frontend_name, client=client
-                            ),
-                            f"fetch_frontend_log_targets_{frontend_name}",
-                            self.endpoint,
-                        )
-                        or []
-                    )
-                except Exception as e:
-                    _log_fetch_error(f"frontend {frontend_name} nested elements", "", e)
-
-        # Fetch global log targets
-        try:
-            nested["global_log_targets"] = (
-                check_dataplane_response(
-                    await get_all_log_target_global.asyncio(client=client),
-                    "fetch_global_log_targets",
-                    self.endpoint,
+                # Create concurrent tasks for this frontend
+                tasks = self._create_frontend_tasks(frontend_name, metrics)
+                # Extract just the tasks (second element of each tuple)
+                task_coroutines = [task for _, task in tasks]
+                frontend_tasks.append(
+                    asyncio.gather(*task_coroutines, return_exceptions=True)
                 )
-                or []
-            )
+
+            if frontend_tasks:
+                try:
+                    # Execute all frontend tasks concurrently
+                    all_frontend_results = await asyncio.gather(
+                        *frontend_tasks, return_exceptions=True
+                    )
+
+                    # Process results for each frontend
+                    for i, (frontend_name, results) in enumerate(
+                        zip(frontend_names, all_frontend_results)
+                    ):
+                        if isinstance(results, Exception):
+                            _log_fetch_error(
+                                f"frontend {frontend_name} nested elements", "", results
+                            )
+                            # Initialize with empty lists for failed frontend
+                            for key in [
+                                "frontend_binds",
+                                "frontend_acls",
+                                "frontend_http_request_rules",
+                                "frontend_http_response_rules",
+                                "frontend_filters",
+                                "frontend_log_targets",
+                            ]:
+                                nested[key][frontend_name] = []
+                        else:
+                            await self._process_frontend_results(
+                                frontend_name, results, nested
+                            )
+
+                except Exception as e:
+                    _log_fetch_error("frontend concurrent processing", "", e)
+                    # Initialize all frontends with empty lists on total failure
+                    for frontend in config_sections["frontends"]:
+                        frontend_name = frontend.name
+                        for key in [
+                            "frontend_binds",
+                            "frontend_acls",
+                            "frontend_http_request_rules",
+                            "frontend_http_response_rules",
+                            "frontend_filters",
+                            "frontend_log_targets",
+                        ]:
+                            nested[key][frontend_name] = []
+
+        # Fetch global log targets (single call, no concurrency needed)
+        try:
+
+            async def _fetch_global_logs():
+                with metrics.time_dataplane_api_operation("fetch_global_log_targets"):
+                    result: APIResponse = await get_all_log_target_global(
+                        endpoint=self.endpoint
+                    )
+                    return result.content or []
+
+            nested["global_log_targets"] = await _fetch_global_logs()
         except Exception as e:
             _log_fetch_error("global log targets", "", e)
+            nested["global_log_targets"] = []
 
         return nested
 
     def _build_configuration_result(
         self,
-        config_sections: Dict[str, Any],
-        nested_elements: Dict[str, Any],
+        config_sections: dict[str, Any],
+        nested_elements: dict[str, Any],
         metrics: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Build final configuration result combining sections and nested elements."""
         metrics.record_dataplane_api_request("fetch_structured", "success")
 
@@ -608,7 +649,7 @@ class ConfigAPI:
         return result
 
     async def apply_config_change(
-        self, change: ConfigChange, version: int, transaction_id: Optional[str] = None
+        self, change: ConfigChange, version: int, transaction_id: str | None = None
     ) -> ConfigChangeResult:
         """Apply a single configuration change via structured API.
 
@@ -623,15 +664,14 @@ class ConfigAPI:
         Raises:
             DataplaneAPIError: If the change cannot be applied
         """
-        client = self._get_client()
 
         if change.element_type:
             reload_info = await self._apply_nested_element_change(
-                client, change, version, transaction_id
+                change, version, transaction_id
             )
         else:
             reload_info = await self._apply_section_change(
-                client, change, version, transaction_id
+                change, version, transaction_id
             )
 
         return ConfigChangeResult(
@@ -641,10 +681,9 @@ class ConfigAPI:
 
     async def _apply_section_change(
         self,
-        client: Any,
         change: ConfigChange,
         version: int,
-        transaction_id: Optional[str] = None,
+        transaction_id: str | None = None,
     ) -> ReloadInfo:
         """Apply a section-level configuration change.
 
@@ -652,89 +691,89 @@ class ConfigAPI:
             ReloadInfo indicating if a reload was triggered
         """
         # Configuration for each section type
-        section_handlers: Dict[ConfigSectionType, SectionHandlerConfig] = {
+        section_handlers: dict[ConfigSectionType, SectionHandlerConfig] = {
             ConfigSectionType.BACKEND: {
-                "create": create_backend.asyncio_detailed,
-                "update": replace_backend.asyncio_detailed,
-                "delete": delete_backend.asyncio_detailed,
+                "create": create_backend,
+                "update": replace_backend,
+                "delete": delete_backend,
                 "id_field": "name",
             },
             ConfigSectionType.FRONTEND: {
-                "create": create_frontend.asyncio_detailed,
-                "update": replace_frontend.asyncio_detailed,
-                "delete": delete_frontend.asyncio_detailed,
+                "create": create_frontend,
+                "update": replace_frontend,
+                "delete": delete_frontend,
                 "id_field": "name",
             },
             ConfigSectionType.GLOBAL: {
                 "create": None,  # Global cannot be created
-                "update": replace_global.asyncio_detailed,
+                "update": replace_global,
                 "delete": None,  # Global cannot be deleted
                 "id_field": None,
             },
             ConfigSectionType.DEFAULTS: {
                 "create": None,  # Use replace to create/update defaults
-                "update": replace_defaults_section.asyncio_detailed,
+                "update": replace_defaults_section,
                 "delete": None,  # Defaults cannot be deleted
                 "id_field": "name",
             },
             ConfigSectionType.USERLIST: {
-                "create": create_userlist.asyncio_detailed,
+                "create": create_userlist,
                 "update": None,  # No replace API - will use delete+create pattern
-                "delete": delete_userlist.asyncio_detailed,
+                "delete": delete_userlist,
                 "id_field": "name",
             },
             ConfigSectionType.CACHE: {
-                "create": create_cache.asyncio_detailed,
-                "update": replace_cache.asyncio_detailed,
-                "delete": delete_cache.asyncio_detailed,
+                "create": create_cache,
+                "update": replace_cache,
+                "delete": delete_cache,
                 "id_field": "name",
             },
             ConfigSectionType.MAILERS: {
-                "create": create_mailers_section.asyncio_detailed,
-                "update": edit_mailers_section.asyncio_detailed,
-                "delete": delete_mailers_section.asyncio_detailed,
+                "create": create_mailers_section,
+                "update": edit_mailers_section,
+                "delete": delete_mailers_section,
                 "id_field": "name",
             },
             ConfigSectionType.RESOLVER: {
-                "create": create_resolver.asyncio_detailed,
-                "update": replace_resolver.asyncio_detailed,
-                "delete": delete_resolver.asyncio_detailed,
+                "create": create_resolver,
+                "update": replace_resolver,
+                "delete": delete_resolver,
                 "id_field": "name",
             },
             ConfigSectionType.PEER: {
-                "create": create_peer.asyncio_detailed,
+                "create": create_peer,
                 "update": None,  # No replace API - will use delete+create pattern
-                "delete": delete_peer.asyncio_detailed,
+                "delete": delete_peer,
                 "id_field": "name",
             },
             ConfigSectionType.FCGI_APP: {
-                "create": create_fcgi_app.asyncio_detailed,
-                "update": replace_fcgi_app.asyncio_detailed,
-                "delete": delete_fcgi_app.asyncio_detailed,
+                "create": create_fcgi_app,
+                "update": replace_fcgi_app,
+                "delete": delete_fcgi_app,
                 "id_field": "name",
             },
             ConfigSectionType.HTTP_ERRORS: {
-                "create": create_http_errors_section.asyncio_detailed,
-                "update": replace_http_errors_section.asyncio_detailed,
-                "delete": delete_http_errors_section.asyncio_detailed,
+                "create": create_http_errors_section,
+                "update": replace_http_errors_section,
+                "delete": delete_http_errors_section,
                 "id_field": "name",
             },
             ConfigSectionType.RING: {
-                "create": create_ring.asyncio_detailed,
-                "update": replace_ring.asyncio_detailed,
-                "delete": delete_ring.asyncio_detailed,
+                "create": create_ring,
+                "update": replace_ring,
+                "delete": delete_ring,
                 "id_field": "name",
             },
             ConfigSectionType.LOG_FORWARD: {
-                "create": create_log_forward.asyncio_detailed,
-                "update": replace_log_forward.asyncio_detailed,
-                "delete": delete_log_forward.asyncio_detailed,
+                "create": create_log_forward,
+                "update": replace_log_forward,
+                "delete": delete_log_forward,
                 "id_field": "name",
             },
             ConfigSectionType.PROGRAM: {
-                "create": create_program.asyncio_detailed,
-                "update": replace_program.asyncio_detailed,
-                "delete": delete_program.asyncio_detailed,
+                "create": create_program,
+                "update": replace_program,
+                "delete": delete_program,
                 "id_field": "name",
             },
         }
@@ -749,9 +788,9 @@ class ConfigAPI:
 
         # Use transaction_id if provided, otherwise use version
         if transaction_id:
-            base_params = {"client": client, "transaction_id": transaction_id}
+            base_params = {"endpoint": self.endpoint, "transaction_id": transaction_id}
         else:
-            base_params = {"client": client, "version": version}
+            base_params = {"endpoint": self.endpoint, "version": version}
 
         if change.change_type == ConfigChangeType.CREATE:
             if not handler_config["create"]:
@@ -812,9 +851,9 @@ class ConfigAPI:
             else:
                 params = {**base_params, "body": change.new_config}
                 if handler_config["id_field"] == "name":
-                    # For APIs that expect name as positional argument (backends, frontends, defaults)
+                    # For APIs that expect name as keyword argument to avoid @api_function conflicts
                     reload_info = await self._call_api_with_reload_info(
-                        handler_config["update"], change.section_name, **params
+                        handler_config["update"], name=change.section_name, **params
                     )
                 elif handler_config["id_field"]:
                     # For other APIs that expect the id as keyword argument
@@ -837,9 +876,9 @@ class ConfigAPI:
                 )
             params = {**base_params}
             if handler_config["id_field"] == "name":
-                # For APIs that expect name as positional argument (backends, frontends, defaults)
+                # For APIs that expect name as keyword argument to avoid @api_function conflicts
                 reload_info = await self._call_api_with_reload_info(
-                    handler_config["delete"], change.section_name, **params
+                    handler_config["delete"], name=change.section_name, **params
                 )
             elif handler_config["id_field"]:
                 # For other APIs that expect the id as keyword argument
@@ -858,10 +897,9 @@ class ConfigAPI:
 
     async def _apply_nested_element_change(
         self,
-        client: Any,
         change: ConfigChange,
         version: int,
-        transaction_id: Optional[str] = None,
+        transaction_id: str | None = None,
     ) -> ReloadInfo:
         """Apply a nested element configuration change.
 
@@ -869,91 +907,91 @@ class ConfigAPI:
             ReloadInfo indicating if a reload was triggered
         """
         # Configuration for nested elements
-        element_handlers: Dict[
-            Tuple[ConfigSectionType, ConfigElementType], ElementHandlerConfig
+        element_handlers: dict[
+            tuple[ConfigSectionType, ConfigElementType], ElementHandlerConfig
         ] = {
             (ConfigSectionType.BACKEND, ConfigElementType.SERVER): {
-                "create": create_server_backend.asyncio,
-                "update": replace_server_backend.asyncio,
-                "delete": delete_server_backend.asyncio,
-                "parent_field": "backend",
+                "create": create_server_backend,
+                "update": replace_server_backend,
+                "delete": delete_server_backend,
+                "parent_field": "parent_name",
                 "id_field": "name",
             },
             (ConfigSectionType.BACKEND, ConfigElementType.ACL): {
-                "create": create_acl_backend.asyncio,
-                "update": replace_acl_backend.asyncio,
-                "delete": delete_acl_backend.asyncio,
-                "parent_field": "backend",
+                "create": create_acl_backend,
+                "update": replace_acl_backend,
+                "delete": delete_acl_backend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.BACKEND, ConfigElementType.HTTP_REQUEST_RULE): {
-                "create": create_http_request_rule_backend.asyncio,
-                "update": replace_http_request_rule_backend.asyncio,
-                "delete": delete_http_request_rule_backend.asyncio,
-                "parent_field": "backend",
+                "create": create_http_request_rule_backend,
+                "update": replace_http_request_rule_backend,
+                "delete": delete_http_request_rule_backend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.BACKEND, ConfigElementType.HTTP_RESPONSE_RULE): {
-                "create": create_http_response_rule_backend.asyncio,
-                "update": replace_http_response_rule_backend.asyncio,
-                "delete": delete_http_response_rule_backend.asyncio,
-                "parent_field": "backend",
+                "create": create_http_response_rule_backend,
+                "update": replace_http_response_rule_backend,
+                "delete": delete_http_response_rule_backend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.BACKEND, ConfigElementType.FILTER): {
-                "create": create_filter_backend.asyncio,
-                "update": replace_filter_backend.asyncio,
-                "delete": delete_filter_backend.asyncio,
-                "parent_field": "backend",
+                "create": create_filter_backend,
+                "update": replace_filter_backend,
+                "delete": delete_filter_backend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.BACKEND, ConfigElementType.LOG_TARGET): {
-                "create": create_log_target_backend.asyncio,
-                "update": replace_log_target_backend.asyncio,
-                "delete": delete_log_target_backend.asyncio,
-                "parent_field": "backend",
+                "create": create_log_target_backend,
+                "update": replace_log_target_backend,
+                "delete": delete_log_target_backend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.FRONTEND, ConfigElementType.BIND): {
-                "create": create_bind_frontend.asyncio,
-                "update": replace_bind_frontend.asyncio,
-                "delete": delete_bind_frontend.asyncio,
-                "parent_field": "frontend",
+                "create": create_bind_frontend,
+                "update": replace_bind_frontend,
+                "delete": delete_bind_frontend,
+                "parent_field": "parent_name",
                 "id_field": "name",
             },
             (ConfigSectionType.FRONTEND, ConfigElementType.ACL): {
-                "create": create_acl_frontend.asyncio,
-                "update": replace_acl_frontend.asyncio,
-                "delete": delete_acl_frontend.asyncio,
-                "parent_field": "frontend",
+                "create": create_acl_frontend,
+                "update": replace_acl_frontend,
+                "delete": delete_acl_frontend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.FRONTEND, ConfigElementType.HTTP_REQUEST_RULE): {
-                "create": create_http_request_rule_frontend.asyncio,
-                "update": replace_http_request_rule_frontend.asyncio,
-                "delete": delete_http_request_rule_frontend.asyncio,
-                "parent_field": "frontend",
+                "create": create_http_request_rule_frontend,
+                "update": replace_http_request_rule_frontend,
+                "delete": delete_http_request_rule_frontend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.FRONTEND, ConfigElementType.HTTP_RESPONSE_RULE): {
-                "create": create_http_response_rule_frontend.asyncio,
-                "update": replace_http_response_rule_frontend.asyncio,
-                "delete": delete_http_response_rule_frontend.asyncio,
-                "parent_field": "frontend",
+                "create": create_http_response_rule_frontend,
+                "update": replace_http_response_rule_frontend,
+                "delete": delete_http_response_rule_frontend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.FRONTEND, ConfigElementType.FILTER): {
-                "create": create_filter_frontend.asyncio,
-                "update": replace_filter_frontend.asyncio,
-                "delete": delete_filter_frontend.asyncio,
-                "parent_field": "frontend",
+                "create": create_filter_frontend,
+                "update": replace_filter_frontend,
+                "delete": delete_filter_frontend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
             (ConfigSectionType.FRONTEND, ConfigElementType.LOG_TARGET): {
-                "create": create_log_target_frontend.asyncio,
-                "update": replace_log_target_frontend.asyncio,
-                "delete": delete_log_target_frontend.asyncio,
-                "parent_field": "frontend",
+                "create": create_log_target_frontend,
+                "update": replace_log_target_frontend,
+                "delete": delete_log_target_frontend,
+                "parent_field": "parent_name",
                 "id_field": "index",
             },
         }
@@ -973,13 +1011,13 @@ class ConfigAPI:
         # Use transaction_id if provided, otherwise use version
         if transaction_id:
             base_params = {
-                "client": client,
+                "endpoint": self.endpoint,
                 "transaction_id": transaction_id,
                 handler_config["parent_field"]: change.section_name,
             }
         else:
             base_params = {
-                "client": client,
+                "endpoint": self.endpoint,
                 "version": version,
                 handler_config["parent_field"]: change.section_name,
             }
@@ -999,20 +1037,20 @@ class ConfigAPI:
                         endpoint=self.endpoint,
                         operation="apply_nested_element_change",
                     )
-                # Pass parent_name and index as positional, other params as keyword
+                # Pass all parameters as keyword arguments to avoid conflicts with @api_function decorator
                 if transaction_id:
                     await handler_config["create"](
-                        parent_name,
-                        element_index,
-                        client=client,
+                        parent_name=parent_name,
+                        index=element_index,
+                        endpoint=self.endpoint,
                         body=change.new_config,
                         transaction_id=transaction_id,
                     )
                 else:
                     await handler_config["create"](
-                        parent_name,
-                        element_index,
-                        client=client,
+                        parent_name=parent_name,
+                        index=element_index,
+                        endpoint=self.endpoint,
                         body=change.new_config,
                         version=version,
                     )
@@ -1024,11 +1062,11 @@ class ConfigAPI:
             params = {**base_params, "body": change.new_config}
             element_id = change.element_id or change.element_index
             if element_id is not None and handler_config["id_field"] == "index":
-                # For APIs that expect index as positional argument
+                # For APIs that expect index as keyword argument to avoid @api_function conflicts
                 parent_name = change.section_name
                 await handler_config["update"](
-                    parent_name,
-                    element_id,
+                    parent_name=parent_name,
+                    index=element_id,
                     **{
                         k: v
                         for k, v in params.items()
@@ -1046,11 +1084,11 @@ class ConfigAPI:
             params = {**base_params}
             element_id = change.element_id or change.element_index
             if element_id is not None and handler_config["id_field"] == "index":
-                # For APIs that expect index as positional argument
+                # For APIs that expect index as keyword argument to avoid @api_function conflicts
                 parent_name = change.section_name
                 await handler_config["delete"](
-                    parent_name,
-                    element_id,
+                    parent_name=parent_name,
+                    index=element_id,
                     **{
                         k: v
                         for k, v in params.items()

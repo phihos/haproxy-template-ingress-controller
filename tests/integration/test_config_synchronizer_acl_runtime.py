@@ -122,30 +122,94 @@ async def test_acl_runtime_operations_no_reload(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_acl_file_creation_and_removal(
+async def test_acl_validation_error_bubbles_up(
     docker_compose_dataplane,
     config_synchronizer,
     haproxy_config_with_acl,
     haproxy_context_factory,
 ):
-    """Test ACL file creation and removal via ConfigSynchronizer.
+    """Test that validation errors bubble up correctly when ACL files are missing.
 
-    This test verifies:
-    1. ACL files can be created from scratch
-    2. ACL files can be removed completely
-    3. File operations work correctly via runtime API
+    This test verifies that ConfigSynchronizer properly raises ValidationError
+    when HAProxy config references ACL files that don't exist.
+    """
+    from haproxy_template_ic.dataplane.types import ValidationError
+
+    # Deploy config that references ACL files but provides none
+    invalid_context = haproxy_context_factory(
+        config_content=haproxy_config_with_acl,  # References /etc/haproxy/general/blocked.acl
+        acl_files={},  # But provides no ACL files
+    )
+
+    # This should raise ValidationError because config references missing ACL file
+    with pytest.raises(ValidationError) as exc_info:
+        await config_synchronizer.sync_configuration(invalid_context)
+
+    # Verify error message mentions the missing ACL file
+    error_message = str(exc_info.value)
+    assert "blocked.acl" in error_message
+    assert "failed to open pattern file" in error_message
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_acl_deployment_basic(
+    docker_compose_dataplane,
+    config_synchronizer,
+    haproxy_config_with_acl,
+    haproxy_context_factory,
+):
+    """Test basic ACL deployment - verify file creation AND config references.
+
+    This simple test verifies that when we deploy a config with ACL references:
+    1. ACL file gets created with correct content
+    2. HAProxy config contains the ACL declarations and HTTP request rules
     """
     ports, compose_manager = docker_compose_dataplane
 
-    # Step 1: Deploy config without ACL files initially
-    initial_context = haproxy_context_factory(
+    # Deploy config with ACL file
+    context = haproxy_context_factory(
         config_content=haproxy_config_with_acl,
-        acl_files={},  # No ACL files initially
+        acl_files={"blocked.acl": "192.168.1.100\n10.0.0.50\n"},
     )
 
-    await config_synchronizer.sync_configuration(initial_context)
+    result = await config_synchronizer.sync_configuration(context)
+    assert "success" in str(result).lower() or "completed" in str(result).lower()
 
-    # Step 2: Deploy config with ACL file
+    # Verify ACL file was created with correct content
+    acl_content = await read_container_file(
+        compose_manager, "production-haproxy", "/etc/haproxy/general/blocked.acl"
+    )
+    assert "192.168.1.100" in acl_content
+    assert "10.0.0.50" in acl_content
+
+    # Verify config contains ACL references (THIS WILL FAIL due to missing _SECTION_ELEMENTS)
+    config_content = await read_container_file(
+        compose_manager, "production-haproxy", "/etc/haproxy/haproxy.cfg"
+    )
+    assert "acl blocked_ips src -f /etc/haproxy/general/blocked.acl" in config_content
+    assert "http-request deny if blocked_ips" in config_content
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_acl_file_creation_and_removal(
+    docker_compose_dataplane,
+    config_synchronizer,
+    haproxy_config_with_acl,
+    haproxy_config_clean,
+    haproxy_context_factory,
+):
+    """Test ACL file creation and removal via ConfigSynchronizer.
+
+    This test verifies:
+    1. ACL files can be created alongside configs that reference them
+    2. ACL files can be removed by switching to configs that don't reference them
+    3. File operations work correctly via ConfigSynchronizer
+    """
+    ports, compose_manager = docker_compose_dataplane
+
+    # Step 1: Deploy config with ACL file (valid case)
     with_acl_context = haproxy_context_factory(
         config_content=haproxy_config_with_acl,
         acl_files={"blocked.acl": "192.168.1.100\n10.0.0.50\n"},
@@ -161,13 +225,14 @@ async def test_acl_file_creation_and_removal(
     assert "192.168.1.100" in acl_content
     assert "10.0.0.50" in acl_content
 
-    # Step 3: Remove ACL file by deploying empty ACL list
-    no_acl_context = haproxy_context_factory(
-        config_content=haproxy_config_with_acl,
-        acl_files={},  # No ACL files - should remove existing
+    # Step 2: Remove ACL file by deploying clean config (no ACL references)
+    clean_context = haproxy_context_factory(
+        config_content=haproxy_config_clean,  # Config without ACL references
+        acl_files={},  # No ACL files needed since config doesn't reference them
     )
 
-    await config_synchronizer.sync_configuration(no_acl_context)
+    result2 = await config_synchronizer.sync_configuration(clean_context)
+    assert "success" in str(result2).lower() or "completed" in str(result2).lower()
 
     # Verify ACL file was removed or cleared
     try:

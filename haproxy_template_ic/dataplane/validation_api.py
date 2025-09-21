@@ -6,39 +6,32 @@ for HAProxy configuration changes.
 """
 
 import structlog
-from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, Dict, Optional, TYPE_CHECKING
-
-from haproxy_dataplane_v3 import AuthenticatedClient
+from typing import Any
 
 from haproxy_template_ic.core.logging import autolog
-
-if TYPE_CHECKING:
-    from .endpoint import DataplaneEndpoint
-
-# Configuration and transaction APIs
-from haproxy_dataplane_v3.api.configuration import (
-    get_ha_proxy_configuration,
-    post_ha_proxy_configuration,
-)
-from haproxy_dataplane_v3.api.information import get_info, get_haproxy_process_info
-
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import record_span_event, set_span_error
+from haproxy_dataplane_v3.models import Information
+
+from .adapter import (
+    get_configuration_version,
+    get_ha_proxy_configuration,
+    post_haproxy_configuration,
+    get_info,
+    get_haproxy_process_info,
+    APIResponse,
+)
+from .endpoint import DataplaneEndpoint
 from .types import (
     DataplaneAPIError,
     ValidationError,
     ValidationDeploymentResult,
-    ReloadInfo,
 )
 from .utils import (
     handle_dataplane_errors,
     parse_validation_error_details,
-    get_configuration_version,
     extract_exception_origin,
-    check_dataplane_response,
-    check_configuration_response,
 )
 
 __all__ = [
@@ -53,20 +46,17 @@ class ValidationAPI:
 
     def __init__(
         self,
-        get_client: Callable[[], AuthenticatedClient],
-        endpoint: "DataplaneEndpoint",
+        endpoint: DataplaneEndpoint,
     ):
         """Initialize validation API.
 
         Args:
-            get_client: Factory function that returns an authenticated client
             endpoint: Dataplane endpoint for error context
         """
-        self._get_client = get_client
         self.endpoint = endpoint
 
     @handle_dataplane_errors("get_version")
-    async def get_version(self) -> Dict[str, Any]:
+    async def get_version(self) -> dict[str, Any]:
         """Get HAProxy version and runtime information.
 
         Returns:
@@ -76,19 +66,18 @@ class ValidationAPI:
             DataplaneAPIError: If version retrieval fails
         """
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         with metrics.time_dataplane_api_operation("get_version"):
             try:
-                # Get both general info and HAProxy process info
-                info = check_dataplane_response(
-                    await get_info.asyncio(client=client), "get_info", self.endpoint
+                info_response: APIResponse[Information] = await get_info(
+                    endpoint=self.endpoint
                 )
-                process_info = check_dataplane_response(
-                    await get_haproxy_process_info.asyncio(client=client),
-                    "get_haproxy_process_info",
-                    self.endpoint,
+                process_info_response = await get_haproxy_process_info(
+                    endpoint=self.endpoint
                 )
+
+                info = info_response.content
+                process_info = process_info_response.content
 
                 result = {
                     "api_version": getattr(info, "api_version", "unknown"),
@@ -140,30 +129,21 @@ class ValidationAPI:
             config_content = config_content + "\n"
 
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         await logger.ainfo(f"Validating configuration ({len(config_content)} bytes)")
 
         with metrics.time_dataplane_api_operation("validate"):
             try:
                 # Validate only, don't apply (skip_reload=true)
-                response = await post_ha_proxy_configuration.asyncio_detailed(
-                    client=client,
+                response = await post_haproxy_configuration(
+                    endpoint=self.endpoint,
                     body=config_content,
                     skip_reload=True,
                     only_validate=True,
                 )
 
-                # Use specialized configuration error checking
-                check_configuration_response(
-                    response.parsed,
-                    "validate_configuration",
-                    self.endpoint,
-                    config_content,
-                )
-
-                # Extract reload information (should be empty for validation-only)
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                # Extract reload information from adapter response (should be empty for validation-only)
+                reload_info = response.reload_info
                 if reload_info.reload_triggered:
                     await logger.ainfo(
                         f"Unexpected reload triggered during validation: {reload_info.reload_id}"
@@ -176,11 +156,15 @@ class ValidationAPI:
                 )
                 await logger.ainfo("Configuration validation successful")
 
+            except (ValidationError, DataplaneAPIError):
+                # ValidationError/DataplaneAPIError from adapter already has proper details, re-raise it
+                metrics.record_dataplane_api_request("validate", "error")
+                raise
             except Exception as e:
                 metrics.record_dataplane_api_request("validate", "error")
                 set_span_error(e, "Configuration validation failed")
 
-                # Parse validation error details
+                # Parse validation error details for non-ValidationError exceptions
                 error_response = str(e)
                 validation_details, error_line, error_context = (
                     parse_validation_error_details(error_response, config_content)
@@ -225,36 +209,29 @@ class ValidationAPI:
             config_content = config_content + "\n"
 
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         await logger.ainfo(f"Deploying configuration ({len(config_content)} bytes)")
 
         with metrics.time_dataplane_api_operation("deploy"):
             try:
-                # Get current version before deployment
-                version = await get_configuration_version(client)
+                response = await get_configuration_version(endpoint=self.endpoint)
+                version = response.content
 
                 # Deploy with reload
                 # If version is None, fall back to version=1 as default
                 if version is None:
                     version = 1
 
-                response = await post_ha_proxy_configuration.asyncio_detailed(
-                    client=client,
+                # Deploy configuration - adapter handles error checking
+                response = await post_haproxy_configuration(
+                    endpoint=self.endpoint,
                     body=config_content,
                     skip_reload=False,
                     only_validate=False,
                     version=version,
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
-
-                # Use specialized configuration error checking
-                check_configuration_response(
-                    response.parsed,
-                    "deploy_configuration",
-                    self.endpoint,
-                    config_content,
-                )
+                # Extract reload info from adapter response
+                reload_info = response.reload_info
 
                 deployment_info = ValidationDeploymentResult(
                     size=len(config_content),
@@ -271,6 +248,10 @@ class ValidationAPI:
 
                 return deployment_info
 
+            except (ValidationError, DataplaneAPIError):
+                # ValidationError/DataplaneAPIError from adapter already has proper details, re-raise it
+                metrics.record_dataplane_api_request("deploy", "error")
+                raise
             except Exception as e:
                 metrics.record_dataplane_api_request("deploy", "error")
                 set_span_error(e, "Configuration deployment failed")
@@ -307,7 +288,7 @@ class ValidationAPI:
                     ) from e
 
     @handle_dataplane_errors("get_current_configuration")
-    async def get_current_configuration(self) -> Optional[str]:
+    async def get_current_configuration(self) -> str | None:
         """Get the current HAProxy configuration.
 
         Returns:
@@ -317,15 +298,13 @@ class ValidationAPI:
             DataplaneAPIError: If configuration retrieval fails
         """
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         with metrics.time_dataplane_api_operation("get_config"):
             try:
-                config = check_dataplane_response(
-                    await get_ha_proxy_configuration.asyncio(client=client),
-                    "get_ha_proxy_configuration",
-                    self.endpoint,
+                config_response = await get_ha_proxy_configuration(
+                    endpoint=self.endpoint
                 )
+                config = config_response.content
 
                 if config and hasattr(config, "data"):
                     config_content = config.data.decode("utf-8")

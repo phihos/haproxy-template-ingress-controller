@@ -13,6 +13,8 @@ Tests verify:
 5. Transaction commit reload detection works
 """
 
+import asyncio
+
 import pytest
 
 
@@ -151,6 +153,80 @@ backend servers
     )
     assert result2.reload_info.reload_id is None, (
         "Reload ID should be None when no reload triggered"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_server_weight_changes_no_reload(
+    docker_compose_dataplane, config_synchronizer, haproxy_context_factory
+):
+    """Test that server weight changes use runtime API (no reload).
+
+    This verifies that runtime-compatible server modifications (like weight changes)
+    use HAProxy's runtime API instead of triggering full reloads.
+    """
+    ports, compose_manager = docker_compose_dataplane
+
+    # Initial config with one server (no weight specified)
+    initial_config = """
+global
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend main
+    bind *:80
+    default_backend servers
+
+backend servers
+    balance roundrobin
+    server web1 192.168.1.100:8080 check
+    """
+
+    # Deploy initial config
+    initial_context = haproxy_context_factory(config_content=initial_config)
+    await config_synchronizer.sync_configuration(initial_context)
+
+    await asyncio.sleep(10)
+
+    # Config with modified server weight (same IP, runtime-compatible change)
+    modified_config = """
+global
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend main
+    bind *:80
+    default_backend servers
+
+backend servers
+    balance roundrobin
+    server web1 192.168.1.100:8080 check weight 150
+    """
+
+    # Deploy modified config
+    modified_context = haproxy_context_factory(config_content=modified_config)
+    result = await config_synchronizer.sync_configuration(modified_context)
+
+    # TDD Assertions - Runtime-compatible changes should not trigger reload
+    assert hasattr(result, "reload_info"), "Result should have reload_info attribute"
+
+    # Weight changes should use runtime API (no reload)
+    assert not result.reload_info.reload_triggered, (
+        "Server weight changes should use runtime API without reload"
+    )
+    assert result.reload_info.reload_id is None, (
+        "Reload ID should be None for runtime-only changes"
     )
 
 
@@ -408,10 +484,13 @@ backend new_backend
 
     if result.reload_info.reload_triggered:
         # Check that INFO-level log message was generated for reload
+        # Look for specific reload notification logs, not HTTP request logs
         reload_logs = [
             record
             for record in caplog.records
-            if record.levelname == "INFO" and "reload" in record.message.lower()
+            if record.levelname == "INFO"
+            and "reload triggered" in record.message.lower()
+            and "haproxy_template_ic.dataplane.synchronizer" in record.name
         ]
         assert len(reload_logs) > 0, "Reload should trigger INFO-level log message"
 

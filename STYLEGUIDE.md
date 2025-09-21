@@ -11,7 +11,7 @@
 ```bash
 uv run ruff format        # Auto-format
 uv run ruff check --fix   # Fix issues
-uv run mypy haproxy_template_ic/  # Type checking
+uv run ty check haproxy_template_ic/  # Type checking
 uv run bandit -c pyproject.toml -r haproxy_template_ic/  # Security scan
 ```
 
@@ -415,7 +415,7 @@ def deploy_configuration(pod: Pod) -> None:
 All must pass before PR merge:
 - `timeout 480 uv run pytest -n auto` (full test suite under 8 minutes)
 - `uv run ruff format` and `uv run ruff check --fix`
-- `uv run mypy haproxy_template_ic/`
+- `uv run ty check haproxy_template_ic/`
 - `uv run bandit -c pyproject.toml -r haproxy_template_ic/`
 - `uv run deptry .` (dependency hygiene)
 

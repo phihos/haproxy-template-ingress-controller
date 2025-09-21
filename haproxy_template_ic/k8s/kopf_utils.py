@@ -9,7 +9,7 @@ These utilities should only be used within IndexedResourceCollection.from_kopf_i
 import logging
 import unicodedata
 from collections import defaultdict
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Iterator
 
 from kopf._core.engines.indexing import OperatorIndices
 from pydantic import BaseModel, PrivateAttr
@@ -21,7 +21,7 @@ from .field_filter import remove_fields_from_resource
 logger = logging.getLogger(__name__)
 
 
-def convert_kopf_body_to_dict(body: Any) -> Dict[str, Any]:
+def convert_kopf_body_to_dict(body: Any) -> dict[str, Any]:
     """
     Convert a Kopf Body object to a regular dictionary.
 
@@ -46,8 +46,8 @@ def convert_kopf_body_to_dict(body: Any) -> Dict[str, Any]:
 
 
 def normalize_kopf_resource(
-    resource: Any, ignore_fields: List[str] | None = None
-) -> Dict[str, Any]:
+    resource: Any, ignore_fields: list[str] | None = None
+) -> dict[str, Any]:
     """
     Normalize a Kopf resource (Body object or dict) to a regular dictionary.
 
@@ -127,7 +127,7 @@ def is_valid_kubernetes_resource(resource_dict: Any) -> bool:
 def get_resource_collection_from_indices(
     indices: OperatorIndices,
     resource_id: str,
-    ignore_fields: List[str] | None = None,
+    ignore_fields: list[str] | None = None,
 ) -> "IndexedResourceCollection":
     """
     Get an IndexedResourceCollection from a memo object for a specific resource type.
@@ -153,14 +153,14 @@ def get_resource_collection_from_indices(
 class IndexedResourceCollection(BaseModel):
     """O(1) resource lookups by custom index keys."""
 
-    _internal_dict: Dict[Tuple[str, ...], List[Dict[str, Any]]] = PrivateAttr(
+    _internal_dict: dict[tuple[str, ...], list[dict[str, Any]]] = PrivateAttr(
         default_factory=lambda: defaultdict(list)
     )
     _max_size: int = PrivateAttr(default=10000)
 
     @classmethod
     def from_kopf_index(
-        cls, index: Any, ignore_fields: Optional[List[str]] = None
+        cls, index: Any, ignore_fields: list[str] | None = None
     ) -> "IndexedResourceCollection":
         """Create from kopf Index with automatic Body/Store object conversion.
 
@@ -210,15 +210,15 @@ class IndexedResourceCollection(BaseModel):
                 logger.warning(f"Error with key {key}: {e}")
         return collection
 
-    def get_indexed(self, *args: str) -> List[Dict[str, Any]]:
+    def get_indexed(self, *args: str) -> list[dict[str, Any]]:
         """Get resources by key."""
         key = self._normalize_key(*args)
         return self._internal_dict.get(key, [])
 
-    def get_indexed_iter(self, *args: str) -> Iterator[Dict[str, Any]]:
+    def get_indexed_iter(self, *args: str) -> Iterator[dict[str, Any]]:
         yield from self.get_indexed(*args)
 
-    def get_indexed_single(self, *args: str) -> Optional[Dict[str, Any]]:
+    def get_indexed_single(self, *args: str) -> dict[str, Any] | None:
         """Get single resource or raise if multiple found."""
         results = self.get_indexed(*args)
         if len(results) > 1:
@@ -247,12 +247,12 @@ class IndexedResourceCollection(BaseModel):
             raise ValueError(error_msg)
         return results[0] if results else None
 
-    def items(self) -> Iterator[Tuple[Tuple[str, ...], Dict[str, Any]]]:
+    def items(self) -> Iterator[tuple[tuple[str, ...], dict[str, Any]]]:
         for key, resources in self._internal_dict.items():
             for resource in resources:
                 yield (key, resource)
 
-    def values(self) -> Iterator[Dict[str, Any]]:
+    def values(self) -> Iterator[dict[str, Any]]:
         for resources in self._internal_dict.values():
             yield from resources
 
@@ -262,15 +262,15 @@ class IndexedResourceCollection(BaseModel):
     def __bool__(self) -> bool:
         return bool(self._internal_dict)
 
-    def __contains__(self, key: Tuple[str, ...]) -> bool:
+    def __contains__(self, key: tuple[str, ...]) -> bool:
         if isinstance(key, tuple):
             normalized_key = self._normalize_key(*key)
         return normalized_key in self._internal_dict
 
-    def keys(self) -> Iterator[Tuple[str, ...]]:
+    def keys(self) -> Iterator[tuple[str, ...]]:
         return iter(self._internal_dict.keys())
 
-    def _normalize_key(self, *args: Any) -> Tuple[str, ...]:
+    def _normalize_key(self, *args: Any) -> tuple[str, ...]:
         components = (
             args[0] if len(args) == 1 and isinstance(args[0], (tuple, list)) else args
         )

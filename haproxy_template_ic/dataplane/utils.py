@@ -10,14 +10,11 @@ import functools
 import logging
 import re
 import traceback
-from typing import TYPE_CHECKING, Any, Callable, Dict, List
+from typing import Any, Callable, TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
 
 import httpx
 from haproxy_dataplane_v3 import errors
-from haproxy_dataplane_v3.api.configuration import (
-    get_configuration_version as get_config_version_api,
-)
 
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import (
@@ -25,10 +22,8 @@ from haproxy_template_ic.tracing import (
     set_span_error,
 )
 
-from .types import DataplaneAPIError, ValidationError
-
 if TYPE_CHECKING:
-    from .endpoint import DataplaneEndpoint
+    from .types import DataplaneAPIError
 
 
 __all__ = [
@@ -38,12 +33,8 @@ __all__ = [
     "extract_config_context",
     "parse_validation_error_details",
     "handle_dataplane_errors",
-    "get_configuration_version",
-    "fetch_with_metrics",
     "natural_sort_key",
     "extract_exception_origin",
-    "check_dataplane_response",
-    "check_configuration_response",
 ]
 
 logger = logging.getLogger(__name__)
@@ -143,7 +134,7 @@ def normalize_dataplane_url(base_url: str) -> str:
 
     # Reconstruct the URL with normalized path
     try:
-        return urlunparse(
+        result = urlunparse(
             (
                 parsed.scheme,
                 parsed.netloc,
@@ -153,6 +144,7 @@ def normalize_dataplane_url(base_url: str) -> str:
                 parsed.fragment,
             )
         )
+        return str(result) if isinstance(result, bytes) else result
     except ValueError:
         # If reconstruction fails, use simple string concatenation
         if not base_url.endswith("/v3"):
@@ -289,7 +281,7 @@ def parse_validation_error_details(
     return validation_details, error_line, error_context
 
 
-def _to_dict_safe(obj: Any) -> Dict[str, Any] | Any:
+def _to_dict_safe(obj: Any) -> dict[str, Any] | Any:
     """Safely convert an object to dictionary, handling serialization errors gracefully."""
     try:
         return obj.to_dict() if hasattr(obj, "to_dict") else obj
@@ -301,7 +293,7 @@ def _to_dict_safe(obj: Any) -> Dict[str, Any] | Any:
         }
 
 
-def _check_early_exit_condition(changes: List[str], max_changes: int) -> bool:
+def _check_early_exit_condition(changes: list[str], max_changes: int) -> bool:
     """Check if early exit condition is met for comparison operations.
 
     Args:
@@ -328,210 +320,9 @@ def _log_fetch_error(resource_type: str, identifier: str, error: Exception) -> N
     logger.debug(f"Could not fetch {resource_type} {identifier}: {error}")
 
 
-def check_dataplane_response(
-    response: Any, operation: str, endpoint: "str | DataplaneEndpoint"
-) -> Any:
-    """Uniform error checking for all dataplane API responses.
-
-    This function provides consistent error detection across all dataplane modules
-    by checking if the response is an Error object from the generated client.
-
-    Args:
-        response: Response from any dataplane API call
-        operation: Operation name for context (e.g., "fetch_backends", "create_map")
-        endpoint: Endpoint URL or DataplaneEndpoint for error context
-
-    Returns:
-        The response if successful
-
-    Raises:
-        DataplaneAPIError: If response is an Error object with proper context
-
-    Example:
-        response = await get_backends.asyncio(client=client)
-        checked_response = check_dataplane_response(response, "fetch_backends", base_url)
-    """
-    # Import here to avoid circular dependencies
-    try:
-        from haproxy_dataplane_v3.models.error import Error
-    except ImportError:
-        # Fallback if import fails - assume response is valid
-        logger.warning("Could not import Error model from generated client")
-        return response
-
-    if isinstance(response, Error):
-        error_msg = f"{operation} failed"
-        if response.message:
-            error_msg += f": {response.message}"
-        if response.code:
-            error_msg += f" (HTTP {response.code})"
-
-        logger.warning(
-            f"Dataplane API error in {operation}: code={response.code}, message={response.message}"
-        )
-
-        raise DataplaneAPIError(
-            error_msg,
-            endpoint=endpoint,
-            operation=operation,
-            original_error=None,
-        )
-
-    return response
-
-
-def check_configuration_response(
-    response: Any,
-    operation: str,
-    endpoint: "str | DataplaneEndpoint",
-    config_content: str | None = None,
-) -> Any:
-    """Specialized error checking for configuration operations (validate/deploy).
-
-    This function handles both Error objects and string responses containing JSON error data.
-    It determines whether to raise ValidationError or DataplaneAPIError based on response content.
-
-    Args:
-        response: Response from configuration API call (Error object or string)
-        operation: Operation name for context (e.g., "validate_configuration", "deploy_configuration")
-        endpoint: Endpoint URL or DataplaneEndpoint for error context
-        config_content: Optional configuration content for context extraction
-
-    Returns:
-        The response if successful
-
-    Raises:
-        ValidationError: If response contains HAProxy validation errors
-        DataplaneAPIError: If response contains other API errors
-
-    Example:
-        response = await post_ha_proxy_configuration.asyncio(client=client, body=config)
-        checked_response = check_configuration_response(response, "deploy_configuration", base_url, config)
-    """
-    import json
-
-    # Import here to avoid circular dependencies
-    try:
-        from haproxy_dataplane_v3.models.error import Error
-    except ImportError:
-        # Fallback if import fails - assume response is valid
-        logger.warning("Could not import Error model from generated client")
-        return response
-
-    # First handle Error objects like regular check_dataplane_response
-    if isinstance(response, Error):
-        error_msg = f"{operation} failed"
-        if response.message:
-            error_msg += f": {response.message}"
-        if response.code:
-            error_msg += f" (HTTP {response.code})"
-
-        logger.warning(
-            f"Dataplane API error in {operation}: code={response.code}, message={response.message}"
-        )
-
-        raise DataplaneAPIError(
-            error_msg,
-            endpoint=endpoint,
-            operation=operation,
-            original_error=None,
-        )
-
-    # Handle string responses that may contain JSON error data
-    if isinstance(response, str):
-        try:
-            error_data = json.loads(response)
-            if isinstance(error_data, dict) and error_data.get("code", 0) >= 400:
-                message = error_data.get("message", "")
-
-                # Use existing utility to parse validation details
-                validation_details, error_line, error_context = (
-                    parse_validation_error_details(message, config_content)
-                )
-
-                # Decision logic: ValidationError vs DataplaneAPIError
-                if (
-                    "validation error" in message.lower()
-                    or "Fatal errors found in configuration" in message
-                    or error_line is not None
-                ):
-                    # This is a validation error
-                    raise ValidationError(
-                        f"Configuration validation failed: {validation_details}",
-                        endpoint=endpoint,
-                        config_size=len(config_content) if config_content else None,
-                        validation_details=validation_details,
-                        error_line=error_line,
-                        config_content=config_content,
-                        error_context=error_context,
-                    )
-                else:
-                    # This is a general API error
-                    raise DataplaneAPIError(
-                        f"{operation} failed: {message}",
-                        endpoint=endpoint,
-                        operation=operation,
-                    )
-        except (json.JSONDecodeError, KeyError):
-            # Not JSON or malformed - treat as normal response
-            pass
-
-    return response
-
-
-async def get_configuration_version(client: Any) -> int | None:
-    """Get the current HAProxy configuration version.
-
-    Args:
-        client: The dataplane API client
-
-    Returns:
-        Configuration version number or None if failed to fetch
-    """
-    result = await get_config_version_api.asyncio(client=client)
-    # Configuration version should be an int, return as-is or None if not
-    if result is not None and hasattr(result, "__int__"):
-        return int(result)
-    return None
-
-
-async def fetch_with_metrics(
-    operation_name: str,
-    fetch_func,
-    client: Any,
-    metrics,
-    default_value: Any | None = None,
-    endpoint: "str | DataplaneEndpoint | None" = None,
-) -> Any:
-    """Fetch configuration data with metrics timing and automatic error checking.
-
-    Args:
-        operation_name: Name for metrics tracking
-        fetch_func: Async function to call for fetching data
-        client: Dataplane API client
-        metrics: Metrics collector instance
-        default_value: Value to return if fetch_func returns None/empty
-        endpoint: Dataplane API base URL or DataplaneEndpoint for error context (enables error checking)
-
-    Returns:
-        Result from fetch_func or default_value if result is falsy
-
-    Raises:
-        DataplaneAPIError: If endpoint is provided and response is an Error object
-    """
-    with metrics.time_dataplane_api_operation(operation_name):
-        result = await fetch_func(client=client)
-
-        # Apply uniform error checking if endpoint provided
-        if endpoint:
-            result = check_dataplane_response(result, operation_name, endpoint)
-
-        return result or default_value
-
-
 def _handle_exception(
     exception: Exception, op_name: str, metrics, endpoint: str
-) -> DataplaneAPIError:
+) -> "DataplaneAPIError":
     """Handle exceptions consistently for dataplane operations.
 
     Args:
@@ -543,6 +334,8 @@ def _handle_exception(
     Returns:
         DataplaneAPIError with proper context and chaining
     """
+    from .types import DataplaneAPIError, ValidationError
+
     if isinstance(exception, (ValidationError, DataplaneAPIError)):
         # Re-raise these without wrapping
         raise exception

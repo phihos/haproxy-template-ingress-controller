@@ -99,8 +99,6 @@ async def handle_configmap_change(
 
     new_config = await load_config_from_configmap(event["object"])
 
-    # Check if configuration has actually changed
-    # Compare raw configuration dictionaries using DeepDiff
     diff = DeepDiff(memo.configuration.config.raw, new_config.raw, verbose_level=2)
 
     if not diff:

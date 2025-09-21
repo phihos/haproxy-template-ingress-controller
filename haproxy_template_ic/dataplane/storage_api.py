@@ -15,10 +15,8 @@ Key features:
 
 import io
 import logging
-from collections.abc import Callable
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
-from haproxy_dataplane_v3 import AuthenticatedClient
 from haproxy_dataplane_v3.models.create_storage_general_file_body import (
     CreateStorageGeneralFileBody,
 )
@@ -37,42 +35,40 @@ from haproxy_dataplane_v3.models.ssl_file import SSLFile
 from haproxy_dataplane_v3.types import UNSET, File
 
 from haproxy_template_ic.core.logging import autolog, log_resource_operation
-
-if TYPE_CHECKING:
-    from .endpoint import DataplaneEndpoint
-
-# Storage APIs
-from haproxy_dataplane_v3.api.storage import (
+from .endpoint import DataplaneEndpoint
+from .adapter import (
+    create_storage_general_file,
     create_storage_map_file,
     create_storage_ssl_certificate,
-    create_storage_general_file,
+    delete_storage_general_file,
     delete_storage_map,
     delete_storage_ssl_certificate,
-    delete_storage_general_file,
+    get_all_storage_general_files,
     get_all_storage_map_files,
     get_all_storage_ssl_certificates,
-    get_all_storage_general_files,
+    get_one_storage_general_file,
     get_one_storage_map,
     get_one_storage_ssl_certificate,
-    get_one_storage_general_file,
+    replace_storage_general_file,
     replace_storage_map_file,
     replace_storage_ssl_certificate,
-    replace_storage_general_file,
+    ReloadInfo,
 )
 
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import record_span_event, set_span_error
+
 from .types import (
     CreateOperationResult,
     DataplaneAPIError,
     DeleteOperationResult,
+    StorageOperationResult,
     UpdateOperationResult,
     compute_content_hash,
     extract_hash_from_description,
-    ReloadInfo,
-    StorageOperationResult,
 )
-from .utils import handle_dataplane_errors, _log_fetch_error, check_dataplane_response
+from .utils import _log_fetch_error, handle_dataplane_errors
+from .runtime_api import RuntimeAPI
 
 __all__ = [
     "StorageAPI",
@@ -91,21 +87,15 @@ class StorageAPI:
 
     def __init__(
         self,
-        get_client: Callable[[], AuthenticatedClient],
-        endpoint: "DataplaneEndpoint",
+        endpoint: DataplaneEndpoint,
     ):
         """Initialize storage API.
 
         Args:
-            get_client: Factory function that returns an authenticated client
             endpoint: Dataplane endpoint for error context
         """
-        self._get_client = get_client
         self.endpoint = endpoint
-        # Add runtime API access for optimized updates
-        from .runtime_api import RuntimeAPI
-
-        self.runtime_api = RuntimeAPI(get_client, endpoint)
+        self.runtime_api = RuntimeAPI(endpoint)
 
     def _extract_storage_content(self, storage_item) -> str | None:
         """Extract content from HAProxy storage API response.
@@ -128,11 +118,16 @@ class StorageAPI:
 
     @handle_dataplane_errors("sync_maps")
     @autolog()
-    async def sync_maps(self, maps: dict[str, str]) -> StorageOperationResult:
+    async def sync_maps(
+        self,
+        maps: dict[str, str],
+        operations: set[str] = {"create", "update", "delete"},
+    ) -> StorageOperationResult:
         """Synchronize map files with HAProxy storage.
 
         Args:
             maps: Dictionary mapping map names to their content
+            operations: Set of operations to perform ("create", "update", "delete")
 
         Returns:
             StorageOperationResult containing operation status and reload information
@@ -148,19 +143,14 @@ class StorageAPI:
             )
 
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         logger.info(f"Synchronizing {len(maps)} map files")
 
-        # Get existing maps for comparison
         try:
-            raw_response = await get_all_storage_map_files.asyncio(client=client)
-            existing_maps = (
-                check_dataplane_response(
-                    raw_response, "get_all_storage_map_files", self.endpoint
-                )
-                or []
+            existing_maps_response = await get_all_storage_map_files(
+                endpoint=self.endpoint
             )
+            existing_maps = existing_maps_response.content
             existing_map_names = {
                 m.storage_name for m in existing_maps if m.storage_name
             }
@@ -175,42 +165,48 @@ class StorageAPI:
 
         reload_infos = []
 
-        for map_name in maps_to_create:
-            create_result = await self._create_map(
-                client, map_name, maps[map_name], metrics
-            )
-            reload_infos.append(create_result.reload_info)
+        actual_maps_created = 0
+        if "create" in operations:
+            for map_name in maps_to_create:
+                create_result = await self._create_map(
+                    map_name, maps[map_name], metrics
+                )
+                reload_infos.append(create_result.reload_info)
+                actual_maps_created += 1
 
         actual_maps_updated = 0
-        for map_name in maps_to_update:
-            existing_map = next(
-                (m for m in existing_maps if m.storage_name == map_name), None
-            )
-            if existing_map is None:
-                raise RuntimeError(f"Map {map_name} should exist in existing_maps")
+        if "update" in operations:
+            for map_name in maps_to_update:
+                existing_map = next(
+                    (m for m in existing_maps if m.storage_name == map_name), None
+                )
+                if existing_map is None:
+                    raise RuntimeError(f"Map {map_name} should exist in existing_maps")
 
-            # TODO: Implement runtime API update optimization later
-            # For now, use storage API to ensure files exist before validation
-            update_result = await self._update_map_if_changed(
-                client, map_name, maps[map_name], existing_map, metrics
-            )
+                # Use storage API to ensure files exist before validation
+                update_result = await self._update_map_if_changed(
+                    map_name, maps[map_name], existing_map, metrics
+                )
 
-            reload_infos.append(update_result.reload_info)
-            if update_result.content_changed:
-                actual_maps_updated += 1
+                reload_infos.append(update_result.reload_info)
+                if update_result.content_changed:
+                    actual_maps_updated += 1
 
-        for map_name in maps_to_delete:
-            delete_result = await self._delete_map(client, map_name, metrics)
-            reload_infos.append(delete_result.reload_info)
+        actual_maps_deleted = 0
+        if "delete" in operations:
+            for map_name in maps_to_delete:
+                delete_result = await self._delete_map(map_name, metrics)
+                reload_infos.append(delete_result.reload_info)
+                actual_maps_deleted += 1
 
         logger.info(
-            f"Map sync complete: {len(maps_to_create)} created, "
-            f"{actual_maps_updated} updated, {len(maps_to_delete)} deleted"
+            f"Map sync complete: {actual_maps_created} created, "
+            f"{actual_maps_updated} updated, {actual_maps_deleted} deleted"
         )
 
-        has_creates = len(maps_to_create) > 0
+        has_creates = actual_maps_created > 0
         has_updates = actual_maps_updated > 0
-        has_deletes = len(maps_to_delete) > 0
+        has_deletes = actual_maps_deleted > 0
         operations_performed = has_creates or has_updates or has_deletes
 
         combined_reload_info = ReloadInfo.combine(*reload_infos)
@@ -223,12 +219,15 @@ class StorageAPI:
     @handle_dataplane_errors("sync_certificates")
     @autolog()
     async def sync_certificates(
-        self, certificates: dict[str, str]
+        self,
+        certificates: dict[str, str],
+        operations: set[str] = {"create", "update", "delete"},
     ) -> StorageOperationResult:
         """Synchronize SSL certificates with HAProxy storage.
 
         Args:
             certificates: Dictionary mapping certificate names to their content
+            operations: Set of operations to perform ("create", "update", "delete")
 
         Returns:
             StorageOperationResult containing operation status and reload information
@@ -244,19 +243,14 @@ class StorageAPI:
             )
 
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         logger.info(f"Synchronizing {len(certificates)} SSL certificates")
 
-        # Get existing certificates for comparison
         try:
-            raw_response = await get_all_storage_ssl_certificates.asyncio(client=client)
-            existing_certs = (
-                check_dataplane_response(
-                    raw_response, "get_all_storage_ssl_certificates", self.endpoint
-                )
-                or []
+            existing_certs_response = await get_all_storage_ssl_certificates(
+                endpoint=self.endpoint
             )
+            existing_certs = existing_certs_response.content
             existing_cert_names = {
                 c.storage_name for c in existing_certs if c.storage_name
             }
@@ -271,41 +265,48 @@ class StorageAPI:
 
         reload_infos = []
 
-        for cert_name in certs_to_create:
-            create_result = await self._create_certificate(
-                client, cert_name, certificates[cert_name], metrics
-            )
-            reload_infos.append(create_result.reload_info)
+        actual_certs_created = 0
+        if "create" in operations:
+            for cert_name in certs_to_create:
+                create_result = await self._create_certificate(
+                    cert_name, certificates[cert_name], metrics
+                )
+                reload_infos.append(create_result.reload_info)
+                actual_certs_created += 1
 
         actual_certs_updated = 0
-        for cert_name in certs_to_update:
-            existing_cert = next(
-                (c for c in existing_certs if c.storage_name == cert_name), None
-            )
-            if existing_cert is None:
-                raise RuntimeError(
-                    f"Certificate {cert_name} should exist in existing_certs"
+        if "update" in operations:
+            for cert_name in certs_to_update:
+                existing_cert = next(
+                    (c for c in existing_certs if c.storage_name == cert_name), None
                 )
-            update_result = await self._update_certificate_if_changed(
-                client, cert_name, certificates[cert_name], existing_cert, metrics
-            )
-            reload_infos.append(update_result.reload_info)
-            if update_result.content_changed:
-                actual_certs_updated += 1
+                if existing_cert is None:
+                    raise RuntimeError(
+                        f"Certificate {cert_name} should exist in existing_certs"
+                    )
+                update_result = await self._update_certificate_if_changed(
+                    cert_name, certificates[cert_name], existing_cert, metrics
+                )
+                reload_infos.append(update_result.reload_info)
+                if update_result.content_changed:
+                    actual_certs_updated += 1
 
-        for cert_name in certs_to_delete:
-            delete_result = await self._delete_certificate(client, cert_name, metrics)
-            reload_infos.append(delete_result.reload_info)
+        actual_certs_deleted = 0
+        if "delete" in operations:
+            for cert_name in certs_to_delete:
+                delete_result = await self._delete_certificate(cert_name, metrics)
+                reload_infos.append(delete_result.reload_info)
+                actual_certs_deleted += 1
 
         logger.info(
-            f"Certificate sync complete: {len(certs_to_create)} created, "
-            f"{actual_certs_updated} updated, {len(certs_to_delete)} deleted"
+            f"Certificate sync complete: {actual_certs_created} created, "
+            f"{actual_certs_updated} updated, {actual_certs_deleted} deleted"
         )
 
         operations_performed = (
-            len(certs_to_create) > 0
+            actual_certs_created > 0
             or actual_certs_updated > 0
-            or len(certs_to_delete) > 0
+            or actual_certs_deleted > 0
         )
 
         combined_reload_info = ReloadInfo.combine(*reload_infos)
@@ -316,7 +317,7 @@ class StorageAPI:
         )
 
     async def _create_map(
-        self, client: Any, map_name: str, content: str, metrics: Any
+        self, map_name: str, content: str, metrics: Any
     ) -> CreateOperationResult:
         """Create a new map file."""
         with metrics.time_dataplane_api_operation("create_map"):
@@ -331,11 +332,10 @@ class StorageAPI:
                 body = CreateStorageMapFileBody(file_upload=file_obj)
                 body["description"] = content_hash
 
-                response = await create_storage_map_file.asyncio_detailed(
-                    client=client,
-                    body=body,
+                response = await create_storage_map_file(
+                    endpoint=self.endpoint, body=body
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "map_created",
@@ -368,10 +368,9 @@ class StorageAPI:
 
     async def _update_map_if_changed(
         self,
-        client: Any,
         map_name: str,
         content: str,
-        existing_map: "MapFile",
+        existing_map: MapFile,
         metrics: Any,
     ) -> UpdateOperationResult:
         """Update map if content has changed.
@@ -394,9 +393,10 @@ class StorageAPI:
             # Fallback to direct content comparison if no hash available
             if current_hash is None:
                 try:
-                    existing_resource = await get_one_storage_map.asyncio(
-                        client=client, name=map_name
+                    existing_resource_response = await get_one_storage_map(
+                        endpoint=self.endpoint, name=map_name
                     )
+                    existing_resource = existing_resource_response.content
                     existing_content = self._extract_storage_content(existing_resource)
 
                     if existing_content == content:
@@ -414,12 +414,12 @@ class StorageAPI:
 
             # Content changed, update the map
             with metrics.time_dataplane_api_operation("update_map"):
-                response = await replace_storage_map_file.asyncio_detailed(
+                response = await replace_storage_map_file(
                     name=map_name,
-                    client=client,
+                    endpoint=self.endpoint,
                     body=content,
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "map_updated",
@@ -453,7 +453,7 @@ class StorageAPI:
             ) from e
 
     async def _update_map_skip_reload(
-        self, client: Any, map_name: str, content: str, metrics: Any
+        self, map_name: str, content: str, metrics: Any
     ) -> UpdateOperationResult:
         """Update map file storage without triggering reload (runtime API succeeded)."""
         with metrics.time_dataplane_api_operation("update_map_skip_reload"):
@@ -469,15 +469,10 @@ class StorageAPI:
                 body["description"] = content_hash
 
                 # Update storage but skip reload since runtime API already applied changes
-                response = await replace_storage_map_file.asyncio_detailed(
-                    name=map_name,
-                    client=client,
-                    body=body,
-                    skip_reload=True,  # Key parameter to avoid reload
+                response = await replace_storage_map_file(
+                    endpoint=self.endpoint, name=map_name, body=body
                 )
-
-                # Process response to extract reload info (should be empty due to skip_reload)
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "map_updated_skip_reload",
@@ -513,16 +508,14 @@ class StorageAPI:
                     original_error=e,
                 ) from e
 
-    async def _delete_map(
-        self, client: Any, map_name: str, metrics: Any
-    ) -> DeleteOperationResult:
+    async def _delete_map(self, map_name: str, metrics: Any) -> DeleteOperationResult:
         """Delete a map file."""
         with metrics.time_dataplane_api_operation("delete_map"):
             try:
-                response = await delete_storage_map.asyncio_detailed(
-                    client=client, name=map_name
+                response = await delete_storage_map(
+                    endpoint=self.endpoint, name=map_name
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event("map_deleted", {"name": map_name})
                 metrics.record_dataplane_api_request("delete_map", "success")
@@ -546,7 +539,7 @@ class StorageAPI:
                 ) from e
 
     async def _create_certificate(
-        self, client: Any, cert_name: str, content: str, metrics: Any
+        self, cert_name: str, content: str, metrics: Any
     ) -> CreateOperationResult:
         """Create a new SSL certificate."""
         with metrics.time_dataplane_api_operation("create_certificate"):
@@ -561,11 +554,10 @@ class StorageAPI:
                 body = CreateStorageSSLCertificateBody(file_upload=file_obj)
                 body["description"] = content_hash
 
-                response = await create_storage_ssl_certificate.asyncio_detailed(
-                    client=client,
-                    body=body,
+                response = await create_storage_ssl_certificate(
+                    endpoint=self.endpoint, body=body
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "certificate_created",
@@ -598,7 +590,6 @@ class StorageAPI:
 
     async def _update_certificate_if_changed(
         self,
-        client: Any,
         cert_name: str,
         content: str,
         existing_cert: SSLFile,
@@ -624,9 +615,10 @@ class StorageAPI:
             # Fallback to direct content comparison if no hash available
             if current_hash is None:
                 try:
-                    existing_resource = await get_one_storage_ssl_certificate.asyncio(
-                        client=client, name=cert_name
+                    existing_resource_response = await get_one_storage_ssl_certificate(
+                        endpoint=self.endpoint, name=cert_name
                     )
+                    existing_resource = existing_resource_response.content
                     existing_content = self._extract_storage_content(existing_resource)
 
                     if existing_content == content:
@@ -644,12 +636,17 @@ class StorageAPI:
 
             # Content changed, update the certificate
             with metrics.time_dataplane_api_operation("update_certificate"):
-                response = await replace_storage_ssl_certificate.asyncio_detailed(
-                    name=cert_name,
-                    client=client,
-                    body=content,
+                file_obj = File(
+                    file_name=cert_name,
+                    payload=io.BytesIO(content.encode("utf-8")),
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                body = CreateStorageSSLCertificateBody(file_upload=file_obj)
+                body["description"] = content_hash
+
+                response = await replace_storage_ssl_certificate(
+                    endpoint=self.endpoint, name=cert_name, body=body
+                )
+                reload_info = response.reload_info
 
                 record_span_event(
                     "certificate_updated",
@@ -683,15 +680,15 @@ class StorageAPI:
             ) from e
 
     async def _delete_certificate(
-        self, client: Any, cert_name: str, metrics: Any
+        self, cert_name: str, metrics: Any
     ) -> DeleteOperationResult:
         """Delete an SSL certificate."""
         with metrics.time_dataplane_api_operation("delete_certificate"):
             try:
-                response = await delete_storage_ssl_certificate.asyncio_detailed(
-                    client=client, name=cert_name
+                response = await delete_storage_ssl_certificate(
+                    endpoint=self.endpoint, name=cert_name
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event("certificate_deleted", {"name": cert_name})
                 metrics.record_dataplane_api_request("delete_certificate", "success")
@@ -725,31 +722,18 @@ class StorageAPI:
             DataplaneAPIError: If fetching storage info fails
         """
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         with metrics.time_dataplane_api_operation("get_storage_info"):
             try:
                 # Get maps with error handling
-                maps_response = await get_all_storage_map_files.asyncio(client=client)
-                maps = (
-                    check_dataplane_response(
-                        maps_response, "get_all_storage_map_files", self.endpoint
-                    )
-                    or []
-                )
+                maps_response = await get_all_storage_map_files(endpoint=self.endpoint)
+                maps = maps_response.content
 
                 # Get certificates with error handling
-                certs_response = await get_all_storage_ssl_certificates.asyncio(
-                    client=client
+                certificates_response = await get_all_storage_ssl_certificates(
+                    endpoint=self.endpoint
                 )
-                certificates = (
-                    check_dataplane_response(
-                        certs_response,
-                        "get_all_storage_ssl_certificates",
-                        self.endpoint,
-                    )
-                    or []
-                )
+                certificates = certificates_response.content
 
                 info = {
                     "maps": {
@@ -778,7 +762,11 @@ class StorageAPI:
 
     @handle_dataplane_errors("sync_acls")
     @autolog()
-    async def sync_acls(self, acls: dict[str, str]) -> StorageOperationResult:
+    async def sync_acls(
+        self,
+        acls: dict[str, str],
+        operations: set[str] = {"create", "update", "delete"},
+    ) -> StorageOperationResult:
         """Synchronize ACL files with HAProxy storage and runtime.
 
         Implements optimized workflow:
@@ -787,6 +775,7 @@ class StorageAPI:
 
         Args:
             acls: Dictionary mapping ACL names to their content
+            operations: Set of operations to perform ("create", "update", "delete")
 
         Returns:
             StorageOperationResult containing operation status and reload information
@@ -794,37 +783,20 @@ class StorageAPI:
         Raises:
             DataplaneAPIError: If ACL synchronization fails
         """
-        if not acls:
-            logger.debug("No ACL files to synchronize")
-            return StorageOperationResult(
-                operation_applied=False,
-                reload_info=ReloadInfo(),
-            )
-
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         logger.info(f"Synchronizing {len(acls)} ACL files")
 
-        # Get existing general files to find ACL files
-        try:
-            raw_response = await get_all_storage_general_files.asyncio(client=client)
-            existing_files = (
-                check_dataplane_response(
-                    raw_response, "get_all_storage_general_files", self.endpoint
-                )
-                or []
-            )
-            # Filter for ACL files (assuming .acl extension)
-            existing_acl_names = {
-                f.storage_name
-                for f in existing_files
-                if f.storage_name and f.storage_name.endswith(".acl")
-            }
-        except Exception as e:
-            _log_fetch_error("existing ACL files", "", e)
-            existing_files = []
-            existing_acl_names = set()
+        existing_files_response = await get_all_storage_general_files(
+            endpoint=self.endpoint
+        )
+        existing_files = existing_files_response.content
+        # Filter for ACL files (assuming .acl extension)
+        existing_acl_names = {
+            f.storage_name
+            for f in existing_files
+            if f.storage_name and f.storage_name.endswith(".acl")
+        }
 
         acls_to_create = set(acls.keys()) - existing_acl_names
         acls_to_update = set(acls.keys()) & existing_acl_names
@@ -833,47 +805,53 @@ class StorageAPI:
         reload_infos = []
 
         # Create new ACL files (triggers reload - expected)
-        for acl_name in acls_to_create:
-            create_result = await self._create_acl_file(
-                client, acl_name, acls[acl_name], metrics
-            )
-            reload_infos.append(create_result.reload_info)
+        actual_acls_created = 0
+        if "create" in operations:
+            for acl_name in acls_to_create:
+                create_result = await self._create_acl_file(
+                    acl_name, acls[acl_name], metrics
+                )
+                reload_infos.append(create_result.reload_info)
+                actual_acls_created += 1
 
         # Update existing ACL files
         actual_acls_updated = 0
-        for acl_name in acls_to_update:
-            existing_acl = next(
-                (f for f in existing_files if f.storage_name == acl_name), None
-            )
-            if existing_acl is None:
-                raise RuntimeError(
-                    f"ACL file {acl_name} should exist in existing_files"
+        if "update" in operations:
+            for acl_name in acls_to_update:
+                existing_acl = next(
+                    (f for f in existing_files if f.storage_name == acl_name), None
+                )
+                if existing_acl is None:
+                    raise RuntimeError(
+                        f"ACL file {acl_name} should exist in existing_files"
+                    )
+
+                # Use storage API to ensure files exist before validation
+                update_result = await self._update_acl_file_if_changed(
+                    acl_name, acls[acl_name], existing_acl, metrics
                 )
 
-            # TODO: Implement runtime API update optimization later
-            # For now, use storage API to ensure files exist before validation
-            update_result = await self._update_acl_file_if_changed(
-                client, acl_name, acls[acl_name], existing_acl, metrics
-            )
-
-            reload_infos.append(update_result.reload_info)
-            if update_result.content_changed:
-                actual_acls_updated += 1
+                reload_infos.append(update_result.reload_info)
+                if update_result.content_changed:
+                    actual_acls_updated += 1
 
         # Delete ACL files (triggers reload - expected)
-        for acl_name in acls_to_delete:
-            delete_result = await self._delete_acl_file(client, acl_name, metrics)
-            reload_infos.append(delete_result.reload_info)
+        actual_acls_deleted = 0
+        if "delete" in operations:
+            for acl_name in acls_to_delete:
+                delete_result = await self._delete_acl_file(acl_name, metrics)
+                reload_infos.append(delete_result.reload_info)
+                actual_acls_deleted += 1
 
         logger.info(
-            f"ACL sync complete: {len(acls_to_create)} created, "
-            f"{actual_acls_updated} updated, {len(acls_to_delete)} deleted"
+            f"ACL sync complete: {actual_acls_created} created, "
+            f"{actual_acls_updated} updated, {actual_acls_deleted} deleted"
         )
 
         operations_performed = (
-            len(acls_to_create) > 0
+            actual_acls_created > 0
             or actual_acls_updated > 0
-            or len(acls_to_delete) > 0
+            or actual_acls_deleted > 0
         )
 
         combined_reload_info = ReloadInfo.combine(*reload_infos)
@@ -884,7 +862,7 @@ class StorageAPI:
         )
 
     async def _create_acl_file(
-        self, client: Any, acl_name: str, content: str, metrics: Any
+        self, acl_name: str, content: str, metrics: Any
     ) -> CreateOperationResult:
         """Create a new ACL file using general file storage."""
         with metrics.time_dataplane_api_operation("create_acl"):
@@ -899,11 +877,10 @@ class StorageAPI:
                 body = CreateStorageGeneralFileBody(file_upload=file_obj)
                 body["description"] = content_hash
 
-                response = await create_storage_general_file.asyncio_detailed(
-                    client=client,
-                    body=body,
+                response = await create_storage_general_file(
+                    endpoint=self.endpoint, body=body
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "acl_created",
@@ -935,7 +912,6 @@ class StorageAPI:
 
     async def _update_acl_file_if_changed(
         self,
-        client: Any,
         acl_name: str,
         content: str,
         existing_acl: GeneralUseFile,
@@ -961,9 +937,10 @@ class StorageAPI:
             # Fallback to direct content comparison if no hash available
             if current_hash is None:
                 try:
-                    existing_resource = await get_one_storage_general_file.asyncio(
-                        client=client, name=acl_name
+                    existing_resource_response = await get_one_storage_general_file(
+                        endpoint=self.endpoint, name=acl_name
                     )
+                    existing_resource = existing_resource_response.content
                     existing_content = self._extract_storage_content(existing_resource)
 
                     if existing_content == content:
@@ -988,12 +965,10 @@ class StorageAPI:
                 body = ReplaceStorageGeneralFileBody(file_upload=file_obj)
                 body["description"] = content_hash
 
-                response = await replace_storage_general_file.asyncio_detailed(
-                    name=acl_name,
-                    client=client,
-                    body=body,
+                response = await replace_storage_general_file(
+                    name=acl_name, endpoint=self.endpoint, body=body
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "acl_updated",
@@ -1027,7 +1002,7 @@ class StorageAPI:
             ) from e
 
     async def _update_acl_file_skip_reload(
-        self, client: Any, acl_name: str, content: str, metrics: Any
+        self, acl_name: str, content: str, metrics: Any
     ) -> UpdateOperationResult:
         """Update ACL file storage without triggering reload (runtime API succeeded)."""
         with metrics.time_dataplane_api_operation("update_acl_skip_reload"):
@@ -1043,15 +1018,10 @@ class StorageAPI:
                 body["description"] = content_hash
 
                 # Update storage but skip reload since runtime API already applied changes
-                response = await replace_storage_general_file.asyncio_detailed(
-                    storage_name=acl_name,
-                    client=client,
-                    body=body,
-                    skip_reload=True,  # Key parameter to avoid reload
+                response = await replace_storage_general_file(
+                    name=acl_name, endpoint=self.endpoint, body=body
                 )
-
-                # Process response to extract reload info (should be empty due to skip_reload)
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "acl_updated_skip_reload",
@@ -1088,15 +1058,15 @@ class StorageAPI:
                 ) from e
 
     async def _delete_acl_file(
-        self, client: Any, acl_name: str, metrics: Any
+        self, acl_name: str, metrics: Any
     ) -> DeleteOperationResult:
         """Delete an ACL file."""
         with metrics.time_dataplane_api_operation("delete_acl"):
             try:
-                response = await delete_storage_general_file.asyncio_detailed(
-                    client=client, name=acl_name
+                response = await delete_storage_general_file(
+                    endpoint=self.endpoint, name=acl_name
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event("acl_deleted", {"name": acl_name})
                 metrics.record_dataplane_api_request("delete_acl", "success")
@@ -1120,11 +1090,16 @@ class StorageAPI:
 
     @handle_dataplane_errors("sync_files")
     @autolog()
-    async def sync_files(self, files: dict[str, str]) -> StorageOperationResult:
+    async def sync_files(
+        self,
+        files: dict[str, str],
+        operations: set[str] = {"create", "update", "delete"},
+    ) -> StorageOperationResult:
         """Synchronize general files with HAProxy storage.
 
         Args:
             files: Dictionary mapping file names to their content
+            operations: Set of operations to perform ("create", "update", "delete")
 
         Returns:
             StorageOperationResult containing operation status and reload information
@@ -1140,19 +1115,14 @@ class StorageAPI:
             )
 
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         logger.info(f"Synchronizing {len(files)} general files")
 
-        # Get existing files for comparison
         try:
-            raw_response = await get_all_storage_general_files.asyncio(client=client)
-            existing_files = (
-                check_dataplane_response(
-                    raw_response, "get_all_storage_general_files", self.endpoint
-                )
-                or []
+            existing_files_response = await get_all_storage_general_files(
+                endpoint=self.endpoint
             )
+            existing_files = existing_files_response.content
             existing_file_names = {
                 f.storage_name for f in existing_files if f.storage_name
             }
@@ -1167,39 +1137,48 @@ class StorageAPI:
 
         reload_infos = []
 
-        for file_name in files_to_create:
-            create_result = await self._create_file(
-                client, file_name, files[file_name], metrics
-            )
-            reload_infos.append(create_result.reload_info)
+        actual_files_created = 0
+        if "create" in operations:
+            for file_name in files_to_create:
+                create_result = await self._create_file(
+                    file_name, files[file_name], metrics
+                )
+                reload_infos.append(create_result.reload_info)
+                actual_files_created += 1
 
         actual_files_updated = 0
-        for file_name in files_to_update:
-            existing_file = next(
-                (f for f in existing_files if f.storage_name == file_name), None
-            )
-            if existing_file is None:
-                raise RuntimeError(f"File {file_name} should exist in existing_files")
-            update_result = await self._update_file_if_changed(
-                client, file_name, files[file_name], existing_file, metrics
-            )
-            reload_infos.append(update_result.reload_info)
-            if update_result.content_changed:
-                actual_files_updated += 1
+        if "update" in operations:
+            for file_name in files_to_update:
+                existing_file = next(
+                    (f for f in existing_files if f.storage_name == file_name), None
+                )
+                if existing_file is None:
+                    raise RuntimeError(
+                        f"File {file_name} should exist in existing_files"
+                    )
+                update_result = await self._update_file_if_changed(
+                    file_name, files[file_name], existing_file, metrics
+                )
+                reload_infos.append(update_result.reload_info)
+                if update_result.content_changed:
+                    actual_files_updated += 1
 
-        for file_name in files_to_delete:
-            delete_result = await self._delete_file(client, file_name, metrics)
-            reload_infos.append(delete_result.reload_info)
+        actual_files_deleted = 0
+        if "delete" in operations:
+            for file_name in files_to_delete:
+                delete_result = await self._delete_file(file_name, metrics)
+                reload_infos.append(delete_result.reload_info)
+                actual_files_deleted += 1
 
         logger.info(
-            f"File sync complete: {len(files_to_create)} created, "
-            f"{actual_files_updated} updated, {len(files_to_delete)} deleted"
+            f"File sync complete: {actual_files_created} created, "
+            f"{actual_files_updated} updated, {actual_files_deleted} deleted"
         )
 
         operations_performed = (
-            len(files_to_create) > 0
+            actual_files_created > 0
             or actual_files_updated > 0
-            or len(files_to_delete) > 0
+            or actual_files_deleted > 0
         )
 
         combined_reload_info = ReloadInfo.combine(*reload_infos)
@@ -1210,7 +1189,7 @@ class StorageAPI:
         )
 
     async def _create_file(
-        self, client: Any, file_name: str, content: str, metrics: Any
+        self, file_name: str, content: str, metrics: Any
     ) -> CreateOperationResult:
         """Create a new general file."""
         with metrics.time_dataplane_api_operation("create_file"):
@@ -1225,11 +1204,10 @@ class StorageAPI:
                 body = CreateStorageGeneralFileBody(file_upload=file_obj)
                 body["description"] = content_hash
 
-                response = await create_storage_general_file.asyncio_detailed(
-                    client=client,
-                    body=body,
+                response = await create_storage_general_file(
+                    endpoint=self.endpoint, body=body
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "file_created",
@@ -1261,7 +1239,6 @@ class StorageAPI:
 
     async def _update_file_if_changed(
         self,
-        client: Any,
         file_name: str,
         content: str,
         existing_file: GeneralUseFile,
@@ -1287,9 +1264,10 @@ class StorageAPI:
             # Fallback to direct content comparison if no hash available
             if current_hash is None:
                 try:
-                    existing_resource = await get_one_storage_general_file.asyncio(
-                        client=client, name=file_name
+                    existing_resource_response = await get_one_storage_general_file(
+                        endpoint=self.endpoint, name=file_name
                     )
+                    existing_resource = existing_resource_response.content
                     existing_content = self._extract_storage_content(existing_resource)
 
                     if existing_content == content:
@@ -1314,12 +1292,10 @@ class StorageAPI:
                 body = ReplaceStorageGeneralFileBody(file_upload=file_obj)
                 body["description"] = content_hash
 
-                response = await replace_storage_general_file.asyncio_detailed(
-                    name=file_name,
-                    client=client,
-                    body=body,
+                response = await replace_storage_general_file(
+                    name=file_name, endpoint=self.endpoint, body=body
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event(
                     "file_updated",
@@ -1352,16 +1328,14 @@ class StorageAPI:
                 original_error=e,
             ) from e
 
-    async def _delete_file(
-        self, client: Any, file_name: str, metrics: Any
-    ) -> DeleteOperationResult:
+    async def _delete_file(self, file_name: str, metrics: Any) -> DeleteOperationResult:
         """Delete a general file."""
         with metrics.time_dataplane_api_operation("delete_file"):
             try:
-                response = await delete_storage_general_file.asyncio_detailed(
-                    client=client, name=file_name
+                response = await delete_storage_general_file(
+                    endpoint=self.endpoint, name=file_name
                 )
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                reload_info = response.reload_info
 
                 record_span_event("file_deleted", {"name": file_name})
                 metrics.record_dataplane_api_request("delete_file", "success")

@@ -9,8 +9,8 @@ from haproxy_template_ic.dataplane.types import (
     CreateOperationResult,
     UpdateOperationResult,
     DeleteOperationResult,
-    ReloadInfo,
 )
+from haproxy_template_ic.dataplane.adapter import ReloadInfo
 
 
 def test_basic_error_creation():

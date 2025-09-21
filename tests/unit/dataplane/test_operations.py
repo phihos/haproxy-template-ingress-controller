@@ -21,9 +21,16 @@ from tests.unit.conftest import (
 
 
 @pytest.fixture
-def operations(mock_get_client):
+def operations():
     """Create DataplaneOperations instance for testing."""
-    return DataplaneOperations(mock_get_client, "http://localhost:5555/v3")
+    from haproxy_template_ic.dataplane.endpoint import DataplaneEndpoint
+    from haproxy_template_ic.credentials import DataplaneAuth
+
+    auth = DataplaneAuth(username="admin", password="test")
+    endpoint = DataplaneEndpoint(
+        url="http://localhost:5555/v3", dataplane_auth=auth, pod_name="test-pod"
+    )
+    return DataplaneOperations(endpoint)
 
 
 def test_operations_initialization(operations):
@@ -51,7 +58,8 @@ async def test_deploy_with_transaction_success(operations):
     """Test successful deployment with transaction."""
     changes = [create_frontend_config_change()]
 
-    from haproxy_template_ic.dataplane.types import TransactionCommitResult, ReloadInfo
+    from haproxy_template_ic.dataplane.types import TransactionCommitResult
+    from haproxy_template_ic.dataplane.adapter import ReloadInfo
 
     mock_commit_result = TransactionCommitResult(
         transaction_id="txn-123",
@@ -75,7 +83,13 @@ async def test_deploy_with_transaction_success(operations):
         ) as mock_get_version,
         patch.object(operations.config, "apply_config_change") as mock_apply_change,
     ):
-        mock_get_version.side_effect = [5, 6]  # Before and after versions
+        # Create APIResponse objects for version calls
+        from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
+
+        mock_get_version.side_effect = [
+            create_mock_api_response(content=5),
+            create_mock_api_response(content=6),
+        ]
 
         result = await operations.deploy_structured_configuration(changes)
 
@@ -139,7 +153,13 @@ async def test_deploy_without_transaction(operations):
         ) as mock_get_version,
         patch.object(operations.config, "apply_config_change") as mock_apply_change,
     ):
-        mock_get_version.side_effect = [5, 6]  # Before and after versions
+        # Create APIResponse objects for version calls
+        from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
+
+        mock_get_version.side_effect = [
+            create_mock_api_response(content=5),
+            create_mock_api_response(content=6),
+        ]
         mock_apply_change.side_effect = [None, Exception("Second change failed")]
 
         result = await operations.deploy_structured_configuration(
@@ -168,10 +188,8 @@ async def test_sync_storage_resources(operations, mock_metrics):
         ),
     ):
         # Setup async mocks
-        from haproxy_template_ic.dataplane.types import (
-            StorageOperationResult,
-            ReloadInfo,
-        )
+        from haproxy_template_ic.dataplane.types import StorageOperationResult
+        from haproxy_template_ic.dataplane.adapter import ReloadInfo
 
         mock_storage_result = StorageOperationResult(
             operation_applied=True, reload_info=ReloadInfo()
@@ -202,10 +220,8 @@ async def test_apply_runtime_changes(operations, mock_metrics):
         ),
     ):
         # Setup async mocks
-        from haproxy_template_ic.dataplane.types import (
-            RuntimeOperationResult,
-            ReloadInfo,
-        )
+        from haproxy_template_ic.dataplane.types import RuntimeOperationResult
+        from haproxy_template_ic.dataplane.adapter import ReloadInfo
 
         mock_result = RuntimeOperationResult(
             operation_applied=True, reload_info=ReloadInfo()
@@ -308,4 +324,4 @@ async def test_get_cluster_info(operations, mock_metrics):
         assert result["version"] == mock_version_info
         assert result["storage"] == mock_storage_info
         assert result["configuration"]["current_size"] == len(current_config)
-        assert result["endpoint"] == "http://localhost:5555/v3"
+        assert result["endpoint"].url == "http://localhost:5555/v3"

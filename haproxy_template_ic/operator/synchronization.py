@@ -9,6 +9,7 @@ import logging
 import traceback
 from typing import Any
 
+from haproxy_template_ic.core import autolog
 from haproxy_template_ic.dataplane.types import (
     DataplaneAPIError,
     ValidationError,
@@ -99,6 +100,7 @@ def _log_haproxy_error_hints(
         logger.info(f"📊 Configuration size: {config_size} characters")
 
 
+@autolog()
 @trace_async_function(
     span_name="synchronize_with_haproxy_instances",
     attributes={"operation.category": "synchronization"},

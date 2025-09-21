@@ -10,8 +10,8 @@ import functools
 import inspect
 import logging
 from functools import lru_cache
-from typing import Any, Callable, TypeVar, Awaitable, Dict, cast, List
-from dataclasses import dataclass, field
+from typing import Any, Callable, TypeVar, Awaitable, cast
+from dataclasses import dataclass, field, asdict
 from uuid import uuid4
 
 import structlog
@@ -32,11 +32,10 @@ def _get_function_signature(func: Callable) -> inspect.Signature:
 
 def _extract_context_from_parameters(
     func: Callable, args: tuple, kwargs: dict, decorator_kwargs: dict
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Extract logging context from function parameters using smart detection."""
     context = decorator_kwargs.copy()
 
-    # Get function signature with error handling
     try:
         sig = _get_function_signature(func)
         bound_args = sig.bind_partial(*args, **kwargs)
@@ -60,13 +59,11 @@ def _extract_context_from_parameters(
     # Auto-detect dataplane API classes and extract endpoint information
     if args and hasattr(args[0], "endpoint"):
         endpoint = args[0].endpoint
-        # Check if this is a DataplaneEndpoint object
         if hasattr(endpoint, "url") and hasattr(endpoint, "pod_name"):
             context.setdefault("dataplane_url", endpoint.url)
             if endpoint.pod_name:
                 context.setdefault("pod_name", endpoint.pod_name)
 
-    # Use function parameter values as context
     if "name" in bound_args.arguments:
         context.setdefault("resource_name", bound_args.arguments["name"])
 
@@ -83,7 +80,6 @@ def _extract_context_from_parameters(
     if "operation_id" not in context:
         context["operation_id"] = str(uuid4())[:8]
 
-    # Remove None values to avoid cluttering logs
     return {k: v for k, v in context.items() if v is not None}
 
 
@@ -207,11 +203,6 @@ def add_emoji_prefix(
     if not msg:
         return event_dict
 
-    # Check if message already starts with an emoji (Unicode range for emojis)
-    # Common emoji ranges:
-    # - Emoticons: U+1F600 to U+1F64F
-    # - Symbols: U+1F300 to U+1F5FF, U+1F680 to U+1F6FF, U+1F900 to U+1F9FF
-    # - Other: U+2600 to U+26FF, U+2700 to U+27BF
     if msg and len(msg) > 0:
         first_char = msg[0]
         if (
@@ -221,9 +212,6 @@ def add_emoji_prefix(
         ):
             return event_dict
 
-    # Get log level
-    # For structlog messages, level is in 'log_level'
-    # For stdlib messages, level is in '_record.levelname' (uppercase)
     level = event_dict.get("log_level")
     if not level:
         # Try to get from LogRecord for stdlib logging
@@ -233,8 +221,6 @@ def add_emoji_prefix(
         else:
             level = "info"  # Default if we can't determine
 
-    # Get logger name to identify external libraries
-    # Handle both dict (structlog) and LogRecord (stdlib) formats
     record = event_dict.get("_record")
     if record and hasattr(record, "name"):
         # Standard library LogRecord
@@ -460,8 +446,6 @@ class LoggingConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
-        from dataclasses import asdict
-
         return asdict(self)
 
 
@@ -527,7 +511,7 @@ def create_kopf_filter_processor(
     return kopf_filter_processor
 
 
-def create_base_processor_chain(level: int, use_json: bool = False) -> List[Processor]:
+def create_base_processor_chain(level: int, use_json: bool = False) -> list[Processor]:
     """Create the base processor chain with performance optimizations.
 
     Args:
@@ -537,7 +521,7 @@ def create_base_processor_chain(level: int, use_json: bool = False) -> List[Proc
     Returns:
         List of configured processors
     """
-    processors: List[Processor] = [
+    processors: list[Processor] = [
         _safe_filter_by_level,  # Async-safe early filtering
         structlog.contextvars.merge_contextvars,
         create_kopf_filter_processor(),  # Configurable kopf filtering
@@ -664,7 +648,7 @@ def setup_structured_logging_from_config(config: LoggingConfig) -> None:
     )
 
     # Build processors using configuration
-    processors: List[Processor] = []
+    processors: list[Processor] = []
 
     if config.enable_early_filtering:
         processors.append(_safe_filter_by_level)

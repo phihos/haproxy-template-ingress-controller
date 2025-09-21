@@ -187,8 +187,10 @@ def assert_storage_api_call_signature(
         expected_body_type: Optional type to validate the body against
         allow_name: Whether 'name' parameter is allowed (for replace operations)
     """
-    # Should always have client and body
-    assert "client" in call_args.kwargs, "API call should include 'client' parameter"
+    # Should always have endpoint and body
+    assert "endpoint" in call_args.kwargs, (
+        "API call should include 'endpoint' parameter"
+    )
     assert "body" in call_args.kwargs, "API call should include 'body' parameter"
 
     # Should not have these parameters (they're part of the body)
@@ -1860,31 +1862,35 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
     }
 
     # Create module-specific patches to avoid conflicts
-    # These API functions have .asyncio attributes that need to be mocked
-    post_ha_proxy_config_mock = Mock()
-    post_ha_proxy_config_mock.asyncio = AsyncMock()
-    post_ha_proxy_config_mock.asyncio_detailed = AsyncMock()
+    # Adapter functions are now async functions themselves, but preserve .asyncio for backward compatibility
+    post_ha_proxy_config_mock = AsyncMock()
+    post_ha_proxy_config_mock.asyncio = (
+        post_ha_proxy_config_mock  # For backward compatibility
+    )
+    post_ha_proxy_config_mock.asyncio_detailed = post_ha_proxy_config_mock
 
-    get_ha_proxy_config_mock = Mock()
-    get_ha_proxy_config_mock.asyncio = AsyncMock()
+    get_ha_proxy_config_mock = AsyncMock()
+    get_ha_proxy_config_mock.asyncio = get_ha_proxy_config_mock
 
-    get_info_mock = Mock()
-    get_info_mock.asyncio = AsyncMock()
+    get_info_mock = AsyncMock()
+    get_info_mock.asyncio = get_info_mock
 
-    get_haproxy_process_info_mock = Mock()
-    get_haproxy_process_info_mock.asyncio = AsyncMock()
+    get_haproxy_process_info_mock = AsyncMock()
+    get_haproxy_process_info_mock.asyncio = get_haproxy_process_info_mock
 
-    validation_patches = {
-        **patches,
-        "post_ha_proxy_configuration": post_ha_proxy_config_mock,
+    {
+        "get_metrics_collector": patches["get_metrics_collector"],
+        "record_span_event": patches["record_span_event"],
+        "post_haproxy_configuration": post_ha_proxy_config_mock,
         "get_ha_proxy_configuration": get_ha_proxy_config_mock,
         "get_info": get_info_mock,
         "get_haproxy_process_info": get_haproxy_process_info_mock,
     }
 
+    # Utils patches only for functions actually in utils module
     utils_patches = {
-        **patches,
-        "get_configuration_version": AsyncMock(),
+        "get_metrics_collector": patches["get_metrics_collector"],
+        "record_span_event": patches["record_span_event"],
     }
 
     # Transaction API mocks need both asyncio and asyncio_detailed
@@ -1901,16 +1907,34 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
     delete_transaction_mock.asyncio_detailed = AsyncMock()
 
     transaction_patches = {
-        **patches,
+        "get_metrics_collector": patches["get_metrics_collector"],
+        "record_span_event": patches["record_span_event"],
         "start_transaction": start_transaction_mock,
         "commit_transaction": commit_transaction_mock,
         "delete_transaction": delete_transaction_mock,
     }
 
+    # Split validation patches - some go to adapter, some stay in validation_api
+    validation_api_patches = {
+        "get_metrics_collector": patches["get_metrics_collector"],
+        "record_span_event": patches["record_span_event"],
+        # Patch adapter functions imported by validation_api
+        "post_haproxy_configuration": post_ha_proxy_config_mock,
+        "get_ha_proxy_configuration": get_ha_proxy_config_mock,
+        "get_info": get_info_mock,
+        "get_haproxy_process_info": get_haproxy_process_info_mock,
+        "get_configuration_version": AsyncMock(),
+    }
+
+    adapter_patches = {
+        "check_dataplane_response": patches["check_dataplane_response"],
+    }
+
     with (
         patch.multiple(
-            "haproxy_template_ic.dataplane.validation_api", **validation_patches
+            "haproxy_template_ic.dataplane.validation_api", **validation_api_patches
         ),
+        patch.multiple("haproxy_template_ic.dataplane.adapter", **adapter_patches),
         patch.multiple("haproxy_template_ic.dataplane.utils", **utils_patches),
         patch.multiple(
             "haproxy_template_ic.dataplane.transaction_api", **transaction_patches
@@ -1918,7 +1942,8 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
     ):
         # Return all API mocks combined for backward compatibility
         all_api_mocks = {
-            **validation_patches,
+            **validation_api_patches,
+            **adapter_patches,
             **utils_patches,
             **transaction_patches,
             # Include individual mock objects for direct access

@@ -61,7 +61,6 @@ async def handle_secret_change(
 ) -> None:
     """Handle Secret change events."""
 
-    # Create new credentials from secret data
     secret_data = event["object"]["data"]
     new_credentials = Credentials.from_secret(secret_data)
 
@@ -82,5 +81,4 @@ async def handle_secret_change(
         diff_str = diff_str[:500] + "..."
     logger.info("🔄 Credentials changed: updating", credentials_diff=diff_str)
 
-    # Update credentials
     memo.configuration.credentials = new_credentials

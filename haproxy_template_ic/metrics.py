@@ -9,7 +9,7 @@ import logging
 import time
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, Dict, Iterator, List, Tuple, TypeVar, cast
+from typing import Any, Callable, Iterator, TypeVar, cast
 
 from prometheus_async import aio
 from prometheus_client import (
@@ -215,7 +215,7 @@ class MetricsCollector:
             logger.warning("Metrics server already started")
             return
 
-        await aio.web.start_http_server(port=port)
+        await aio.web.start_http_server(port=port)  # type: ignore[attr-defined]
         self._server_started = True
         logger.info(f"📊 Metrics server started on port {port}")
 
@@ -227,7 +227,6 @@ class MetricsCollector:
             return
 
         # Note: prometheus_async doesn't provide a direct stop method
-        # The server will be stopped when the event loop shuts down
         self._server_started = False
         logger.debug("📊 Metrics server stopped")
 
@@ -241,14 +240,14 @@ class MetricsCollector:
         )
 
     def record_watched_resources(
-        self, resources_by_type: Dict[str, Dict[str, Any]]
+        self, resources_by_type: dict[str, dict[str, Any]]
     ) -> None:
         """Record the count of watched resources by type."""
         # Clear existing gauges
         watched_resources_total.clear()
 
         for resource_type, resources in resources_by_type.items():
-            namespace_counts: Dict[str, int] = {}
+            namespace_counts: dict[str, int] = {}
 
             for key, _ in resources.items():
                 namespace: str = key[0]
@@ -412,7 +411,7 @@ class MetricsCollector:
         """
         debouncer_time_since_last_render.set(time_since_last_render)
 
-    def record_pool_statistics(self, pool_stats: Dict[str, Any]) -> None:
+    def record_pool_statistics(self, pool_stats: dict[str, Any]) -> None:
         """Record connection pool statistics from get_pool_stats().
 
         Args:
@@ -425,7 +424,6 @@ class MetricsCollector:
         # Update counters with current totals (Prometheus counters track cumulative values)
         stats = pool_stats.get("statistics", {})
 
-        # Set counter values to current totals (counters should only increase)
         clients_created = stats.get("clients_created", 0)
         clients_reused = stats.get("clients_reused", 0)
         clients_cleaned = stats.get("clients_cleaned", 0)
@@ -474,7 +472,7 @@ class MetricsCollector:
 
 
 def timed_operation(
-    metric_name: str, labels: Dict[str, str] | None = None
+    metric_name: str, labels: dict[str, str] | None = None
 ) -> Callable[[F], F]:
     """Decorator to time function execution and record in metrics."""
 
@@ -528,7 +526,7 @@ def export_metrics() -> str:
 )
 def calculate_histogram_percentiles(
     histogram, percentiles: list = [50, 95, 99]
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Calculate approximate percentiles from a Prometheus histogram.
 
     Args:
@@ -540,7 +538,6 @@ def calculate_histogram_percentiles(
     """
     result = {}
 
-    # Get all samples from the histogram
     samples = []
     for sample in histogram.collect():
         for metric in sample.samples:
@@ -600,13 +597,13 @@ def calculate_histogram_percentiles(
 @handle_exceptions(
     logger=logger, default_return={}, context="performance metrics calculation"
 )
-def get_performance_metrics() -> Dict[str, Any]:
+def get_performance_metrics() -> dict[str, Any]:
     """Get performance metrics for dashboard display.
 
     Returns:
         Dictionary containing template_render, dataplane_api, and sync_success_rate metrics with historical data
     """
-    performance: Dict[str, Any] = {}
+    performance: dict[str, Any] = {}
 
     # Template render metrics
     template_percentiles = calculate_histogram_percentiles(
@@ -643,14 +640,14 @@ class MetricsHistory:
     def __init__(self, max_samples: int = 30):
         """Initialize with maximum number of samples to store."""
         self.max_samples = max_samples
-        self.template_render_times: List[
-            Tuple[float, float]
+        self.template_render_times: list[
+            tuple[float, float]
         ] = []  # List of (timestamp, duration_ms)
-        self.dataplane_api_times: List[
-            Tuple[float, float]
+        self.dataplane_api_times: list[
+            tuple[float, float]
         ] = []  # List of (timestamp, duration_ms)
-        self.sync_results: List[
-            Tuple[float, bool]
+        self.sync_results: list[
+            tuple[float, bool]
         ] = []  # List of (timestamp, success_boolean)
 
     def add_template_render_time(self, duration_seconds: float) -> None:

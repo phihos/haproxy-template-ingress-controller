@@ -11,7 +11,7 @@ import logging
 import os
 import shutil
 import tempfile
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
 import kopf
 import structlog
@@ -24,6 +24,10 @@ from kubernetes import config as k8s_config
 from haproxy_template_ic.core.logging import setup_structured_logging
 from haproxy_template_ic.core.validation import has_valid_attr
 from haproxy_template_ic.credentials import Credentials
+from haproxy_template_ic.dataplane.endpoint import (
+    DataplaneEndpoint,
+    DataplaneEndpointSet,
+)
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext, TemplateContext
@@ -188,7 +192,6 @@ def configure_webhook_server(
     logger.info("🔗 Setting up webhook server")
 
     if not webhook_cert_dir:
-        # Create temporary directory for self-signed certificates
         webhook_cert_dir = tempfile.mkdtemp(prefix="haproxy-template-ic-webhook-")
         logger.info(f"📁 Created temporary webhook cert directory: {webhook_cert_dir}")
 
@@ -215,13 +218,11 @@ def create_event_loop() -> asyncio.AbstractEventLoop:
 
 def run_operator_loop(cli_options: "CliOptions") -> None:
     """Run the main operator loop with config reload capability."""
-    # Initialize metrics
     metrics = get_metrics_collector()
     metrics.set_app_info()
 
     logger = structlog.get_logger("operator")
 
-    # Load Kubernetes configuration once
     try:
         k8s_config.load_incluster_config()
         logger.info("✅ Loaded in-cluster Kubernetes configuration")
@@ -234,7 +235,6 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             raise
 
     while True:  # Config reload loop
-        # Set up operator
         # Explicitly set registry to prevent persistence of handlers across reloads
         registry = SmartOperatorRegistry()
         set_default_registry(registry)
@@ -255,7 +255,6 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
 
         asyncio.set_event_loop(loop)
 
-        # Load configuration and credentials before creating ApplicationState
         namespace = get_current_namespace() or "default"
         configmap_name = cli_options.configmap_name
         secret_name = cli_options.secret_name
@@ -265,20 +264,18 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         )
 
         try:
-            # Load configuration from ConfigMap
             configmap = loop.run_until_complete(
                 fetch_configmap(configmap_name, namespace)
             )
             config = loop.run_until_complete(load_config_from_configmap(configmap))
             renderer = TemplateRenderer.from_config(config)
 
-            # Load credentials from Secret
             secret = loop.run_until_complete(fetch_secret(secret_name, namespace))
             secret_data = (
                 secret.data if has_valid_attr(secret, "data") else secret["data"]
             )
             credentials = Credentials.from_secret(secret_data)
-            url_to_pod_name: Dict[str, str] = {}
+            url_to_pod_name: dict[str, str] = {}
 
         except Exception as e:
             logger.error(f"❌ Failed to load configuration or credentials: {e}")
@@ -286,12 +283,6 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
 
         # Construct validation URL from configuration
         validation_url = f"http://{config.validation.dataplane_host}:{config.validation.dataplane_port}"
-
-        # Create endpoint set for the new ConfigSynchronizer constructor
-        from haproxy_template_ic.dataplane.endpoint import (
-            DataplaneEndpoint,
-            DataplaneEndpointSet,
-        )
 
         validation_endpoint = DataplaneEndpoint(
             url=validation_url,
@@ -308,7 +299,6 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             rendered_config=None,
         )
 
-        # Create index synchronization tracker
         index_tracker = IndexSynchronizationTracker(config)
 
         memo = ApplicationState(
@@ -345,19 +335,15 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
         )
 
         try:
-            # Initialize logging and tracing based on loaded config
             loop.run_until_complete(initialize_post_config(memo))
 
-            # Set up kopf indices
             # They must be set up before kopf.run or else they will not be initialized properly
             setup_resource_watchers(memo)
             setup_haproxy_pod_indexing(memo)
 
             # Watch the configmap for any changes to reload when necessary
             kopf.on.startup()(init_watch_configmap)
-            # Initialize and start the template rendering debouncer
             kopf.on.startup()(init_template_debouncer)
-            # Start the metrics server for Prometheus monitoring
             kopf.on.startup()(init_metrics_server)
 
             # Register cleanup handlers
@@ -376,7 +362,6 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
                 indexers=indexers,
             )
             loop.close()
-            # Check if we should exit or reload
             if not memo.runtime.config_reload_flag.done():
                 break  # Normal shutdown
 

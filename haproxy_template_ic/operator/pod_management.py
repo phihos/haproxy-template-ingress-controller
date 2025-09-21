@@ -6,7 +6,7 @@ for the operator's synchronization process.
 """
 
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import kopf
 from kr8s.asyncio.objects import Pod
@@ -38,7 +38,7 @@ __all__ = [
 
 async def haproxy_pods_index(
     **kwargs: Any,
-) -> Dict[Tuple[str, str], Dict[str, Any]]:
+) -> dict[tuple[str, str], dict[str, Any]]:
     """Index HAProxy pods for efficient discovery."""
     # Extract kopf parameters
     namespace = kwargs.get("namespace", "")
@@ -48,9 +48,6 @@ async def haproxy_pods_index(
 
     logger.info(f"📝 Indexing HAProxy pod {namespace}/{name}")
 
-    # Check if pod is being deleted using deletionTimestamp
-    # Note: Index handlers don't receive event type like event handlers do,
-    # so we need to check the deletionTimestamp to determine if pod is being deleted
     metadata = body.get("metadata", {})
     deletion_timestamp = metadata.get("deletionTimestamp")
 
@@ -78,7 +75,7 @@ async def haproxy_pods_index(
 @trace_async_function(
     span_name="fetch_haproxy_pods", attributes={"operation.category": "kubernetes"}
 )
-async def fetch_haproxy_pods(match_labels: Dict[str, str], namespace: str) -> List[Pod]:
+async def fetch_haproxy_pods(match_labels: dict[str, str], namespace: str) -> list[Pod]:
     """Fetch HAProxy pods from Kubernetes cluster using pod selector.
 
     Args:
@@ -128,7 +125,7 @@ async def fetch_haproxy_pods(match_labels: Dict[str, str], namespace: str) -> Li
 
 def create_production_endpoints_from_index(
     memo: ApplicationState,
-) -> List[DataplaneEndpoint]:
+) -> list[DataplaneEndpoint]:
     """Create production DataplaneEndpoint objects from HAProxy pod index.
 
     Args:
@@ -137,7 +134,6 @@ def create_production_endpoints_from_index(
     Returns:
         List of DataplaneEndpoint objects for current HAProxy pods
     """
-    # Get HAProxy pod collection from kopf indices
     haproxy_pods = get_resource_collection_from_indices(
         memo.resources.indices, HAPROXY_PODS_INDEX
     )
@@ -145,7 +141,6 @@ def create_production_endpoints_from_index(
     # Convert pod data to URLs and pod names using existing function
     urls, url_to_pod_name = get_production_urls_from_index(haproxy_pods)
 
-    # Create DataplaneEndpoint objects with production credentials
     endpoints = []
     for url in urls:
         pod_name = url_to_pod_name.get(url)
@@ -163,8 +158,8 @@ def create_production_endpoints_from_index(
 
 @autolog(component="operator")
 async def handle_haproxy_pod_event(
-    body: Dict[str, Any] | None = None,
-    meta: Dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
+    meta: dict[str, Any] | None = None,
     type: str | None = None,
     logger: logging.Logger | None = None,
     memo: ApplicationState | None = None,
@@ -178,7 +173,6 @@ async def handle_haproxy_pod_event(
     logger = logger or kwargs.get("logger", logging.getLogger(__name__))
     memo = memo or kwargs.get("memo")
 
-    # Validate required parameters
     if not memo:
         logger.warning("No memo provided to handle_haproxy_pod_event")
         return
@@ -197,7 +191,6 @@ async def handle_haproxy_pod_event(
     phase = status.get("phase", "Unknown")
     pod_ip = status.get("podIP", "Not assigned")
 
-    # Update production endpoints from current HAProxy pod index
     try:
         production_endpoints = create_production_endpoints_from_index(memo)
         memo.operations.config_synchronizer.update_production_clients(

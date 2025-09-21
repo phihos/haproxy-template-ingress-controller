@@ -6,7 +6,7 @@ HAProxy configuration context with change detection capabilities.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 import xxhash
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, computed_field
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 class TemplateContext(BaseModel):
     """Context for template rendering."""
 
-    resources: Dict[str, IndexedResourceCollection] = Field(
+    resources: dict[str, IndexedResourceCollection] = Field(
         default_factory=dict,
         description="Indexed resource collections organized by type",
     )
@@ -44,26 +44,26 @@ class HAProxyConfigContext(BaseModel):
     )
 
     # Rendered artifacts (unified for all content types)
-    rendered_content: List[RenderedContent] = Field(
+    rendered_content: list[RenderedContent] = Field(
         default_factory=list, description="All rendered content (maps, certs, files)"
     )
-    rendered_config: Optional[RenderedConfig] = Field(
+    rendered_config: RenderedConfig | None = Field(
         None, description="Rendered HAProxy config"
     )
 
     # Private attributes for caching filtered lists
-    _cached_maps: Optional[List[RenderedContent]] = PrivateAttr(default=None)
-    _cached_certificates: Optional[List[RenderedContent]] = PrivateAttr(default=None)
-    _cached_acls: Optional[List[RenderedContent]] = PrivateAttr(default=None)
-    _cached_files: Optional[List[RenderedContent]] = PrivateAttr(default=None)
+    _cached_maps: list[RenderedContent] | None = PrivateAttr(default=None)
+    _cached_certificates: list[RenderedContent] | None = PrivateAttr(default=None)
+    _cached_acls: list[RenderedContent] | None = PrivateAttr(default=None)
+    _cached_files: list[RenderedContent] | None = PrivateAttr(default=None)
     _cache_version: int = PrivateAttr(default=0)
 
     # Private attributes for change detection
-    _last_content_hash: Optional[str] = PrivateAttr(default=None)
-    _last_haproxy_pods_hash: Optional[str] = PrivateAttr(default=None)
+    _last_content_hash: str | None = PrivateAttr(default=None)
+    _last_haproxy_pods_hash: str | None = PrivateAttr(default=None)
     _hash_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
 
-    def get_content_by_filename(self, filename: str) -> Optional[RenderedContent]:
+    def get_content_by_filename(self, filename: str) -> RenderedContent | None:
         """Get any rendered content by its filename (maps, certificates, files)."""
         return next(
             (
@@ -85,7 +85,7 @@ class HAProxyConfigContext(BaseModel):
     # Convenience properties for backward compatibility (filters by content type with caching)
     @computed_field  # type: ignore[misc]
     @property
-    def rendered_maps(self) -> List[RenderedContent]:
+    def rendered_maps(self) -> list[RenderedContent]:
         """Get rendered maps (cached)."""
         if self._cached_maps is None:
             self._cached_maps = [
@@ -95,7 +95,7 @@ class HAProxyConfigContext(BaseModel):
 
     @computed_field  # type: ignore[misc]
     @property
-    def rendered_certificates(self) -> List[RenderedContent]:
+    def rendered_certificates(self) -> list[RenderedContent]:
         """Get rendered certificates (cached)."""
         if self._cached_certificates is None:
             self._cached_certificates = [
@@ -105,7 +105,7 @@ class HAProxyConfigContext(BaseModel):
 
     @computed_field  # type: ignore[misc]
     @property
-    def rendered_acls(self) -> List[RenderedContent]:
+    def rendered_acls(self) -> list[RenderedContent]:
         """Get rendered ACLs (cached)."""
         if self._cached_acls is None:
             self._cached_acls = [
@@ -115,7 +115,7 @@ class HAProxyConfigContext(BaseModel):
 
     @computed_field  # type: ignore[misc]
     @property
-    def rendered_files(self) -> List[RenderedContent]:
+    def rendered_files(self) -> list[RenderedContent]:
         """Get rendered files (cached)."""
         if self._cached_files is None:
             self._cached_files = [

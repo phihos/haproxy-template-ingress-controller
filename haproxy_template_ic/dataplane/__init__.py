@@ -9,7 +9,6 @@ from .client import DataplaneClient
 from .synchronizer import ConfigSynchronizer
 from .utils import normalize_dataplane_url
 from .endpoint import DataplaneEndpoint, DataplaneEndpointSet
-from .client_pool import DataplaneClientPool
 
 __all__ = [
     # Error classes
@@ -25,5 +24,4 @@ __all__ = [
     # Infrastructure classes (for advanced use)
     "DataplaneEndpoint",
     "DataplaneEndpointSet",
-    "DataplaneClientPool",
 ]

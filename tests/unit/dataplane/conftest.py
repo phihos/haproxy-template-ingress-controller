@@ -16,6 +16,10 @@ from haproxy_template_ic.dataplane.types import (
     ConfigSectionType,
 )
 
+# Import adapter fixtures
+
+# Import API response mocking helpers
+
 
 @pytest.fixture(scope="module")
 def test_endpoint(test_auth):
@@ -110,11 +114,21 @@ def patch_storage_map_apis(
 
     # Set up default mocks if not provided
     if mock_get_all is None:
-        mock_get_all = AsyncMock(return_value=[])
+        from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
+
+        mock_get_all = AsyncMock(return_value=create_mock_api_response(content=[]))
     if mock_create is None:
-        mock_create = AsyncMock(return_value=MapFile(storage_name="test.map"))
+        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
+
+        mock_create = create_storage_async_mock(
+            MapFile, storage_name="test.map", reload_id="test-reload-123"
+        )
     if mock_replace is None:
-        mock_replace = AsyncMock(return_value=MapFile(storage_name="test.map"))
+        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
+
+        mock_replace = create_storage_async_mock(
+            MapFile, storage_name="test.map", reload_id="test-reload-123"
+        )
     if mock_metrics is None:
         mock_metrics = Mock(
             time_dataplane_api_operation=Mock(
@@ -156,11 +170,21 @@ def patch_storage_certificate_apis(
 
     # Set up default mocks if not provided
     if mock_get_all is None:
-        mock_get_all = AsyncMock(return_value=[])
+        from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
+
+        mock_get_all = AsyncMock(return_value=create_mock_api_response(content=[]))
     if mock_create is None:
-        mock_create = AsyncMock(return_value=SSLFile(storage_name="test.crt"))
+        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
+
+        mock_create = create_storage_async_mock(
+            SSLFile, storage_name="test.crt", reload_id="test-reload-123"
+        )
     if mock_replace is None:
-        mock_replace = AsyncMock(return_value=SSLFile(storage_name="test.crt"))
+        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
+
+        mock_replace = create_storage_async_mock(
+            SSLFile, storage_name="test.crt", reload_id="test-reload-123"
+        )
     if mock_metrics is None:
         mock_metrics = Mock(
             time_dataplane_api_operation=Mock(
@@ -206,11 +230,21 @@ def patch_storage_file_apis(
 
     # Set up default mocks if not provided
     if mock_get_all is None:
-        mock_get_all = AsyncMock(return_value=[])
+        from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
+
+        mock_get_all = AsyncMock(return_value=create_mock_api_response(content=[]))
     if mock_create is None:
-        mock_create = AsyncMock(return_value=GeneralUseFile(storage_name="test.txt"))
+        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
+
+        mock_create = create_storage_async_mock(
+            GeneralUseFile, storage_name="test.txt", reload_id="test-reload-123"
+        )
     if mock_replace is None:
-        mock_replace = AsyncMock(return_value=GeneralUseFile(storage_name="test.txt"))
+        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
+
+        mock_replace = create_storage_async_mock(
+            GeneralUseFile, storage_name="test.txt", reload_id="test-reload-123"
+        )
     if mock_metrics is None:
         mock_metrics = Mock(
             time_dataplane_api_operation=Mock(

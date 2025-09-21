@@ -5,24 +5,21 @@ This module provides the simplified DataplaneClient class that coordinates
 between the various API modules for common operations.
 """
 
-import base64
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-import httpx
-from haproxy_dataplane_v3 import AuthenticatedClient
 
 from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
 from .types import (
     ConfigChange,
     MapChange,
-    ReloadInfo,
     RuntimeOperationResult,
     StorageOperationResult,
     StructuredDeploymentResult,
     ValidationDeploymentResult,
     ValidateAndDeployResult,
 )
+from .adapter import ReloadInfo
 from .endpoint import DataplaneEndpoint
 from .operations import DataplaneOperations
 
@@ -68,26 +65,8 @@ class DataplaneClient:
             endpoint.dataplane_auth.password.get_secret_value(),
         )
 
-        # Defer client creation until first use
-        self._client: AuthenticatedClient | None = None
-
         # Initialize unified operations interface
-        self.operations = DataplaneOperations(self._get_client, self.endpoint)
-
-    def _get_client(self) -> AuthenticatedClient:
-        """Lazy initialization of AuthenticatedClient object."""
-        if self._client is None:
-            logger.debug(f"Creating dataplane client for {self.base_url}")
-            # Create basic auth token from username and password
-            auth_string = f"{self.auth[0]}:{self.auth[1]}"
-            auth_token = base64.b64encode(auth_string.encode()).decode("ascii")
-            self._client = AuthenticatedClient(
-                base_url=self.base_url,
-                token=auth_token,
-                prefix="Basic",
-                timeout=httpx.Timeout(self.timeout),
-            )
-        return self._client
+        self.operations = DataplaneOperations(self.endpoint)
 
     @property
     def endpoint_context(self) -> str:
@@ -100,7 +79,7 @@ class DataplaneClient:
 
     # === High-level API Methods ===
 
-    async def get_version(self) -> Dict[str, Any]:
+    async def get_version(self) -> dict[str, Any]:
         """Get HAProxy version and runtime information.
 
         Returns:
@@ -155,7 +134,7 @@ class DataplaneClient:
         """
         return await self.operations.validate_and_deploy(config_content)
 
-    async def get_current_configuration(self) -> Optional[str]:
+    async def get_current_configuration(self) -> str | None:
         """Get the current HAProxy configuration.
 
         Returns:
@@ -166,11 +145,16 @@ class DataplaneClient:
         """
         return await self.operations.validation.get_current_configuration()
 
-    async def sync_maps(self, maps: Dict[str, str]) -> StorageOperationResult:
+    async def sync_maps(
+        self,
+        maps: dict[str, str],
+        operations: set[str] = {"create", "update", "delete"},
+    ) -> StorageOperationResult:
         """Synchronize map files with HAProxy storage.
 
         Args:
             maps: Dictionary mapping map names to their content
+            operations: Set of operations to perform ("create", "update", "delete")
 
         Returns:
             StorageOperationResult containing operation status and reload information
@@ -178,15 +162,18 @@ class DataplaneClient:
         Raises:
             DataplaneAPIError: If map synchronization fails
         """
-        return await self.operations.storage.sync_maps(maps)
+        return await self.operations.storage.sync_maps(maps, operations)
 
     async def sync_certificates(
-        self, certificates: Dict[str, str]
+        self,
+        certificates: dict[str, str],
+        operations: set[str] = {"create", "update", "delete"},
     ) -> StorageOperationResult:
         """Synchronize SSL certificates with HAProxy storage.
 
         Args:
             certificates: Dictionary mapping certificate names to their content
+            operations: Set of operations to perform ("create", "update", "delete")
 
         Returns:
             StorageOperationResult containing operation status and reload information
@@ -194,13 +181,18 @@ class DataplaneClient:
         Raises:
             DataplaneAPIError: If certificate synchronization fails
         """
-        return await self.operations.storage.sync_certificates(certificates)
+        return await self.operations.storage.sync_certificates(certificates, operations)
 
-    async def sync_acls(self, acls: Dict[str, str]) -> StorageOperationResult:
+    async def sync_acls(
+        self,
+        acls: dict[str, str],
+        operations: set[str] = {"create", "update", "delete"},
+    ) -> StorageOperationResult:
         """Synchronize ACL files with HAProxy storage.
 
         Args:
             acls: Dictionary mapping ACL names to their content
+            operations: Set of operations to perform ("create", "update", "delete")
 
         Returns:
             StorageOperationResult containing operation status and reload information
@@ -208,13 +200,18 @@ class DataplaneClient:
         Raises:
             DataplaneAPIError: If ACL synchronization fails
         """
-        return await self.operations.storage.sync_acls(acls)
+        return await self.operations.storage.sync_acls(acls, operations)
 
-    async def sync_files(self, files: Dict[str, str]) -> StorageOperationResult:
+    async def sync_files(
+        self,
+        files: dict[str, str],
+        operations: set[str] = {"create", "update", "delete"},
+    ) -> StorageOperationResult:
         """Synchronize generic files with HAProxy storage.
 
         Args:
             files: Dictionary mapping file names to their content
+            operations: Set of operations to perform ("create", "update", "delete")
 
         Returns:
             StorageOperationResult containing operation status and reload information
@@ -222,10 +219,10 @@ class DataplaneClient:
         Raises:
             DataplaneAPIError: If file synchronization fails
         """
-        return await self.operations.storage.sync_files(files)
+        return await self.operations.storage.sync_files(files, operations)
 
     async def apply_runtime_map_operations(
-        self, map_name: str, operations: List[MapChange]
+        self, map_name: str, operations: list[MapChange]
     ) -> RuntimeOperationResult:
         """Apply runtime map operations without HAProxy reload.
 
@@ -244,7 +241,7 @@ class DataplaneClient:
         )
 
     async def apply_runtime_acl_operations(
-        self, acl_id: str, operations: List[MapChange]
+        self, acl_id: str, operations: list[MapChange]
     ) -> RuntimeOperationResult:
         """Apply runtime ACL operations without HAProxy reload.
 
@@ -283,7 +280,7 @@ class DataplaneClient:
         )
 
     async def deploy_structured_configuration(
-        self, changes: List[ConfigChange], use_transaction: bool = True
+        self, changes: list[ConfigChange], use_transaction: bool = True
     ) -> StructuredDeploymentResult:
         """Deploy structured configuration changes.
 
@@ -301,7 +298,7 @@ class DataplaneClient:
             changes, use_transaction
         )
 
-    async def fetch_structured_configuration(self) -> Dict[str, Any]:
+    async def fetch_structured_configuration(self) -> dict[str, Any]:
         """Fetch complete structured configuration components from HAProxy instance.
 
         Returns:
@@ -312,7 +309,7 @@ class DataplaneClient:
         """
         return await self.operations.config.fetch_structured_configuration()
 
-    async def get_cluster_info(self) -> Dict[str, Any]:
+    async def get_cluster_info(self) -> dict[str, Any]:
         """Get comprehensive cluster information.
 
         Returns:
@@ -336,7 +333,7 @@ class DataplaneClient:
         """
         return await self.operations.transactions.start()
 
-    async def commit_transaction(self, transaction_id: str) -> Dict[str, Any]:
+    async def commit_transaction(self, transaction_id: str) -> dict[str, Any]:
         """Commit a transaction to apply configuration changes.
 
         Args:
@@ -365,10 +362,10 @@ class DataplaneClient:
 
     async def sync_storage_resources(
         self,
-        maps: Optional[Dict[str, str]] = None,
-        certificates: Optional[Dict[str, str]] = None,
-        acls: Optional[Dict[str, str]] = None,
-        files: Optional[Dict[str, str]] = None,
+        maps: dict[str, str] | None = None,
+        certificates: dict[str, str] | None = None,
+        acls: dict[str, str] | None = None,
+        files: dict[str, str] | None = None,
     ) -> ReloadInfo:
         """Synchronize multiple storage resource types.
 
@@ -390,9 +387,9 @@ class DataplaneClient:
 
     async def apply_runtime_changes(
         self,
-        map_changes: Optional[Dict[str, List[MapChange]]] = None,
-        acl_changes: Optional[Dict[str, List[MapChange]]] = None,
-        server_changes: Optional[List[Dict[str, Any]]] = None,
+        map_changes: dict[str, list[MapChange]] | None = None,
+        acl_changes: dict[str, list[MapChange]] | None = None,
+        server_changes: list[dict[str, Any]] | None = None,
     ) -> ReloadInfo:
         """Apply runtime changes without HAProxy reload.
 

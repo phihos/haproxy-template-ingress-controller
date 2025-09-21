@@ -6,7 +6,7 @@ and collecting resource metrics.
 """
 
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import kopf
 from kopf._core.engines.indexing import OperatorIndices
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 async def update_resource_index(
     **kwargs: Any,
-) -> Dict[Tuple[str, ...], Dict[str, Any]]:
+) -> dict[tuple[str, ...], dict[str, Any]]:
     """Update resource index with configurable key."""
     # Extract kopf parameters
     param = kwargs.get("param", "")
@@ -35,14 +35,13 @@ async def update_resource_index(
     name = kwargs.get("name", "")
     body = kwargs.get("body", {})
     logger = kwargs.get("logger", logging.getLogger(__name__))
-    memo: Optional[ApplicationState] = kwargs.get("memo", None)
+    memo: ApplicationState | None = kwargs.get("memo", None)
 
     logger.debug(f"📝 Updating index {param} for {namespace}/{name}...")
 
     # Convert kopf Body to dictionary if needed
     body_dict = dict(body) if has_valid_attr(body, "items") else body
 
-    # Get the watch config for this resource type
     if memo:
         watch_config = memo.configuration.config.watched_resources.get(param)
     else:
@@ -71,11 +70,10 @@ async def update_resource_index(
 
 def _collect_resource_indices(
     config: Config, kopf_indices: OperatorIndices, metrics: MetricsCollector
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Collect all resource indices as IndexedResourceCollections."""
-    indices: Dict[str, IndexedResourceCollection] = {}
+    indices: dict[str, IndexedResourceCollection] = {}
 
-    # Get the ignore_fields configuration
     ignore_fields = config.watched_resources_ignore_fields
 
     for resource_id in config.watched_resources:
@@ -89,7 +87,7 @@ def _collect_resource_indices(
             total_count = len(collection)
 
             # Calculate namespace distribution
-            namespaces: Dict[str, int] = {}
+            namespaces: dict[str, int] = {}
             for resource in collection.values():
                 namespace = resource.get("metadata", {}).get("namespace", "default")
                 namespaces[namespace] = namespaces.get(namespace, 0) + 1
@@ -112,7 +110,7 @@ def _collect_resource_indices(
     return indices
 
 
-def _record_resource_metrics(metrics: Any, indices: Dict[str, Any]) -> None:
+def _record_resource_metrics(metrics: Any, indices: dict[str, Any]) -> None:
     """Record metrics for watched resources."""
     metrics_data = {}
     for rid, collection in indices.items():

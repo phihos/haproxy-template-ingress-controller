@@ -203,7 +203,7 @@ def allocate_test_ports(max_retries: int = 10) -> Dict[str, int]:
                 f"Failed to allocate ports after {max_retries} attempts: {e}"
             )
 
-    # This should never be reached but added for mypy completeness
+    # This should never be reached but added for ty completeness
     raise RuntimeError("Failed to allocate ports: no attempts made")
 
 

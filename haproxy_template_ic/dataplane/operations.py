@@ -11,35 +11,31 @@ behavior across different types of dataplane operations.
 """
 
 import logging
-from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
-from haproxy_dataplane_v3 import AuthenticatedClient
-
-if TYPE_CHECKING:
-    from .endpoint import DataplaneEndpoint
-
+from haproxy_template_ic.core.logging import autolog
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import record_span_event
+
+from .adapter import ReloadInfo, get_configuration_version
+from .config_api import ConfigAPI
+from .endpoint import DataplaneEndpoint
+from .runtime_api import RuntimeAPI
+from .storage_api import StorageAPI
+from .transaction_api import TransactionAPI
 from .types import (
     ConfigChange,
     DataplaneAPIError,
     MapChange,
-    ReloadInfo,
     StructuredDeploymentResult,
     ValidateAndDeployResult,
 )
-from .config_api import ConfigAPI
-from .runtime_api import RuntimeAPI
-from .storage_api import StorageAPI
-from .transaction_api import TransactionAPI
-from .validation_api import ValidationAPI
 from .utils import (
-    handle_dataplane_errors,
-    get_configuration_version,
     extract_exception_origin,
+    handle_dataplane_errors,
 )
+from .validation_api import ValidationAPI
 
 __all__ = [
     "DataplaneOperations",
@@ -57,24 +53,20 @@ class DataplaneOperations:
 
     def __init__(
         self,
-        get_client: Callable[[], AuthenticatedClient],
-        endpoint: "DataplaneEndpoint",
+        endpoint: DataplaneEndpoint,
     ):
         """Initialize unified operations.
 
         Args:
-            get_client: Factory function that returns an authenticated client
             endpoint: Dataplane endpoint for error context
         """
-        self._get_client = get_client
         self.endpoint = endpoint
 
-        # Initialize specialized API modules
-        self.config = ConfigAPI(get_client, endpoint)
-        self.runtime = RuntimeAPI(get_client, endpoint)
-        self.storage = StorageAPI(get_client, endpoint)
-        self.transactions = TransactionAPI(get_client, endpoint)
-        self.validation = ValidationAPI(get_client, endpoint)
+        self.config = ConfigAPI(endpoint)
+        self.runtime = RuntimeAPI(endpoint)
+        self.storage = StorageAPI(endpoint)
+        self.transactions = TransactionAPI(endpoint)
+        self.validation = ValidationAPI(endpoint)
 
     # === Storage Operations ===
 
@@ -253,49 +245,80 @@ class DataplaneOperations:
                     original_error=e,
                 ) from e
 
+    @autolog()
     async def _deploy_with_transaction(
         self, changes: list[ConfigChange]
     ) -> StructuredDeploymentResult:
-        """Deploy changes within a transaction."""
+        """Deploy changes within a transaction, with runtime-first optimization for servers."""
+        # Separate server changes for runtime API optimization
+        server_changes, other_changes = self._separate_server_changes(changes)
+
+        logger.debug(
+            f"🔄 Separated changes: {len(server_changes)} server changes (runtime-attempted), "
+            f"{len(other_changes)} other changes (transaction-required)"
+        )
+
+        # Try runtime API for server changes first (without transaction)
+        runtime_failed_servers = await self._try_server_runtime_deployment(
+            server_changes
+        )
+
+        # Combine failed servers with other changes for transaction
+        transaction_changes = other_changes + runtime_failed_servers
+
+        if not transaction_changes:
+            # All changes were successful via runtime API
+            return await self._create_runtime_only_result(server_changes)
+
+        # Deploy remaining changes via transaction
         transaction_id = None
 
         try:
-            # Start transaction
             transaction_id = await self.transactions.start()
 
-            # Get current version for changes
-            client = self._get_client()
-            version = await get_configuration_version(client)
-            if version is None:
-                raise DataplaneAPIError(
-                    "Unable to get configuration version for transaction",
-                    endpoint=self.endpoint,
-                    operation="deploy_with_transaction",
-                )
-
-            # Apply all changes
-            for change in changes:
+            response = await get_configuration_version(endpoint=self.endpoint)
+            version = response.content
+            # Apply all transaction changes
+            for change in transaction_changes:
                 await self.config.apply_config_change(change, version, transaction_id)
 
             # Commit transaction
             commit_result = await self.transactions.commit(transaction_id)
 
-            # Get final configuration version after commit
-            final_version = await get_configuration_version(client)
+            final_version_response = await get_configuration_version(
+                endpoint=self.endpoint
+            )
+
+            successful_runtime_servers = len(server_changes) - len(
+                runtime_failed_servers
+            )
+            total_changes_applied = (
+                len(transaction_changes) + successful_runtime_servers
+            )
 
             result = StructuredDeploymentResult(
-                changes_applied=len(changes),
+                changes_applied=total_changes_applied,
                 transaction_used=True,
                 transaction_id=transaction_id,
-                version=str(final_version) if final_version is not None else "unknown",
+                version=str(final_version_response.content)
+                if final_version_response.content is not None
+                else "unknown",
                 reload_info=commit_result.reload_info,  # Propagate reload info from transaction commit
             )
+
+            if successful_runtime_servers > 0:
+                logger.info(
+                    f"✅ {successful_runtime_servers} server changes applied via runtime API, "
+                    f"{len(transaction_changes)} changes applied via transaction"
+                )
 
             record_span_event(
                 "structured_config_deployed",
                 {
                     **asdict(result),
                     **asdict(commit_result),
+                    "runtime_servers_applied": successful_runtime_servers,
+                    "transaction_changes_applied": len(transaction_changes),
                 },
             )
             return result
@@ -314,12 +337,175 @@ class DataplaneOperations:
                     )
             raise
 
+    def _separate_server_changes(
+        self, changes: list[ConfigChange]
+    ) -> tuple[list[ConfigChange], list[ConfigChange]]:
+        """Separate server changes from other changes for runtime API optimization.
+
+        This method intelligently routes server operations:
+        - Server CREATE in new backends → transaction (runtime API will fail)
+        - Server CREATE in existing backends → runtime API attempt
+        - Server UPDATE/DELETE → runtime API attempt
+
+        Args:
+            changes: List of configuration changes
+
+        Returns:
+            Tuple of (runtime_eligible_server_changes, transaction_required_changes)
+        """
+        from .types import ConfigElementType, ConfigSectionType, ConfigChangeType
+
+        # Identify backends being created in this deployment
+        new_backends = self._get_backends_being_created(changes)
+
+        runtime_eligible_servers = []
+        transaction_required_changes = []
+
+        for change in changes:
+            if (
+                change.element_type == ConfigElementType.SERVER
+                and change.section_type == ConfigSectionType.BACKEND
+            ):
+                # Check if this server CREATE is in a new backend
+                if (
+                    change.change_type == ConfigChangeType.CREATE
+                    and change.section_name in new_backends
+                ):
+                    # Server CREATE in new backend → must use transaction
+                    logger.debug(
+                        f"🔄 Server CREATE in new backend '{change.section_name}' → transaction required"
+                    )
+                    transaction_required_changes.append(change)
+                else:
+                    # Server UPDATE/DELETE or CREATE in existing backend → try runtime API
+                    runtime_eligible_servers.append(change)
+            else:
+                # All non-server changes go through transaction
+                transaction_required_changes.append(change)
+
+        return runtime_eligible_servers, transaction_required_changes
+
+    def _get_backends_being_created(self, changes: list[ConfigChange]) -> set[str]:
+        """Identify backend names that are being created in this deployment.
+
+        Args:
+            changes: List of configuration changes
+
+        Returns:
+            Set of backend names being created
+        """
+        from .types import ConfigSectionType, ConfigChangeType
+
+        new_backends = set()
+
+        for change in changes:
+            if (
+                change.element_type is None  # Section-level change, not element-level
+                and change.section_type == ConfigSectionType.BACKEND
+                and change.change_type == ConfigChangeType.CREATE
+            ):
+                new_backends.add(change.section_name)
+
+        if new_backends:
+            logger.debug(
+                f"🏗️ Detected {len(new_backends)} new backends: {sorted(new_backends)}"
+            )
+
+        return new_backends
+
+    @autolog()
+    async def _try_server_runtime_deployment(
+        self, server_changes: list[ConfigChange]
+    ) -> list[ConfigChange]:
+        """Try to deploy server changes via runtime API (no transaction).
+
+        Args:
+            server_changes: List of server changes to attempt via runtime API
+
+        Returns:
+            List of server changes that failed runtime API (need transaction fallback)
+        """
+        if not server_changes:
+            return []
+
+        logger.info(
+            f"🏃 Attempting {len(server_changes)} server changes via runtime API"
+        )
+
+        runtime_failed_servers = []
+        version_response = await get_configuration_version(endpoint=self.endpoint)
+        version = version_response.content
+
+        for i, change in enumerate(server_changes):
+            logger.debug(
+                f"🏃 Applying server change {i + 1}/{len(server_changes)}: {change}"
+            )
+            try:
+                # Try to apply server change without transaction (enables runtime API)
+                await self.config.apply_config_change(change, version)
+            except Exception as server_error:
+                logger.warning(
+                    f"⚠️  Runtime API failed for server {change.element_id}, will retry via transaction: {server_error}"
+                )
+                runtime_failed_servers.append(change)
+
+        # Log results
+        if runtime_failed_servers:
+            logger.info(
+                f"🔄 {len(runtime_failed_servers)} server changes failed runtime API, will retry via transaction"
+            )
+
+        successful_runtime_servers = len(server_changes) - len(runtime_failed_servers)
+        if successful_runtime_servers > 0:
+            logger.info(
+                f"✅ {successful_runtime_servers} server changes applied via runtime API"
+            )
+
+        return runtime_failed_servers
+
+    @autolog()
+    async def _create_runtime_only_result(
+        self, server_changes: list[ConfigChange]
+    ) -> StructuredDeploymentResult:
+        """Create result for when all changes were applied via runtime API.
+
+        Args:
+            server_changes: List of server changes that were applied via runtime API
+
+        Returns:
+            Deployment result indicating no transaction was used
+        """
+        logger.info(
+            "✅ All changes were server changes applied via runtime API - no transaction needed"
+        )
+
+        final_version_response = await get_configuration_version(endpoint=self.endpoint)
+
+        result = StructuredDeploymentResult(
+            changes_applied=len(server_changes),
+            transaction_used=False,  # Runtime API was used, no transaction
+            version=str(final_version_response.content)
+            if final_version_response.content is not None
+            else "unknown",
+            reload_info=ReloadInfo(),  # No reload for runtime-only changes
+        )
+
+        record_span_event(
+            "runtime_only_deployment",
+            {
+                **asdict(result),
+                "server_changes_count": len(server_changes),
+            },
+        )
+
+        return result
+
     async def _deploy_without_transaction(
         self, changes: list[ConfigChange]
     ) -> StructuredDeploymentResult:
         """Deploy changes without transaction (less atomic)."""
-        client = self._get_client()
-        version = await get_configuration_version(client)
+        response = await get_configuration_version(endpoint=self.endpoint)
+        version = response.content
 
         applied_changes = 0
         reload_infos = []
@@ -336,13 +522,14 @@ class DataplaneOperations:
                 logger.error(f"Failed to apply change {change}: {e}")
                 # Continue with remaining changes
 
-        # Get final configuration version after changes
-        final_version = await get_configuration_version(client)
+        final_version_response = await get_configuration_version(endpoint=self.endpoint)
 
         deployment_result = StructuredDeploymentResult(
             changes_applied=applied_changes,
             transaction_used=False,
-            version=str(final_version) if final_version is not None else "unknown",
+            version=str(final_version_response.content)
+            if final_version_response.content is not None
+            else "unknown",
             total_changes=len(changes),
             reload_info=ReloadInfo.combine(
                 *reload_infos

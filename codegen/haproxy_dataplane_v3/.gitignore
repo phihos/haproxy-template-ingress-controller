@@ -11,10 +11,8 @@ dist/
 .env
 .venv
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# ty
+.ty_cache/
 
 # JetBrains
 .idea/

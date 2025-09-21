@@ -7,7 +7,7 @@ and other settings models with validation and parsing logic.
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 class ResourceFilter(BaseModel):
     """Filter for Kubernetes resources."""
 
-    namespace_selector: Optional[Dict[str, str]] = Field(
+    namespace_selector: dict[str, str | None] | None = Field(
         None, description="Namespace label selector"
     )
-    label_selector: Optional[Dict[str, str]] = Field(
+    label_selector: dict[str, str | None] | None = Field(
         None, description="Resource label selector"
     )
 
@@ -60,10 +60,10 @@ class WatchResourceConfig(BaseModel):
     enable_validation_webhook: bool = Field(
         True, description="Enable webhook validation for this resource"
     )
-    resource_filter: Optional[ResourceFilter] = Field(
+    resource_filter: ResourceFilter | None = Field(
         None, description="Optional resource filtering"
     )
-    index_by: List[str] = Field(
+    index_by: list[str] = Field(
         default_factory=lambda: ["metadata.namespace", "metadata.name"],
         description="Field paths for index key (dot notation for nested access)",
     )
@@ -92,7 +92,7 @@ class WatchResourceConfig(BaseModel):
 class PodSelector(BaseModel):
     """Selector for HAProxy pods."""
 
-    match_labels: Dict[str, str] = Field(
+    match_labels: dict[str, str] = Field(
         ..., description="Labels to match HAProxy pods", min_length=1
     )
 
@@ -215,24 +215,24 @@ class Config(BaseModel):
     )
 
     # Optional collections
-    watched_resources: Dict[str, WatchResourceConfig] = Field(
+    watched_resources: dict[str, WatchResourceConfig] = Field(
         default_factory=dict, description="Kubernetes resources to watch"
     )
-    maps: Dict[Filename, TemplateConfig] = Field(
+    maps: dict[Filename, TemplateConfig] = Field(
         default_factory=dict, description="HAProxy map files (by filename)"
     )
-    template_snippets: Dict[str, TemplateSnippet] = Field(
+    template_snippets: dict[str, TemplateSnippet] = Field(
         default_factory=dict, description="Reusable template snippets"
     )
-    certificates: Dict[Filename, TemplateConfig] = Field(
+    certificates: dict[Filename, TemplateConfig] = Field(
         default_factory=dict, description="TLS certificates (by filename)"
     )
-    files: Dict[Filename, TemplateConfig] = Field(
+    files: dict[Filename, TemplateConfig] = Field(
         default_factory=dict, description="General-purpose files (by filename)"
     )
 
     # Field filtering configuration
-    watched_resources_ignore_fields: List[str] = Field(
+    watched_resources_ignore_fields: list[str] = Field(
         default_factory=lambda: ["metadata.managedFields"],
         description="JSONPath expressions for fields to omit from indexed resources (e.g., 'metadata.managedFields')",
     )
@@ -277,7 +277,7 @@ class Config(BaseModel):
 
     @field_validator("template_snippets")
     @classmethod
-    def validate_snippet_names(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_snippet_names(cls, v: dict[str, Any]) -> dict[str, Any]:
         """Validate snippet names for template inclusion."""
         for name, snippet in v.items():
             if name != snippet.name:
@@ -296,7 +296,7 @@ class Config(BaseModel):
 
     @field_validator("watched_resources_ignore_fields")
     @classmethod
-    def validate_ignore_fields(cls, v: List[str]) -> List[str]:
+    def validate_ignore_fields(cls, v: list[str]) -> list[str]:
         """Validate JSONPath expressions for field filtering."""
         validated = validate_ignore_fields(v)
         if len(validated) < len(v):
@@ -307,10 +307,10 @@ class Config(BaseModel):
         return validated
 
     # Private attribute to store raw configuration dictionary for diff comparison
-    _raw_dict: Dict[str, Any] = PrivateAttr(default_factory=dict)
+    _raw_dict: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     @property
-    def raw(self) -> Dict[str, Any]:
+    def raw(self) -> dict[str, Any]:
         """Access to the raw configuration dictionary for comparison purposes."""
         return self._raw_dict
 
@@ -367,7 +367,7 @@ class Config(BaseModel):
 
 
 # Main parsing function to replace config_from_dict
-def config_from_dict(data: Dict[str, Any]) -> Config:
+def config_from_dict(data: dict[str, Any]) -> Config:
     """
     Create Config object from dictionary with automatic validation.
     """
@@ -411,10 +411,10 @@ def config_from_dict(data: Dict[str, Any]) -> Config:
 
 
 # Type aliases for collections
-WatchResourceCollection = Dict[str, WatchResourceConfig]
-MapCollection = Dict[str, TemplateConfig]
-TemplateSnippetCollection = Dict[str, TemplateSnippet]
-CertificateCollection = Dict[str, TemplateConfig]
+WatchResourceCollection = dict[str, WatchResourceConfig]
+MapCollection = dict[str, TemplateConfig]
+TemplateSnippetCollection = dict[str, TemplateSnippet]
+CertificateCollection = dict[str, TemplateConfig]
 
 __all__ = [
     "ResourceFilter",

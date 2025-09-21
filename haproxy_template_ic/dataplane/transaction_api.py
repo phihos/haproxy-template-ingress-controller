@@ -5,36 +5,28 @@ This module handles transaction lifecycle management for atomic
 configuration changes in HAProxy.
 """
 
-import structlog
-from collections.abc import Callable
 from dataclasses import asdict
-from typing import TYPE_CHECKING
 
-from haproxy_dataplane_v3 import AuthenticatedClient
+import structlog
 
 from haproxy_template_ic.core.logging import autolog
-
-if TYPE_CHECKING:
-    from .endpoint import DataplaneEndpoint
-
-# Transaction APIs
-from haproxy_dataplane_v3.api.transactions import (
+from .endpoint import DataplaneEndpoint
+from .adapter import (
     commit_transaction,
     delete_transaction,
     start_transaction,
+    get_configuration_version,
 )
 
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import record_span_event, set_span_error
+
 from .types import (
     DataplaneAPIError,
     TransactionCommitResult,
-    ReloadInfo,
 )
 from .utils import (
     handle_dataplane_errors,
-    get_configuration_version,
-    check_dataplane_response,
 )
 
 __all__ = [
@@ -49,16 +41,13 @@ class TransactionAPI:
 
     def __init__(
         self,
-        get_client: Callable[[], AuthenticatedClient],
-        endpoint: "DataplaneEndpoint",
+        endpoint: DataplaneEndpoint,
     ):
         """Initialize transaction API.
 
         Args:
-            get_client: Factory function that returns an authenticated client
             endpoint: Dataplane endpoint for error context
         """
-        self._get_client = get_client
         self.endpoint = endpoint
 
     @handle_dataplane_errors("start_transaction")
@@ -73,12 +62,11 @@ class TransactionAPI:
             DataplaneAPIError: If transaction creation fails
         """
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         with metrics.time_dataplane_api_operation("start_transaction"):
             try:
-                # Get current configuration version
-                version = await get_configuration_version(client)
+                response = await get_configuration_version(endpoint=self.endpoint)
+                version = response.content
                 if version is None:
                     raise DataplaneAPIError(
                         "Unable to get configuration version for transaction",
@@ -86,14 +74,10 @@ class TransactionAPI:
                         operation="start_transaction",
                     )
 
-                response = await start_transaction.asyncio_detailed(
-                    client=client, version=version
+                response = await start_transaction(
+                    endpoint=self.endpoint, version=version
                 )
-                transaction = check_dataplane_response(
-                    response.parsed,
-                    "start_transaction",
-                    self.endpoint,
-                )
+                transaction = response.content
 
                 if transaction is not None and hasattr(transaction, "id"):
                     transaction_id = transaction.id
@@ -140,24 +124,15 @@ class TransactionAPI:
             DataplaneAPIError: If transaction commit fails
         """
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         with metrics.time_dataplane_api_operation("commit_transaction"):
             try:
-                # Get detailed response for reload detection
-                response = await commit_transaction.asyncio_detailed(
-                    client=client, id=transaction_id
+                # Commit transaction - adapter handles error checking
+                response = await commit_transaction(
+                    endpoint=self.endpoint, id=transaction_id
                 )
-
-                # Check response for errors
-                check_dataplane_response(
-                    response.parsed,
-                    "commit_transaction",
-                    self.endpoint,
-                )
-
-                # Extract reload information from HTTP response
-                reload_info = ReloadInfo.from_response(response, self.endpoint)
+                # Extract reload info from adapter response
+                reload_info = response.reload_info
 
                 commit_info = TransactionCommitResult(
                     transaction_id=transaction_id,
@@ -193,18 +168,10 @@ class TransactionAPI:
             DataplaneAPIError: If transaction rollback fails
         """
         metrics = get_metrics_collector()
-        client = self._get_client()
 
         with metrics.time_dataplane_api_operation("rollback_transaction"):
             try:
-                response = await delete_transaction.asyncio_detailed(
-                    client=client, id=transaction_id
-                )
-                check_dataplane_response(
-                    response.parsed,
-                    "rollback_transaction",
-                    self.endpoint,
-                )
+                await delete_transaction(endpoint=self.endpoint, id=transaction_id)
 
                 metrics.record_dataplane_api_request("rollback_transaction", "success")
                 record_span_event(

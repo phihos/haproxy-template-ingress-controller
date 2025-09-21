@@ -8,16 +8,17 @@ for the HAProxy Dataplane API v3 integration.
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Tuple, TypeVar, TYPE_CHECKING
+from typing import Any, TypeVar, TYPE_CHECKING
 
 import xxhash
 
-from haproxy_dataplane_v3.types import Response
 from haproxy_template_ic.constants import DEFAULT_DATAPLANE_PORT
 from haproxy_template_ic.k8s.kopf_utils import IndexedResourceCollection
 
+from .endpoint import DataplaneEndpoint
+
 if TYPE_CHECKING:
-    from .endpoint import DataplaneEndpoint
+    from .adapter import ReloadInfo
 
 __all__ = [
     "XXH64_PREFIX",
@@ -32,7 +33,6 @@ __all__ = [
     "ValidationError",
     "ConfigChange",
     "MapChange",
-    "ReloadInfo",
     "StructuredDeploymentResult",
     "ValidationDeploymentResult",
     "TransactionCommitResult",
@@ -120,7 +120,7 @@ class DataplaneAPIError(Exception):
     def __init__(
         self,
         message: str,
-        endpoint: "str | DataplaneEndpoint | None" = None,
+        endpoint: str | DataplaneEndpoint | None = None,
         operation: str | None = None,
         original_error: Exception | None = None,
     ):
@@ -158,7 +158,7 @@ class ValidationError(DataplaneAPIError):
     def __init__(
         self,
         message: str,
-        endpoint: "str | DataplaneEndpoint | None" = None,
+        endpoint: str | DataplaneEndpoint | None = None,
         config_size: int | None = None,
         validation_details: str | None = None,
         error_line: int | None = None,
@@ -207,80 +207,6 @@ class MapChange:
     operation: str
     key: str
     value: str = ""
-
-
-@dataclass
-class ReloadInfo:
-    """Information about HAProxy reload detection.
-
-    Captures reload status from HAProxy Dataplane API operations.
-    Any operation that returns HTTP 202 status code triggers a reload.
-    """
-
-    reload_id: str | None = None
-
-    @property
-    def reload_triggered(self) -> bool:
-        """True when reload_id is not None, indicating a reload was triggered."""
-        return self.reload_id is not None
-
-    @classmethod
-    def from_response(
-        cls, response: Response, endpoint: "DataplaneEndpoint"
-    ) -> "ReloadInfo":
-        """Extract reload information from HAProxy Dataplane API response.
-
-        HAProxy operations that trigger reloads return HTTP 202 status code
-        and include a 'Reload-ID' header with the reload identifier.
-
-        Args:
-            response: Response object from haproxy_dataplane_v3 with status_code and headers
-            endpoint: DataplaneEndpoint object for context
-
-        Returns:
-            ReloadInfo instance with reload_id if reload was triggered
-        """
-        reload_id = None
-
-        if response.status_code == 202:
-            for header_name in ["Reload-ID", "reload-id", "RELOAD-ID", "reload_id"]:
-                reload_id = response.headers.get(header_name)
-                if reload_id:
-                    break
-
-        return cls(reload_id=reload_id)
-
-    @classmethod
-    def combine(cls, *reload_infos: "ReloadInfo") -> "ReloadInfo":
-        """Combine multiple ReloadInfo instances using 'any reload wins' logic.
-
-        If any of the provided ReloadInfo instances indicates a reload was triggered,
-        the combined result will show reload_triggered=True. The first non-None
-        reload_id will be preserved.
-
-        Args:
-            *reload_infos: Variable number of ReloadInfo instances to combine
-
-        Returns:
-            Combined ReloadInfo instance
-
-        Examples:
-            >>> r1 = ReloadInfo()  # No reload
-            >>> r2 = ReloadInfo(reload_id="abc123")  # Reload triggered
-            >>> combined = ReloadInfo.combine(r1, r2)
-            >>> combined.reload_triggered
-            True
-            >>> combined.reload_id
-            'abc123'
-        """
-        # Find the first reload_id from any ReloadInfo that triggered a reload
-        combined_reload_id = None
-        for reload_info in reload_infos:
-            if reload_info.reload_triggered:
-                combined_reload_id = reload_info.reload_id
-                break
-
-        return cls(reload_id=combined_reload_id)
 
 
 def _safe_dict_get(obj: Any, key: str, default: T | None = None) -> T | None:
@@ -394,7 +320,7 @@ class StructuredDeploymentResult:
     changes_applied: int
     transaction_used: bool
     version: str
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
     transaction_id: str | None = None
     total_changes: int | None = None
 
@@ -409,7 +335,7 @@ class ValidationDeploymentResult:
     size: int
     status: str
     version: str
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -421,7 +347,7 @@ class TransactionCommitResult:
 
     transaction_id: str
     status: str
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -433,7 +359,7 @@ class SynchronizationResult:
 
     method: str
     version: str
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -457,8 +383,8 @@ class ConfigSynchronizerResult:
     successful: int
     failed: int
     skipped: int
-    errors: List[str]
-    reload_info: ReloadInfo
+    errors: list[str]
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -469,7 +395,7 @@ class ConfigChangeResult:
     """
 
     change_applied: bool
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -480,7 +406,7 @@ class RuntimeOperationResult:
     """
 
     operation_applied: bool
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -491,7 +417,7 @@ class StorageOperationResult:
     """
 
     operation_applied: bool
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -501,7 +427,7 @@ class CreateOperationResult:
     Used by storage helper methods for creating resources.
     """
 
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -512,7 +438,7 @@ class UpdateOperationResult:
     """
 
     content_changed: bool
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 @dataclass
@@ -522,7 +448,7 @@ class DeleteOperationResult:
     Used by storage helper methods for deleting resources.
     """
 
-    reload_info: ReloadInfo
+    reload_info: "ReloadInfo"
 
 
 def compute_content_hash(content: str) -> str:
@@ -562,7 +488,7 @@ def extract_hash_from_description(description: str | None) -> str | None:
 
 def get_production_urls_from_index(
     indexed_pods: "IndexedResourceCollection",
-) -> Tuple[List[str], Dict[str, str]]:
+) -> tuple[list[str], dict[str, str]]:
     """Extract dataplane URLs and pod names from indexed HAProxy pods.
 
     Returns:
@@ -572,11 +498,11 @@ def get_production_urls_from_index(
     """
 
     logger = logging.getLogger(__name__)
-    urls: List[str] = []
-    url_to_pod_name: Dict[str, str] = {}
+    urls: list[str] = []
+    url_to_pod_name: dict[str, str] = {}
 
     for pod_dict in indexed_pods.values():
-        status: Dict[str, Any] = _safe_dict_get(pod_dict, "status", {}) or {}
+        status: dict[str, Any] = _safe_dict_get(pod_dict, "status", {}) or {}
         phase = _safe_dict_get(status, "phase")
         pod_ip = _safe_dict_get(status, "podIP")
 
@@ -589,11 +515,24 @@ def get_production_urls_from_index(
             )
 
             annotations = _safe_dict_get(metadata, "annotations", {})
-            port = _safe_dict_get(
+            port_str = _safe_dict_get(
                 annotations,
                 "haproxy-template-ic/dataplane-port",
                 str(DEFAULT_DATAPLANE_PORT),
             )
+
+            # Validate port is a valid number, fallback to default if not
+            try:
+                port_num = (
+                    int(port_str)
+                    if port_str and port_str.strip()
+                    else DEFAULT_DATAPLANE_PORT
+                )
+                if not (1 <= port_num <= 65535):  # Valid port range
+                    port_num = DEFAULT_DATAPLANE_PORT
+                port = str(port_num)
+            except (ValueError, TypeError):
+                port = str(DEFAULT_DATAPLANE_PORT)
 
             url = f"http://{pod_ip}:{port}"
             urls.append(url)

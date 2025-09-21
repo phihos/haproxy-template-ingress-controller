@@ -7,7 +7,7 @@ This file provides guidance to Claude Code when working with this repository.
 ### Commands
 - **Install dependencies**: `uv sync --group dev`
 - **Tests**: `timeout 480 uv run pytest -n auto` (all), `uv run pytest -m "not integration and not acceptance"` (unit only)
-- **Quality checks**: `uv run ruff format`, `uv run ruff check --fix`, `uv run mypy haproxy_template_ic/`
+- **Quality checks**: `uv run ruff format`, `uv run ruff check --fix`, `uv run ty check haproxy_template_ic/`
 - **Development**: `bash ./scripts/start-dev-env.sh up` (start), `restart` (after code changes), `logs` (monitor)
 
 ### Documentation Links
@@ -120,7 +120,7 @@ Application configured via:
 All must pass before PR merge:
 - `timeout 480 uv run pytest -n auto` (full test suite)
 - `uv run ruff format` and `uv run ruff check --fix`
-- `uv run mypy haproxy_template_ic/`
+- `uv run ty check haproxy_template_ic/`
 - `uv run bandit -c pyproject.toml -r haproxy_template_ic/`
 
 ## Troubleshooting Quick Reference

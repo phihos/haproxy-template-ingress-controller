@@ -285,6 +285,33 @@ backend servers
 """
 
 
+@pytest.fixture
+def haproxy_config_clean() -> str:
+    """HAProxy configuration without ACL file references for testing."""
+    return """
+global
+    stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend main
+    bind *:80
+    default_backend servers
+
+frontend status
+    bind *:8404
+    http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+
+backend servers
+    balance roundrobin
+    server web1 192.168.1.100:8080 check
+"""
+
+
 @pytest_asyncio.fixture
 async def config_synchronizer(mock_haproxy_urls):
     """ConfigSynchronizer using existing URL infrastructure for integration testing.
@@ -323,9 +350,6 @@ async def config_synchronizer(mock_haproxy_urls):
     synchronizer = ConfigSynchronizer(endpoint_set)
 
     yield synchronizer
-
-    # Cleanup connections
-    await synchronizer.close_all_connections()
 
 
 @pytest.fixture
