@@ -98,37 +98,79 @@ def mock_metrics_collector_patch():
 
 # Storage API patch context managers
 @contextmanager
-def patch_storage_map_apis(
-    mock_get_all=None, mock_create=None, mock_replace=None, mock_metrics=None
+def patch_storage_apis(
+    storage_type: str,
+    mock_get_all=None,
+    mock_create=None,
+    mock_replace=None,
+    mock_metrics=None,
 ):
     """
-    Context manager for patching storage map APIs.
+    Generic context manager for patching storage APIs.
 
     Args:
-        mock_get_all: AsyncMock for get_all_storage_map_files (default: returns [])
-        mock_create: AsyncMock for create_storage_map_file (default: returns MapFile)
-        mock_replace: AsyncMock for replace_storage_map_file (default: returns MapFile)
+        storage_type: Type of storage ('map', 'certificate', 'file')
+        mock_get_all: AsyncMock for get_all operation (default: returns [])
+        mock_create: AsyncMock for create operation (default: returns appropriate model)
+        mock_replace: AsyncMock for replace operation (default: returns appropriate model)
         mock_metrics: Mock for get_metrics_collector (default: returns basic mock)
     """
-    from haproxy_dataplane_v3.models import MapFile
+    from haproxy_dataplane_v3.models import MapFile, SSLFile, GeneralUseFile
+
+    # Map storage types to their corresponding models and API function names
+    storage_config = {
+        "map": {
+            "model": MapFile,
+            "extension": "map",
+            "get_all": "get_all_storage_map_files",
+            "create": "create_storage_map_file",
+            "replace": "replace_storage_map_file",
+        },
+        "certificate": {
+            "model": SSLFile,
+            "extension": "crt",
+            "get_all": "get_all_storage_ssl_certificates",
+            "create": "create_storage_ssl_certificate",
+            "replace": "replace_storage_ssl_certificate",
+        },
+        "file": {
+            "model": GeneralUseFile,
+            "extension": "txt",
+            "get_all": "get_all_storage_general_files",
+            "create": "create_storage_general_file",
+            "replace": "replace_storage_general_file",
+        },
+    }
+
+    if storage_type not in storage_config:
+        raise ValueError(f"Unknown storage type: {storage_type}")
+
+    config = storage_config[storage_type]
 
     # Set up default mocks if not provided
     if mock_get_all is None:
         from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
 
         mock_get_all = AsyncMock(return_value=create_mock_api_response(content=[]))
+
     if mock_create is None:
         from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
 
         mock_create = create_storage_async_mock(
-            MapFile, storage_name="test.map", reload_id="test-reload-123"
+            config["model"],
+            storage_name=f"test.{config['extension']}",
+            reload_id="test-reload-123",
         )
+
     if mock_replace is None:
         from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
 
         mock_replace = create_storage_async_mock(
-            MapFile, storage_name="test.map", reload_id="test-reload-123"
+            config["model"],
+            storage_name=f"test.{config['extension']}",
+            reload_id="test-reload-123",
         )
+
     if mock_metrics is None:
         mock_metrics = Mock(
             time_dataplane_api_operation=Mock(
@@ -137,137 +179,53 @@ def patch_storage_map_apis(
             record_dataplane_api_request=Mock(),
         )
 
+    # Build patches dictionary
+    patches = {
+        config["get_all"]: mock_get_all,
+        config["create"]: mock_create,
+        config["replace"]: mock_replace,
+        "get_metrics_collector": lambda: mock_metrics,
+    }
+
     # Apply all patches
-    with patch.multiple(
-        "haproxy_template_ic.dataplane.storage_api",
-        get_all_storage_map_files=mock_get_all,
-        create_storage_map_file=mock_create,
-        replace_storage_map_file=mock_replace,
-        get_metrics_collector=lambda: mock_metrics,
-    ):
+    with patch.multiple("haproxy_template_ic.dataplane.storage_api", **patches):
         yield {
             "get_all": mock_get_all,
             "create": mock_create,
             "replace": mock_replace,
             "metrics": mock_metrics,
         }
+
+
+# Convenience functions for backward compatibility
+@contextmanager
+def patch_storage_map_apis(
+    mock_get_all=None, mock_create=None, mock_replace=None, mock_metrics=None
+):
+    """Context manager for patching storage map APIs."""
+    with patch_storage_apis(
+        "map", mock_get_all, mock_create, mock_replace, mock_metrics
+    ) as mocks:
+        yield mocks
 
 
 @contextmanager
 def patch_storage_certificate_apis(
     mock_get_all=None, mock_create=None, mock_replace=None, mock_metrics=None
 ):
-    """
-    Context manager for patching storage certificate APIs.
-
-    Args:
-        mock_get_all: AsyncMock for get_all_storage_ssl_certificates (default: returns [])
-        mock_create: AsyncMock for create_storage_ssl_certificate (default: returns SSLFile)
-        mock_replace: AsyncMock for replace_storage_ssl_certificate (default: returns SSLFile)
-        mock_metrics: Mock for get_metrics_collector (default: returns basic mock)
-    """
-    from haproxy_dataplane_v3.models import SSLFile
-
-    # Set up default mocks if not provided
-    if mock_get_all is None:
-        from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
-
-        mock_get_all = AsyncMock(return_value=create_mock_api_response(content=[]))
-    if mock_create is None:
-        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
-
-        mock_create = create_storage_async_mock(
-            SSLFile, storage_name="test.crt", reload_id="test-reload-123"
-        )
-    if mock_replace is None:
-        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
-
-        mock_replace = create_storage_async_mock(
-            SSLFile, storage_name="test.crt", reload_id="test-reload-123"
-        )
-    if mock_metrics is None:
-        mock_metrics = Mock(
-            time_dataplane_api_operation=Mock(
-                return_value=Mock(__enter__=Mock(), __exit__=Mock())
-            ),
-            record_dataplane_api_request=Mock(),
-        )
-
-    patches = {}
-    if mock_get_all:
-        patches["get_all_storage_ssl_certificates"] = mock_get_all
-    if mock_create:
-        patches["create_storage_ssl_certificate"] = mock_create
-    if mock_replace:
-        patches["replace_storage_ssl_certificate"] = mock_replace
-    if mock_metrics:
-        patches["get_metrics_collector"] = lambda: mock_metrics
-
-    # Apply all patches
-    with patch.multiple("haproxy_template_ic.dataplane.storage_api", **patches):
-        yield {
-            "get_all": mock_get_all,
-            "create": mock_create,
-            "replace": mock_replace,
-            "metrics": mock_metrics,
-        }
+    """Context manager for patching storage certificate APIs."""
+    with patch_storage_apis(
+        "certificate", mock_get_all, mock_create, mock_replace, mock_metrics
+    ) as mocks:
+        yield mocks
 
 
 @contextmanager
 def patch_storage_file_apis(
     mock_get_all=None, mock_create=None, mock_replace=None, mock_metrics=None
 ):
-    """
-    Context manager for patching storage general file APIs.
-
-    Args:
-        mock_get_all: AsyncMock for get_all_storage_general_files (default: returns [])
-        mock_create: AsyncMock for create_storage_general_file (default: returns GeneralUseFile)
-        mock_replace: AsyncMock for replace_storage_general_file (default: returns GeneralUseFile)
-        mock_metrics: Mock for get_metrics_collector (default: returns basic mock)
-    """
-    from haproxy_dataplane_v3.models import GeneralUseFile
-
-    # Set up default mocks if not provided
-    if mock_get_all is None:
-        from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
-
-        mock_get_all = AsyncMock(return_value=create_mock_api_response(content=[]))
-    if mock_create is None:
-        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
-
-        mock_create = create_storage_async_mock(
-            GeneralUseFile, storage_name="test.txt", reload_id="test-reload-123"
-        )
-    if mock_replace is None:
-        from tests.unit.dataplane.adapter_fixtures import create_storage_async_mock
-
-        mock_replace = create_storage_async_mock(
-            GeneralUseFile, storage_name="test.txt", reload_id="test-reload-123"
-        )
-    if mock_metrics is None:
-        mock_metrics = Mock(
-            time_dataplane_api_operation=Mock(
-                return_value=Mock(__enter__=Mock(), __exit__=Mock())
-            ),
-            record_dataplane_api_request=Mock(),
-        )
-
-    patches = {}
-    if mock_get_all:
-        patches["get_all_storage_general_files"] = mock_get_all
-    if mock_create:
-        patches["create_storage_general_file"] = mock_create
-    if mock_replace:
-        patches["replace_storage_general_file"] = mock_replace
-    if mock_metrics:
-        patches["get_metrics_collector"] = lambda: mock_metrics
-
-    # Apply all patches
-    with patch.multiple("haproxy_template_ic.dataplane.storage_api", **patches):
-        yield {
-            "get_all": mock_get_all,
-            "create": mock_create,
-            "replace": mock_replace,
-            "metrics": mock_metrics,
-        }
+    """Context manager for patching storage general file APIs."""
+    with patch_storage_apis(
+        "file", mock_get_all, mock_create, mock_replace, mock_metrics
+    ) as mocks:
+        yield mocks

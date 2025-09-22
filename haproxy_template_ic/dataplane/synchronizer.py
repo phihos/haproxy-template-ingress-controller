@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Any, Callable
 
+from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext
 
@@ -52,8 +53,16 @@ _SECTION_ELEMENTS = {
         ("binds", ConfigElementType.BIND, True),  # Named elements
         ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
         ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
+        (
+            "backend_switching_rules",
+            ConfigElementType.BACKEND_SWITCHING_RULE,
+            False,
+        ),  # Ordered
         ("acls", ConfigElementType.ACL, False),  # Ordered
         ("filters", ConfigElementType.FILTER, False),  # Ordered
+        ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
+    ],
+    ConfigSectionType.GLOBAL: [
         ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
     ],
 }
@@ -71,12 +80,14 @@ class ConfigSynchronizer:
         self._production_clients: dict[str, DataplaneClient] = {}
 
     def create_client(
-        self, endpoint: DataplaneEndpoint, timeout: float = 30.0
+        self, endpoint: DataplaneEndpoint, timeout: float = DEFAULT_API_TIMEOUT
     ) -> DataplaneClient:
         """Factory method for creating clients."""
         return DataplaneClient(endpoint=endpoint, timeout=timeout)
 
-    def create_client_for_url(self, url: str, timeout: float = 30.0) -> DataplaneClient:
+    def create_client_for_url(
+        self, url: str, timeout: float = DEFAULT_API_TIMEOUT
+    ) -> DataplaneClient:
         """Factory method for creating clients by URL (convenience method)."""
         endpoint = self.endpoints.find_by_url(url)
         if not endpoint:
@@ -493,6 +504,7 @@ class ConfigSynchronizer:
                 "binds": "frontend_binds",
                 "http_request_rules": "frontend_http_request_rules",
                 "http_response_rules": "frontend_http_response_rules",
+                "backend_switching_rules": "frontend_backend_switching_rules",
                 "filters": "frontend_filters",
                 "log_targets": "frontend_log_targets",
             }
@@ -505,14 +517,23 @@ class ConfigSynchronizer:
                 "filters": "backend_filters",
                 "log_targets": "backend_log_targets",
             }
+        elif section_type == ConfigSectionType.GLOBAL:
+            flat_key_mappings = {
+                "log_targets": "global_log_targets",
+            }
         else:
-            # Other section types (DEFAULTS, GLOBAL) don't have nested elements
+            # Other section types (DEFAULTS) don't have nested elements
             return {}
 
         # Extract nested elements from flat structure
         for attr_name, flat_key in flat_key_mappings.items():
             if flat_key in config:
-                section_elements = config[flat_key].get(section_name, [])
+                if section_type == ConfigSectionType.GLOBAL:
+                    # Global section elements are stored directly (singleton section)
+                    section_elements = config[flat_key] or []
+                else:
+                    # Named section elements are stored by section name
+                    section_elements = config[flat_key].get(section_name, [])
                 nested_elements[attr_name] = section_elements
 
         return nested_elements
@@ -659,13 +680,14 @@ class ConfigSynchronizer:
                 # element endpoints (they return HTTP 501). Defaults are handled as atomic units
                 # and any changes trigger a full section update using full_section=true.
 
-        # Compare global section
+        # Compare global section (singleton section with nested elements)
         current_global = current.get("global")
         new_global = new.get("global")
 
-        # Determine change type for global section
+        # Global section comparison logic - handle nested elements separately
         if current_global and new_global:
-            # Both exist - check if they differ
+            # Both exist - compare the section itself (non-nested directives)
+            # and also compare nested elements separately
             if _to_dict_safe(current_global) != _to_dict_safe(new_global):
                 changes.append(
                     ConfigChange(
@@ -676,8 +698,20 @@ class ConfigSynchronizer:
                         old_config=current_global,
                     )
                 )
+
+            # Compare nested elements (like log targets) for existing global section
+            current_nested = self._extract_nested_elements_for_section(
+                current, ConfigSectionType.GLOBAL, "global"
+            )
+            new_nested = self._extract_nested_elements_for_section(
+                new, ConfigSectionType.GLOBAL, "global"
+            )
+            self._compare_nested_elements(
+                current_nested, new_nested, ConfigSectionType.GLOBAL, "global", changes
+            )
+
         elif new_global:
-            # Only new exists - create
+            # Only new exists - create global section
             changes.append(
                 ConfigChange(
                     change_type=ConfigChangeType.CREATE,
@@ -686,8 +720,18 @@ class ConfigSynchronizer:
                     new_config=new_global,
                 )
             )
+
+            # Compare nested elements for new global section
+            current_nested = {}  # Empty for new section
+            new_nested = self._extract_nested_elements_for_section(
+                new, ConfigSectionType.GLOBAL, "global"
+            )
+            self._compare_nested_elements(
+                current_nested, new_nested, ConfigSectionType.GLOBAL, "global", changes
+            )
+
         elif current_global:
-            # Only current exists - delete
+            # Only current exists - delete global section
             changes.append(
                 ConfigChange(
                     change_type=ConfigChangeType.DELETE,

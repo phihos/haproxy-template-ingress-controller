@@ -26,6 +26,19 @@ if TYPE_CHECKING:
     from .types import DataplaneAPIError
 
 
+# Pre-compiled regex patterns for performance optimization
+NATURAL_SORT_PATTERN = re.compile(r"(\d+)")
+
+# HAProxy error line parsing patterns (compiled with IGNORECASE flag)
+HAPROXY_ERROR_PATTERNS = [
+    re.compile(r"config parsing \[.*?:(\d+)\]", re.IGNORECASE),  # [/tmp/file:54]
+    re.compile(r"line (\d+):", re.IGNORECASE),  # line 42:
+    re.compile(r"\[line (\d+)\]", re.IGNORECASE),  # [line 123]
+    re.compile(r"at line (\d+)", re.IGNORECASE),  # at line 123
+    re.compile(r":(\d+)\]", re.IGNORECASE),  # generic :number]
+]
+
+
 __all__ = [
     "normalize_dataplane_url",
     "extract_hostname_from_url",
@@ -89,7 +102,7 @@ def natural_sort_key(name: str) -> tuple:
 
     This ensures SRV_1, SRV_2, ..., SRV_9, SRV_10 instead of SRV_1, SRV_10, SRV_2, ...
     """
-    parts = re.split(r"(\d+)", name)
+    parts = NATURAL_SORT_PATTERN.split(name)
     return tuple(int(part) if part.isdigit() else part for part in parts)
 
 
@@ -186,17 +199,8 @@ def parse_haproxy_error_line(error_message: str) -> int | None:
     Returns:
         Line number if found, None otherwise
     """
-    # Pattern to match various HAProxy error formats with line numbers
-    patterns = [
-        r"config parsing \[.*?:(\d+)\]",  # [/tmp/file:54]
-        r"line (\d+):",  # line 42:
-        r"\[line (\d+)\]",  # [line 123]
-        r"at line (\d+)",  # at line 123
-        r":(\d+)\]",  # generic :number]
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, error_message, re.IGNORECASE)
+    for pattern in HAPROXY_ERROR_PATTERNS:
+        match = pattern.search(error_message)
         if match:
             try:
                 return int(match.group(1))

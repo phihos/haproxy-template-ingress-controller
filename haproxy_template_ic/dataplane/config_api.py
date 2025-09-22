@@ -27,6 +27,7 @@ from .adapter import (
     create_backend,
     create_bind_frontend,
     create_cache,
+    create_defaults_section,
     create_fcgi_app,
     create_filter_backend,
     create_filter_frontend,
@@ -39,6 +40,9 @@ from .adapter import (
     create_log_forward,
     create_log_target_backend,
     create_log_target_frontend,
+    create_log_target_global,
+    create_log_target_log_forward,
+    create_log_target_peer,
     create_mailers_section,
     create_peer,
     create_program,
@@ -51,6 +55,7 @@ from .adapter import (
     delete_backend,
     delete_bind_frontend,
     delete_cache,
+    delete_defaults_section,
     delete_fcgi_app,
     delete_filter_backend,
     delete_filter_frontend,
@@ -63,6 +68,9 @@ from .adapter import (
     delete_log_forward,
     delete_log_target_backend,
     delete_log_target_frontend,
+    delete_log_target_global,
+    delete_log_target_log_forward,
+    delete_log_target_peer,
     delete_mailers_section,
     delete_peer,
     delete_program,
@@ -73,6 +81,7 @@ from .adapter import (
     edit_mailers_section,
     get_all_acl_backend,
     get_all_acl_frontend,
+    get_all_backend_switching_rule_frontend,
     get_all_bind_frontend,
     get_all_filter_backend,
     get_all_filter_frontend,
@@ -83,6 +92,8 @@ from .adapter import (
     get_all_log_target_backend,
     get_all_log_target_frontend,
     get_all_log_target_global,
+    get_all_log_target_log_forward,
+    get_all_log_target_peer,
     get_all_server_backend,
     get_backends,
     get_caches,
@@ -117,6 +128,9 @@ from .adapter import (
     replace_log_forward,
     replace_log_target_backend,
     replace_log_target_frontend,
+    replace_log_target_global,
+    replace_log_target_log_forward,
+    replace_log_target_peer,
     replace_program,
     replace_resolver,
     replace_ring,
@@ -404,6 +418,14 @@ class ConfigAPI:
                 ),
             ),
             (
+                "frontend_backend_switching_rules",
+                _fetch_with_timing(
+                    f"fetch_frontend_backend_switching_rules_{frontend_name}",
+                    get_all_backend_switching_rule_frontend,
+                    parent_name=frontend_name,
+                ),
+            ),
+            (
                 "frontend_filters",
                 _fetch_with_timing(
                     f"fetch_frontend_filters_{frontend_name}",
@@ -479,6 +501,7 @@ class ConfigAPI:
             "frontend_acls",
             "frontend_http_request_rules",
             "frontend_http_response_rules",
+            "frontend_backend_switching_rules",
             "frontend_filters",
             "frontend_log_targets",
         ]
@@ -624,6 +647,54 @@ class ConfigAPI:
             _log_fetch_error("global log targets", "", e)
             nested["global_log_targets"] = []
 
+        # Fetch peer log targets
+        nested["peer_log_targets"] = {}
+        if config_sections.get("peers"):
+            for peer_section in config_sections["peers"]:
+                peer_name = peer_section.name
+                try:
+
+                    async def _fetch_peer_logs(name):
+                        with metrics.time_dataplane_api_operation(
+                            f"fetch_peer_log_targets_{name}"
+                        ):
+                            result: APIResponse = await get_all_log_target_peer(
+                                parent_name=name, endpoint=self.endpoint
+                            )
+                            return result.content or []
+
+                    nested["peer_log_targets"][peer_name] = await _fetch_peer_logs(
+                        peer_name
+                    )
+                except Exception as e:
+                    _log_fetch_error(f"peer {peer_name} log targets", "", e)
+                    nested["peer_log_targets"][peer_name] = []
+
+        # Fetch log_forward log targets
+        nested["log_forward_log_targets"] = {}
+        if config_sections.get("log_forwards"):
+            for log_forward_section in config_sections["log_forwards"]:
+                log_forward_name = log_forward_section.name
+                try:
+
+                    async def _fetch_log_forward_logs(name):
+                        with metrics.time_dataplane_api_operation(
+                            f"fetch_log_forward_log_targets_{name}"
+                        ):
+                            result: APIResponse = await get_all_log_target_log_forward(
+                                parent_name=name, endpoint=self.endpoint
+                            )
+                            return result.content or []
+
+                    nested["log_forward_log_targets"][
+                        log_forward_name
+                    ] = await _fetch_log_forward_logs(log_forward_name)
+                except Exception as e:
+                    _log_fetch_error(
+                        f"log_forward {log_forward_name} log targets", "", e
+                    )
+                    nested["log_forward_log_targets"][log_forward_name] = []
+
         return nested
 
     def _build_configuration_result(
@@ -711,9 +782,9 @@ class ConfigAPI:
                 "id_field": None,
             },
             ConfigSectionType.DEFAULTS: {
-                "create": None,  # Use replace to create/update defaults
+                "create": create_defaults_section,
                 "update": replace_defaults_section,
-                "delete": None,  # Defaults cannot be deleted
+                "delete": delete_defaults_section,
                 "id_field": "name",
             },
             ConfigSectionType.USERLIST: {
@@ -994,6 +1065,27 @@ class ConfigAPI:
                 "parent_field": "parent_name",
                 "id_field": "index",
             },
+            (ConfigSectionType.GLOBAL, ConfigElementType.LOG_TARGET): {
+                "create": create_log_target_global,
+                "update": replace_log_target_global,
+                "delete": delete_log_target_global,
+                "parent_field": None,  # Global log targets don't have a parent
+                "id_field": "index",
+            },
+            (ConfigSectionType.PEER, ConfigElementType.LOG_TARGET): {
+                "create": create_log_target_peer,
+                "update": replace_log_target_peer,
+                "delete": delete_log_target_peer,
+                "parent_field": "parent_name",
+                "id_field": "index",
+            },
+            (ConfigSectionType.LOG_FORWARD, ConfigElementType.LOG_TARGET): {
+                "create": create_log_target_log_forward,
+                "update": replace_log_target_log_forward,
+                "delete": delete_log_target_log_forward,
+                "parent_field": "parent_name",
+                "id_field": "index",
+            },
         }
 
         # element_type must be non-None when this method is called
@@ -1013,19 +1105,21 @@ class ConfigAPI:
             base_params = {
                 "endpoint": self.endpoint,
                 "transaction_id": transaction_id,
-                handler_config["parent_field"]: change.section_name,
             }
+            # Add parent_field only if it's not None (global sections don't have parents)
+            if handler_config["parent_field"] is not None:
+                base_params[handler_config["parent_field"]] = change.section_name
         else:
             base_params = {
                 "endpoint": self.endpoint,
                 "version": version,
-                handler_config["parent_field"]: change.section_name,
             }
+            # Add parent_field only if it's not None (global sections don't have parents)
+            if handler_config["parent_field"] is not None:
+                base_params[handler_config["parent_field"]] = change.section_name
 
         if change.change_type == ConfigChangeType.CREATE:
             if handler_config["id_field"] == "index":
-                # For APIs that expect parent_name and index as positional arguments
-                parent_name = change.section_name
                 element_index = (
                     change.element_index
                     if change.element_index is not None
@@ -1037,23 +1131,43 @@ class ConfigAPI:
                         endpoint=self.endpoint,
                         operation="apply_nested_element_change",
                     )
-                # Pass all parameters as keyword arguments to avoid conflicts with @api_function decorator
-                if transaction_id:
-                    await handler_config["create"](
-                        parent_name=parent_name,
-                        index=element_index,
-                        endpoint=self.endpoint,
-                        body=change.new_config,
-                        transaction_id=transaction_id,
-                    )
+
+                # Handle global elements (no parent) vs section elements (with parent)
+                if handler_config["parent_field"] is None:
+                    # Global elements (like global log targets) - no parent_name parameter
+                    if transaction_id:
+                        await handler_config["create"](
+                            index=element_index,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            transaction_id=transaction_id,
+                        )
+                    else:
+                        await handler_config["create"](
+                            index=element_index,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            version=version,
+                        )
                 else:
-                    await handler_config["create"](
-                        parent_name=parent_name,
-                        index=element_index,
-                        endpoint=self.endpoint,
-                        body=change.new_config,
-                        version=version,
-                    )
+                    # Section elements (like backend/frontend log targets) - with parent_name
+                    parent_name = change.section_name
+                    if transaction_id:
+                        await handler_config["create"](
+                            parent_name=parent_name,
+                            index=element_index,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            transaction_id=transaction_id,
+                        )
+                    else:
+                        await handler_config["create"](
+                            parent_name=parent_name,
+                            index=element_index,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            version=version,
+                        )
             else:
                 # For other APIs that expect all parameters as keyword arguments
                 await handler_config["create"](body=change.new_config, **base_params)
@@ -1062,17 +1176,29 @@ class ConfigAPI:
             params = {**base_params, "body": change.new_config}
             element_id = change.element_id or change.element_index
             if element_id is not None and handler_config["id_field"] == "index":
-                # For APIs that expect index as keyword argument to avoid @api_function conflicts
-                parent_name = change.section_name
-                await handler_config["update"](
-                    parent_name=parent_name,
-                    index=element_id,
-                    **{
-                        k: v
-                        for k, v in params.items()
-                        if k != handler_config["parent_field"]
-                    },
-                )
+                # Handle global elements (no parent) vs section elements (with parent)
+                if handler_config["parent_field"] is None:
+                    # Global elements (like global log targets) - no parent_name parameter
+                    await handler_config["update"](
+                        index=element_id,
+                        **{
+                            k: v
+                            for k, v in params.items()
+                            if k != handler_config["parent_field"]
+                        },
+                    )
+                else:
+                    # Section elements (like backend/frontend log targets) - with parent_name
+                    parent_name = change.section_name
+                    await handler_config["update"](
+                        parent_name=parent_name,
+                        index=element_id,
+                        **{
+                            k: v
+                            for k, v in params.items()
+                            if k != handler_config["parent_field"]
+                        },
+                    )
             elif element_id is not None:
                 # For other APIs that expect the id as keyword argument
                 params[handler_config["id_field"]] = element_id
@@ -1084,17 +1210,29 @@ class ConfigAPI:
             params = {**base_params}
             element_id = change.element_id or change.element_index
             if element_id is not None and handler_config["id_field"] == "index":
-                # For APIs that expect index as keyword argument to avoid @api_function conflicts
-                parent_name = change.section_name
-                await handler_config["delete"](
-                    parent_name=parent_name,
-                    index=element_id,
-                    **{
-                        k: v
-                        for k, v in params.items()
-                        if k != handler_config["parent_field"]
-                    },
-                )
+                # Handle global elements (no parent) vs section elements (with parent)
+                if handler_config["parent_field"] is None:
+                    # Global elements (like global log targets) - no parent_name parameter
+                    await handler_config["delete"](
+                        index=element_id,
+                        **{
+                            k: v
+                            for k, v in params.items()
+                            if k != handler_config["parent_field"]
+                        },
+                    )
+                else:
+                    # Section elements (like backend/frontend log targets) - with parent_name
+                    parent_name = change.section_name
+                    await handler_config["delete"](
+                        parent_name=parent_name,
+                        index=element_id,
+                        **{
+                            k: v
+                            for k, v in params.items()
+                            if k != handler_config["parent_field"]
+                        },
+                    )
             elif element_id is not None:
                 # For other APIs that expect the id as keyword argument
                 params[handler_config["id_field"]] = element_id

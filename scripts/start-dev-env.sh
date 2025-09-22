@@ -643,24 +643,25 @@ build_and_load_local_image() {
 
 deploy_controller() {
     local overlay_name="${1:-dev}"
-    
+
     build_and_load_local_image || {
         err "Failed to build or load image"
         return 1
     }
-    
+
     print_section "🚀 Deploying Controller (${overlay_name} mode)"
-    
+
     log INFO "Deploying haproxy-template-ic to namespace '${CTRL_NAMESPACE}' using kustomize overlay..."
     retry_with_backoff 3 2 kubectl apply -k "deploy/overlays/${overlay_name}" || {
         err "Failed to apply kustomize overlay"
         cleanup_failed_deployment
         return 1
     }
-    
-    log INFO "Pointing deployment to local image '${LOCAL_IMAGE}'..."
-    kubectl -n "${CTRL_NAMESPACE}" set image deployment/haproxy-template-ic controller="${LOCAL_IMAGE}" >/dev/null || true
-    
+
+    # Force restart of controller to pick up any ConfigMap changes
+    log INFO "Restarting controller deployment to apply ConfigMap changes..."
+    kubectl -n "${CTRL_NAMESPACE}" rollout restart deployment/haproxy-template-ic >/dev/null || true
+
     log INFO "Waiting for controller deployment to become ready..."
     if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-template-ic --timeout="${TIMEOUT}s"; then
         err "Controller rollout did not complete in ${TIMEOUT}s."
@@ -669,7 +670,7 @@ deploy_controller() {
         return 1
     fi
     ok "Controller is ready."
-    
+
     # Wait for HAProxy production deployment (skip in debug mode since controller needs to configure it first)
     if [[ "${overlay_name}" != "debug" ]]; then
         log INFO "Waiting for HAProxy production deployment to become ready..."
@@ -769,7 +770,7 @@ dev_exec() {
 
 dev_restart() {
     print_section "🔄 Restarting Controller"
-    
+
     # Build and load new image unless skipped
     if [[ "$SKIP_BUILD" != "true" ]]; then
         log INFO "Rebuilding and loading controller image..."
@@ -780,8 +781,14 @@ dev_restart() {
     else
         log INFO "Skipping image rebuild (--skip-build flag set)"
     fi
-    
-    # Restart the deployment with the new image
+
+    # Reapply kustomize overlay to ensure ConfigMaps and other resources are updated
+    log INFO "Reapplying kustomize overlay to pick up any resource changes..."
+    retry_with_backoff 3 2 kubectl apply -k "deploy/overlays/dev" || {
+        warn "Failed to reapply kustomize overlay"
+    }
+
+    # Restart the deployment to pick up ConfigMap changes
     kubectl -n "$CTRL_NAMESPACE" rollout restart deploy/haproxy-template-ic
     kubectl -n "$CTRL_NAMESPACE" rollout status deploy/haproxy-template-ic --timeout="${TIMEOUT}s"
     ok "Controller restarted successfully"

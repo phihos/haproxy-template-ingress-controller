@@ -380,34 +380,71 @@ def config_from_dict(data: dict[str, Any]) -> Config:
         return config
     except Exception as e:
         # Provide detailed error context for common configuration issues
-        error_msg = "Configuration validation failed"
+        error_parts = ["Configuration validation failed"]
 
         # Check for specific validation error patterns and provide helpful guidance
         error_str = str(e)
         if "template_snippets" in error_str and "model_type" in error_str:
-            error_msg += "\n\n🔧 TEMPLATE SNIPPETS FORMAT ERROR:\nYour template_snippets are using the wrong format. Each snippet must be a dictionary with 'name' and 'template' fields.\n\n"
-            error_msg += "❌ INCORRECT FORMAT:\n"
-            error_msg += "template_snippets:\n"
-            error_msg += "  snippet-name: |\n"
-            error_msg += "    template content\n\n"
-            error_msg += "✅ CORRECT FORMAT:\n"
-            error_msg += "template_snippets:\n"
-            error_msg += "  snippet-name:\n"
-            error_msg += "    name: snippet-name\n"
-            error_msg += "    template: |\n"
-            error_msg += "      template content\n\n"
+            error_parts.extend(
+                [
+                    "",
+                    "🔧 TEMPLATE SNIPPETS FORMAT ERROR:",
+                    "Your template_snippets are using the wrong format. Each snippet must be a dictionary with 'name' and 'template' fields.",
+                    "",
+                    "❌ INCORRECT FORMAT:",
+                    "template_snippets:",
+                    "  snippet-name: |",
+                    "    template content",
+                    "",
+                    "✅ CORRECT FORMAT:",
+                    "template_snippets:",
+                    "  snippet-name:",
+                    "    name: snippet-name",
+                    "    template: |",
+                    "      template content",
+                    "",
+                ]
+            )
         elif "watched_resources" in error_str:
-            error_msg += "\n\n🔧 WATCHED RESOURCES ERROR:\nThere's an issue with your watched_resources configuration. Check api_version, kind, and other required fields.\n\n"
+            error_parts.extend(
+                [
+                    "",
+                    "🔧 WATCHED RESOURCES ERROR:",
+                    "There's an issue with your watched_resources configuration. Check api_version, kind, and other required fields.",
+                    "",
+                ]
+            )
         elif "pod_selector" in error_str:
-            error_msg += "\n\n🔧 POD SELECTOR ERROR:\nYour pod_selector configuration is invalid. Ensure match_labels is a non-empty dictionary.\n\n"
+            error_parts.extend(
+                [
+                    "",
+                    "🔧 POD SELECTOR ERROR:",
+                    "Your pod_selector configuration is invalid. Ensure match_labels is a non-empty dictionary.",
+                    "",
+                ]
+            )
         elif "haproxy_config" in error_str:
-            error_msg += "\n\n🔧 HAPROXY CONFIG ERROR:\nYour haproxy_config template is invalid. Ensure it contains a valid Jinja2 template string.\n\n"
+            error_parts.extend(
+                [
+                    "",
+                    "🔧 HAPROXY CONFIG ERROR:",
+                    "Your haproxy_config template is invalid. Ensure it contains a valid Jinja2 template string.",
+                    "",
+                ]
+            )
         elif "dataplane_auth" in error_str or "validation_auth" in error_str:
-            error_msg += "\n\n🔧 CREDENTIALS MOVED TO SECRET:\nAuthentication fields are no longer supported in ConfigMaps. You must provide credentials via a Kubernetes Secret using --secret-name parameter.\n\n"
+            error_parts.extend(
+                [
+                    "",
+                    "🔧 CREDENTIALS MOVED TO SECRET:",
+                    "Authentication fields are no longer supported in ConfigMaps. You must provide credentials via a Kubernetes Secret using --secret-name parameter.",
+                    "",
+                ]
+            )
 
-        error_msg += f"\nDETAILED ERROR:\n{e}"
+        error_parts.extend(["", "DETAILED ERROR:", f"{e}"])
 
-        raise ValueError(error_msg) from e
+        raise ValueError("\n".join(error_parts)) from e
 
 
 # Type aliases for collections

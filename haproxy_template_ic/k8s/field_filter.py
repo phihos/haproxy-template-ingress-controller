@@ -12,6 +12,7 @@ from functools import lru_cache
 from typing import Any
 
 import jsonpath
+from jsonpath import JSONPathMatch
 from jsonpath.exceptions import JSONPathError
 
 logger = logging.getLogger(__name__)
@@ -93,21 +94,18 @@ def remove_fields_from_resource(
     return filtered_resource
 
 
-def _remove_field_at_path(obj: Any, match: Any) -> None:
+def _remove_field_at_path(obj: Any, match: JSONPathMatch) -> None:
     """Remove a field at the specified JSONPath match.
 
     Args:
         obj: The object to modify
-        match: JSONPath match object from finditer with parts attribute
+        match: JSONPath match object from finditer
     """
-    if not hasattr(match, "parts") or not match.parts:
-        return
-
     # Get the path parts
-    parts = match.parts
+    parts: tuple[str, ...] = match.parts
 
-    # Can't remove root
-    if len(parts) == 0:
+    # Can't remove root (empty parts)
+    if not parts:
         return
 
     # Navigate to parent of the field to remove

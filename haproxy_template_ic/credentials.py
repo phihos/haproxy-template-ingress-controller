@@ -137,12 +137,12 @@ def _decode_field(val: Any) -> str | None:
     return None
 
 
-def validate_k8s_name(ctx, param, name: str) -> str:
+def validate_k8s_name(_ctx, _param, name: str) -> str:
     """Validate Kubernetes resource name format.
 
     Args:
-        ctx: Click context (unused)
-        param: Click parameter (unused)
+        _ctx: Click context (unused)
+        _param: Click parameter (unused)
         name: Name to validate
 
     Returns:
