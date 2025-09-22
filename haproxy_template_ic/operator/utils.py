@@ -69,10 +69,8 @@ def trigger_reload(memo: ApplicationState) -> None:
     """
     logger.debug("Triggering configuration reload")
 
-    # Set the reload flag
     memo.runtime.config_reload_flag.set_result(None)
     logger.debug("Set config_reload_flag")
 
-    # Set the stop flag
     memo.runtime.stop_flag.set_result(None)
     logger.debug("Set stop_flag")

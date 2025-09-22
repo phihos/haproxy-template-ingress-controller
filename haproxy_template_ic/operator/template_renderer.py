@@ -6,7 +6,7 @@ template-based content with metrics and error handling.
 """
 
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from kopf._core.engines.indexing import OperatorIndices
 
@@ -44,8 +44,8 @@ __all__ = [
 
 
 def _prepare_template_context(
-    haproxy_config_context: HAProxyConfigContext, indices: Dict[str, Any]
-) -> Tuple[TemplateContext, Dict[str, Any], List]:
+    haproxy_config_context: HAProxyConfigContext, indices: dict[str, Any]
+) -> tuple[TemplateContext, dict[str, Any], list]:
     """Prepare template context and variables for rendering."""
     haproxy_config_context.rendered_content.clear()
     haproxy_config_context._clear_cache()
@@ -81,7 +81,7 @@ def _render_haproxy_config(
     config: Config,
     haproxy_config_context: HAProxyConfigContext,
     template_renderer: TemplateRenderer,
-    template_vars: Dict[str, Any],
+    template_vars: dict[str, Any],
     metrics: MetricsCollector,
 ) -> None:
     """Render the main HAProxy configuration template."""
@@ -115,9 +115,9 @@ def _render_content_templates(
     config: Config,
     template_renderer: TemplateRenderer,
     haproxy_config_context: HAProxyConfigContext,
-    template_vars: Dict[str, Any],
+    template_vars: dict[str, Any],
     metrics: Any,
-) -> List:
+) -> list:
     """Render all content templates (maps, certificates, files)."""
     content_collections = [
         (CONTENT_TYPE_MAP, config.maps),
@@ -175,7 +175,7 @@ def _render_content_templates(
     return template_errors
 
 
-def _validate_template_errors(template_errors: List) -> None:
+def _validate_template_errors(template_errors: list) -> None:
     """Validate and handle template rendering errors."""
     if template_errors:
         error_count = len(template_errors)
@@ -281,7 +281,7 @@ async def render_haproxy_templates(
         # Trigger synchronization with HAProxy instances
         try:
             await synchronize_with_haproxy_instances(
-                config, haproxy_config_context, kopf_indices, config_synchronizer
+                haproxy_config_context, config_synchronizer
             )
             logger.debug("🚀 HAProxy synchronization completed successfully")
         except Exception as sync_error:

@@ -153,7 +153,7 @@ uv run ruff format
 uv run ruff check --fix
 
 # Type checking
-uv run mypy haproxy_template_ic/
+uv run ty check haproxy_template_ic/
 
 # Security scan
 uv run bandit -c pyproject.toml -r haproxy_template_ic/
@@ -168,7 +168,7 @@ Automatically runs on commit:
 
 - ruff format
 - ruff check
-- mypy
+- ty
 - bandit
 
 Skip hooks if needed:
@@ -247,7 +247,7 @@ FROM production AS coverage
     ```bash
     uv run ruff format
     uv run ruff check --fix
-    uv run mypy haproxy_template_ic/
+    uv run ty check haproxy_template_ic/
     ```
 4. Commit with conventional format:
     ```bash

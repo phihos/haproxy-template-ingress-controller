@@ -8,20 +8,13 @@ import pytest
 from haproxy_template_ic.constants import HAPROXY_PODS_INDEX
 from haproxy_template_ic.models.config import Config, OperatorConfig
 from haproxy_template_ic.operator.index_sync import IndexSynchronizationTracker
+from tests.unit.conftest import create_config_mock_with_watched_resources
 
 
 @pytest.fixture
 def config():
     """Create a mock config for testing."""
-    config = Mock(spec=Config)
-    config.operator = Mock(spec=OperatorConfig)
-    config.operator.index_initialization_timeout = 5
-    config.watched_resources = {
-        "services": Mock(),
-        "ingresses": Mock(),
-        "secrets": Mock(),
-    }
-    return config
+    return create_config_mock_with_watched_resources()
 
 
 @pytest.fixture

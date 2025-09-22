@@ -9,19 +9,22 @@ import asyncio
 import functools
 import logging
 import re
-from typing import Any, Dict, List, Optional, Union
+import traceback
+from typing import Any, Callable, TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
 
 import httpx
 from haproxy_dataplane_v3 import errors
-from haproxy_dataplane_v3.api.configuration import get_configuration_version
 
-from .errors import DataplaneAPIError, ValidationError
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import (
     record_span_event,
     set_span_error,
 )
+
+if TYPE_CHECKING:
+    from .types import DataplaneAPIError
+
 
 __all__ = [
     "normalize_dataplane_url",
@@ -30,19 +33,50 @@ __all__ = [
     "extract_config_context",
     "parse_validation_error_details",
     "handle_dataplane_errors",
-    "_get_configuration_version",
-    "_fetch_with_metrics",
-    "_natural_sort_key",
-    "MAX_CONFIG_COMPARISON_CHANGES",
+    "natural_sort_key",
+    "extract_exception_origin",
 ]
 
 logger = logging.getLogger(__name__)
 
-# Constants for configuration comparison performance
-MAX_CONFIG_COMPARISON_CHANGES = 10  # Stop comparison after finding this many changes
+
+def extract_exception_origin(exc: Exception) -> str:
+    """Extract detailed origin information from an exception.
+
+    Returns a formatted string with filename, line number, and function name
+    where the exception occurred, along with the full traceback.
+
+    Args:
+        exc: The exception to analyze
+
+    Returns:
+        Formatted string with exception origin details
+    """
+    try:
+        tb = exc.__traceback__
+        if tb is None:
+            return "Origin: No traceback available"
+
+        # Extract the last frame (where the actual error occurred)
+        tb_lines = traceback.extract_tb(tb)
+        if not tb_lines:
+            return "Origin: No traceback frames available"
+
+        # Get the innermost frame (actual error location)
+        last_frame = tb_lines[-1]
+        origin_info = (
+            f"Origin: {last_frame.filename}:{last_frame.lineno} in {last_frame.name}()"
+        )
+
+        # Get full traceback for debugging
+        full_traceback = "".join(traceback.format_tb(tb)).strip()
+
+        return f"{origin_info}\nCall Stack:\n{full_traceback}"
+    except Exception as extract_error:
+        return f"Origin: Error extracting traceback: {extract_error}"
 
 
-def _natural_sort_key(name: str) -> tuple:
+def natural_sort_key(name: str) -> tuple:
     """Extract numeric parts for natural sorting of names like SRV_1, SRV_10.
 
     This function splits a string into alternating text and numeric parts,
@@ -100,7 +134,7 @@ def normalize_dataplane_url(base_url: str) -> str:
 
     # Reconstruct the URL with normalized path
     try:
-        return urlunparse(
+        result = urlunparse(
             (
                 parsed.scheme,
                 parsed.netloc,
@@ -110,6 +144,7 @@ def normalize_dataplane_url(base_url: str) -> str:
                 parsed.fragment,
             )
         )
+        return str(result) if isinstance(result, bytes) else result
     except ValueError:
         # If reconstruction fails, use simple string concatenation
         if not base_url.endswith("/v3"):
@@ -117,7 +152,7 @@ def normalize_dataplane_url(base_url: str) -> str:
         return base_url
 
 
-def extract_hostname_from_url(url: str) -> Optional[str]:
+def extract_hostname_from_url(url: str) -> str | None:
     """Extract hostname from a URL.
 
     Args:
@@ -137,7 +172,7 @@ def extract_hostname_from_url(url: str) -> Optional[str]:
         return None
 
 
-def parse_haproxy_error_line(error_message: str) -> Optional[int]:
+def parse_haproxy_error_line(error_message: str) -> int | None:
     """Extract line number from HAProxy validation error messages.
 
     HAProxy errors often contain line numbers in formats like:
@@ -218,8 +253,8 @@ def extract_config_context(
 
 
 def parse_validation_error_details(
-    error_response: str, config_content: Optional[str] = None
-) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    error_response: str, config_content: str | None = None
+) -> tuple[str | None, int | None, str | None]:
     """Parse HAProxy validation error response to extract structured details.
 
     Args:
@@ -246,7 +281,7 @@ def parse_validation_error_details(
     return validation_details, error_line, error_context
 
 
-def _to_dict_safe(obj: Any) -> Union[Dict[str, Any], Any]:
+def _to_dict_safe(obj: Any) -> dict[str, Any] | Any:
     """Safely convert an object to dictionary, handling serialization errors gracefully."""
     try:
         return obj.to_dict() if hasattr(obj, "to_dict") else obj
@@ -258,7 +293,7 @@ def _to_dict_safe(obj: Any) -> Union[Dict[str, Any], Any]:
         }
 
 
-def _check_early_exit_condition(changes: List[str], max_changes: int) -> bool:
+def _check_early_exit_condition(changes: list[str], max_changes: int) -> bool:
     """Check if early exit condition is met for comparison operations.
 
     Args:
@@ -285,49 +320,9 @@ def _log_fetch_error(resource_type: str, identifier: str, error: Exception) -> N
     logger.debug(f"Could not fetch {resource_type} {identifier}: {error}")
 
 
-async def _get_configuration_version(client: Any) -> int | None:
-    """Get the current HAProxy configuration version.
-
-    Args:
-        client: The dataplane API client
-
-    Returns:
-        Configuration version number or None if failed to fetch
-    """
-    try:
-        # TODO Check for type instead of assuming int
-        return await get_configuration_version.asyncio(client=client)  # type: ignore[return-value]
-    except Exception:
-        # Silently return None for version fetch failures
-        return None
-
-
-async def _fetch_with_metrics(
-    operation_name: str,
-    fetch_func,
-    client: Any,
-    metrics,
-    default_value: Optional[Any] = None,
-) -> Any:
-    """Fetch configuration data with metrics timing.
-
-    Args:
-        operation_name: Name for metrics tracking
-        fetch_func: Async function to call for fetching data
-        client: Dataplane API client
-        metrics: Metrics collector instance
-        default_value: Value to return if fetch_func returns None/empty
-
-    Returns:
-        Result from fetch_func or default_value if result is falsy
-    """
-    with metrics.time_dataplane_api_operation(operation_name):
-        return await fetch_func(client=client) or default_value
-
-
 def _handle_exception(
     exception: Exception, op_name: str, metrics, endpoint: str
-) -> DataplaneAPIError:
+) -> "DataplaneAPIError":
     """Handle exceptions consistently for dataplane operations.
 
     Args:
@@ -339,6 +334,8 @@ def _handle_exception(
     Returns:
         DataplaneAPIError with proper context and chaining
     """
+    from .types import DataplaneAPIError, ValidationError
+
     if isinstance(exception, (ValidationError, DataplaneAPIError)):
         # Re-raise these without wrapping
         raise exception
@@ -374,7 +371,9 @@ def _handle_exception(
         ) from exception
 
 
-def handle_dataplane_errors(operation_name: Optional[str] = None):
+def handle_dataplane_errors(
+    operation_name: str | None = None,
+) -> Callable[[Callable], Callable]:
     """Decorator to standardize error handling for dataplane operations.
 
     Automatically wraps exceptions in DataplaneAPIError with consistent context,
@@ -386,31 +385,27 @@ def handle_dataplane_errors(operation_name: Optional[str] = None):
 
     def decorator(func):
         @functools.wraps(func)
-        async def async_wrapper(self, *args, **kwargs):
+        def wrapper(self, *args, **kwargs):
             op_name = operation_name or func.__name__
             metrics = get_metrics_collector()
-            endpoint = getattr(self, "base_url", "unknown")
+            endpoint = getattr(self, "endpoint", getattr(self, "base_url", "unknown"))
 
             try:
-                return await func(self, *args, **kwargs)
+                result = func(self, *args, **kwargs)
+                # Handle async results properly
+                if asyncio.iscoroutine(result):
+
+                    async def async_handler():
+                        try:
+                            return await result
+                        except Exception as e:
+                            _handle_exception(e, op_name, metrics, endpoint)
+
+                    return async_handler()
+                return result
             except Exception as e:
                 _handle_exception(e, op_name, metrics, endpoint)
 
-        @functools.wraps(func)
-        def sync_wrapper(self, *args, **kwargs):
-            op_name = operation_name or func.__name__
-            metrics = get_metrics_collector()
-            endpoint = getattr(self, "base_url", "unknown")
-
-            try:
-                return func(self, *args, **kwargs)
-            except Exception as e:
-                _handle_exception(e, op_name, metrics, endpoint)
-
-        # Return the appropriate wrapper based on whether the function is async
-        if asyncio.iscoroutinefunction(func):
-            return async_wrapper
-        else:
-            return sync_wrapper
+        return wrapper
 
     return decorator

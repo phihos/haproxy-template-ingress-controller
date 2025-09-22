@@ -3,11 +3,12 @@
 # configuration synchronization, and deployment management
 
 # Export public API
-from .errors import DataplaneAPIError, ValidationError
-from .models import ConfigChange, get_production_urls_from_index
+from .types import DataplaneAPIError, ValidationError
+from .types import ConfigChange, get_production_urls_from_index
 from .client import DataplaneClient
 from .synchronizer import ConfigSynchronizer
 from .utils import normalize_dataplane_url
+from .endpoint import DataplaneEndpoint, DataplaneEndpointSet
 
 __all__ = [
     # Error classes
@@ -20,4 +21,7 @@ __all__ = [
     "ConfigChange",
     "get_production_urls_from_index",
     "normalize_dataplane_url",
+    # Infrastructure classes (for advanced use)
+    "DataplaneEndpoint",
+    "DataplaneEndpointSet",
 ]

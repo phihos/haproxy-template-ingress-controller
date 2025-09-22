@@ -27,12 +27,12 @@ dependencies = [
     "python-jsonpath>=1.2.0",
     "pyyaml>=6.0.2",
     "structlog>=25.4.0",
-    "tenacity>=9.1.0",
     "typing-extensions>=4.0.0", # Required by generated client
     "urllib3>=2.0.0", # Required by generated client (with asyncio support)
     "uvloop>=0.21.0",
     "xxhash>=3.5.0", # Fast non-cryptographic hashing for content change detection
-    "haproxy_dataplane_v3"
+    "orjson>=3.10.0", # Fast JSON serialization for structured logging
+    "haproxy_dataplane_v3",
 ]
 
 [dependency-groups]
@@ -45,7 +45,6 @@ dev = [
     "docker>=7.1.0",
     "filelock>=3.19.1",
     "lint>=1.2.1",
-    "mypy>=1.8.0",
     "oscrypto @ git+https://github.com/wbond/oscrypto.git@d5f3437", # Fix for OpenSSL 3.0.10+ version detection bug
     "prometheus-client>=0.22.1",
     "pytest>=8.4.1",
@@ -58,6 +57,7 @@ dev = [
     "python-on-whales>=0.78.0",
     "requests>=2.32.4",
     "ruff>=0.12.7",
+    "ty>=0.0.1a21",
     "types-click>=7.1.8",
     "types-pygments>=2.19.0.20250809",
     "types-PyYAML>=6.0.0",
@@ -98,6 +98,7 @@ addopts = [
     "--strict-config",
     "--cluster-name=haproxy-template-ic-test",
     "--kubeconfig=.pytest-kind/haproxy-template-ic-test/kubeconfig",
+    "-n=auto",
 ]
 markers = [
     "acceptance: marks tests as acceptance/end-to-end tests (deselect with '-m \"not acceptance\"')",
@@ -149,54 +150,25 @@ exclude_lines = [
     "@(abc\\.)?abstractmethod",
 ]
 
-[tool.mypy]
-python_version = "3.13"
-strict = false
-warn_return_any = false
-warn_unused_configs = false
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-check_untyped_defs = false
-disallow_untyped_decorators = false
-no_implicit_optional = false
-warn_redundant_casts = false
-warn_unused_ignores = false
-warn_no_return = false
-warn_unreachable = false
-ignore_errors = false
+[tool.ty]
+# Environment configuration
+[tool.ty.environment]
+python-version = "3.13"
 
-# Exclude test files and generated code for now to focus on production code
+# Source configuration - exclude test files and generated code for now to focus on production code
+[tool.ty.src]
 exclude = [
     "tests/.*",
     "codegen/.*",  # Exclude generated code
     "haproxy_template_ic/dashboard/.*",  # Dashboard modules under development
 ]
 
-# For third-party libraries without type stubs or py.typed markers
-# We only ignore imports for libraries that genuinely lack typing support
-[[tool.mypy.overrides]]
-module = [
-    "kopf.*",        # Kubernetes operator framework - no official type stubs
-    "kr8s.*",        # Kubernetes library - no official type stubs  
-    "kubernetes.*",  # Official Kubernetes client - no official type stubs
-    "deepdiff.*",    # Deep difference library - no official type stubs
-    "docker.*",      # Docker library - no official type stubs
-    "python_on_whales.*",  # Docker wrapper - no official type stubs
-    "haproxy_dataplane_v3.*",  # Generated HAProxy Dataplane API client
-    "circuitbreaker.*",  # Circuit breaker library - no official type stubs
-    "haproxy_template_ic.dashboard.*",  # Dashboard modules - under development
-]
-ignore_missing_imports = true
+# Rules configuration - keep permissive for now to match mypy behavior
+[tool.ty.rules]
+# Configure rules to be less strict to match current mypy configuration
+# Most rules default to appropriate levels for gradual adoption
 
-# Be more lenient with kopf-related issues
-[[tool.mypy.overrides]]
-module = "haproxy_template_ic.operator"
-warn_return_any = false
-disallow_any_expr = false
-disallow_any_decorated = false
-disallow_any_explicit = false
-# Ignore kopf signature incompatibilities
-disable_error_code = ["arg-type"]
+# Configuration can be extended with overrides for specific modules or rules as needed
 
 [tool.bandit]
 exclude_dirs = ["tests", "codegen"]  # Don't security-scan generated code

@@ -8,7 +8,6 @@ templates are refreshed periodically.
 
 import asyncio
 import time
-from typing import Optional
 
 import structlog
 from kopf._core.engines.indexing import OperatorIndices
@@ -77,7 +76,7 @@ class TemplateRenderDebouncer:
         self.index_tracker = index_tracker
 
         self._event = asyncio.Event()
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._last_render_time: float = 0
         self._stop: bool = False
         self._change_count = 0

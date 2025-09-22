@@ -11,7 +11,7 @@ import os
 import re
 import sys
 from functools import lru_cache
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 import jinja2
 from jinja2 import (
@@ -23,7 +23,6 @@ from jinja2 import (
 )
 from pathvalidate import ValidationError, is_valid_filename, sanitize_filename
 
-# Import Pydantic models and collection type aliases
 from .constants import (
     MAX_TEMPLATE_FRAMES,
     TEMPLATE_CACHE_SIZE,
@@ -47,7 +46,7 @@ def b64decode_filter(value: str) -> str:
         raise ValueError(f"Failed to decode base64 value: {e}") from e
 
 
-def logarithm_filter(x, base=math.e):
+def logarithm_filter(x, base=math.e) -> float:
     """Ansible-style logarithm filter."""
     try:
         if base == 10:
@@ -58,9 +57,7 @@ def logarithm_filter(x, base=math.e):
         raise ValueError("logarithm() can only be used on numbers") from ex
 
 
-def get_path_filter(
-    filename: str, content_type: str, config: Optional[Any] = None
-) -> str:
+def get_path_filter(filename: str, content_type: str, config: Any | None = None) -> str:
     """Custom Jinja2 filter to resolve full paths from filenames with security validation.
 
     Args:
@@ -112,7 +109,6 @@ def get_path_filter(
             f"Invalid content_type '{content_type}'. Must be one of: {valid_types}"
         )
 
-    # Get base directory
     if config is None:
         # Fallback to defaults if no config provided
         base_dirs = {
@@ -122,7 +118,6 @@ def get_path_filter(
         }
         base_dir = base_dirs[content_type]
     else:
-        # Use config storage directories
         base_dirs = {
             "map": config.storage_maps_dir,
             "certificate": config.storage_ssl_dir,
@@ -150,12 +145,12 @@ def get_path_filter(
 class SnippetLoader(BaseLoader):
     """Custom Jinja2 loader that can resolve template snippets by name."""
 
-    def __init__(self, snippets: Optional[TemplateSnippetCollection] = None):
+    def __init__(self, snippets: TemplateSnippetCollection | None = None):
         self.snippets = snippets if snippets is not None else {}
 
     def get_source(
         self, environment: Environment, template: str
-    ) -> tuple[str, Optional[str], Optional[Callable]]:
+    ) -> tuple[str, str | None, Callable | None]:
         """Get template source for snippet name."""
         # Handle snippets dict (current format)
         snippet = self.snippets.get(template)
@@ -163,12 +158,11 @@ class SnippetLoader(BaseLoader):
         if snippet is None:
             raise TemplateNotFound(template)
 
-        # Get template content from snippet
         source = snippet.template if hasattr(snippet, "template") else str(snippet)
         return source, None, lambda: True
 
 
-def _extract_snippet_name(line_text: str) -> Optional[str]:
+def _extract_snippet_name(line_text: str) -> str | None:
     """Extract snippet name from an include statement.
 
     Args:
@@ -218,7 +212,7 @@ def _get_context_lines(
 
 
 def _format_snippet_context(
-    snippet_name: Optional[str],
+    snippet_name: str | None,
     line_no: int,
     lines: list[str],
     line_idx: int,
@@ -244,7 +238,6 @@ def _format_snippet_context(
     if not context_lines:
         return context_parts
 
-    # Build header based on context type
     if snippet_name:
         if is_error:
             header = f"\n  ↓ Snippet '{snippet_name}' (error at line {line_no}):\n"
@@ -266,8 +259,8 @@ def _format_snippet_context(
 
 def _process_include_chain(
     template_frames: list[dict[str, Any]],
-    template_content: Optional[str],
-    snippets: Optional[TemplateSnippetCollection],
+    template_content: str | None,
+    snippets: TemplateSnippetCollection | None,
 ) -> list[str]:
     """Process a chain of includes to build error context.
 
@@ -288,7 +281,6 @@ def _process_include_chain(
         frame_line_no: int = frame_dict["line"]
         is_last = frame_idx == len(template_frames) - 1
 
-        # Get the content to analyze
         content_to_analyze = current_content
 
         # For intermediate frames, get content from the previous snippet
@@ -318,7 +310,6 @@ def _process_include_chain(
             # Try to extract the snippet name from include statement
             snippet_name_for_next = _extract_snippet_name(lines[line_idx])
 
-        # Store frame info
         include_chain.append(
             {
                 "line_no": frame_line_no,
@@ -329,7 +320,6 @@ def _process_include_chain(
             }
         )
 
-        # Update current content for next iteration
         current_content = content_to_analyze
 
     # Now display the chain
@@ -351,7 +341,6 @@ def _process_include_chain(
             is_error = chain_item["is_last"]
             is_include = not is_error and idx < len(include_chain) - 1
 
-            # Get snippet name from previous item if available
             snippet_name = None
             if idx > 0 and include_chain[idx - 1].get("next_snippet_name"):
                 snippet_name = include_chain[idx - 1]["next_snippet_name"]
@@ -366,7 +355,6 @@ def _process_include_chain(
                     header = f"\n  Main template (include at line {chain_item['line_no']}):\n"
                     error_parts.append(header + "\n".join(context_lines))
             else:
-                # Use helper to format snippet context
                 context = _format_snippet_context(
                     snippet_name,
                     chain_item["line_no"],
@@ -383,8 +371,8 @@ def _process_include_chain(
 def format_template_error(
     e: Exception,
     template_name: str = "template",
-    template_content: Optional[str] = None,
-    snippets: Optional[TemplateSnippetCollection] = None,
+    template_content: str | None = None,
+    snippets: TemplateSnippetCollection | None = None,
 ) -> str:
     """Format a template error with detailed context for debugging.
 
@@ -442,7 +430,6 @@ def format_template_error(
                 error_parts.append("\n\n  Error occurred through nested includes:")
                 error_parts.append(f"\n  Error: {str(e)}\n")
 
-                # Use helper to process include chain
                 chain_context = _process_include_chain(
                     template_frames, template_content, snippets
                 )
@@ -452,7 +439,6 @@ def format_template_error(
                 error_parts.append("\n\n  Error occurred in included snippet:")
                 error_parts.append(f"\n  Error: {str(e)}\n")
 
-                # Use helper to process the simpler two-level case
                 chain_context = _process_include_chain(
                     template_frames, template_content, snippets
                 )
@@ -477,7 +463,6 @@ def format_template_error(
         # No line number available
         error_parts.append(f": {str(e)}")
 
-    # Add specific guidance for common errors
     error_str = str(e).lower()
     if "nonetype" in error_str and "is not iterable" in error_str:
         error_parts.append(
@@ -500,29 +485,25 @@ def format_template_error(
 
 
 def get_template_environment(
-    snippets: Optional[TemplateSnippetCollection] = None,
+    snippets: TemplateSnippetCollection | None = None,
     config=None,
 ) -> Environment:
     """Get or create a Jinja2 environment with snippet support."""
-    # Create snippet loader
     snippet_loader = SnippetLoader(snippets)
 
-    # Create environment with custom loader and filters
     env = Environment(
         loader=snippet_loader,
         autoescape=False,  # HAProxy config shouldn't be HTML-escaped  # nosec B701
         trim_blocks=False,  # Rely on manual whitespace control to create fewer surprises
         lstrip_blocks=False,  # Rely on manual whitespace control to create fewer surprises
+        keep_trailing_newline=True,  # HAProxy requires configs to end with newline
         extensions=["jinja2.ext.do"],  # Enable do extension for {% do %} statements
     )
 
-    # Add custom filters
     env.filters["b64decode"] = b64decode_filter
 
-    # Add math filters (Ansible-style)
     env.filters["log"] = logarithm_filter
 
-    # Add get_path filter with config access
     def get_path_with_config(filename: str, content_type: str) -> str:
         return get_path_filter(filename, content_type, config)
 
@@ -536,7 +517,7 @@ class TemplateEnvironmentFactory:
 
     @staticmethod
     def create_environment(
-        snippets: Optional[TemplateSnippetCollection] = None,
+        snippets: TemplateSnippetCollection | None = None,
         config=None,
     ) -> Environment:
         """Create a Jinja2 environment with the given snippets."""
@@ -546,9 +527,7 @@ class TemplateEnvironmentFactory:
 class TemplateCompiler:
     """Service for compiling Jinja2 templates with dependency injection."""
 
-    def __init__(
-        self, snippets: Optional[TemplateSnippetCollection] = None, config=None
-    ):
+    def __init__(self, snippets: TemplateSnippetCollection | None = None, config=None):
         """Initialize the compiler with template snippets."""
         self.environment = TemplateEnvironmentFactory.create_environment(
             snippets, config
@@ -561,7 +540,7 @@ class TemplateCompiler:
 
 @lru_cache(maxsize=TEMPLATE_CACHE_SIZE)
 def compile_template(
-    template_str: str, snippets_tuple: Optional[tuple] = None
+    template_str: str, snippets_tuple: tuple | None = None
 ) -> Template:
     """Compile a template string with caching."""
     # Convert tuple back to dict for snippet environment
@@ -576,8 +555,8 @@ def compile_template(
 
 def render_template(
     template_str: str,
-    context: Dict[str, Any],
-    snippets: Optional[TemplateSnippetCollection] = None,
+    context: dict[str, Any],
+    snippets: TemplateSnippetCollection | None = None,
 ) -> str:
     """Render a template with the given context and snippets."""
     # Convert snippets to tuple for caching
@@ -598,7 +577,7 @@ class TemplateRenderer:
     """
 
     def __init__(
-        self, template_snippets: Optional[TemplateSnippetCollection] = None, config=None
+        self, template_snippets: TemplateSnippetCollection | None = None, config=None
     ):
         """Initialize the renderer with template snippets.
 
@@ -607,7 +586,7 @@ class TemplateRenderer:
             config: Configuration object for get_path filter
         """
         self._compiler = TemplateCompiler(template_snippets, config)
-        self._compiled_templates: Dict[str, Template] = {}
+        self._compiled_templates: dict[str, Template] = {}
 
     @classmethod
     def from_config(cls, config) -> "TemplateRenderer":
@@ -622,7 +601,7 @@ class TemplateRenderer:
         return cls(template_snippets=config.template_snippets, config=config)
 
     def render(
-        self, template_str: str, template_name: Optional[str] = None, **context: Any
+        self, template_str: str, template_name: str | None = None, **context: Any
     ) -> str:
         """Compile (with caching) and render a template.
 

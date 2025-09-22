@@ -11,8 +11,9 @@ import functools
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Iterator, Callable, TypeVar, Awaitable, cast
+from typing import Any, Awaitable, Callable, Iterator, TypeVar, cast
 
+import structlog
 from opentelemetry import trace
 from opentelemetry.exporter.jaeger.thrift import JaegerExporter
 from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
@@ -20,11 +21,14 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry.trace import Status, StatusCode
-import structlog
 
 from haproxy_template_ic.core.error_handling import handle_exceptions
+
+SERVICE_NAME = "service.name"
+SERVICE_VERSION = "service.version"
+SERVICE_INSTANCE_ID = "service.instance.id"
+
 
 logger = structlog.get_logger(__name__)
 
@@ -39,7 +43,7 @@ class TracingConfig:
     enabled: bool = False
     service_name: str = "haproxy-template-ic"
     service_version: str = "1.0.0"
-    jaeger_endpoint: Optional[str] = None
+    jaeger_endpoint: str | None = None
     sample_rate: float = 1.0
     console_export: bool = False
 
@@ -49,8 +53,8 @@ class TracingManager:
 
     def __init__(self, config: TracingConfig):
         self.config = config
-        self.tracer_provider: Optional[TracerProvider] = None
-        self.tracer: Optional[trace.Tracer] = None
+        self.tracer_provider: TracerProvider | None = None
+        self.tracer: trace.Tracer | None = None
         self._instrumented = False
 
     def initialize(self) -> None:
@@ -65,14 +69,11 @@ class TracingManager:
             jaeger_endpoint=self.config.jaeger_endpoint,
         )
 
-        # Create resource with service metadata
         resource = Resource(
             {
-                ResourceAttributes.SERVICE_NAME: self.config.service_name,
-                ResourceAttributes.SERVICE_VERSION: self.config.service_version,
-                ResourceAttributes.SERVICE_INSTANCE_ID: os.getenv(
-                    "HOSTNAME", "unknown"
-                ),
+                SERVICE_NAME: self.config.service_name,
+                SERVICE_VERSION: self.config.service_version,
+                SERVICE_INSTANCE_ID: os.getenv("HOSTNAME", "unknown"),
             }
         )
 
@@ -83,7 +84,6 @@ class TracingManager:
         # Add span processors/exporters
         self._configure_exporters()
 
-        # Get tracer instance
         self.tracer = trace.get_tracer(__name__)
 
         # Auto-instrument libraries
@@ -150,10 +150,10 @@ class TracingManager:
 
 
 # Global tracing manager instance
-_tracing_manager: Optional[TracingManager] = None
+_tracing_manager: TracingManager | None = None
 
 
-def get_tracing_manager() -> Optional[TracingManager]:
+def get_tracing_manager() -> TracingManager | None:
     """Get the global tracing manager instance."""
     return _tracing_manager
 
@@ -165,7 +165,7 @@ def initialize_tracing(config: TracingConfig) -> None:
     _tracing_manager.initialize()
 
 
-def get_tracer() -> Optional[trace.Tracer]:
+def get_tracer() -> trace.Tracer | None:
     """Get the configured tracer instance."""
     if _tracing_manager and _tracing_manager.tracer:
         return _tracing_manager.tracer
@@ -175,9 +175,9 @@ def get_tracer() -> Optional[trace.Tracer]:
 @contextmanager
 def trace_operation(
     operation_name: str,
-    attributes: Optional[Dict[str, Any]] = None,
+    attributes: dict[str, Any] | None = None,
     set_status_on_exception: bool = True,
-) -> Iterator[Optional[trace.Span]]:
+) -> Iterator[trace.Span | None]:
     """Context manager for tracing operations with error handling."""
     tracer = get_tracer()
     if not tracer:
@@ -201,19 +201,23 @@ def trace_operation(
 
 
 def trace_async_function(
-    span_name: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None
+    span_name: str | None = None, attributes: dict[str, Any] | None = None
 ) -> Callable[[AsyncF], AsyncF]:
     """Decorator for tracing async functions."""
 
     def decorator(func: AsyncF) -> AsyncF:
-        operation_name = span_name or f"{func.__module__}.{func.__name__}"
+        operation_name = (
+            span_name or f"{func.__module__}.{getattr(func, '__name__', 'unknown')}"
+        )
 
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             with trace_operation(operation_name, attributes) as span:
                 if span:
                     # Add function metadata
-                    span.set_attribute("function.name", func.__name__)
+                    span.set_attribute(
+                        "function.name", getattr(func, "__name__", "unknown")
+                    )
                     span.set_attribute("function.module", func.__module__)
 
                 return await func(*args, **kwargs)
@@ -224,19 +228,23 @@ def trace_async_function(
 
 
 def trace_function(
-    span_name: Optional[str] = None, attributes: Optional[Dict[str, Any]] = None
+    span_name: str | None = None, attributes: dict[str, Any] | None = None
 ) -> Callable[[F], F]:
     """Decorator for tracing synchronous functions."""
 
     def decorator(func: F) -> F:
-        operation_name = span_name or f"{func.__module__}.{func.__name__}"
+        operation_name = (
+            span_name or f"{func.__module__}.{getattr(func, '__name__', 'unknown')}"
+        )
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             with trace_operation(operation_name, attributes) as span:
                 if span:
                     # Add function metadata
-                    span.set_attribute("function.name", func.__name__)
+                    span.set_attribute(
+                        "function.name", getattr(func, "__name__", "unknown")
+                    )
                     span.set_attribute("function.module", func.__module__)
 
                 return func(*args, **kwargs)
@@ -254,14 +262,14 @@ def add_span_attributes(**attributes: Any) -> None:
             current_span.set_attribute(str(key), str(value))
 
 
-def record_span_event(name: str, attributes: Optional[Dict[str, Any]] = None) -> None:
+def record_span_event(name: str, attributes: dict[str, Any] | None = None) -> None:
     """Record an event on the current active span."""
     current_span = trace.get_current_span()
     if current_span and current_span.is_recording():
         current_span.add_event(name, attributes or {})
 
 
-def set_span_error(error: Exception, description: Optional[str] = None) -> None:
+def set_span_error(error: Exception, description: str | None = None) -> None:
     """Mark the current span as having an error."""
     current_span = trace.get_current_span()
     if current_span and current_span.is_recording():
@@ -326,7 +334,6 @@ def create_tracing_config_from_env() -> TracingConfig:
     )
 
 
-# Cleanup function for graceful shutdown
 def shutdown_tracing() -> None:
     """Shutdown distributed tracing."""
     if _tracing_manager:

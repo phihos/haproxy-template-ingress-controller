@@ -7,7 +7,7 @@ This file provides guidance to Claude Code when working with this repository.
 ### Commands
 - **Install dependencies**: `uv sync --group dev`
 - **Tests**: `timeout 480 uv run pytest -n auto` (all), `uv run pytest -m "not integration and not acceptance"` (unit only)
-- **Quality checks**: `uv run ruff format`, `uv run ruff check --fix`, `uv run mypy haproxy_template_ic/`
+- **Quality checks**: `uv run ruff format`, `uv run ruff check --fix`, `uv run ty check haproxy_template_ic/`
 - **Development**: `bash ./scripts/start-dev-env.sh up` (start), `restart` (after code changes), `logs` (monitor)
 
 ### Documentation Links
@@ -54,6 +54,18 @@ This file provides guidance to Claude Code when working with this repository.
 - **Module-level imports**: Prefer over local imports when possible
 - **No defensive programming**: Leverage type safety instead of getattr()/hasattr() patterns
 - **Package exports**: Import from packages (`from haproxy_template_ic.dataplane import DataplaneClient`), not submodules
+
+### Comment Quality Standards
+- **No meta-comments**: Remove comments about code history, cleanup status, or implementation decisions
+- **No obvious comments**: Comments should explain WHY, never WHAT the code does
+- **No phase/DRY/library comments**: Remove development artifact comments like "Phase 2 DRY: Extended Mock Factory Library"
+- **Code should be self-documenting**: Use descriptive names instead of comments
+- **Modern Python syntax**: Use pipe syntax (`str | None`) instead of `Union[str, None]` for type hints
+
+### Documentation Standards
+- **No performance claims**: Never include performance metrics, timing claims, or scale assertions without measured data
+- **Factual information only**: Document only verified, testable behavior and requirements
+- **No speculation**: Avoid "should", "typically", "usually" - use definitive statements based on facts
 
 ## Critical Architectural Decisions
 
@@ -108,7 +120,7 @@ Application configured via:
 All must pass before PR merge:
 - `timeout 480 uv run pytest -n auto` (full test suite)
 - `uv run ruff format` and `uv run ruff check --fix`
-- `uv run mypy haproxy_template_ic/`
+- `uv run ty check haproxy_template_ic/`
 - `uv run bandit -c pyproject.toml -r haproxy_template_ic/`
 
 ## Troubleshooting Quick Reference

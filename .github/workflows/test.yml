@@ -34,7 +34,7 @@ jobs:
         run: uv run --frozen ruff check
 
       - name: Run type checking
-        run: uv run --frozen mypy haproxy_template_ic/
+        run: uv run --frozen ty check --exclude "tests/**" --exclude "codegen/**" haproxy_template_ic/
 
       - name: Run security scan
         run: uv run bandit -c pyproject.toml -r haproxy_template_ic/ --quiet

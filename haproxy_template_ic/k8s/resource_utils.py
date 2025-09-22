@@ -8,7 +8,7 @@ namespace detection, JSONPath compilation, and resource validation.
 import logging
 import os
 from functools import lru_cache
-from typing import Any, Dict, Optional
+from typing import Any
 
 import jsonpath
 from jsonpath.exceptions import JSONPathError
@@ -54,7 +54,7 @@ def _compile_jsonpath(expression: str) -> Any:
         raise
 
 
-def extract_nested_field(resource: Dict[str, Any], field_path: str) -> Optional[Any]:
+def extract_nested_field(resource: dict[str, Any], field_path: str) -> Any | None:
     """
     Extract a nested field from a resource using dot notation.
 

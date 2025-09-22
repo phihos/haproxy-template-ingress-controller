@@ -7,7 +7,7 @@ to the cluster, providing immediate feedback on configuration errors.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import kopf
 import yaml
@@ -18,7 +18,7 @@ from haproxy_template_ic.core.validation import has_valid_attr
 logger = logging.getLogger(__name__)
 
 
-def _is_haproxy_template_ic_configmap(configmap_data: Dict[str, Any]) -> bool:
+def _is_haproxy_template_ic_configmap(configmap_data: dict[str, Any]) -> bool:
     """Check if this ConfigMap is intended for HAProxy Template IC."""
     # Check for specific labels or annotations that identify our ConfigMaps
     metadata = configmap_data.get("metadata", {})
@@ -54,13 +54,13 @@ def _is_haproxy_template_ic_configmap(configmap_data: Dict[str, Any]) -> bool:
     return False
 
 
-def _extract_config_data(configmap_data: Dict[str, Any]) -> Optional[str]:
+def _extract_config_data(configmap_data: dict[str, Any]) -> str | None:
     """Extract the config data from ConfigMap."""
     return configmap_data.get("data", {}).get("config")
 
 
 async def _validate_resource_structure(
-    spec: Dict[str, Any], meta: Dict[str, Any], kind: str, warnings: List[str]
+    spec: dict[str, Any], meta: dict[str, Any], kind: str, warnings: list[str]
 ) -> None:
     """Validate basic resource structure."""
     # Basic metadata validation
@@ -84,7 +84,7 @@ async def _validate_resource_structure(
         await _validate_secret_specific(spec, warnings)
 
 
-async def _validate_ingress_specific(spec: Dict[str, Any], warnings: List[str]) -> None:
+async def _validate_ingress_specific(spec: dict[str, Any], warnings: list[str]) -> None:
     """Validate Ingress-specific fields."""
     rules = spec.get("rules", [])
     if not rules:
@@ -97,7 +97,7 @@ async def _validate_ingress_specific(spec: Dict[str, Any], warnings: List[str]) 
             warnings.append(f"Ingress rule {i} has neither host nor http configuration")
 
 
-async def _validate_service_specific(spec: Dict[str, Any], warnings: List[str]) -> None:
+async def _validate_service_specific(spec: dict[str, Any], warnings: list[str]) -> None:
     """Validate Service-specific fields."""
     ports = spec.get("ports", [])
     if not ports:
@@ -110,7 +110,7 @@ async def _validate_service_specific(spec: Dict[str, Any], warnings: List[str]) 
             raise kopf.AdmissionError(f"Service port {i} is missing 'port' field")
 
 
-async def _validate_secret_specific(spec: Dict[str, Any], warnings: List[str]) -> None:
+async def _validate_secret_specific(spec: dict[str, Any], warnings: list[str]) -> None:
     """Validate Secret-specific fields."""
     data = spec.get("data", {})
     if not data:

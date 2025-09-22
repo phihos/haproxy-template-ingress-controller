@@ -16,13 +16,90 @@ import filelock
 import httpx
 from python_on_whales import DockerClient
 
-from .progress import (
-    TestProgressReporter,
-    ContainerWaitReporter,
-    get_test_reporter,
-    progress_context as progress_context,
-    format_troubleshooting_info,
-)
+
+def format_troubleshooting_info(
+    compose_file: Path,
+    ports: Dict[str, int],
+    failed_services: List[str],
+    container_logs: Dict[str, str],
+) -> str:
+    """Format troubleshooting information for failed tests."""
+    lines = [
+        "\n" + "=" * 80,
+        "🚨 INTEGRATION TEST FAILURE - TROUBLESHOOTING INFO",
+        "=" * 80,
+        "",
+        f"📄 Docker Compose File: {compose_file}",
+        "",
+        "🔌 Port Allocations:",
+    ]
+
+    for name, port in ports.items():
+        lines.append(f"  - {name}: {port}")
+
+    if failed_services:
+        lines.extend(
+            [
+                "",
+                "❌ Failed Services:",
+            ]
+        )
+        for service in failed_services:
+            lines.append(f"  - {service}")
+
+    lines.extend(
+        [
+            "",
+            "🛠️  Debugging Commands:",
+            f"  docker compose -f {compose_file} ps",
+            f"  docker compose -f {compose_file} logs",
+            f"  docker compose -f {compose_file} down -v",
+            "",
+            "🔍 Manual Service Testing:",
+        ]
+    )
+
+    for name, port in ports.items():
+        if "dataplane" in name or "api" in name:
+            lines.append(f"  curl -u admin:adminpass http://localhost:{port}/v3/info")
+        elif "health" in name:
+            lines.append(f"  curl http://localhost:{port}/healthz")
+
+    if container_logs:
+        lines.extend(
+            [
+                "",
+                "📜 Container Logs:",
+                "",
+            ]
+        )
+        for service, logs in container_logs.items():
+            lines.append(f"--- {service} ---")
+
+            # Give more space for dataplane API containers (they contain important error details)
+            if "dataplane-api" in service:
+                # Show last 2000 characters for dataplane API containers
+                if len(logs) > 2000:
+                    log_lines = logs.split("\n")
+                    if len(log_lines) > 50:
+                        # Show last 50 lines which is usually more useful than truncating characters
+                        truncated_logs = "\n".join(log_lines[-50:])
+                        lines.append("... (showing last 50 lines) ...")
+                        lines.append(truncated_logs)
+                    else:
+                        lines.append(logs[-2000:])
+                        lines.append("... (truncated to last 2000 characters)")
+                else:
+                    lines.append(logs)
+            else:
+                # Other containers get the original 1000 character limit
+                lines.append(logs[:1000] + ("..." if len(logs) > 1000 else ""))
+
+            lines.append("")  # Empty line after each service
+
+    lines.extend(["=" * 80, ""])
+
+    return "\n".join(lines)
 
 
 def find_free_port(used_ports: set, max_retries: int = 10) -> int:
@@ -126,7 +203,7 @@ def allocate_test_ports(max_retries: int = 10) -> Dict[str, int]:
                 f"Failed to allocate ports after {max_retries} attempts: {e}"
             )
 
-    # This should never be reached but added for mypy completeness
+    # This should never be reached but added for ty completeness
     raise RuntimeError("Failed to allocate ports: no attempts made")
 
 
@@ -227,38 +304,22 @@ async def wait_for_service(
     url: str,
     timeout: int = 10,
     interval: float = 0.2,
-    reporter: Optional[TestProgressReporter] = None,
     service_name: str = "service",
 ) -> bool:
-    """Wait for a service to become available with progress reporting."""
-    if reporter is None:
-        reporter = get_test_reporter()
-
+    """Wait for a service to become available."""
     start_time = time.time()
-    wait_reporter = ContainerWaitReporter(reporter)
-    attempt = 0
-    max_attempts = int(timeout / interval)
 
     while time.time() - start_time < timeout:
-        attempt += 1
-        wait_reporter.update(service_name, url, attempt, max_attempts)
-
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
                 response = await client.get(url)
                 if response.status_code < 500:  # Accept any non-server-error response
-                    wait_reporter.success(service_name, url)
                     return True
-                else:
-                    reporter.debug(
-                        f"Service {service_name} returned status {response.status_code}"
-                    )
-        except (httpx.RequestError, httpx.HTTPStatusError) as e:
-            reporter.debug(f"Service {service_name} connection failed: {e}")
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            pass
 
         await asyncio.sleep(interval)
 
-    wait_reporter.failure(service_name, url, f"Timeout after {timeout}s")
     return False
 
 
@@ -266,40 +327,24 @@ async def wait_for_dataplane_api(
     base_url: str,
     auth: Tuple[str, str] = ("admin", "adminpass"),
     timeout: int = 10,
-    reporter: Optional[TestProgressReporter] = None,
     service_name: str = "Dataplane API",
 ) -> bool:
-    """Wait for Dataplane API to become ready with progress reporting."""
-    if reporter is None:
-        reporter = get_test_reporter()
-
+    """Wait for Dataplane API to become ready."""
     start_time = time.time()
-    wait_reporter = ContainerWaitReporter(reporter)
-    attempt = 0
     interval = 0.2  # Faster polling
-    max_attempts = int(timeout / interval)
     api_url = f"{base_url}/v3/info"
 
     while time.time() - start_time < timeout:
-        attempt += 1
-        wait_reporter.update(service_name, api_url, attempt, max_attempts)
-
         try:
             async with httpx.AsyncClient(timeout=3.0, auth=auth) as client:
                 response = await client.get(api_url)
                 if response.status_code == 200:
-                    wait_reporter.success(service_name, api_url)
                     return True
-                else:
-                    reporter.debug(
-                        f"Dataplane API returned status {response.status_code}"
-                    )
-        except (httpx.RequestError, httpx.HTTPStatusError) as e:
-            reporter.debug(f"Dataplane API connection failed: {e}")
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            pass
 
         await asyncio.sleep(interval)
 
-    wait_reporter.failure(service_name, api_url, f"Timeout after {timeout}s")
     return False
 
 
@@ -315,22 +360,13 @@ def read_config_file(filename: str) -> str:
 def get_container_logs(
     docker: DockerClient,
     service_name: str,
-    reporter: Optional[TestProgressReporter] = None,
 ) -> str:
     """Get logs from a docker-compose service for debugging."""
-    if reporter is None:
-        reporter = get_test_reporter()
-
     try:
-        reporter.debug(f"Fetching logs for service {service_name}")
         logs = docker.compose.logs(services=[service_name])
-        if logs.strip():
-            reporter.container_logs(service_name, logs)
         return logs
     except Exception as e:
-        error_msg = f"Failed to get logs: {e}"
-        reporter.warning(f"Could not fetch logs for {service_name}: {e}")
-        return error_msg
+        return f"Failed to get logs: {e}"
 
 
 class DockerComposeManager:
@@ -347,22 +383,15 @@ class DockerComposeManager:
         self.project_name = generate_project_name(test_name)
         self.compose_file = None
         self.temp_dir = None
-        self.docker = None  # Will be initialized with compose file
-        self.reporter = get_test_reporter()
+        self.docker: DockerClient | None = None  # Will be initialized with compose file
         self.failed_services: List[str] = []
         self.container_logs: Dict[str, str] = {}
         self.shared_images = shared_images or {}
         self.use_prebuilt_images = bool(shared_images)
 
     async def __aenter__(self):
-        """Set up Docker compose environment with progress reporting."""
-        self.reporter.phase("SETUP", "Initializing Docker environment")
-
-        # Report port allocations
-        self.reporter.port_allocation(self.ports)
-
+        """Set up Docker compose environment."""
         # Create temporary directory for docker-compose.yml
-        self.reporter.docker_operation("Creating temporary directory")
         self.temp_dir = tempfile.mkdtemp()
 
         # Get fixture directory
@@ -371,15 +400,10 @@ class DockerComposeManager:
 
         # Copy Docker build files to temp directory only if not using pre-built images
         if not self.use_prebuilt_images:
-            self.reporter.docker_operation("Copying Docker build context")
             for dir_name in ["dataplane", "haproxy"]:
-                self.reporter.debug(f"Copying {dir_name} directory")
                 shutil.copytree(fixtures_dir / dir_name, temp_path / dir_name)
-        else:
-            self.reporter.docker_operation("Using pre-built Docker images")
 
         # Generate docker-compose.yml
-        self.reporter.docker_operation("Generating docker-compose.yml")
         template_path = fixtures_dir / "docker-compose-template.yml"
         compose_content = generate_compose_file(
             self.ports, template_path, self.use_prebuilt_images
@@ -389,17 +413,13 @@ class DockerComposeManager:
         with open(self.compose_file, "w") as f:
             f.write(compose_content)
 
-        self.reporter.compose_file(self.compose_file)
-
         # Initialize Docker client with compose file and project name
-        self.reporter.docker_operation("Initializing Docker client")
         self.docker = DockerClient(
             compose_files=[str(self.compose_file)],
             compose_project_name=self.project_name,
         )
 
         # Build and start containers with retry logic
-        self.reporter.docker_operation("Building and starting containers")
         max_retries = 5  # Increased from 3 to 5
         template_path = fixtures_dir / "docker-compose-template.yml"
 
@@ -428,10 +448,6 @@ class DockerComposeManager:
                     and "failed" in error_msg
                     or "external connectivity" in error_msg
                 ) and attempt < max_retries - 1:
-                    self.reporter.warning(
-                        f"Port conflict detected (attempt {attempt + 1}/{max_retries}), retrying with new ports..."
-                    )
-
                     # Re-allocate ports and regenerate compose file
                     # Wait longer before retrying to reduce contention
                     delay = (2**attempt) + random.uniform(1.0, 3.0)
@@ -439,7 +455,6 @@ class DockerComposeManager:
 
                     # Re-allocate ports with higher retry count for aggressive scenarios
                     self.ports = allocate_test_ports(max_retries=8)
-                    self.reporter.port_allocation(self.ports)
 
                     compose_content = generate_compose_file(
                         self.ports, template_path, self.use_prebuilt_images
@@ -456,18 +471,13 @@ class DockerComposeManager:
                     continue
 
                 # If it's not a port conflict or we've exhausted retries, re-raise
-                self.reporter.error(f"Failed to start containers: {e}")
                 raise
-
-        # Wait for services to be ready
-        self.reporter.phase("HEALTH_CHECK", "Waiting for services to become ready")
 
         # Wait for services to be ready
         validation_ready = await wait_for_dataplane_api(
             f"http://localhost:{self.ports['validation_port']}",
             auth=("admin", "adminpass"),
             timeout=10,
-            reporter=self.reporter,
             service_name="Validation Dataplane API",
         )
 
@@ -475,7 +485,6 @@ class DockerComposeManager:
             f"http://localhost:{self.ports['production_port']}",
             auth=("admin", "adminpass"),
             timeout=10,
-            reporter=self.reporter,
             service_name="Production Dataplane API",
         )
 
@@ -495,8 +504,6 @@ class DockerComposeManager:
 
         # Collect logs if any service failed
         if failed_services:
-            self.reporter.phase("DIAGNOSIS", "Collecting diagnostic information")
-
             # Collect container logs
             service_containers = [
                 "validation-dataplane-api",
@@ -507,19 +514,19 @@ class DockerComposeManager:
 
             for container in service_containers:
                 try:
-                    logs = get_container_logs(self.docker, container, self.reporter)
+                    assert self.docker is not None, (
+                        "DockerComposeManager not initialized"
+                    )
+                    logs = get_container_logs(self.docker, container)
                     self.container_logs[container] = logs
                 except Exception as e:
-                    self.reporter.warning(f"Could not get logs for {container}: {e}")
                     self.container_logs[container] = f"Failed to get logs: {e}"
 
             # Format troubleshooting information
-
             troubleshooting_info = format_troubleshooting_info(
                 self.compose_file, self.ports, failed_services, self.container_logs
             )
 
-            self.reporter.error("Some services failed to start")
             print(troubleshooting_info)
 
             raise RuntimeError(
@@ -527,49 +534,203 @@ class DockerComposeManager:
                 f"See troubleshooting information above for details."
             )
 
-        self.reporter.phase("READY", f"All services ready for test: {self.test_name}")
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Clean up Docker environment with progress reporting."""
-        self.reporter.phase("TEARDOWN", "Cleaning up Docker environment")
+    def collect_logs_on_failure(
+        self, container_names: Optional[List[str]] = None
+    ) -> Dict[str, str]:
+        """Collect container logs for debugging failed tests.
 
+        Args:
+            container_names: List of container names to collect logs from.
+                           If None, collects from all known containers.
+
+        Returns:
+            Dictionary mapping container names to their log content.
+        """
+        if container_names is None:
+            # Default to dataplane API containers for debugging
+            container_names = [
+                "validation-dataplane-api",
+                "production-dataplane-api",
+                "validation-haproxy",
+                "production-haproxy",
+            ]
+
+        container_logs = {}
+
+        for container in container_names:
+            try:
+                assert self.docker is not None, "DockerComposeManager not initialized"
+                logs = get_container_logs(self.docker, container)
+                if logs and logs.strip():
+                    container_logs[container] = logs
+                else:
+                    container_logs[container] = f"No logs available for {container}"
+            except Exception as e:
+                container_logs[container] = f"Failed to get logs: {e}"
+
+        return container_logs
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Clean up Docker environment."""
         # Stop and remove containers with retry logic
         if self.docker and self.compose_file:
             max_cleanup_retries = 2
             for attempt in range(max_cleanup_retries):
                 try:
-                    self.reporter.docker_operation("Stopping containers")
                     self.docker.compose.down(volumes=True, remove_orphans=True)
                     break
-                except Exception as e:
+                except Exception:
                     if attempt < max_cleanup_retries - 1:
-                        self.reporter.warning(
-                            f"Cleanup attempt {attempt + 1} failed, retrying: {e}"
-                        )
                         await asyncio.sleep(1.0)
                         continue
-                    else:
-                        self.reporter.warning(
-                            f"Error during container cleanup after {max_cleanup_retries} attempts: {e}"
-                        )
 
         # Clean up temporary directory
         if self.temp_dir:
             try:
-                self.reporter.docker_operation("Removing temporary files")
                 shutil.rmtree(self.temp_dir)
-            except Exception as e:
-                self.reporter.warning(f"Error during temp directory cleanup: {e}")
+            except Exception:
+                pass
 
         # Release allocated ports from global registry
         try:
-            self.reporter.docker_operation("Releasing allocated ports")
             release_test_ports(self.ports)
-        except Exception as e:
-            self.reporter.warning(f"Error during port cleanup: {e}")
+        except Exception:
+            pass
 
-        if exc_type is not None:
-            self.reporter.error(f"Test failed with {exc_type.__name__}: {exc_val}")
-        else:
-            self.reporter.debug("Docker environment cleaned up successfully")
+
+# Container interaction utilities for integration tests
+async def exec_container_command(
+    compose_manager: DockerComposeManager, service_name: str, command: str
+) -> str:
+    """Execute command in Docker container using existing DockerComposeManager.
+
+    Args:
+        compose_manager: DockerComposeManager instance from docker_compose_dataplane fixture
+        service_name: Name of the Docker Compose service (e.g., "production-haproxy")
+        command: Command to execute in the container
+
+    Returns:
+        Command output as string
+
+    Raises:
+        RuntimeError: If command execution fails
+    """
+    try:
+        # Use the existing docker client from DockerComposeManager
+        assert compose_manager.docker is not None, (
+            "DockerComposeManager not initialized"
+        )
+        result = compose_manager.docker.container.execute(
+            container=f"{compose_manager.project_name}-{service_name}-1",
+            command=command.split() if isinstance(command, str) else command,
+        )
+        return str(result)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to execute command '{command}' in {service_name}: {e}"
+        ) from e
+
+
+async def read_container_file(
+    compose_manager: DockerComposeManager, service_name: str, file_path: str
+) -> str:
+    """Read file content from Docker container filesystem.
+
+    Args:
+        compose_manager: DockerComposeManager instance from docker_compose_dataplane fixture
+        service_name: Name of the Docker Compose service (e.g., "production-haproxy")
+        file_path: Path to file inside the container
+
+    Returns:
+        File content as string
+
+    Raises:
+        RuntimeError: If file reading fails
+    """
+    try:
+        # Use cat command to read file content
+        content = await exec_container_command(
+            compose_manager, service_name, f"cat {file_path}"
+        )
+        return content
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to read file '{file_path}' from {service_name}: {e}"
+        ) from e
+
+
+async def haproxy_socket_command(
+    compose_manager: DockerComposeManager, service_name: str, socket_cmd: str
+) -> str:
+    """Send command to HAProxy stats socket via socat.
+
+    Args:
+        compose_manager: DockerComposeManager instance from docker_compose_dataplane fixture
+        service_name: Name of the Docker Compose service (e.g., "production-haproxy")
+        socket_cmd: HAProxy socket command (e.g., "show acl", "show map")
+
+    Returns:
+        Socket command output as string
+
+    Raises:
+        RuntimeError: If socket command fails
+    """
+    try:
+        # Use socat to send command to HAProxy stats socket
+        full_command = f'echo "{socket_cmd}" | socat - /etc/haproxy/haproxy-master.sock'
+        result = await exec_container_command(
+            compose_manager, service_name, full_command
+        )
+        return result
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to execute socket command '{socket_cmd}' on {service_name}: {e}"
+        ) from e
+
+
+async def get_haproxy_process_info(
+    compose_manager: DockerComposeManager, service_name: str
+) -> Dict[str, str]:
+    """Get HAProxy process information for reload detection.
+
+    Args:
+        compose_manager: DockerComposeManager instance from docker_compose_dataplane fixture
+        service_name: Name of the Docker Compose service (e.g., "production-haproxy")
+
+    Returns:
+        Dictionary with process information (pid, start_time, etc.)
+
+    Raises:
+        RuntimeError: If process info retrieval fails
+    """
+    try:
+        # Get HAProxy process info using ps command (BusyBox compatible)
+        ps_output = await exec_container_command(
+            compose_manager, service_name, "ps | grep haproxy"
+        )
+
+        # Parse ps output to extract process info
+        lines = ps_output.strip().split("\n")
+        # Filter out the grep command itself
+        haproxy_lines = [line for line in lines if line and "grep haproxy" not in line]
+        if not haproxy_lines:
+            raise RuntimeError("No HAProxy process found")
+
+        # Extract key process information
+        # BusyBox ps format: PID USER TIME COMMAND
+        fields = haproxy_lines[0].split()
+        if len(fields) < 4:
+            raise RuntimeError(f"Unexpected ps output format: {ps_output}")
+
+        return {
+            "pid": fields[0],
+            "start_time": fields[2],  # TIME field in BusyBox ps
+            "command": " ".join(fields[3:]),
+            "full_output": ps_output,
+        }
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to get process info from {service_name}: {e}"
+        ) from e

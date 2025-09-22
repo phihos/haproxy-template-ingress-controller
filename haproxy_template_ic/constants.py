@@ -74,7 +74,7 @@ LOGGING_CACHE_SIZE: Final[int] = 128
 # Buffer Sizes
 SOCKET_BUFFER_SIZE: Final[int] = 1024
 
-# Error Message Templates - unused constants removed for clean code
+# Error Message Templates
 ERROR_MISSING_CREDENTIALS: Final[str] = "Missing/invalid credential fields: {fields}"
 
 # Template Processing Limits

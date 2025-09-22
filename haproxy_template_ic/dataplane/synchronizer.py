@@ -8,63 +8,104 @@ across multiple instances with validation-first deployment and structured compar
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable
 
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext
 
-from .client import _SECTION_ELEMENTS, DataplaneClient
-from .errors import DataplaneAPIError, ValidationError
-from .models import ConfigChange, compute_content_hash
-from .types import ConfigChangeType, ConfigElementType, ConfigSectionType
+from .client import DataplaneClient
+from .endpoint import DataplaneEndpoint, DataplaneEndpointSet
+from .types import (
+    ConfigChange,
+    ConfigChangeType,
+    ConfigElementType,
+    ConfigSectionType,
+    DataplaneAPIError,
+    ValidationError,
+    SynchronizationResult,
+    ValidationDeploymentResult,
+    ConfigSynchronizerResult,
+    compute_content_hash,
+)
+from .adapter import ReloadInfo
 from .utils import (
-    MAX_CONFIG_COMPARISON_CHANGES,
     _check_early_exit_condition,
-    _natural_sort_key,
+    extract_exception_origin,
+    natural_sort_key,
     _to_dict_safe,
     extract_hostname_from_url,
     parse_validation_error_details,
 )
 
-if TYPE_CHECKING:
-    from haproxy_template_ic.credentials import Credentials
+
+# Section elements registry defining nested elements each section supports
+_SECTION_ELEMENTS = {
+    ConfigSectionType.BACKEND: [
+        ("servers", ConfigElementType.SERVER, True),  # Named elements
+        ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
+        ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
+        ("acls", ConfigElementType.ACL, False),  # Ordered
+        ("filters", ConfigElementType.FILTER, False),  # Ordered
+        ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
+    ],
+    ConfigSectionType.FRONTEND: [
+        ("binds", ConfigElementType.BIND, True),  # Named elements
+        ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
+        ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
+        ("acls", ConfigElementType.ACL, False),  # Ordered
+        ("filters", ConfigElementType.FILTER, False),  # Ordered
+        ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
+    ],
+}
 
 logger = logging.getLogger(__name__)
 
 
 class ConfigSynchronizer:
-    """Simple configuration synchronizer for HAProxy instances."""
+    """Configuration synchronizer using endpoint bundling."""
 
-    def __init__(
-        self,
-        production_urls: List[str],
-        validation_url: str,
-        credentials: "Credentials",
-        url_to_pod_name: Optional[Dict[str, str]] = None,
-    ):
-        self.production_urls = production_urls
-        self.validation_url = validation_url
-        self.credentials = credentials
-        self.url_to_pod_name = url_to_pod_name or {}
+    def __init__(self, endpoints: DataplaneEndpointSet):
+        self.endpoints = endpoints
 
-        self._validation_client: Optional[DataplaneClient] = None
-        self._production_clients: Dict[str, DataplaneClient] = {}
+        self._validation_client: DataplaneClient | None = None
+        self._production_clients: dict[str, DataplaneClient] = {}
+
+    def create_client(
+        self, endpoint: DataplaneEndpoint, timeout: float = 30.0
+    ) -> DataplaneClient:
+        """Factory method for creating clients."""
+        return DataplaneClient(endpoint=endpoint, timeout=timeout)
+
+    def create_client_for_url(self, url: str, timeout: float = 30.0) -> DataplaneClient:
+        """Factory method for creating clients by URL (convenience method)."""
+        endpoint = self.endpoints.find_by_url(url)
+        if not endpoint:
+            raise ValueError(f"No endpoint found for URL: {url}")
+        return self.create_client(endpoint, timeout)
 
     def _get_validation_client(self) -> DataplaneClient:
-        """Get validation client, creating it if needed (lazy initialization)."""
+        """Get validation client."""
         if self._validation_client is None:
-            self._validation_client = DataplaneClient(
-                self.validation_url,
-                auth=(
-                    self.credentials.validation.username,
-                    self.credentials.validation.password.get_secret_value(),
-                ),
-            )
+            self._validation_client = self.create_client(self.endpoints.validation)
         return self._validation_client
+
+    def _get_production_client(self, endpoint: DataplaneEndpoint) -> DataplaneClient:
+        """Get production client."""
+        if endpoint.url not in self._production_clients:
+            self._production_clients[endpoint.url] = self.create_client(endpoint)
+        return self._production_clients[endpoint.url]
+
+    def get_endpoint_health(self) -> dict[str, str]:
+        """Get health status of all endpoints."""
+        health = {}
+        for endpoint in self.endpoints.all_endpoints():
+            # Could add health check logic here in the future
+            health[endpoint.display_name] = "unknown"
+        return health
 
     def _prepare_sync_content(
         self, config_context: HAProxyConfigContext
-    ) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]]:
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, str]]:
         """Prepare content for synchronization."""
         return (
             {rc.filename: rc.content for rc in config_context.rendered_maps},
@@ -75,37 +116,33 @@ class ConfigSynchronizer:
 
     def _compute_template_hashes(
         self, config_context: HAProxyConfigContext
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Compute hashes for all rendered templates."""
 
         template_hashes = {}
 
-        # Add main HAProxy config
         if config_context.rendered_config:
             template_hashes["haproxy.cfg"] = compute_content_hash(
                 config_context.rendered_config.content
             )
 
-        # Add all rendered content (maps, certificates, ACLs, files)
         for content in config_context.rendered_content:
             template_hashes[content.filename] = compute_content_hash(content.content)
 
         return template_hashes
 
-    def update_production_clients(
-        self, new_urls: List[str], url_to_pod_name: Optional[Dict[str, str]] = None
-    ) -> None:
-        """Update production clients based on current URLs.
+    def update_production_clients(self, new_endpoints: list[DataplaneEndpoint]) -> None:
+        """Update production clients based on current endpoints.
 
         This method handles dynamic HAProxy pod lifecycle by:
-        - Creating clients for newly discovered URLs
-        - Removing clients for URLs that are no longer present
-        - Preserving existing clients for stable URLs to maintain connection pooling
+        - Creating clients for newly discovered endpoints
+        - Removing clients for endpoints that are no longer present
 
         Args:
-            new_urls: Current list of production HAProxy URLs
-            url_to_pod_name: Optional mapping from URLs to pod names
+            new_endpoints: Current list of production HAProxy endpoints
         """
+        new_urls = [ep.url for ep in new_endpoints]
+
         # Remove clients for URLs that are no longer present
         removed_urls = set(self._production_clients.keys()) - set(new_urls)
         for url in removed_urls:
@@ -114,92 +151,91 @@ class ConfigSynchronizer:
             del self._production_clients[url]
             logger.debug(f"Removed cached client for {url}")
 
-        # Create clients for new URLs
         new_urls_set = set(new_urls)
         existing_urls = set(self._production_clients.keys())
         newly_added_urls = new_urls_set - existing_urls
 
         for url in newly_added_urls:
-            self._production_clients[url] = DataplaneClient(
-                url,
-                auth=(
-                    self.credentials.dataplane.username,
-                    self.credentials.dataplane.password.get_secret_value(),
-                ),
-            )
+            # Find endpoint with auth from new_endpoints list
+            endpoint = next(ep for ep in new_endpoints if ep.url == url)
+            self._production_clients[url] = DataplaneClient(endpoint)
             logger.debug(f"Created cached client for {url}")
 
-        # Update the production URLs list
-        self.production_urls = new_urls
-
-        # Update pod name mapping if provided
-        if url_to_pod_name is not None:
-            self.url_to_pod_name = url_to_pod_name
-
-    def add_production_url(self, url: str) -> None:
-        """Add a single production URL and create its client.
-
-        Args:
-            url: The production HAProxy dataplane URL to add
-        """
-        if url not in self._production_clients:
-            self._production_clients[url] = DataplaneClient(
-                url,
-                auth=(
-                    self.credentials.dataplane.username,
-                    self.credentials.dataplane.password.get_secret_value(),
-                ),
-            )
-            logger.debug(f"➕ Added production client for {url}")
-
-            # Update the URLs list
-            if url not in self.production_urls:
-                self.production_urls.append(url)
-
-    def remove_production_url(self, url: str) -> None:
-        """Remove a single production URL and cleanup its client.
-
-        Args:
-            url: The production HAProxy dataplane URL to remove
-        """
-        if url in self._production_clients:
-            # Remove the client
-            del self._production_clients[url]
-            logger.debug(f"➖ Removed production client for {url}")
-
-            # Update the URLs list
-            if url in self.production_urls:
-                self.production_urls.remove(url)
+        self.endpoints = DataplaneEndpointSet(
+            validation=self.endpoints.validation,  # Keep the existing validation endpoint
+            production=new_endpoints,
+        )
 
     async def _sync_content_to_client(
         self,
         client: DataplaneClient,
-        maps: Dict[str, str],
-        certificates: Dict[str, str],
-        acls: Dict[str, str],
-        files: Dict[str, str],
+        maps: dict[str, str],
+        certificates: dict[str, str],
+        acls: dict[str, str],
+        files: dict[str, str],
         url: str,
     ) -> None:
         """Sync all content types to a single client."""
+        logger.debug(f"Syncing {len(maps)} maps to {url}")
+        await client.sync_maps(maps)
+
+        logger.debug(f"Syncing {len(certificates)} certificates to {url}")
+        await client.sync_certificates(certificates)
+
+        logger.debug(f"Syncing {len(acls)} ACLs to {url}")
+        await client.sync_acls(acls)
+
+        logger.debug(f"Syncing {len(files)} files to {url}")
+        await client.sync_files(files)
+
+    async def _sync_content_pre_deployment(
+        self,
+        client: "DataplaneClient",
+        maps: dict[str, str],
+        certificates: dict[str, str],
+        acls: dict[str, str],
+        files: dict[str, str],
+        url: str,
+    ) -> None:
+        """Sync content before deployment - creates and updates only."""
+        logger.debug(f"🔄 Phase 1: Creating/updating content for {url}")
+
         if maps:
-            logger.debug(f"Syncing {len(maps)} maps to {url}")
-            await client.sync_maps(maps)
-
+            await client.sync_maps(maps, operations={"create", "update"})
         if certificates:
-            logger.debug(f"Syncing {len(certificates)} certificates to {url}")
-            await client.sync_certificates(certificates)
-
+            await client.sync_certificates(
+                certificates, operations={"create", "update"}
+            )
         if acls:
-            logger.debug(f"Syncing {len(acls)} ACLs to {url}")
-            await client.sync_acls(acls)
-
+            await client.sync_acls(acls, operations={"create", "update"})
         if files:
-            logger.debug(f"Syncing {len(files)} files to {url}")
-            await client.sync_files(files)
+            await client.sync_files(files, operations={"create", "update"})
+
+    async def _sync_content_post_deployment(
+        self,
+        client: "DataplaneClient",
+        maps: dict[str, str],
+        certificates: dict[str, str],
+        acls: dict[str, str],
+        files: dict[str, str],
+        url: str,
+    ) -> None:
+        """Sync content after deployment - deletions only.
+
+        Always call storage sync methods to ensure files not needed in the new
+        context are deleted from disk, even when the new context has no files.
+        """
+        logger.debug(f"🗑️ Phase 2: Cleaning up unused content for {url}")
+
+        # Always call sync methods for deletion - they will compare disk vs needed files
+        await client.sync_maps(maps, operations={"delete"})
+        await client.sync_certificates(certificates, operations={"delete"})
+        await client.sync_acls(acls, operations={"delete"})
+        await client.sync_files(files, operations={"delete"})
 
     async def _validate_configuration(self, config: str) -> None:
         """Validate configuration using the validation instance."""
-        logger.debug(f"Validating configuration at {self.validation_url}")
+        logger.debug(f"Validating configuration at {self.endpoints.validation.url}")
         try:
             validation_client = self._get_validation_client()
             await validation_client.validate_configuration(config)
@@ -208,11 +244,11 @@ class ConfigSynchronizer:
 
     def _compare_nested_elements(
         self,
-        current_nested: Dict[str, Any],
-        new_nested: Dict[str, Any],
+        current_nested: dict[str, Any],
+        new_nested: dict[str, Any],
         section_type: ConfigSectionType,
         section_name: str,
-        changes: List[ConfigChange],
+        changes: list[ConfigChange],
     ) -> None:
         """Compare all nested elements within a section.
 
@@ -235,7 +271,6 @@ class ConfigSynchronizer:
             current_items = current_nested.get(attr_name, []) or []
             new_items = new_nested.get(attr_name, []) or []
 
-            # Ensure we have lists
             if not isinstance(current_items, list):
                 current_items = []
             if not isinstance(new_items, list):
@@ -253,12 +288,12 @@ class ConfigSynchronizer:
 
     def _compare_element_list(
         self,
-        current_items: List[Any],
-        new_items: List[Any],
+        current_items: list[Any],
+        new_items: list[Any],
         element_type: ConfigElementType,
         section_type: ConfigSectionType,
         section_name: str,
-        changes: List[ConfigChange],
+        changes: list[ConfigChange],
         is_named: bool,
     ) -> None:
         """Compare element lists using either named or ordered strategy.
@@ -291,36 +326,57 @@ class ConfigSynchronizer:
                 changes,
             )
 
+    def _get_element_identifier(
+        self, item: Any, element_type: ConfigElementType
+    ) -> str | None:
+        """Get the identifier (name/id) from a dataplane API object based on element type.
+
+        Different dataplane API objects use different attribute names for identification:
+        - ACL objects use 'acl_name'
+        - Most other objects use 'name'
+        - Some objects use 'id'
+
+        Args:
+            item: The dataplane API object
+            element_type: Type of the element to determine correct attribute
+
+        Returns:
+            The identifier string, or None if not found
+        """
+        if element_type == ConfigElementType.ACL:
+            return getattr(item, "acl_name", None)
+
+        # For other element types, try standard attributes
+        return getattr(item, "name", None) or getattr(item, "id", None)
+
     def _compare_by_name(
         self,
-        current_items: List[Any],
-        new_items: List[Any],
+        current_items: list[Any],
+        new_items: list[Any],
         element_type: ConfigElementType,
         section_type: ConfigSectionType,
         section_name: str,
-        changes: List[ConfigChange],
+        changes: list[ConfigChange],
     ) -> None:
         """Compare named nested elements like servers or ACLs."""
         # Build dictionaries by name for efficient comparison
         current_dict = {}
         for item in current_items:
-            if item.name:
-                current_dict[item.name] = item
-            elif item.id:
-                current_dict[item.id] = item
+            identifier = self._get_element_identifier(item, element_type)
+            if identifier:
+                current_dict[identifier] = item
 
         new_dict = {}
         for item in new_items:
-            if item.name:
-                new_dict[item.name] = item
-            elif item.id:
-                new_dict[item.id] = item
+            identifier = self._get_element_identifier(item, element_type)
+            if identifier:
+                new_dict[identifier] = item
 
         current_names = set(current_dict.keys())
         new_names = set(new_dict.keys())
 
         # Deletions
-        for name in sorted(current_names - new_names, key=_natural_sort_key):
+        for name in sorted(current_names - new_names, key=natural_sort_key):
             changes.append(
                 ConfigChange.create_element_change(
                     change_type=ConfigChangeType.DELETE,
@@ -332,8 +388,7 @@ class ConfigSynchronizer:
                 )
             )
 
-        # Additions
-        for name in sorted(new_names - current_names, key=_natural_sort_key):
+        for name in sorted(new_names - current_names, key=natural_sort_key):
             changes.append(
                 ConfigChange.create_element_change(
                     change_type=ConfigChangeType.CREATE,
@@ -346,7 +401,7 @@ class ConfigSynchronizer:
             )
 
         # Modifications
-        for name in sorted(current_names & new_names, key=_natural_sort_key):
+        for name in sorted(current_names & new_names, key=natural_sort_key):
             if _to_dict_safe(current_dict[name]) != _to_dict_safe(new_dict[name]):
                 changes.append(
                     ConfigChange.create_element_change(
@@ -362,12 +417,12 @@ class ConfigSynchronizer:
 
     def _compare_by_order(
         self,
-        current_items: List[Any],
-        new_items: List[Any],
+        current_items: list[Any],
+        new_items: list[Any],
         element_type: ConfigElementType,
         section_type: ConfigSectionType,
         section_name: str,
-        changes: List[ConfigChange],
+        changes: list[ConfigChange],
     ) -> None:
         """Compare ordered nested elements like HTTP request rules."""
         # Compare lists element by element
@@ -413,13 +468,62 @@ class ConfigSynchronizer:
                     )
                 )
 
+    def _extract_nested_elements_for_section(
+        self, config: dict[str, Any], section_type: ConfigSectionType, section_name: str
+    ) -> dict[str, Any]:
+        """Extract nested elements for a specific section from the flat configuration structure.
+
+        This method handles the data structure mismatch between the expected nested format
+        and the actual flat format returned by fetch_structured_configuration.
+
+        Args:
+            config: Configuration dictionary with flat structure
+            section_type: Type of the section (FRONTEND, BACKEND, etc.)
+            section_name: Name of the specific section
+
+        Returns:
+            Dictionary with nested elements organized by attribute name
+        """
+        nested_elements = {}
+
+        # Define mapping from section types to their flat keys
+        if section_type == ConfigSectionType.FRONTEND:
+            flat_key_mappings = {
+                "acls": "frontend_acls",
+                "binds": "frontend_binds",
+                "http_request_rules": "frontend_http_request_rules",
+                "http_response_rules": "frontend_http_response_rules",
+                "filters": "frontend_filters",
+                "log_targets": "frontend_log_targets",
+            }
+        elif section_type == ConfigSectionType.BACKEND:
+            flat_key_mappings = {
+                "servers": "backend_servers",
+                "acls": "backend_acls",
+                "http_request_rules": "backend_http_request_rules",
+                "http_response_rules": "backend_http_response_rules",
+                "filters": "backend_filters",
+                "log_targets": "backend_log_targets",
+            }
+        else:
+            # Other section types (DEFAULTS, GLOBAL) don't have nested elements
+            return {}
+
+        # Extract nested elements from flat structure
+        for attr_name, flat_key in flat_key_mappings.items():
+            if flat_key in config:
+                section_elements = config[flat_key].get(section_name, [])
+                nested_elements[attr_name] = section_elements
+
+        return nested_elements
+
     def _compare_section_configs(
         self,
-        current: Dict[str, Any],
-        new: Dict[str, Any],
+        current: dict[str, Any],
+        new: dict[str, Any],
         section_key: str,
         section_type: ConfigSectionType,
-        changes: List[ConfigChange],
+        changes: list[ConfigChange],
     ) -> None:
         """Compare configuration sections and append changes to the changes list.
 
@@ -456,7 +560,6 @@ class ConfigSynchronizer:
                 )
             )
 
-        # Additions
         for name in new_names - current_names:
             changes.append(
                 ConfigChange(
@@ -465,6 +568,17 @@ class ConfigSynchronizer:
                     section_name=name,
                     new_config=new_items[name],
                 )
+            )
+
+            # Compare nested elements for new sections
+            current_nested = self._extract_nested_elements_for_section(
+                current, section_type, name
+            )
+            new_nested = self._extract_nested_elements_for_section(
+                new, section_type, name
+            )
+            self._compare_nested_elements(
+                current_nested, new_nested, section_type, name, changes
             )
 
         # Modifications
@@ -481,19 +595,19 @@ class ConfigSynchronizer:
                 )
 
             # Compare nested elements within existing sections
-            current_nested = (
-                current.get("nested_elements", {}).get(section_key, {}).get(name, {})
+            current_nested = self._extract_nested_elements_for_section(
+                current, section_type, name
             )
-            new_nested = (
-                new.get("nested_elements", {}).get(section_key, {}).get(name, {})
+            new_nested = self._extract_nested_elements_for_section(
+                new, section_type, name
             )
             self._compare_nested_elements(
                 current_nested, new_nested, section_type, name, changes
             )
 
     def _analyze_config_changes(
-        self, current: Dict[str, Any], new: Dict[str, Any]
-    ) -> List[ConfigChange]:
+        self, current: dict[str, Any], new: dict[str, Any]
+    ) -> list[ConfigChange]:
         """Analyze two structured configurations and return list of actionable changes.
 
         This method compares HAProxy configuration sections and returns a list of
@@ -506,7 +620,7 @@ class ConfigSynchronizer:
         Returns:
             List of ConfigChange objects representing the required changes
         """
-        changes: List[ConfigChange] = []
+        changes: list[ConfigChange] = []
 
         # Compare backends
         self._compare_section_configs(
@@ -549,7 +663,9 @@ class ConfigSynchronizer:
         current_global = current.get("global")
         new_global = new.get("global")
 
+        # Determine change type for global section
         if current_global and new_global:
+            # Both exist - check if they differ
             if _to_dict_safe(current_global) != _to_dict_safe(new_global):
                 changes.append(
                     ConfigChange(
@@ -560,7 +676,8 @@ class ConfigSynchronizer:
                         old_config=current_global,
                     )
                 )
-        elif new_global and not current_global:
+        elif new_global:
+            # Only new exists - create
             changes.append(
                 ConfigChange(
                     change_type=ConfigChangeType.CREATE,
@@ -569,7 +686,8 @@ class ConfigSynchronizer:
                     new_config=new_global,
                 )
             )
-        elif current_global and not new_global:
+        elif current_global:
+            # Only current exists - delete
             changes.append(
                 ConfigChange(
                     change_type=ConfigChangeType.DELETE,
@@ -607,16 +725,15 @@ class ConfigSynchronizer:
                     )
                 )
 
-            # Additions
-            for name in new_names - current_names:
-                changes.append(
-                    ConfigChange(
-                        change_type=ConfigChangeType.CREATE,
-                        section_type=section_type,
-                        section_name=name,
-                        new_config=new_sections[name],
+                for name in new_names - current_names:
+                    changes.append(
+                        ConfigChange(
+                            change_type=ConfigChangeType.CREATE,
+                            section_type=section_type,
+                            section_name=name,
+                            new_config=new_sections[name],
+                        )
                     )
-                )
 
             # Modifications
             for name in current_names & new_names:
@@ -650,12 +767,12 @@ class ConfigSynchronizer:
     def _safe_compare_sections(
         self,
         section_name: str,
-        current: Dict[str, Any],
-        new: Dict[str, Any],
-        changes: List[str],
+        current: dict[str, Any],
+        new: dict[str, Any],
+        changes: list[str],
         max_changes: int,
         comparison_func: Callable[
-            [str, Dict[str, Any], Dict[str, Any], List[str]], bool
+            [str, dict[str, Any], dict[str, Any], list[str]], bool
         ],
     ) -> bool:
         """Safely compare configuration sections with error handling."""
@@ -669,9 +786,9 @@ class ConfigSynchronizer:
     def _compare_named_sections_impl(
         self,
         section_name: str,
-        current: Dict[str, Any],
-        new: Dict[str, Any],
-        changes: List[str],
+        current: dict[str, Any],
+        new: dict[str, Any],
+        changes: list[str],
     ) -> bool:
         """Implementation for comparing named configuration sections."""
         current_sections = {
@@ -705,9 +822,9 @@ class ConfigSynchronizer:
     def _compare_list_sections_impl(
         self,
         section_name: str,
-        current: Dict[str, Any],
-        new: Dict[str, Any],
-        changes: List[str],
+        current: dict[str, Any],
+        new: dict[str, Any],
+        changes: list[str],
     ) -> bool:
         """Implementation for comparing list configuration sections."""
         current_list = [_to_dict_safe(s) for s in current.get(section_name, [])]
@@ -728,9 +845,9 @@ class ConfigSynchronizer:
     def _compare_named_config_sections(
         self,
         section_name: str,
-        current: Dict[str, Any],
-        new: Dict[str, Any],
-        changes: List[str],
+        current: dict[str, Any],
+        new: dict[str, Any],
+        changes: list[str],
         max_changes: int,
     ) -> bool:
         """Compare named configuration sections and return True if early exit needed."""
@@ -748,9 +865,9 @@ class ConfigSynchronizer:
     def _compare_list_config_sections(
         self,
         section_name: str,
-        current: Dict[str, Any],
-        new: Dict[str, Any],
-        changes: List[str],
+        current: dict[str, Any],
+        new: dict[str, Any],
+        changes: list[str],
         max_changes: int,
     ) -> bool:
         """Compare list configuration sections and return True if early exit needed."""
@@ -766,7 +883,7 @@ class ConfigSynchronizer:
         return _check_early_exit_condition(changes, max_changes)
 
     def _compare_global_section(
-        self, current: Dict[str, Any], new: Dict[str, Any], changes: List[str]
+        self, current: dict[str, Any], new: dict[str, Any], changes: list[str]
     ) -> None:
         """Compare global configuration section."""
         current_global = _to_dict_safe(current.get("global"))
@@ -781,8 +898,8 @@ class ConfigSynchronizer:
             changes.append("remove global")
 
     def _compare_structured_configs(
-        self, current: Dict[str, Any], new: Dict[str, Any]
-    ) -> List[str]:
+        self, current: dict[str, Any], new: dict[str, Any]
+    ) -> list[str]:
         """Compare two structured configurations and return list of changes.
 
         This method performs an optimized comparison of HAProxy configuration sections
@@ -791,7 +908,7 @@ class ConfigSynchronizer:
         Performance considerations:
         - For large configurations (>100 backends/frontends), this method may consume
           significant memory as it loads all configuration sections into memory
-        - Early exit after MAX_CONFIG_COMPARISON_CHANGES changes to avoid expensive
+        - Early exit after a maximum number of changes to avoid expensive
           deep comparisons when many changes are detected
         - Uses xxHash-based serialization with defensive error handling
 
@@ -803,8 +920,8 @@ class ConfigSynchronizer:
             List of change descriptions, empty if configs are identical
         """
         start_time = time.time()
-        changes: List[str] = []
-        max_changes_before_exit = MAX_CONFIG_COMPARISON_CHANGES
+        changes: list[str] = []
+        max_changes_before_exit = 10  # Stop comparison after finding this many changes
 
         # Compare main configuration sections
         if self._compare_backends_and_frontends(
@@ -845,9 +962,9 @@ class ConfigSynchronizer:
 
     def _compare_backends_and_frontends(
         self,
-        current: Dict[str, Any],
-        new: Dict[str, Any],
-        changes: List[str],
+        current: dict[str, Any],
+        new: dict[str, Any],
+        changes: list[str],
         max_changes: int,
     ) -> bool:
         """Compare backends and frontends sections. Returns True if early exit needed."""
@@ -867,11 +984,11 @@ class ConfigSynchronizer:
 
     def _compare_named_section_type(
         self,
-        current: Dict[str, Any],
-        new: Dict[str, Any],
+        current: dict[str, Any],
+        new: dict[str, Any],
         section_key: str,
         section_label: str,
-        changes: List[str],
+        changes: list[str],
         max_changes: int,
     ) -> bool:
         """Compare a named section type (like backends or frontends). Returns True if early exit needed."""
@@ -890,7 +1007,6 @@ class ConfigSynchronizer:
         current_names = set(current_sections.keys())
         new_names = set(new_sections.keys())
 
-        # Check for removals
         changes.extend(
             f"remove {section_label} {name}" for name in current_names - new_names
         )
@@ -913,7 +1029,7 @@ class ConfigSynchronizer:
         return _check_early_exit_condition(changes, max_changes)
 
     def _compare_defaults_sections(
-        self, current: Dict[str, Any], new: Dict[str, Any], changes: List[str]
+        self, current: dict[str, Any], new: dict[str, Any], changes: list[str]
     ) -> None:
         """Compare defaults sections."""
         current_defaults = [_to_dict_safe(d) for d in current.get("defaults", [])]
@@ -940,19 +1056,19 @@ class ConfigSynchronizer:
         # Record metrics
         metrics = get_metrics_collector()
         if hasattr(metrics, "record_custom_metric"):
-            metrics.record_custom_metric("structured_comparison_time", elapsed)
-            metrics.record_custom_metric("structured_changes_count", changes_count)
+            metrics.record_custom_metric("structured_comparison_time", elapsed)  # type: ignore[misc]
+            metrics.record_custom_metric("structured_changes_count", changes_count)  # type: ignore[misc]
 
     async def _deploy_to_single_instance(
         self,
         url: str,
         config: str,
-        maps_to_sync: Dict[str, str],
-        certificates_to_sync: Dict[str, str],
-        acls_to_sync: Dict[str, str],
-        files_to_sync: Dict[str, str],
-        validation_structured: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        maps_to_sync: dict[str, str],
+        certificates_to_sync: dict[str, str],
+        acls_to_sync: dict[str, str],
+        files_to_sync: dict[str, str],
+        validation_structured: dict[str, Any],
+    ) -> SynchronizationResult:
         """Deploy to a single production instance with structured comparison.
 
         Returns:
@@ -961,8 +1077,8 @@ class ConfigSynchronizer:
 
         client = self._production_clients[url]
 
-        # Sync auxiliary content first (maps, certs, files)
-        await self._sync_content_to_client(
+        # PHASE 1: Pre-deployment sync (create/update files before config references them)
+        await self._sync_content_pre_deployment(
             client, maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync, url
         )
 
@@ -976,14 +1092,24 @@ class ConfigSynchronizer:
             )
 
             if not config_changes:
-                # No changes needed - skip deployment
+                # No changes needed - skip deployment but still sync storage
                 logger.debug(f"⏭️  No structural changes for {url}, skipping deployment")
-                return {
-                    "method": "skipped",
-                    "version": "unchanged",
-                    "reload_triggered": False,
-                    "reload_id": None,
-                }
+
+                # PHASE 2: Post-deployment sync (clean up unused files even when config unchanged)
+                await self._sync_content_post_deployment(
+                    client,
+                    maps_to_sync,
+                    certificates_to_sync,
+                    acls_to_sync,
+                    files_to_sync,
+                    url,
+                )
+
+                return SynchronizationResult(
+                    method="skipped",
+                    version="unchanged",
+                    reload_info=ReloadInfo(),
+                )
             else:
                 # Changes detected - use structured deployment
                 change_descriptions = [str(change) for change in config_changes]
@@ -995,29 +1121,56 @@ class ConfigSynchronizer:
                     deploy_result = await client.deploy_structured_configuration(
                         config_changes
                     )
-                    return {
-                        "method": "structured",
-                        "version": deploy_result["version"],
-                        "reload_triggered": deploy_result["reload_triggered"],
-                        "reload_id": deploy_result.get("reload_id"),
-                    }
+
+                    # PHASE 2: Post-deployment sync (clean up unused files after config is deployed)
+                    await self._sync_content_post_deployment(
+                        client,
+                        maps_to_sync,
+                        certificates_to_sync,
+                        acls_to_sync,
+                        files_to_sync,
+                        url,
+                    )
+
+                    return SynchronizationResult(
+                        method="structured",
+                        version=deploy_result.version,
+                        reload_info=deploy_result.reload_info,
+                    )
                 except DataplaneAPIError as structured_error:
                     # If structured deployment fails, fall back to raw deployment
+                    # Extract origin details from the original error if available
+                    origin_details = ""
+                    if structured_error.original_error:
+                        origin_details = f"\n{extract_exception_origin(structured_error.original_error)}"
+
                     logger.warning(
-                        f"⚠️  Structured deployment failed for {url}, falling back to raw: {structured_error}"
+                        f"⚠️  Structured deployment failed for {url}, falling back to raw: {structured_error}{origin_details}"
                     )
 
                     # Record structured deployment failure metrics
                     metrics = get_metrics_collector()
                     metrics.increment_dataplane_fallback("structured_to_raw")
 
-                    deploy_result = await client.deploy_configuration(config)
-                    return {
-                        "method": "raw_fallback",
-                        "version": deploy_result["version"],
-                        "reload_triggered": deploy_result["reload_triggered"],
-                        "reload_id": deploy_result.get("reload_id"),
-                    }
+                    fallback_result: ValidationDeploymentResult = (
+                        await client.deploy_configuration(config)
+                    )
+
+                    # PHASE 2: Post-deployment sync (clean up unused files after config is deployed)
+                    await self._sync_content_post_deployment(
+                        client,
+                        maps_to_sync,
+                        certificates_to_sync,
+                        acls_to_sync,
+                        files_to_sync,
+                        url,
+                    )
+
+                    return SynchronizationResult(
+                        method="raw_fallback",
+                        version=fallback_result.version,
+                        reload_info=fallback_result.reload_info,
+                    )
 
         except Exception as fetch_error:
             # Fallback to conditional deployment if structured comparison fails
@@ -1030,32 +1183,59 @@ class ConfigSynchronizer:
             metrics.increment_dataplane_fallback("structured_to_conditional")
 
             try:
-                deploy_result = await client.deploy_configuration_conditionally(config)
-                return {
-                    "method": "conditional",
-                    "version": deploy_result["version"],
-                    "reload_triggered": deploy_result["reload_triggered"],
-                    "reload_id": deploy_result.get("reload_id"),
-                }
+                conditional_result: ValidationDeploymentResult = (
+                    await client.deploy_configuration(config)
+                )
+
+                # PHASE 2: Post-deployment sync (clean up unused files after config is deployed)
+                await self._sync_content_post_deployment(
+                    client,
+                    maps_to_sync,
+                    certificates_to_sync,
+                    acls_to_sync,
+                    files_to_sync,
+                    url,
+                )
+
+                return SynchronizationResult(
+                    method="conditional",
+                    version=conditional_result.version,
+                    reload_info=conditional_result.reload_info,
+                )
             except Exception as conditional_error:
                 # Final fallback to regular deployment
+                # Extract origin details for debugging
+                origin_details = f"\n{extract_exception_origin(conditional_error)}"
+
                 logger.warning(
-                    f"⚠️  Conditional deployment also failed for {url}, using regular deployment: {conditional_error}"
+                    f"⚠️  Conditional deployment also failed for {url}, using regular deployment: {conditional_error}{origin_details}"
                 )
 
                 # Record double fallback metrics
                 metrics.increment_dataplane_fallback("conditional_to_regular")
 
-                deploy_result = await client.deploy_configuration(config)
-                return {
-                    "method": "fallback",
-                    "version": deploy_result["version"],
-                    "reload_triggered": deploy_result["reload_triggered"],
-                    "reload_id": deploy_result.get("reload_id"),
-                }
+                final_result: ValidationDeploymentResult = (
+                    await client.deploy_configuration(config)
+                )
+
+                # PHASE 2: Post-deployment sync (clean up unused files after config is deployed)
+                await self._sync_content_post_deployment(
+                    client,
+                    maps_to_sync,
+                    certificates_to_sync,
+                    acls_to_sync,
+                    files_to_sync,
+                    url,
+                )
+
+                return SynchronizationResult(
+                    method="fallback",
+                    version=final_result.version,
+                    reload_info=final_result.reload_info,
+                )
 
     def _handle_deployment_error(
-        self, url: str, error: Exception, config: str, results: Dict[str, Any]
+        self, url: str, error: Exception, config: str, results: dict[str, Any]
     ) -> None:
         """Handle deployment error with enhanced logging."""
         results["failed"] += 1
@@ -1088,7 +1268,7 @@ class ConfigSynchronizer:
 
     async def sync_configuration(
         self, config_context: HAProxyConfigContext
-    ) -> Dict[str, Any]:
+    ) -> ConfigSynchronizerResult:
         """Synchronize configuration to all endpoints with validation-first deployment.
 
         This method implements an improved approach that minimizes HAProxy reloads:
@@ -1100,7 +1280,10 @@ class ConfigSynchronizer:
             config_context: The rendered configuration context
         """
         if not config_context.rendered_config:
-            raise DataplaneAPIError("No rendered HAProxy configuration available")
+            raise DataplaneAPIError(
+                "No rendered HAProxy configuration available",
+                operation="sync_configuration",
+            )
 
         # Prepare configuration content
         config = config_context.rendered_config.content
@@ -1110,7 +1293,7 @@ class ConfigSynchronizer:
         _ = self._compute_template_hashes(config_context)
 
         # Update production clients to handle dynamic URL changes
-        self.update_production_clients(self.production_urls)
+        self.update_production_clients(self.endpoints.production)
 
         # Validate configuration using validation instance
         validation_structured = await self._validate_and_prepare_config(
@@ -1118,29 +1301,30 @@ class ConfigSynchronizer:
         )
 
         # Deploy to production instances
-        results = await self._deploy_to_production_instances(
+        result = await self._deploy_to_production_instances(
             config, sync_content, validation_structured
         )
 
         # Log final results
-        self._log_sync_results(results)
+        self._log_sync_results(result)
 
-        return results
+        return result
 
     async def _validate_and_prepare_config(
         self,
         config: str,
-        sync_content: Tuple[
-            Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]
+        sync_content: tuple[
+            dict[str, str], dict[str, str], dict[str, str], dict[str, str]
         ],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Validate configuration and prepare structured config for deployment."""
         maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync = sync_content
 
         # Step 1: Sync content to validation instance and validate
         logger.debug("🔍 Validating configuration and syncing auxiliary content")
         validation_client = self._get_validation_client()
-        await self._sync_content_to_client(
+        # Validation instance: only create/update files, never delete (avoids conflicts with running config)
+        await self._sync_content_pre_deployment(
             validation_client,
             maps_to_sync,
             certificates_to_sync,
@@ -1148,13 +1332,21 @@ class ConfigSynchronizer:
             files_to_sync,
             "validation instance",
         )
+
         await self._validate_configuration(config)
 
         # Step 2: Deploy config to validation instance and fetch structured components
         logger.debug(
             "📤 Deploying config to validation instance for structured comparison"
         )
-        await validation_client.deploy_configuration(config)
+        validation_result = await validation_client.deploy_configuration(config)
+
+        # Log validation reload if it occurred
+        if validation_result.reload_info.reload_triggered:
+            logger.info(
+                f"🔄 Validation instance reload triggered: {validation_result.reload_info.reload_id} "
+                f"({self.endpoints.validation.url})"
+            )
 
         # Fetch structured config from validation instance
         logger.debug("🔍 Fetching structured configuration from validation instance")
@@ -1163,31 +1355,33 @@ class ConfigSynchronizer:
     async def _deploy_to_production_instances(
         self,
         config: str,
-        sync_content: Tuple[
-            Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, str]
+        sync_content: tuple[
+            dict[str, str], dict[str, str], dict[str, str], dict[str, str]
         ],
-        validation_structured: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        validation_structured: dict[str, Any],
+    ) -> ConfigSynchronizerResult:
         """Deploy configuration to production instances in parallel."""
         maps_to_sync, certificates_to_sync, acls_to_sync, files_to_sync = sync_content
 
         # Initialize results tracking
-        results: Dict[str, Any] = {
+        results: dict[str, Any] = {
             "successful": 0,
             "failed": 0,
             "skipped": 0,
             "errors": [],
+            "reload_triggered": False,
+            "reload_ids": [],
         }
 
         logger.debug(
-            f"🚀 Deploying to {len(self.production_urls)} production instances"
+            f"🚀 Deploying to {len(self.endpoints.production)} production instances"
         )
 
         # Create deployment tasks for parallel execution
         deployment_tasks = []
-        for url in self.production_urls:
+        for endpoint in self.endpoints.production:
             task = self._deploy_to_single_instance(
-                url,
+                endpoint.url,
                 config,
                 maps_to_sync,
                 certificates_to_sync,
@@ -1205,40 +1399,59 @@ class ConfigSynchronizer:
         # Process deployment results
         self._process_deployment_results(deployment_results, config, results)
 
-        return results
+        # Create reload info based on collected data
+        # Use the first reload ID if available, or None if no reloads occurred
+        reload_id = results["reload_ids"][0] if results["reload_ids"] else None
+        reload_info = ReloadInfo(reload_id=reload_id)
+
+        return ConfigSynchronizerResult(
+            successful=results["successful"],
+            failed=results["failed"],
+            skipped=results["skipped"],
+            errors=results["errors"],
+            reload_info=reload_info,
+        )
 
     def _process_deployment_results(
-        self, deployment_results: List[Any], config: str, results: Dict[str, Any]
+        self, deployment_results: list[Any], config: str, results: dict[str, Any]
     ) -> None:
         """Process the results from parallel deployment tasks."""
-        for url, result in zip(self.production_urls, deployment_results):
+        for endpoint, result in zip(self.endpoints.production, deployment_results):
             if isinstance(result, Exception):
                 # Task failed with exception
-                self._handle_deployment_error(url, result, config, results)
-            elif isinstance(result, dict):
+                self._handle_deployment_error(endpoint.url, result, config, results)
+            elif isinstance(result, SynchronizationResult):
                 # Process successful result
-                self._process_successful_deployment(url, result, results)
+                self._process_successful_deployment(endpoint.url, result, results)
             else:
                 # Unexpected result type
                 error_msg = f"Unexpected result type from deployment: {type(result)}"
                 self._handle_deployment_error(
-                    url, Exception(error_msg), config, results
+                    endpoint.url, Exception(error_msg), config, results
                 )
 
     def _process_successful_deployment(
-        self, url: str, result: Dict[str, Any], results: Dict[str, Any]
+        self, url: str, result: SynchronizationResult, results: dict[str, Any]
     ) -> None:
         """Process a successful deployment result."""
-        if result["method"] == "skipped":
+        if result.method == "skipped":
             results["skipped"] += 1
         else:
             results["successful"] += 1
             self._log_successful_deployment(url, result)
 
+        # Collect reload information
+        if result.reload_info.reload_triggered:
+            results["reload_triggered"] = True
+            if result.reload_info.reload_id:
+                results["reload_ids"].append(result.reload_info.reload_id)
+
         # Log detailed deployment information
         self._log_deployment_details(url, result)
 
-    def _log_successful_deployment(self, url: str, result: Dict[str, Any]) -> None:
+    def _log_successful_deployment(
+        self, url: str, result: SynchronizationResult
+    ) -> None:
         """Log information about successful deployment."""
         method_emojis = {
             "structured": "🏗️",
@@ -1246,56 +1459,73 @@ class ConfigSynchronizer:
             "raw_fallback": "🔄",
             "fallback": "🔄",
         }
-        method_emoji = method_emojis.get(result["method"], "✅")
+        method_emoji = method_emojis.get(result.method, "✅")
         pod_info = self._extract_pod_info_from_url(url)
         logger.info(
-            f"{method_emoji} Deployed to {pod_info['pod_name']} ({url}) ({result['method']}), version: {result['version']}"
+            f"{method_emoji} Deployed to {pod_info['pod_name']} ({url}) ({result.method}), version: {result.version}"
         )
 
-    def _log_deployment_details(self, url: str, result: Dict[str, Any]) -> None:
+    def _log_deployment_details(self, url: str, result: SynchronizationResult) -> None:
         """Log detailed deployment information for debugging."""
-        reload_triggered = result.get("reload_triggered", False)
-        reload_id = result.get("reload_id")
+        reload_triggered = result.reload_info.reload_triggered
+        reload_id = result.reload_info.reload_id
 
         logger.debug(
             f"🔍 Processing deployment result for {url}: reload_triggered={reload_triggered}, "
-            f"reload_id={reload_id}, method={result.get('method')}, version={result.get('version')}"
+            f"reload_id={reload_id}, method={result.method}, version={result.version}"
         )
 
         pod_info = self._extract_pod_info_from_url(url)
-        if result["method"] == "skipped":
+        if result.method == "skipped":
             logger.debug(
                 f"ℹ️  Configuration unchanged on {pod_info['pod_name']} ({url})"
             )
         else:
             logger.debug(
-                f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result['method']}"
+                f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result.method}"
             )
 
-    def _log_sync_results(self, results: Dict[str, Any]) -> None:
+        # Log INFO-level message when reload is triggered on production instance
+        if reload_triggered and reload_id:
+            logger.info(
+                f"🔄 Production instance reload triggered: {reload_id} "
+                f"({pod_info['pod_name']} - {url})"
+            )
+
+    def _log_sync_results(self, result: ConfigSynchronizerResult) -> None:
         """Log the final synchronization results."""
-        total_instances = len(self.production_urls)
-        if results["successful"] > 0:
+        total_instances = len(self.endpoints.production)
+
+        # Format reload information
+        if result.reload_info.reload_triggered:
+            if result.reload_info.reload_id:
+                reload_suffix = f" (reload triggered: {result.reload_info.reload_id})"
+            else:
+                reload_suffix = " (reload triggered)"
+        else:
+            reload_suffix = " (no reload)"
+
+        if result.successful > 0:
             # Log at INFO when we actually deployed something
             logger.info(
-                f"🎯 Sync complete: {results['successful']} deployed, "
-                f"{results['skipped']} skipped (unchanged), "
-                f"{results['failed']} failed out of {total_instances} instances"
+                f"🎯 Sync complete: {result.successful} deployed, "
+                f"{result.skipped} skipped (unchanged), "
+                f"{result.failed} failed out of {total_instances} instances{reload_suffix}"
             )
-        elif results["failed"] > 0:
+        elif result.failed > 0:
             # Log at INFO when there were failures (important to know)
             logger.info(
-                f"Sync complete: {results['successful']} successful, {results['failed']} failed"
+                f"Sync complete: {result.successful} successful, {result.failed} failed{reload_suffix}"
             )
         else:
             # Log at DEBUG when nothing changed (all skipped)
             logger.debug(
-                f"🎯 Sync complete: {results['successful']} deployed, "
-                f"{results['skipped']} skipped (unchanged), "
-                f"{results['failed']} failed out of {total_instances} instances"
+                f"🎯 Sync complete: {result.successful} deployed, "
+                f"{result.skipped} skipped (unchanged), "
+                f"{result.failed} failed out of {total_instances} instances{reload_suffix}"
             )
 
-    def _extract_pod_info_from_url(self, url: str) -> Dict[str, str]:
+    def _extract_pod_info_from_url(self, url: str) -> dict[str, str]:
         """Extract pod information from dataplane URL.
 
         Args:
@@ -1311,8 +1541,13 @@ class ConfigSynchronizer:
             if not pod_ip:
                 return {"pod_ip": "unknown", "pod_name": "unknown"}
 
-            # Use actual pod name from mapping if available, otherwise fallback to IP-based name
-            pod_name = self.url_to_pod_name.get(url, f"pod-{pod_ip.replace('.', '-')}")
+            # Use actual pod name from endpoint if available, otherwise fallback to IP-based name
+            endpoint = self.endpoints.find_by_url(url)
+            pod_name = (
+                endpoint.pod_name
+                if endpoint and endpoint.pod_name
+                else f"pod-{pod_ip.replace('.', '-')}"
+            )
 
             return {"pod_ip": pod_ip, "pod_name": pod_name}
 
