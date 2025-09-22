@@ -79,6 +79,10 @@ from haproxy_dataplane_v3.api.configuration import (
     post_ha_proxy_configuration as _post_ha_proxy_configuration,
 )
 from haproxy_dataplane_v3.api.defaults import (
+    add_defaults_section as _add_defaults_section,
+    create_defaults_section as _create_defaults_section,
+    delete_defaults_section as _delete_defaults_section,
+    get_defaults_section as _get_defaults_section,
     get_defaults_sections as _get_defaults_sections,
     replace_defaults_section as _replace_defaults_section,
 )
@@ -147,14 +151,29 @@ from haproxy_dataplane_v3.api.log_forward import (
 )
 from haproxy_dataplane_v3.api.log_target import (
     create_log_target_backend as _create_log_target_backend,
+    create_log_target_defaults as _create_log_target_defaults,
     create_log_target_frontend as _create_log_target_frontend,
+    create_log_target_global as _create_log_target_global,
+    create_log_target_log_forward as _create_log_target_log_forward,
+    create_log_target_peer as _create_log_target_peer,
     delete_log_target_backend as _delete_log_target_backend,
+    delete_log_target_defaults as _delete_log_target_defaults,
     delete_log_target_frontend as _delete_log_target_frontend,
+    delete_log_target_global as _delete_log_target_global,
+    delete_log_target_log_forward as _delete_log_target_log_forward,
+    delete_log_target_peer as _delete_log_target_peer,
     get_all_log_target_backend as _get_all_log_target_backend,
+    get_all_log_target_defaults as _get_all_log_target_defaults,
     get_all_log_target_frontend as _get_all_log_target_frontend,
     get_all_log_target_global as _get_all_log_target_global,
+    get_all_log_target_log_forward as _get_all_log_target_log_forward,
+    get_all_log_target_peer as _get_all_log_target_peer,
     replace_log_target_backend as _replace_log_target_backend,
+    replace_log_target_defaults as _replace_log_target_defaults,
     replace_log_target_frontend as _replace_log_target_frontend,
+    replace_log_target_global as _replace_log_target_global,
+    replace_log_target_log_forward as _replace_log_target_log_forward,
+    replace_log_target_peer as _replace_log_target_peer,
 )
 from haproxy_dataplane_v3.api.mailers import (
     create_mailers_section as _create_mailers_section,
@@ -2345,14 +2364,87 @@ async def replace_cache(
 
 # Defaults functions
 @api_function()
+async def get_defaults_section(
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    full_section: Unset | bool = True,
+) -> Response[Error | Defaults]:
+    return await _get_defaults_section.asyncio_detailed(
+        name,
+        client=client,
+        transaction_id=transaction_id,
+        full_section=full_section,
+    )
+
+
+@api_function()
 async def get_defaults_sections(
     *,
     client: AuthenticatedClient | Client,
     transaction_id: Unset | str = UNSET,
+    full_section: Unset | bool = True,
 ) -> Response[Error | list[Defaults]]:
+    # Workaround for HAProxy DataPlane API bug where list endpoint with full_section=true
+    # doesn't populate log_target_list, but individual endpoint works correctly
+    if full_section is True:
+        # First get section names without full_section
+        list_response = await _get_defaults_sections.asyncio_detailed(
+            client=client,
+            transaction_id=transaction_id,
+            full_section=False,
+        )
+
+        if isinstance(list_response.parsed, Error):
+            return list_response
+
+        # Ensure parsed is a list and not None
+        if not list_response.parsed:
+            return list_response
+
+        # Then fetch each section individually with full_section=true
+        full_sections: list[Defaults] = []
+        for section in list_response.parsed:
+            # Ensure section.name is a string, not Unset
+            if not section.name or isinstance(section.name, type(UNSET)):
+                continue
+
+            individual_response = await _get_defaults_section.asyncio_detailed(
+                section.name,
+                client=client,
+                transaction_id=transaction_id,
+                full_section=True,
+            )
+
+            if isinstance(individual_response.parsed, Error):
+                # Return error response with correct type annotation
+                error_response: Response[Error | list[Defaults]] = cast(
+                    Response[Error | list[Defaults]], individual_response
+                )
+                return error_response
+
+            # Ensure we have a valid Defaults object before appending
+            if individual_response.parsed is not None:
+                full_sections.append(individual_response.parsed)
+
+        # Create response with full sections
+        response: Response[Error | list[Defaults]] = cast(
+            Response[Error | list[Defaults]],
+            Response(
+                status_code=list_response.status_code,
+                headers=list_response.headers,
+                parsed=full_sections,
+                content=list_response.content,
+            ),
+        )
+        return response
+
+    # Use original implementation when full_section is False or UNSET
     return await _get_defaults_sections.asyncio_detailed(
         client=client,
         transaction_id=transaction_id,
+        full_section=full_section,
     )
 
 
@@ -2365,6 +2457,7 @@ async def replace_defaults_section(
     transaction_id: Unset | str = UNSET,
     version: Unset | int = UNSET,
     force_reload: Unset | bool = False,
+    full_section: Unset | bool = True,
 ) -> Response[Defaults | Error]:
     return await _replace_defaults_section.asyncio_detailed(
         name=name,
@@ -2373,6 +2466,67 @@ async def replace_defaults_section(
         transaction_id=transaction_id,
         version=version,
         force_reload=force_reload,
+        full_section=full_section,
+    )
+
+
+@api_function()
+async def add_defaults_section(
+    *,
+    client: AuthenticatedClient | Client,
+    body: Defaults,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+    full_section: Unset | bool = True,
+) -> Response[Defaults | Error]:
+    return await _add_defaults_section.asyncio_detailed(
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+        full_section=full_section,
+    )
+
+
+@api_function()
+async def create_defaults_section(
+    *,
+    client: AuthenticatedClient | Client,
+    body: Defaults,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+    full_section: Unset | bool = True,
+) -> Response[Defaults | Error]:
+    return await _create_defaults_section.asyncio_detailed(
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+        full_section=full_section,
+    )
+
+
+@api_function()
+async def delete_defaults_section(
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+    full_section: Unset | bool = True,
+) -> Response[None | Error]:
+    return await _delete_defaults_section.asyncio_detailed(
+        name=name,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+        full_section=full_section,
     )
 
 
@@ -2746,6 +2900,302 @@ async def replace_log_target_frontend(
     force_reload: Unset | bool = False,
 ) -> Response[LogTarget | Error]:
     return await _replace_log_target_frontend.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# Global log target functions
+@api_function()
+async def create_log_target_global(
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: LogTarget,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[LogTarget | Error]:
+    return await _create_log_target_global.asyncio_detailed(
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_log_target_global(
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | None]:
+    return await _delete_log_target_global.asyncio_detailed(
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_log_target_global(
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: LogTarget,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[LogTarget | Error]:
+    return await _replace_log_target_global.asyncio_detailed(
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# Defaults log target functions
+@api_function()
+async def get_all_log_target_defaults(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[LogTarget]]:
+    return await _get_all_log_target_defaults.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_log_target_defaults(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: LogTarget,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[LogTarget | Error]:
+    return await _create_log_target_defaults.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_log_target_defaults(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | None]:
+    return await _delete_log_target_defaults.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_log_target_defaults(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: LogTarget,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[LogTarget | Error]:
+    return await _replace_log_target_defaults.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# Peer log target functions
+@api_function()
+async def get_all_log_target_peer(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[LogTarget]]:
+    return await _get_all_log_target_peer.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_log_target_peer(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: LogTarget,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[LogTarget | Error]:
+    return await _create_log_target_peer.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_log_target_peer(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | None]:
+    return await _delete_log_target_peer.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_log_target_peer(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: LogTarget,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[LogTarget | Error]:
+    return await _replace_log_target_peer.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# Log forward log target functions
+@api_function()
+async def get_all_log_target_log_forward(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[LogTarget]]:
+    return await _get_all_log_target_log_forward.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_log_target_log_forward(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: LogTarget,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[LogTarget | Error]:
+    return await _create_log_target_log_forward.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_log_target_log_forward(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | None]:
+    return await _delete_log_target_log_forward.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_log_target_log_forward(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: LogTarget,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[LogTarget | Error]:
+    return await _replace_log_target_log_forward.asyncio_detailed(
         parent_name=parent_name,
         index=index,
         client=client,

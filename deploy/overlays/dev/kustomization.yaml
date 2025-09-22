@@ -5,7 +5,7 @@ resources:
 - ../../base
 
 images:
-- name: ghcr.io/OWNER/REPO
+- name: ghcr.io/phihos/haproxy-template-ingress-controller
   newName: haproxy-template-ic
   newTag: dev
 - name: haproxytech/haproxy-alpine
