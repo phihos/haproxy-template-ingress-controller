@@ -1564,7 +1564,7 @@ def assert_exception_raised(func, exception_type, match_pattern=None, *args, **k
 
 
 # Tracing mock fixtures for OpenTelemetry patterns
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def mock_span():
     """Create a mock OpenTelemetry span."""
     span = Mock()
@@ -1575,7 +1575,7 @@ def mock_span():
     return span
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def mock_tracer(mock_span):
     """Create a mock OpenTelemetry tracer."""
     tracer = Mock()
@@ -1587,7 +1587,7 @@ def mock_tracer(mock_span):
     return tracer
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def mock_tracer_provider(mock_tracer):
     """Create a mock OpenTelemetry tracer provider."""
     provider = Mock()
