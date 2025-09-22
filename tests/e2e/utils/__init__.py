@@ -12,6 +12,7 @@ from .helpers import (
     assert_config_change,
     assert_config_structure,
     assert_log_line,
+    assert_no_handler_failures,
     assert_no_reload_loop,
     assert_operator_health,
     count_log_occurrences,
@@ -34,6 +35,7 @@ __all__ = [
     "assert_log_line",
     "assert_config_change",
     "count_log_occurrences",
+    "assert_no_handler_failures",
     "assert_no_reload_loop",
     "assert_operator_health",
     # Assertions

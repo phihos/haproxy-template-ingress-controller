@@ -13,7 +13,7 @@ import structlog
 from kopf._core.engines.indexing import OperatorIndices
 
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
-from haproxy_template_ic.metrics import MetricsCollector, get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.models.config import Config
 from haproxy_template_ic.models.context import HAProxyConfigContext
 from haproxy_template_ic.models.templates import TriggerContext
@@ -82,7 +82,7 @@ class TemplateRenderDebouncer:
         self._change_count = 0
         self._last_change_time: float = 0
         self._start_lock = asyncio.Lock()
-        self._metrics = self._get_metrics_collector()
+        self._metrics = metrics
 
         # Trigger tracking for context
         self._pod_changed: bool = False
@@ -97,13 +97,6 @@ class TemplateRenderDebouncer:
             logger.info(
                 f"Long max_interval ({max_interval}s) - templates may become stale during quiet periods"
             )
-
-    def _get_metrics_collector(self):
-        """Get metrics collector instance if available."""
-        try:
-            return get_metrics_collector()
-        except ImportError:
-            return None
 
     async def trigger(self, source: str = "resource_changes") -> None:
         """
@@ -204,27 +197,26 @@ class TemplateRenderDebouncer:
                 )
 
                 # Log rendering trigger
-                if triggered_by == "resource_changes":
-                    logger.info(
-                        f"🔄 Rendering templates: {changes_batched} changes batched",
-                        changes_batched=changes_batched,
-                        trigger=triggered_by,
-                        pod_changed=pod_changed,
-                    )
-                elif triggered_by == "pod_changes":
-                    logger.info(
-                        "🔄 Rendering templates: HAProxy pods changed",
-                        changes_batched=changes_batched,
-                        trigger=triggered_by,
-                        pod_changed=pod_changed,
-                    )
-                else:  # periodic_refresh
-                    logger.info(
-                        f"⏰ Rendering templates: periodic refresh after {self.max_interval}s",
-                        interval=self.max_interval,
-                        trigger=triggered_by,
-                        pod_changed=pod_changed,
-                    )
+                match triggered_by:
+                    case "resource_changes":
+                        message = (
+                            f"🔄 Rendering templates: {changes_batched} changes batched"
+                        )
+                        extra_fields = {}
+                    case "pod_changes":
+                        message = "🔄 Rendering templates: HAProxy pods changed"
+                        extra_fields = {}
+                    case _:  # periodic_refresh
+                        message = f"⏰ Rendering templates: periodic refresh after {self.max_interval}s"
+                        extra_fields = {"interval": self.max_interval}
+
+                logger.info(
+                    message,
+                    changes_batched=changes_batched,
+                    trigger=triggered_by,
+                    pod_changed=pod_changed,
+                    **extra_fields,
+                )
 
                 # Record metrics
                 if self._metrics:

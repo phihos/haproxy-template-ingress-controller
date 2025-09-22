@@ -6,6 +6,7 @@ into a single, well-organized module for easier imports and maintenance.
 """
 
 import os
+import time
 from typing import Any, Dict
 
 import pytest
@@ -250,6 +251,46 @@ def _assert_watch_streams_active(operator: LocalOperatorRunner) -> None:
         "☸️ Starting Kopf" in logs
         and "☸️ Activity 'init_watch_configmap' succeeded." in logs
     ), "Kopf framework should be active and processing configuration"
+
+
+def assert_no_handler_failures(
+    operator: LocalOperatorRunner, timeout: float = 5
+) -> None:
+    """Assert that no kopf handler failures occur within the timeout period.
+
+    Monitors operator logs for handler failure messages that indicate signature
+    mismatches or other handler execution errors.
+
+    Args:
+        operator: LocalOperatorRunner instance
+        timeout: Time period to monitor in seconds
+
+    Raises:
+        AssertionError: If any handler failures are detected
+    """
+    start_time = time.time()
+    error_patterns = [
+        "TypeError:",
+        "got an unexpected keyword argument",
+        "Error during handling",
+        "Handler failed",
+        "Traceback (most recent call last):",
+    ]
+
+    initial_position = operator.get_log_position()
+
+    # Monitor for handler failures during the timeout period
+    while time.time() - start_time < timeout:
+        logs = operator.get_logs(since_index=initial_position)
+
+        for pattern in error_patterns:
+            if pattern in logs:
+                pytest.fail(
+                    f"Handler failure detected! Found error pattern: '{pattern}'\n"
+                    f"Recent logs:\n{logs}"
+                )
+
+        time.sleep(0.1)  # Small delay to avoid excessive CPU usage
 
 
 # =============================================================================

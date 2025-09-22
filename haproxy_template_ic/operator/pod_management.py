@@ -37,14 +37,14 @@ __all__ = [
 
 
 async def haproxy_pods_index(
+    namespace: str = "",
+    name: str = "",
+    body: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Index HAProxy pods for efficient discovery."""
-    # Extract kopf parameters
-    namespace = kwargs.get("namespace", "")
-    name = kwargs.get("name", "")
-    body = kwargs.get("body", {})
-    logger = kwargs.get("logger", logging.getLogger(__name__))
+    if body is None:
+        body = {}
 
     logger.info(f"📝 Indexing HAProxy pod {namespace}/{name}")
 
@@ -161,17 +161,16 @@ async def handle_haproxy_pod_event(
     body: dict[str, Any] | None = None,
     meta: dict[str, Any] | None = None,
     type: str | None = None,
-    logger: logging.Logger | None = None,
     memo: ApplicationState | None = None,
     **kwargs: Any,
 ) -> None:
     """Handle HAProxy pod events (create, update, delete)."""
-    # Extract parameters from kwargs if not provided positionally
-    body = body or kwargs.get("body", {})
-    meta = meta or kwargs.get("meta", {})
-    type = type or kwargs.get("type", "")
-    logger = logger or kwargs.get("logger", logging.getLogger(__name__))
-    memo = memo or kwargs.get("memo")
+    if body is None:
+        body = {}
+    if meta is None:
+        meta = {}
+    if type is None:
+        type = ""
 
     if not memo:
         logger.warning("No memo provided to handle_haproxy_pod_event")
@@ -202,36 +201,39 @@ async def handle_haproxy_pod_event(
     except Exception as e:
         logger.error(f"❌ Failed to update production endpoints: {e}")
 
-    if type == "ADDED":
-        logger.info(f"🆕 HAProxy pod created: {namespace}/{name}")
-        logger.info(f"📊 Pod status: phase={phase}, podIP={pod_ip}")
-        # Always trigger for pod creation
-        await memo.operations.debouncer.trigger("pod_changes")
-        logger.debug("⏰ Triggered template rendering due to new HAProxy pod")
-
-    elif type == "DELETED":
-        logger.info(f"🗑️ HAProxy pod deleted: {namespace}/{name}")
-        # Always trigger for pod deletion
-        await memo.operations.debouncer.trigger("pod_changes")
-        logger.debug("⏰ Triggered template rendering due to HAProxy pod deletion")
-
-    elif type == "MODIFIED":
-        # Check readiness condition for updates
-        ready_condition = None
-        conditions = status.get("conditions", [])
-        for condition in conditions:
-            if condition.get("type") == "Ready":
-                ready_condition = condition.get("status", "Unknown")
-                break
-
-        logger.info(
-            f"🔄 HAProxy pod updated: {namespace}/{name} phase={phase} pod_ip={pod_ip} ready={ready_condition}"
-        )
-
-        # Only trigger sync if pod became ready or has IP assigned
-        if phase == "Running" and pod_ip and pod_ip != "Not assigned":
+    match type:
+        case "ADDED":
+            logger.info(f"🆕 HAProxy pod created: {namespace}/{name}")
+            logger.info(f"📊 Pod status: phase={phase}, podIP={pod_ip}")
+            # Always trigger for pod creation
             await memo.operations.debouncer.trigger("pod_changes")
-            logger.debug("⏰ Triggered template rendering due to HAProxy pod update")
+            logger.debug("⏰ Triggered template rendering due to new HAProxy pod")
+
+        case "DELETED":
+            logger.info(f"🗑️ HAProxy pod deleted: {namespace}/{name}")
+            # Always trigger for pod deletion
+            await memo.operations.debouncer.trigger("pod_changes")
+            logger.debug("⏰ Triggered template rendering due to HAProxy pod deletion")
+
+        case "MODIFIED":
+            # Check readiness condition for updates
+            ready_condition = None
+            conditions = status.get("conditions", [])
+            for condition in conditions:
+                if condition.get("type") == "Ready":
+                    ready_condition = condition.get("status", "Unknown")
+                    break
+
+            logger.info(
+                f"🔄 HAProxy pod updated: {namespace}/{name} phase={phase} pod_ip={pod_ip} ready={ready_condition}"
+            )
+
+            # Only trigger sync if pod became ready or has IP assigned
+            if phase == "Running" and pod_ip and pod_ip != "Not assigned":
+                await memo.operations.debouncer.trigger("pod_changes")
+                logger.debug(
+                    "⏰ Triggered template rendering due to HAProxy pod update"
+                )
 
 
 def setup_haproxy_pod_indexing(memo: ApplicationState) -> None:

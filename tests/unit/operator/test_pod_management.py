@@ -18,7 +18,7 @@ from tests.unit.conftest import (
 
 
 @pytest.mark.asyncio
-async def test_haproxy_pods_index_normal_pod():
+async def test_haproxy_pods_index_normal_pod(monkeypatch):
     """Test that haproxy_pods_index correctly indexes normal pods."""
     namespace = "test-namespace"
     name = "test-pod"
@@ -29,12 +29,12 @@ async def test_haproxy_pods_index_normal_pod():
         additional_status={"podIP": "10.0.0.1"},
     )
     logger = create_logger_mock()
+    monkeypatch.setattr("haproxy_template_ic.operator.pod_management.logger", logger)
 
     result = await haproxy_pods_index(
         namespace=namespace,
         name=name,
         body=body,
-        logger=logger,
     )
 
     # Should return indexed pod data
@@ -43,7 +43,7 @@ async def test_haproxy_pods_index_normal_pod():
 
 
 @pytest.mark.asyncio
-async def test_haproxy_pods_index_deleted_pod():
+async def test_haproxy_pods_index_deleted_pod(monkeypatch):
     """Test that haproxy_pods_index correctly removes deleted pods from index."""
     namespace = "test-namespace"
     name = "test-pod"
@@ -55,12 +55,12 @@ async def test_haproxy_pods_index_deleted_pod():
         additional_metadata={"deletionTimestamp": "2024-01-01T12:00:00Z"},
     )
     logger = create_logger_mock()
+    monkeypatch.setattr("haproxy_template_ic.operator.pod_management.logger", logger)
 
     result = await haproxy_pods_index(
         namespace=namespace,
         name=name,
         body=body,
-        logger=logger,
     )
 
     # Should return empty dict to remove from index
@@ -189,7 +189,7 @@ async def test_handle_haproxy_pod_event_mixed_args_kwargs():
 
 
 @pytest.mark.asyncio
-async def test_handle_haproxy_pod_event_no_memo():
+async def test_handle_haproxy_pod_event_no_memo(monkeypatch):
     """Test handle_haproxy_pod_event handles missing memo gracefully."""
     body = create_k8s_pod_resource(
         name="test-pod",
@@ -199,26 +199,24 @@ async def test_handle_haproxy_pod_event_no_memo():
     )
     meta = {"name": "test-pod", "namespace": "default"}
     logger = create_logger_mock()
+    monkeypatch.setattr("haproxy_template_ic.operator.pod_management.logger", logger)
 
     # Call without memo - should not raise exception
-    await handle_haproxy_pod_event(
-        body=body, meta=meta, type="ADDED", logger=logger, memo=None
-    )
+    await handle_haproxy_pod_event(body=body, meta=meta, type="ADDED", memo=None)
 
     # Should log warning and return early
     logger.warning.assert_called_with("No memo provided to handle_haproxy_pod_event")
 
 
 @pytest.mark.asyncio
-async def test_handle_haproxy_pod_event_missing_parameters():
+async def test_handle_haproxy_pod_event_missing_parameters(monkeypatch):
     """Test handle_haproxy_pod_event handles missing required parameters."""
     memo = create_memo_mock_with_debouncer()
     logger = create_logger_mock()
+    monkeypatch.setattr("haproxy_template_ic.operator.pod_management.logger", logger)
 
     # Call with missing meta and body
-    await handle_haproxy_pod_event(
-        body=None, meta=None, type="ADDED", logger=logger, memo=memo
-    )
+    await handle_haproxy_pod_event(body=None, meta=None, type="ADDED", memo=memo)
 
     # Should log warning and return early
     logger.warning.assert_called_with(

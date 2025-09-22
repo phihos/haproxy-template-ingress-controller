@@ -2381,20 +2381,22 @@ def test_extract_resource_id_exception():
     collection = IndexedResourceCollection()
 
     # Test with object that causes exception when accessing metadata.name
-    # We need to mock the actual property access
+    # AND also make dict access fail by removing get method
     resource = MagicMock()
     mock_metadata = MagicMock()
     resource.metadata = mock_metadata
     # Make the name property raise an exception
     type(mock_metadata).name = PropertyMock(side_effect=RuntimeError("Error"))
+    # Also make dict access fail
+    del resource.get
 
     resource_id = collection._extract_resource_id(resource)
     assert resource_id == "<error>"
 
-    # Test with None - this returns "<unknown>" because None doesn't have
-    # a metadata attribute, not because of an exception
+    # Test with None - this returns "<error>" because None doesn't have
+    # a metadata attribute or get method
     resource_id = collection._extract_resource_id(None)
-    assert resource_id == "<unknown>"
+    assert resource_id == "<error>"
 
 
 def test_get_indexed_iter():

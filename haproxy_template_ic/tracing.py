@@ -47,6 +47,24 @@ class TracingConfig:
     sample_rate: float = 1.0
     console_export: bool = False
 
+    def override_with_app_config(self, app_tracing_config: Any) -> "TracingConfig":
+        """Create new TracingConfig with app-specific overrides.
+
+        Args:
+            app_tracing_config: Application tracing configuration object
+
+        Returns:
+            New TracingConfig instance with app-specific values applied
+        """
+        return TracingConfig(
+            enabled=app_tracing_config.enabled,
+            service_name=app_tracing_config.service_name or self.service_name,
+            service_version=app_tracing_config.service_version or self.service_version,
+            jaeger_endpoint=app_tracing_config.jaeger_endpoint or self.jaeger_endpoint,
+            sample_rate=app_tracing_config.sample_rate,
+            console_export=app_tracing_config.console_export or self.console_export,
+        )
+
 
 class TracingManager:
     """Manages OpenTelemetry tracing configuration and lifecycle."""

@@ -10,13 +10,70 @@ import functools
 import inspect
 import logging
 from functools import lru_cache
-from typing import Any, Callable, TypeVar, Awaitable, cast
+from typing import Any, Callable, TypeVar, Awaitable, cast, TypedDict, NotRequired
 from dataclasses import dataclass, field, asdict
 from uuid import uuid4
 
 import structlog
 import structlog.contextvars
 from structlog.types import EventDict, WrappedLogger, Processor
+
+
+# Unicode constants for emoji detection
+EMOJI_UNICODE_RANGES = [
+    (
+        "\U0001f300",
+        "\U0001f9ff",
+    ),  # Misc Symbols and Pictographs, Emoticons, Transport, etc.
+    ("\U00002600", "\U000027bf"),  # Miscellaneous Symbols, Dingbats
+]
+SPECIAL_EMOJI_CHARS = "✅❌⚠️ℹ️⏰🔧📋☸️⚙️✓"
+
+
+class LogEventDict(TypedDict, total=False):
+    """Enhanced type definition for log event dictionaries with common fields."""
+
+    event: str
+    log_level: NotRequired[str]
+    _json_mode: NotRequired[bool]
+    _record: NotRequired[Any]  # LogRecord or dict
+
+
+# Emoji mappings for different contexts
+LIBRARY_EMOJIS = {
+    "httpx": "🌐",
+    "httpcore": "🌐",
+    "kopf": "☸️",
+    "kr8s": "☸️",
+    "asyncio": "⚡",
+    "uvloop": "⚡",
+}
+
+LEVEL_EMOJIS = {
+    "critical": "💥",
+    "error": "❌",
+    "warning": "⚠️",
+    "debug": "🔧",
+}
+
+INFO_MESSAGE_EMOJIS = {
+    ("start", "begin", "init"): "🚀",
+    ("success", "complete", "done", "finish"): "✅",
+    ("sync", "update", "refresh"): "🔄",
+    ("config", "setting"): "⚙️",
+    ("metric", "measure", "count"): "📊",
+    ("render", "template"): "📄",
+    ("valid",): "✓",
+}
+
+DEBUG_MESSAGE_EMOJIS = {
+    ("creat", "add", "new"): "➕",
+    ("delet", "remov"): "➖",
+    ("skip", "unchang", "same"): "⏭️",
+    ("updat", "modif", "chang"): "📝",
+    ("fetch", "get", "retriev"): "📥",
+    ("send", "post", "deploy"): "📤",
+}
 
 
 # Type variables for decorators
@@ -177,6 +234,49 @@ def observe(**decorator_kwargs: Any) -> Callable[[AsyncF], AsyncF]:
     return decorator
 
 
+def _get_library_emoji(logger_name: str) -> str:
+    """Get emoji for library-specific loggers."""
+    for lib, emoji in LIBRARY_EMOJIS.items():
+        if lib in logger_name:
+            return emoji
+    return ""
+
+
+def _get_message_based_emoji(message: str, level: str) -> str:
+    """Get emoji based on message content and level."""
+    msg_lower = message.lower()
+
+    if level == "info":
+        for keywords, emoji in INFO_MESSAGE_EMOJIS.items():
+            if any(word in msg_lower for word in keywords):
+                return emoji
+        return "ℹ️"  # Default info emoji
+
+    elif level == "debug":
+        for keywords, emoji in DEBUG_MESSAGE_EMOJIS.items():
+            if any(word in msg_lower for word in keywords):
+                return emoji
+        return "🔧"  # Default debug emoji
+
+    return ""
+
+
+def _get_emoji_for_log(level: str, logger_name: str, message: str) -> str:
+    """Determine appropriate emoji for log entry."""
+    # Check for library-specific emojis first (overrides level-based)
+    library_emoji = _get_library_emoji(logger_name)
+    if library_emoji:
+        return library_emoji
+
+    # Check level-specific emojis
+    level_emoji = LEVEL_EMOJIS.get(level)
+    if level_emoji:
+        return level_emoji
+
+    # For info and debug levels, analyze message content
+    return _get_message_based_emoji(message, level)
+
+
 def add_emoji_prefix(
     logger: WrappedLogger, method_name: str, event_dict: EventDict
 ) -> EventDict:
@@ -205,10 +305,10 @@ def add_emoji_prefix(
 
     if msg and len(msg) > 0:
         first_char = msg[0]
+        # Check if message already has an emoji prefix
         if (
-            "\U0001f300" <= first_char <= "\U0001f9ff"
-            or "\U00002600" <= first_char <= "\U000027bf"
-            or first_char in "✅❌⚠️ℹ️⏰🔧📋☸️⚙️✓"
+            any(start <= first_char <= end for start, end in EMOJI_UNICODE_RANGES)
+            or first_char in SPECIAL_EMOJI_CHARS
         ):
             return event_dict
 
@@ -231,66 +331,8 @@ def add_emoji_prefix(
     else:
         logger_name = ""
 
-    # Determine appropriate emoji based on level and logger
-    emoji = ""
-
-    # Special handling for known libraries (override level-based emoji)
-    if any(lib in logger_name for lib in ["httpx", "httpcore"]):
-        emoji = "🌐"  # Network/HTTP requests
-    elif "kopf" in logger_name:
-        emoji = "☸️"  # Kubernetes operator
-    elif "kr8s" in logger_name:
-        emoji = "☸️"  # Kubernetes client
-    elif "asyncio" in logger_name or "uvloop" in logger_name:
-        emoji = "⚡"  # Async operations
-
-    # If no library-specific emoji, use level-based
-    if not emoji:
-        # Default emojis by log level
-        if level == "critical":
-            emoji = "💥"
-        elif level == "error":
-            emoji = "❌"
-        elif level == "warning":
-            emoji = "⚠️"
-        elif level == "info":
-            # Try to be smart about info messages
-            if any(word in msg.lower() for word in ["start", "begin", "init"]):
-                emoji = "🚀"
-            elif any(
-                word in msg.lower()
-                for word in ["success", "complete", "done", "finish"]
-            ):
-                emoji = "✅"
-            elif any(word in msg.lower() for word in ["sync", "update", "refresh"]):
-                emoji = "🔄"
-            elif any(word in msg.lower() for word in ["config", "setting"]):
-                emoji = "⚙️"
-            elif any(word in msg.lower() for word in ["metric", "measure", "count"]):
-                emoji = "📊"
-            elif any(word in msg.lower() for word in ["render", "template"]):
-                emoji = "📄"
-            elif any(word in msg.lower() for word in ["valid"]):
-                emoji = "✓"
-            else:
-                emoji = "ℹ️"
-        elif level == "debug":
-            # Smart debug emojis
-            msg_lower = msg.lower()
-            if any(word in msg_lower for word in ["creat", "add", "new"]):
-                emoji = "➕"
-            elif any(word in msg_lower for word in ["delet", "remov"]):
-                emoji = "➖"
-            elif any(word in msg_lower for word in ["skip", "unchang", "same"]):
-                emoji = "⏭️"
-            elif any(word in msg_lower for word in ["updat", "modif", "chang"]):
-                emoji = "📝"
-            elif any(word in msg_lower for word in ["fetch", "get", "retriev"]):
-                emoji = "📥"
-            elif any(word in msg_lower for word in ["send", "post", "deploy"]):
-                emoji = "📤"
-            else:
-                emoji = "🔧"
+    # Get appropriate emoji using helper function
+    emoji = _get_emoji_for_log(level, logger_name, msg)
 
     # Add emoji to the message
     if emoji:

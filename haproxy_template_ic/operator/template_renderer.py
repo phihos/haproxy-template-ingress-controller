@@ -28,7 +28,14 @@ from ..dataplane.synchronizer import ConfigSynchronizer
 from ..metrics import MetricsCollector
 from ..models.config import Config
 from ..models.context import HAProxyConfigContext, TemplateContext
-from ..models.templates import ContentType, RenderedConfig, RenderedContent
+from ..models.templates import (
+    ContentType,
+    RenderedConfig,
+    RenderedContent,
+    TemplatePreparationResult,
+    TemplateRenderContext,
+    TemplateValidationIssue,
+)
 from ..templating import TemplateRenderer
 from .synchronization import synchronize_with_haproxy_instances
 
@@ -45,7 +52,7 @@ __all__ = [
 
 def _prepare_template_context(
     haproxy_config_context: HAProxyConfigContext, indices: dict[str, Any]
-) -> tuple[TemplateContext, dict[str, Any], list]:
+) -> TemplatePreparationResult:
     """Prepare template context and variables for rendering."""
     haproxy_config_context.rendered_content.clear()
     haproxy_config_context._clear_cache()
@@ -53,18 +60,17 @@ def _prepare_template_context(
 
     template_context = TemplateContext(resources=indices)
 
-    validation_errors = []
+    validation_errors: list[TemplateValidationIssue] = []
 
     def register_error(
         resource_type: str, resource_uid: str, error_message: str
     ) -> None:
-        validation_errors.append(
-            {
-                "resource_type": resource_type,
-                "resource_uid": resource_uid,
-                "error": error_message,
-            }
+        validation_error = TemplateValidationIssue(
+            resource_type=resource_type,
+            resource_uid=resource_uid,
+            error=error_message,
         )
+        validation_errors.append(validation_error)
         logger.warning(
             f"Template validation error: resource_type={resource_type} resource_uid={resource_uid} error={error_message}"
         )
@@ -74,55 +80,54 @@ def _prepare_template_context(
         "register_error": register_error,
     }
 
-    return template_context, template_vars, validation_errors
+    return TemplatePreparationResult(
+        template_context=template_context,
+        template_vars=template_vars,
+        validation_errors=validation_errors,
+    )
 
 
-def _render_haproxy_config(
-    config: Config,
-    haproxy_config_context: HAProxyConfigContext,
-    template_renderer: TemplateRenderer,
-    template_vars: dict[str, Any],
-    metrics: MetricsCollector,
-) -> None:
+def _render_haproxy_config(render_context: TemplateRenderContext) -> None:
     """Render the main HAProxy configuration template."""
     try:
         with trace_template_render(CONTENT_TYPE_HAPROXY_CONFIG):
-            with metrics.time_template_render(CONTENT_TYPE_HAPROXY_CONFIG):
-                rendered_content = template_renderer.render(
-                    config.haproxy_config.template,
+            with render_context.metrics.time_template_render(
+                CONTENT_TYPE_HAPROXY_CONFIG
+            ):
+                rendered_content = render_context.template_renderer.render(
+                    render_context.config.haproxy_config.template,
                     template_name="haproxy_config",
-                    **template_vars,
+                    **render_context.template_vars,
                 )
 
         rendered_config = RenderedConfig(content=rendered_content)
-        haproxy_config_context.rendered_config = rendered_config
-        metrics.record_template_render(CONTENT_TYPE_HAPROXY_CONFIG, "success")
+        render_context.haproxy_config_context.rendered_config = rendered_config
+        render_context.metrics.record_template_render(
+            CONTENT_TYPE_HAPROXY_CONFIG, "success"
+        )
         add_span_attributes(
-            template_size=len(rendered_content), template_vars_count=len(template_vars)
+            template_size=len(rendered_content),
+            template_vars_count=len(render_context.template_vars),
         )
         record_span_event("haproxy_config_rendered")
         logger.debug("✅ Rendered HAProxy configuration template")
 
     except Exception as e:
-        metrics.record_template_render(CONTENT_TYPE_HAPROXY_CONFIG, "error")
-        metrics.record_error("template_render_failed", "operator")
+        render_context.metrics.record_template_render(
+            CONTENT_TYPE_HAPROXY_CONFIG, "error"
+        )
+        render_context.metrics.record_error("template_render_failed", "operator")
         record_span_event("haproxy_config_render_failed", {"error": str(e)})
         # The error message already includes detailed context from format_template_error
         logger.error(f"❌ {e}")
 
 
-def _render_content_templates(
-    config: Config,
-    template_renderer: TemplateRenderer,
-    haproxy_config_context: HAProxyConfigContext,
-    template_vars: dict[str, Any],
-    metrics: Any,
-) -> list:
+def _render_content_templates(render_context: TemplateRenderContext) -> list:
     """Render all content templates (maps, certificates, files)."""
     content_collections = [
-        (CONTENT_TYPE_MAP, config.maps),
-        (CONTENT_TYPE_CERTIFICATE, config.certificates),
-        (CONTENT_TYPE_FILE, config.files),
+        (CONTENT_TYPE_MAP, render_context.config.maps),
+        (CONTENT_TYPE_CERTIFICATE, render_context.config.certificates),
+        (CONTENT_TYPE_FILE, render_context.config.files),
     ]
 
     template_errors = []
@@ -131,11 +136,11 @@ def _render_content_templates(
         for filename, template_config in items.items():
             try:
                 with trace_template_render(content_type, filename):
-                    with metrics.time_template_render(content_type):
-                        rendered_content_text = template_renderer.render(
+                    with render_context.metrics.time_template_render(content_type):
+                        rendered_content_text = render_context.template_renderer.render(
                             template_config.template,
                             template_name=f"{content_type}/{filename}",
-                            **template_vars,
+                            **render_context.template_vars,
                         )
 
                 rendered_content = RenderedContent(
@@ -143,9 +148,11 @@ def _render_content_templates(
                     content=rendered_content_text,
                     content_type=ContentType(content_type),
                 )
-                haproxy_config_context.rendered_content.append(rendered_content)
+                render_context.haproxy_config_context.rendered_content.append(
+                    rendered_content
+                )
 
-                metrics.record_template_render(content_type, "success")
+                render_context.metrics.record_template_render(content_type, "success")
                 add_span_attributes(
                     **{
                         f"{content_type}_filename": filename,
@@ -163,8 +170,10 @@ def _render_content_templates(
                 }
                 template_errors.append(template_error)
 
-                metrics.record_template_render(content_type, "error")
-                metrics.record_error("template_render_failed", "operator")
+                render_context.metrics.record_template_render(content_type, "error")
+                render_context.metrics.record_error(
+                    "template_render_failed", "operator"
+                )
                 record_span_event(
                     f"{content_type}_render_failed",
                     {"filename": filename, "error": str(e)},
@@ -235,19 +244,24 @@ async def render_haproxy_templates(
         metrics.record_resource_count(total_resources)
 
         # Prepare template context
-        template_context, template_vars, validation_errors = _prepare_template_context(
-            haproxy_config_context, indices
+        preparation_result = _prepare_template_context(haproxy_config_context, indices)
+        template_vars = preparation_result.template_vars
+        validation_errors = preparation_result.validation_errors
+
+        # Create render context
+        render_context = TemplateRenderContext(
+            config=config,
+            template_renderer=template_renderer,
+            haproxy_config_context=haproxy_config_context,
+            template_vars=template_vars,
+            metrics=metrics,
         )
 
         # Render main HAProxy configuration
-        _render_haproxy_config(
-            config, haproxy_config_context, template_renderer, template_vars, metrics
-        )
+        _render_haproxy_config(render_context)
 
         # Render content templates (maps, certificates, files)
-        template_errors = _render_content_templates(
-            config, template_renderer, haproxy_config_context, template_vars, metrics
-        )
+        template_errors = _render_content_templates(render_context)
 
         # Validate results
         _validate_template_errors(template_errors)
@@ -260,7 +274,7 @@ async def render_haproxy_templates(
             )
             for error in validation_errors[:3]:  # Show first 3 warnings
                 logger.warning(
-                    f"Template warning in {error['resource_type']}: {error['error']}"
+                    f"Template warning in {error.resource_type}: {error.error}"
                 )
 
         haproxy_config_size = (

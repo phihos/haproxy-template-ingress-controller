@@ -8,6 +8,17 @@ import haproxy_template_ic.initialization as init_module
 from haproxy_template_ic.initialization import (
     initialize_post_config,
     init_watch_configmap,
+    _load_configuration_and_credentials,
+    _create_application_state,
+    _setup_kopf_handlers,
+    configure_webhook_server,
+    create_event_loop,
+    run_operator_loop,
+    init_template_debouncer,
+    cleanup_template_debouncer,
+    cleanup_tracing,
+    cleanup_metrics_server,
+    init_metrics_server,
 )
 from haproxy_template_ic.models.state import ApplicationState
 from haproxy_template_ic.tracing import TracingConfig
@@ -46,8 +57,13 @@ async def test_tracing_initialization_enabled(
 ):
     """Test tracing initialization when enabled."""
     # Setup mocks
-    mock_tracing_config = MagicMock(spec=TracingConfig)
-    mock_create_tracing_config = MagicMock(return_value=mock_tracing_config)
+    mock_base_tracing_config = MagicMock(spec=TracingConfig)
+    mock_final_tracing_config = MagicMock(spec=TracingConfig)
+    mock_base_tracing_config.override_with_app_config.return_value = (
+        mock_final_tracing_config
+    )
+
+    mock_create_tracing_config = MagicMock(return_value=mock_base_tracing_config)
     mock_init_tracing = MagicMock()
     mock_setup_logging = MagicMock()
 
@@ -65,16 +81,13 @@ async def test_tracing_initialization_enabled(
         # Call the function
         await initialize_post_config(mock_application_state)
 
-        # Verify tracing configuration was updated
-        assert mock_tracing_config.enabled
-        assert mock_tracing_config.service_name == "test-service"
-        assert mock_tracing_config.service_version == "1.0.0"
-        assert mock_tracing_config.jaeger_endpoint == "jaeger:14268"
-        assert mock_tracing_config.sample_rate == 0.5
-        assert mock_tracing_config.console_export
+        # Verify override_with_app_config was called with app config
+        mock_base_tracing_config.override_with_app_config.assert_called_once_with(
+            mock_application_state.configuration.config.tracing
+        )
 
-        # Verify tracing was initialized
-        mock_init_tracing.assert_called_once_with(mock_tracing_config)
+        # Verify tracing was initialized with the final config
+        mock_init_tracing.assert_called_once_with(mock_final_tracing_config)
 
 
 @pytest.mark.asyncio
@@ -364,3 +377,521 @@ def test_run_operator_loop_initialization_flow(
     mock_fetch_configmap.assert_called_once()
     mock_load_config.assert_called_once()
     mock_creds_from_secret.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_load_configuration_and_credentials():
+    """Test _load_configuration_and_credentials function."""
+    from haproxy_template_ic.models.cli import CliOptions
+    from tests.unit.conftest import (
+        create_configmap_mock,
+        create_async_mock_with_config,
+        create_pydantic_model_mock,
+    )
+
+    # Create mock CLI options using conftest utility
+    mock_cli_options = create_pydantic_model_mock(
+        CliOptions, configmap_name="test-config", secret_name="test-secret"
+    )
+
+    # Use conftest factories for consistent mocking
+    mock_configmap = create_configmap_mock({"config": "test-data"})
+    mock_config = MagicMock()
+    mock_renderer = MagicMock()
+    mock_secret = MagicMock()
+    mock_secret.data = {"key": "value"}
+    mock_credentials = MagicMock()
+
+    # Use conftest async mock utility
+    mock_fetch_configmap = create_async_mock_with_config(return_value=mock_configmap)
+    mock_load_config = create_async_mock_with_config(return_value=mock_config)
+    mock_fetch_secret = create_async_mock_with_config(return_value=mock_secret)
+
+    # Mock class methods
+    mock_template_renderer_cls = MagicMock()
+    mock_template_renderer_cls.from_config = MagicMock(return_value=mock_renderer)
+    mock_credentials_cls = MagicMock()
+    mock_credentials_cls.from_secret = MagicMock(return_value=mock_credentials)
+
+    with mock_module_attributes(
+        init_module,
+        fetch_configmap=mock_fetch_configmap,
+        load_config_from_configmap=mock_load_config,
+        fetch_secret=mock_fetch_secret,
+        has_valid_attr=MagicMock(return_value=True),
+        TemplateRenderer=mock_template_renderer_cls,
+        Credentials=mock_credentials_cls,
+    ):
+        result = await _load_configuration_and_credentials(mock_cli_options, "default")
+
+        # Verify the function returns expected tuple
+        config, credentials, renderer = result
+        assert config == mock_config
+        assert credentials == mock_credentials
+        assert renderer == mock_renderer
+
+        # Verify all functions were called
+        mock_fetch_configmap.assert_called_once_with("test-config", "default")
+        mock_load_config.assert_called_once_with(mock_configmap)
+        mock_fetch_secret.assert_called_once_with("test-secret", "default")
+        mock_template_renderer_cls.from_config.assert_called_once_with(mock_config)
+        mock_credentials_cls.from_secret.assert_called_once_with(mock_secret.data)
+
+
+def test_create_application_state():
+    """Test _create_application_state function."""
+    from haproxy_template_ic.models.cli import CliOptions
+    from tests.unit.conftest import (
+        create_pydantic_model_mock,
+        create_dataplane_auth_mock,
+        create_metrics_collector_mock,
+        create_index_synchronization_tracker_mock,
+    )
+    import asyncio
+
+    # Use conftest utilities for consistent mocking
+    mock_cli_options = create_pydantic_model_mock(CliOptions)
+
+    # Create config mock with required attributes
+    mock_config = MagicMock()
+    mock_config.validation.dataplane_host = "localhost"
+    mock_config.validation.dataplane_port = 5555
+    mock_config.template_rendering.min_render_interval = 1
+    mock_config.template_rendering.max_render_interval = 30
+
+    # Use conftest factory for credentials
+    mock_credentials = MagicMock()
+    mock_credentials.validation = create_dataplane_auth_mock()
+
+    mock_renderer = MagicMock()
+
+    # Create real Future objects for the test
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    stop_flag = asyncio.Future()
+    config_reload_flag = asyncio.Future()
+
+    mock_indexers = MagicMock()
+    mock_indexers.indices = {}
+
+    # Use conftest factories for complex mocks
+    mock_metrics = create_metrics_collector_mock()
+    mock_index_tracker = create_index_synchronization_tracker_mock()
+
+    with mock_module_attributes(
+        init_module,
+        DataplaneEndpoint=MagicMock(),
+        DataplaneEndpointSet=MagicMock(),
+        ConfigSynchronizer=MagicMock(),
+        HAProxyConfigContext=MagicMock(),
+        TemplateContext=MagicMock(),
+        IndexSynchronizationTracker=MagicMock(return_value=mock_index_tracker),
+        TemplateRenderDebouncer=MagicMock(),
+        get_metrics_collector=MagicMock(return_value=mock_metrics),
+        RuntimeState=MagicMock(),
+        ConfigurationState=MagicMock(),
+        ResourceState=MagicMock(),
+        OperationalState=MagicMock(),
+        ApplicationState=MagicMock(),
+    ):
+        _create_application_state(
+            mock_cli_options,
+            mock_config,
+            mock_credentials,
+            mock_renderer,
+            stop_flag,
+            config_reload_flag,
+            mock_indexers,
+        )
+
+        # Verify ApplicationState was created
+        init_module.ApplicationState.assert_called_once()
+
+    loop.close()
+
+
+def test_setup_kopf_handlers():
+    """Test _setup_kopf_handlers function."""
+    mock_memo = MagicMock(spec=ApplicationState)
+
+    # Mock all the required functions
+    mock_setup_resource_watchers = MagicMock()
+    mock_setup_haproxy_pod_indexing = MagicMock()
+    mock_kopf = MagicMock()
+
+    with mock_module_attributes(
+        init_module,
+        setup_resource_watchers=mock_setup_resource_watchers,
+        setup_haproxy_pod_indexing=mock_setup_haproxy_pod_indexing,
+        kopf=mock_kopf,
+    ):
+        _setup_kopf_handlers(mock_memo)
+
+        # Verify all setup functions were called
+        mock_setup_resource_watchers.assert_called_once_with(mock_memo)
+        mock_setup_haproxy_pod_indexing.assert_called_once_with(mock_memo)
+
+        # Verify kopf handlers were registered
+        assert mock_kopf.on.startup.called
+        assert mock_kopf.on.cleanup.called
+
+
+def test_configure_webhook_server_with_default_cert_dir():
+    """Test configure_webhook_server creates temporary cert directory."""
+    with mock_module_attributes(
+        init_module,
+        tempfile=MagicMock(),
+        atexit=MagicMock(),
+        os=MagicMock(),
+        shutil=MagicMock(),
+    ):
+        # Configure tempfile to return a test directory
+        init_module.tempfile.mkdtemp.return_value = "/tmp/test-webhook-certs"
+
+        # Configure os.path.exists to return True for cleanup testing
+        init_module.os.path.exists.return_value = True
+
+        configure_webhook_server(webhook_port=9443)
+
+        # Verify temporary directory was created
+        init_module.tempfile.mkdtemp.assert_called_once_with(
+            prefix="haproxy-template-ic-webhook-"
+        )
+
+        # Verify cleanup was registered
+        init_module.atexit.register.assert_called_once()
+
+
+def test_configure_webhook_server_with_provided_cert_dir():
+    """Test configure_webhook_server uses provided cert directory."""
+    with mock_module_attributes(
+        init_module,
+        tempfile=MagicMock(),
+        atexit=MagicMock(),
+    ):
+        configure_webhook_server(webhook_port=9443, webhook_cert_dir="/custom/cert/dir")
+
+        # Verify no temporary directory was created
+        init_module.tempfile.mkdtemp.assert_not_called()
+
+        # Verify no cleanup was registered
+        init_module.atexit.register.assert_not_called()
+
+
+def test_configure_webhook_server_exception_handling():
+    """Test configure_webhook_server handles exceptions properly."""
+    # Test exception handling in the try-catch block around logging
+    mock_logger = MagicMock()
+
+    with mock_module_attributes(
+        init_module,
+        logger=mock_logger,
+        tempfile=MagicMock(),
+        atexit=MagicMock(),
+    ):
+        # Configure tempfile to return a test directory normally
+        init_module.tempfile.mkdtemp.return_value = "/tmp/test-webhook-certs"
+
+        # Configure logger.info to raise an exception to test the try-catch block
+        mock_logger.info.side_effect = [None, RuntimeError("Logging failed")]
+
+        with pytest.raises(RuntimeError, match="Logging failed"):
+            configure_webhook_server()
+
+
+def test_create_event_loop():
+    """Test create_event_loop returns uvloop event loop."""
+    with mock_module_attributes(
+        init_module,
+        uvloop=MagicMock(),
+    ):
+        mock_policy = MagicMock()
+        mock_loop = MagicMock()
+        mock_policy.new_event_loop.return_value = mock_loop
+        init_module.uvloop.EventLoopPolicy.return_value = mock_policy
+
+        result = create_event_loop()
+
+        assert result == mock_loop
+        init_module.uvloop.EventLoopPolicy.assert_called_once()
+        mock_policy.new_event_loop.assert_called_once()
+
+
+def test_run_operator_loop_kubernetes_config_loading():
+    """Test run_operator_loop handles Kubernetes config loading."""
+    from haproxy_template_ic.models.cli import CliOptions
+    from tests.unit.conftest import (
+        create_pydantic_model_mock,
+        create_metrics_collector_mock,
+    )
+
+    # Create mock CLI options
+    mock_cli_options = create_pydantic_model_mock(
+        CliOptions, configmap_name="test-config", secret_name="test-secret"
+    )
+
+    mock_metrics = create_metrics_collector_mock()
+    mock_k8s_config = MagicMock()
+
+    # Mock successful in-cluster config loading
+    mock_k8s_config.load_incluster_config.return_value = None
+
+    with mock_module_attributes(
+        init_module,
+        get_metrics_collector=MagicMock(return_value=mock_metrics),
+        k8s_config=mock_k8s_config,
+        get_current_namespace=MagicMock(return_value="default"),
+        # Mock the rest to prevent actual execution
+        fetch_configmap=MagicMock(side_effect=SystemExit("Test complete")),
+    ):
+        with pytest.raises(SystemExit, match="Test complete"):
+            run_operator_loop(mock_cli_options)
+
+        # Verify in-cluster config was attempted
+        mock_k8s_config.load_incluster_config.assert_called_once()
+
+
+def test_run_operator_loop_fallback_to_kubeconfig():
+    """Test run_operator_loop falls back to kubeconfig when in-cluster fails."""
+    from haproxy_template_ic.models.cli import CliOptions
+    from tests.unit.conftest import (
+        create_pydantic_model_mock,
+        create_metrics_collector_mock,
+    )
+
+    mock_cli_options = create_pydantic_model_mock(
+        CliOptions, configmap_name="test-config", secret_name="test-secret"
+    )
+
+    mock_metrics = create_metrics_collector_mock()
+    mock_k8s_config = MagicMock()
+
+    # Mock in-cluster config failure, kubeconfig success
+    mock_k8s_config.load_incluster_config.side_effect = Exception("In-cluster failed")
+    mock_k8s_config.load_kube_config.return_value = None
+
+    with mock_module_attributes(
+        init_module,
+        get_metrics_collector=MagicMock(return_value=mock_metrics),
+        k8s_config=mock_k8s_config,
+        get_current_namespace=MagicMock(return_value="default"),
+        # Mock the rest to prevent actual execution
+        fetch_configmap=MagicMock(side_effect=SystemExit("Test complete")),
+    ):
+        with pytest.raises(SystemExit, match="Test complete"):
+            run_operator_loop(mock_cli_options)
+
+        # Verify both config methods were attempted
+        mock_k8s_config.load_incluster_config.assert_called_once()
+        mock_k8s_config.load_kube_config.assert_called_once()
+
+
+def test_run_operator_loop_kubernetes_config_failure():
+    """Test run_operator_loop handles complete Kubernetes config failure."""
+    from haproxy_template_ic.models.cli import CliOptions
+    from tests.unit.conftest import (
+        create_pydantic_model_mock,
+        create_metrics_collector_mock,
+    )
+
+    mock_cli_options = create_pydantic_model_mock(
+        CliOptions, configmap_name="test-config", secret_name="test-secret"
+    )
+
+    mock_metrics = create_metrics_collector_mock()
+    mock_k8s_config = MagicMock()
+
+    # Mock both config methods failing
+    mock_k8s_config.load_incluster_config.side_effect = Exception("In-cluster failed")
+    mock_k8s_config.load_kube_config.side_effect = Exception("Kubeconfig failed")
+
+    with mock_module_attributes(
+        init_module,
+        get_metrics_collector=MagicMock(return_value=mock_metrics),
+        k8s_config=mock_k8s_config,
+    ):
+        with pytest.raises(Exception, match="Kubeconfig failed"):
+            run_operator_loop(mock_cli_options)
+
+
+@pytest.mark.asyncio
+async def test_initialize_post_config_exception_handling():
+    """Test initialize_post_config handles exceptions properly."""
+    from tests.unit.conftest import (
+        create_application_state_mock,
+        create_metrics_collector_mock,
+    )
+
+    mock_application_state = create_application_state_mock()
+    mock_metrics = create_metrics_collector_mock()
+
+    # Mock setup_structured_logging to raise an exception
+    with mock_module_attributes(
+        init_module,
+        setup_structured_logging=MagicMock(side_effect=RuntimeError("Setup failed")),
+        get_metrics_collector=MagicMock(return_value=mock_metrics),
+    ):
+        with pytest.raises(RuntimeError, match="Setup failed"):
+            await initialize_post_config(mock_application_state)
+
+        # Verify error metrics were recorded
+        mock_metrics.record_config_reload.assert_called_with(success=False)
+        mock_metrics.record_error.assert_called_with("config_load_failed", "operator")
+
+
+@pytest.mark.asyncio
+async def test_init_template_debouncer():
+    """Test init_template_debouncer function."""
+    from tests.unit.conftest import (
+        create_application_state_mock,
+        create_async_mock_with_config,
+    )
+
+    mock_application_state = create_application_state_mock()
+    # Set up the operations.debouncer attribute
+    mock_debouncer = MagicMock()
+    mock_debouncer.start = create_async_mock_with_config()
+    mock_operations = MagicMock()
+    mock_operations.debouncer = mock_debouncer
+    mock_application_state.operations = mock_operations
+
+    await init_template_debouncer(mock_application_state)
+
+    mock_debouncer.start.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_template_debouncer():
+    """Test cleanup_template_debouncer function."""
+    from tests.unit.conftest import (
+        create_application_state_mock,
+        create_async_mock_with_config,
+    )
+
+    mock_application_state = create_application_state_mock()
+    # Set up the operations.debouncer attribute
+    mock_debouncer = MagicMock()
+    mock_debouncer.stop = create_async_mock_with_config()
+    mock_operations = MagicMock()
+    mock_operations.debouncer = mock_debouncer
+    mock_application_state.operations = mock_operations
+
+    await cleanup_template_debouncer(mock_application_state)
+
+    mock_debouncer.stop.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_tracing_enabled():
+    """Test cleanup_tracing when tracing is enabled."""
+    from tests.unit.conftest import create_application_state_mock
+
+    mock_application_state = create_application_state_mock()
+    mock_application_state.configuration.config.tracing.enabled = True
+
+    with mock_module_attributes(
+        init_module,
+        shutdown_tracing=MagicMock(),
+    ):
+        await cleanup_tracing(mock_application_state)
+
+        init_module.shutdown_tracing.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_tracing_disabled():
+    """Test cleanup_tracing when tracing is disabled."""
+    from tests.unit.conftest import create_application_state_mock
+
+    mock_application_state = create_application_state_mock()
+    mock_application_state.configuration.config.tracing.enabled = False
+
+    with mock_module_attributes(
+        init_module,
+        shutdown_tracing=MagicMock(),
+    ):
+        await cleanup_tracing(mock_application_state)
+
+        init_module.shutdown_tracing.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_tracing_exception_handling():
+    """Test cleanup_tracing handles exceptions properly."""
+    from tests.unit.conftest import create_application_state_mock
+
+    mock_application_state = create_application_state_mock()
+    mock_application_state.configuration.config.tracing.enabled = True
+
+    with mock_module_attributes(
+        init_module,
+        shutdown_tracing=MagicMock(side_effect=RuntimeError("Shutdown failed")),
+    ):
+        # Should not raise - exception is caught and logged
+        await cleanup_tracing(mock_application_state)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_metrics_server():
+    """Test cleanup_metrics_server function."""
+    from tests.unit.conftest import (
+        create_application_state_mock,
+        create_async_mock_with_config,
+    )
+
+    mock_application_state = create_application_state_mock()
+    # Set up the operations.metrics attribute
+    mock_metrics = MagicMock()
+    mock_metrics.stop_metrics_server = create_async_mock_with_config()
+    mock_operations = MagicMock()
+    mock_operations.metrics = mock_metrics
+    mock_application_state.operations = mock_operations
+
+    await cleanup_metrics_server(mock_application_state)
+
+    mock_metrics.stop_metrics_server.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_metrics_server_exception_handling():
+    """Test cleanup_metrics_server handles exceptions properly."""
+    from tests.unit.conftest import create_application_state_mock
+
+    mock_application_state = create_application_state_mock()
+    # Set up the operations.metrics attribute
+    mock_metrics = MagicMock()
+    mock_metrics.stop_metrics_server = MagicMock(
+        side_effect=RuntimeError("Stop failed")
+    )
+    mock_operations = MagicMock()
+    mock_operations.metrics = mock_metrics
+    mock_application_state.operations = mock_operations
+
+    # Should not raise - exception is caught and logged
+    await cleanup_metrics_server(mock_application_state)
+
+
+@pytest.mark.asyncio
+async def test_init_metrics_server():
+    """Test init_metrics_server function."""
+    from tests.unit.conftest import (
+        create_application_state_mock,
+        create_async_mock_with_config,
+    )
+
+    mock_application_state = create_application_state_mock()
+    # Set up the configuration.config.operator.metrics_port attribute
+    mock_operator = MagicMock()
+    mock_operator.metrics_port = 8080
+    mock_application_state.configuration.config.operator = mock_operator
+
+    # Set up the operations.metrics attribute
+    mock_metrics = MagicMock()
+    mock_metrics.start_metrics_server = create_async_mock_with_config()
+    mock_operations = MagicMock()
+    mock_operations.metrics = mock_metrics
+    mock_application_state.operations = mock_operations
+
+    await init_metrics_server(mock_application_state)
+
+    mock_metrics.start_metrics_server.assert_called_once_with(port=8080)

@@ -9,7 +9,8 @@ These utilities should only be used within IndexedResourceCollection.from_kopf_i
 import logging
 import unicodedata
 from collections import defaultdict
-from typing import Any, Iterator
+from collections.abc import Mapping
+from typing import Any, Iterator, Protocol, runtime_checkable
 
 from kopf._core.engines.indexing import OperatorIndices
 from pydantic import BaseModel, PrivateAttr
@@ -21,65 +22,38 @@ from .field_filter import remove_fields_from_resource
 logger = logging.getLogger(__name__)
 
 
-def convert_kopf_body_to_dict(body: Any) -> dict[str, Any]:
-    """
-    Convert a Kopf Body object to a regular dictionary.
+@runtime_checkable
+class KubernetesMetadata(Protocol):
+    """Protocol for Kubernetes resource metadata."""
 
-    Args:
-        body: A Kopf Body object or any dict-convertible object
+    name: str
+    namespace: str | None = None
 
-    Returns:
-        Dictionary representation of the Body object
 
-    Raises:
-        ValueError: If the Body object cannot be converted to a dictionary
-    """
-    try:
-        # Try direct conversion first - works for most Body objects
-        result = dict(body)
-        if not isinstance(result, dict):
-            raise ValueError(f"Conversion resulted in {type(result)}, not dict")
-        return result
-    except Exception as e:
-        logger.warning(f"Failed to convert Body object to dict: {e}")
-        raise ValueError(f"Cannot convert Body object to dict: {e}") from e
+@runtime_checkable
+class KubernetesResource(Protocol):
+    """Protocol for Kubernetes resource objects."""
+
+    apiVersion: str
+    kind: str
+    metadata: KubernetesMetadata
 
 
 def normalize_kopf_resource(
-    resource: Any, ignore_fields: list[str] | None = None
+    resource: Mapping[str, Any] | dict[str, Any], ignore_fields: list[str] | None = None
 ) -> dict[str, Any]:
     """
     Normalize a Kopf resource (Body object or dict) to a regular dictionary.
 
     Args:
-        resource: A Kopf Body object, regular dict, or other dict-convertible object
+        resource: A Kopf Body object, regular dict, or other Mapping-compatible object
         ignore_fields: Optional list of JSONPath expressions for fields to remove
 
     Returns:
         Dictionary representation of the resource with specified fields removed
-
-    Raises:
-        ValueError: If the resource cannot be normalized to a dictionary
     """
-    # If it's already a regular dict, use it directly
-    if isinstance(resource, dict):
-        result = resource
-    # Check if it's a Kopf Body object or similar dict-convertible object
-    elif hasattr(resource, "__getitem__") or hasattr(resource, "items"):
-        try:
-            result = convert_kopf_body_to_dict(resource)
-        except ValueError:
-            # Fall through to error case
-            raise ValueError(
-                f"Cannot normalize resource of type {type(resource)} to dictionary. "
-                f"Expected dict or dict-convertible object."
-            )
-    else:
-        # If we can't handle it, raise an error
-        raise ValueError(
-            f"Cannot normalize resource of type {type(resource)} to dictionary. "
-            f"Expected dict or dict-convertible object."
-        )
+    # Convert any Mapping to dict (works for kopf Body objects and regular dicts)
+    result = dict(resource)
 
     # Apply field filtering if specified
     if ignore_fields:
@@ -160,7 +134,9 @@ class IndexedResourceCollection(BaseModel):
 
     @classmethod
     def from_kopf_index(
-        cls, index: Any, ignore_fields: list[str] | None = None
+        cls,
+        index: Any,
+        ignore_fields: list[str] | None = None,
     ) -> "IndexedResourceCollection":
         """Create from kopf Index with automatic Body/Store object conversion.
 
@@ -221,31 +197,48 @@ class IndexedResourceCollection(BaseModel):
     def get_indexed_single(self, *args: str) -> dict[str, Any] | None:
         """Get single resource or raise if multiple found."""
         results = self.get_indexed(*args)
-        if len(results) > 1:
-            resource_ids = [self._extract_resource_id(r) for r in results[:3]]
-            error_msg = (
-                f"Multiple resources found for key {args}: {len(results)} matches"
+
+        # Early exit for empty results
+        if not results:
+            return None
+
+        # Early exit for single result (common case)
+        if len(results) == 1:
+            return results[0]
+
+        # Handle multiple results error
+        self._handle_multiple_resources_error(results, args)
+
+    def _handle_multiple_resources_error(
+        self, results: list[dict[str, Any]], key_args: tuple[str, ...]
+    ) -> None:
+        """Handle error case when multiple resources are found for a single lookup."""
+        resource_ids = [self._extract_resource_id(r) for r in results[:3]]
+        error_msg = (
+            f"Multiple resources found for key {key_args}: {len(results)} matches"
+        )
+        if len(results) > 3:
+            error_msg += f" (showing first 3: {', '.join(resource_ids)})"
+        else:
+            error_msg += f" [{', '.join(resource_ids)}]"
+
+        logger.error(
+            f"{error_msg}. This may indicate duplicate resources or incorrect indexing configuration."
+        )
+
+        try:
+            record_span_event(
+                "multiple_resources_found",
+                {
+                    "key": str(key_args),
+                    "count": len(results),
+                    "resources": resource_ids,
+                },
             )
-            if len(results) > 3:
-                error_msg += f" (showing first 3: {', '.join(resource_ids)})"
-            else:
-                error_msg += f" [{', '.join(resource_ids)}]"
-            logger.error(
-                f"{error_msg}. This may indicate duplicate resources or incorrect indexing configuration."
-            )
-            try:
-                record_span_event(
-                    "multiple_resources_found",
-                    {
-                        "key": str(args),
-                        "count": len(results),
-                        "resources": resource_ids,
-                    },
-                )
-            except ImportError:
-                pass
-            raise ValueError(error_msg)
-        return results[0] if results else None
+        except ImportError:
+            pass
+
+        raise ValueError(error_msg)
 
     def items(self) -> Iterator[tuple[tuple[str, ...], dict[str, Any]]]:
         for key, resources in self._internal_dict.items():
@@ -279,25 +272,28 @@ class IndexedResourceCollection(BaseModel):
         )
 
     def _validate_resource(self, resource: Any) -> bool:
+        """Validate that a resource has the required Kubernetes structure."""
         try:
-            return bool(resource.metadata.name)
+            return bool(str(resource.metadata.name or "").strip())
         except AttributeError:
-            return (
-                isinstance(resource, dict)
-                and isinstance(resource.get("metadata", {}), dict)
-                and bool(resource.get("metadata", {}).get("name", "").strip())
+            metadata = resource.get("metadata", {})
+            return isinstance(metadata, dict) and bool(
+                str(metadata.get("name", "")).strip()
             )
 
     def _extract_resource_id(self, resource: Any) -> str:
+        """Extract a human-readable resource identifier."""
         try:
-            # Try object-style access first
-            try:
-                return f"{getattr(resource, 'kind', 'unknown')}:{getattr(resource.metadata, 'namespace', 'unknown')}/{resource.metadata.name}"
-            except AttributeError:
-                # Fall back to dict-style access
-                if isinstance(resource, dict) and "metadata" in resource:
-                    metadata = resource["metadata"]
-                    return f"{resource.get('kind', 'unknown')}:{metadata.get('namespace', 'unknown')}/{metadata.get('name', 'unknown')}"
-                return "<unknown>"
+            kind = getattr(resource, "kind", "unknown")
+            namespace = getattr(resource.metadata, "namespace", "unknown")
+            name = getattr(resource.metadata, "name", "unknown")
+            return f"{kind}:{namespace}/{name}"
         except Exception:
-            return "<error>"
+            try:
+                metadata = resource.get("metadata", {})
+                kind = resource.get("kind", "unknown")
+                namespace = metadata.get("namespace", "unknown")
+                name = metadata.get("name", "unknown")
+                return f"{kind}:{namespace}/{name}"
+            except Exception:
+                return "<error>"

@@ -295,13 +295,17 @@ def test_unexpected_error_in_remove(monkeypatch):
 
 
 def test_match_without_parts():
-    """Test _remove_field_at_path with match lacking parts attribute."""
+    """Test _remove_field_at_path with proper JSONPathMatch object.
+
+    This test now verifies that the function works correctly with proper typing.
+    The old defensive programming approach is no longer needed with explicit typing.
+    """
 
     resource = {"metadata": {"name": "test"}}
 
-    # Create a mock match without parts
+    # Create a mock JSONPathMatch with empty parts (the only realistic edge case)
     mock_match = MagicMock()
-    del mock_match.parts  # Remove parts attribute
+    mock_match.parts = ()  # Empty tuple - valid but nothing to remove
 
     _remove_field_at_path(resource, mock_match)
     assert resource == {"metadata": {"name": "test"}}  # Should remain unchanged

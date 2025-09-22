@@ -5,11 +5,21 @@ Contains models for template configuration, rendered content,
 and template rendering context information.
 """
 
+from __future__ import annotations
+
+from dataclasses import dataclass
 from enum import Enum
+from typing import Any, TYPE_CHECKING
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from .types import Filename, NonEmptyStr, NonEmptyStrictStr, SnippetName
+
+if TYPE_CHECKING:
+    from ..models.config import Config
+    from ..models.context import HAProxyConfigContext, TemplateContext
+    from ..metrics import MetricsCollector
+    from ..templating import TemplateRenderer
 
 
 class TemplateConfig(BaseModel):
@@ -98,6 +108,35 @@ class RenderedConfig(BaseModel):
         frozen = True
 
 
+@dataclass(frozen=True)
+class TemplateValidationIssue:
+    """Validation issue encountered during template processing."""
+
+    resource_type: str
+    resource_uid: str
+    error: str
+
+
+@dataclass(frozen=True)
+class TemplatePreparationResult:
+    """Result of preparing template context and variables for rendering."""
+
+    template_context: TemplateContext
+    template_vars: dict[str, Any]
+    validation_errors: list[TemplateValidationIssue]
+
+
+@dataclass(frozen=True)
+class TemplateRenderContext:
+    """Bundled context for template rendering operations."""
+
+    config: Config
+    template_renderer: TemplateRenderer
+    haproxy_config_context: HAProxyConfigContext
+    template_vars: dict[str, Any]
+    metrics: MetricsCollector
+
+
 __all__ = [
     "TemplateConfig",
     "TemplateSnippet",
@@ -105,4 +144,7 @@ __all__ = [
     "RenderedContent",
     "TriggerContext",
     "RenderedConfig",
+    "TemplateValidationIssue",
+    "TemplatePreparationResult",
+    "TemplateRenderContext",
 ]

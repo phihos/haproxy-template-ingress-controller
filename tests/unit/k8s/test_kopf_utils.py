@@ -3,10 +3,8 @@ Tests for kopf_utils module.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
 
 from haproxy_template_ic.k8s.kopf_utils import (
-    convert_kopf_body_to_dict,
     normalize_kopf_resource,
     is_valid_kubernetes_resource,
 )
@@ -61,50 +59,11 @@ def test_mock_get_method():
     assert mock_body.get("nonexistent", "default") == "default"
 
 
-def test_convert_dict_convertible_object():
-    """Test converting an object that supports dict() conversion."""
-    test_data = {"metadata": {"name": "test-pod"}, "status": {"phase": "Running"}}
-    mock_body = MockKopfBody(test_data)
-
-    result = convert_kopf_body_to_dict(mock_body)
-    assert result == test_data
-
-
-def test_convert_regular_dict():
-    """Test converting a regular dictionary."""
-    test_dict = {"metadata": {"name": "test-pod"}}
-    result = convert_kopf_body_to_dict(test_dict)
-    assert result == test_dict
-
-
-def test_convert_failure():
-    """Test failure when object cannot be converted."""
-    mock_body = MagicMock()
-
-    # Mock dict() to raise an exception
-    with patch("builtins.dict", side_effect=TypeError("Cannot convert")):
-        with pytest.raises(ValueError, match="Cannot convert Body object to dict"):
-            convert_kopf_body_to_dict(mock_body)
-
-
-def test_convert_non_dict_result():
-    """Test failure when dict() returns non-dict."""
-
-    # Create an object that dict() can call but doesn't produce a dict
-    class BadDictConvertible:
-        def keys(self):
-            return "not iterable"  # This will cause dict() to fail
-
-    bad_obj = BadDictConvertible()
-    with pytest.raises(ValueError, match="Cannot convert Body object to dict"):
-        convert_kopf_body_to_dict(bad_obj)
-
-
 def test_normalize_regular_dict():
-    """Test normalizing a regular dictionary passes through unchanged."""
+    """Test normalizing a regular dictionary."""
     test_dict = {"metadata": {"name": "test-pod"}, "status": {"phase": "Running"}}
     result = normalize_kopf_resource(test_dict)
-    assert result is test_dict  # Should be the same object
+    assert result == test_dict  # Should have the same content
 
 
 def test_normalize_body_object():
@@ -129,9 +88,7 @@ def test_normalize_unsupported_object():
     """Test failure when object cannot be normalized."""
     unsupported = "just a string"
 
-    with pytest.raises(
-        ValueError, match="Cannot normalize resource of type.*to dictionary"
-    ):
+    with pytest.raises(ValueError):  # dict() will raise ValueError for string
         normalize_kopf_resource(unsupported)
 
 
@@ -147,9 +104,7 @@ def test_normalize_object_conversion_fails():
             raise RuntimeError("Conversion failed")
 
     bad_obj = BadConvertible()
-    with pytest.raises(
-        ValueError, match="Cannot normalize resource of type.*to dictionary"
-    ):
+    with pytest.raises(RuntimeError, match="Conversion failed"):
         normalize_kopf_resource(bad_obj)
 
 

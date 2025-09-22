@@ -98,23 +98,3 @@ def _is_valid_dict_resource(resource: Any) -> bool:
 
     name = metadata.get("name", "")
     return bool(name.strip()) if isinstance(name, str) else False
-
-
-def _is_valid_sequence_resource(resources: Any) -> bool:
-    """Check if a sequence of resources contains valid items."""
-    if not isinstance(resources, (list, tuple)):
-        return False
-
-    # At least one resource must be valid
-    return any(_is_valid_resource(resource) for resource in resources)
-
-
-def _is_valid_object_resource(resource: Any) -> bool:
-    """Check if an object resource (with attributes) is valid."""
-    try:
-        # Check if it has kubernetes-like attributes
-        return bool(
-            resource.metadata and resource.kind and _is_valid_resource(resource)
-        )
-    except AttributeError:
-        return False
