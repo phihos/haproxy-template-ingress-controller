@@ -2001,7 +2001,12 @@ def patch_debouncer_logger():
 
 
 def create_debouncer_mock_factory(
-    min_interval=0.1, max_interval=1.0, config=None, **kwargs
+    min_interval=0.1,
+    max_interval=1.0,
+    config=None,
+    stop_timeout=0.1,
+    error_retry_delay=0.01,
+    **kwargs,
 ):
     """Create a comprehensive TemplateRenderDebouncer mock with all required dependencies."""
     from unittest.mock import MagicMock, AsyncMock
@@ -2044,7 +2049,11 @@ def create_debouncer_mock_factory(
     defaults.update(kwargs)
 
     return TemplateRenderDebouncer(
-        min_interval=min_interval, max_interval=max_interval, **defaults
+        min_interval=min_interval,
+        max_interval=max_interval,
+        stop_timeout=stop_timeout,
+        error_retry_delay=error_retry_delay,
+        **defaults,
     )
 
 
@@ -2430,11 +2439,6 @@ def assert_debouncer_triggered(mock_debouncer, trigger_type=None):
             assert call_args[0][0] == trigger_type, (
                 f"Expected trigger type '{trigger_type}'"
             )
-
-
-# =============================================================================
-# Phase 2 DRY: Extended Mock Factory Library
-# =============================================================================
 
 
 def create_generic_mock(spec=None, **kwargs):

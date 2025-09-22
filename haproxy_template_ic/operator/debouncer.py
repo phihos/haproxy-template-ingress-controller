@@ -45,6 +45,8 @@ class TemplateRenderDebouncer:
         kopf_indices: OperatorIndices,
         metrics: MetricsCollector,
         index_tracker: IndexSynchronizationTracker,
+        stop_timeout: float = 5.0,
+        error_retry_delay: float = 1.0,
     ):
         """
         Initialize the debouncer.
@@ -59,6 +61,8 @@ class TemplateRenderDebouncer:
             kopf_indices: Kopf indices object
             metrics: Metrics collector
             index_tracker: Index synchronization tracker
+            stop_timeout: Maximum seconds to wait for graceful stop (default: 5.0)
+            error_retry_delay: Seconds to wait before retrying after unexpected errors (default: 1.0)
         """
         if max_interval < min_interval:
             raise ValueError(
@@ -73,6 +77,8 @@ class TemplateRenderDebouncer:
         self.metrics = metrics
         self.min_interval = min_interval
         self.max_interval = max_interval
+        self.stop_timeout = stop_timeout
+        self.error_retry_delay = error_retry_delay
         self.index_tracker = index_tracker
 
         self._event = asyncio.Event()
@@ -253,7 +259,7 @@ class TemplateRenderDebouncer:
             except Exception as e:
                 logger.error(f"Unexpected error in debouncer task: {e}", error=str(e))
                 # Continue running to maintain service availability
-                await asyncio.sleep(1)  # Brief pause before retry
+                await asyncio.sleep(self.error_retry_delay)  # Brief pause before retry
 
         logger.info("Template debouncer background task stopped")
 
@@ -287,7 +293,7 @@ class TemplateRenderDebouncer:
 
         if self._task:
             try:
-                await asyncio.wait_for(self._task, timeout=5)
+                await asyncio.wait_for(self._task, timeout=self.stop_timeout)
             except asyncio.TimeoutError:
                 logger.warning("Debouncer task did not stop gracefully, cancelling")
                 if not self._task.done():

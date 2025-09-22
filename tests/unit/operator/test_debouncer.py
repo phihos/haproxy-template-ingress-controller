@@ -360,7 +360,9 @@ async def test_cancelled_error_during_run(mock_render_haproxy_templates):
 async def test_unexpected_error_in_run(mock_render_haproxy_templates):
     """Test handling of unexpected errors in _run method."""
 
-    debouncer = create_debouncer(min_interval=0.1, max_interval=0.5)
+    debouncer = create_debouncer(
+        min_interval=0.1, max_interval=0.5, error_retry_delay=0.01
+    )
 
     # Patch asyncio.wait_for to raise an unexpected error once
     call_count = 0
@@ -379,7 +381,7 @@ async def test_unexpected_error_in_run(mock_render_haproxy_templates):
 
             try:
                 # Give it time to hit the error and recover
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.05)
 
                 # Should have logged the error
                 error_calls = [
@@ -401,6 +403,7 @@ async def test_stop_with_timeout(mock_render_haproxy_templates):
     debouncer = create_debouncer(
         min_interval=0.01,  # Very short so render triggers quickly
         max_interval=10,  # Long max_interval so it won't trigger periodic refresh
+        stop_timeout=0.01,  # Short timeout for fast test execution
     )
 
     # Manually override the _run method to ignore stop signals
