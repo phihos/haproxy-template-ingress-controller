@@ -295,6 +295,11 @@ def assert_raises_template_error(error_type=None, match_pattern=None):
 
 
 # AsyncMock factory patterns for dataplane tests
+def create_async_mock_coroutine(return_value=None):
+    """Create an AsyncMock that returns an awaitable coroutine."""
+    return AsyncMock(return_value=return_value)()
+
+
 def create_async_mock_with_return_value(return_value):
     """Create an AsyncMock that returns a specific value."""
     return AsyncMock(return_value=return_value)
