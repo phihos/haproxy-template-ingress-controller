@@ -60,6 +60,13 @@ from haproxy_dataplane_v3.api.backend import (
     get_backends as _get_backends,
     replace_backend as _replace_backend,
 )
+from haproxy_dataplane_v3.api.backend_switching_rule import (
+    get_backend_switching_rules as _get_all_backend_switching_rules,
+    create_backend_switching_rule as _create_backend_switching_rule,
+    delete_backend_switching_rule as _delete_backend_switching_rule,
+    replace_backend_switching_rule as _replace_backend_switching_rule,
+)
+
 from haproxy_dataplane_v3.api.bind import (
     create_bind_frontend as _create_bind_frontend,
     delete_bind_frontend as _delete_bind_frontend,
@@ -255,6 +262,7 @@ from haproxy_dataplane_v3.models import (
     ACLLines,
     # Configuration section models
     Backend,
+    BackendSwitchingRule,
     Bind,
     Cache,
     # Storage models
@@ -1553,6 +1561,87 @@ async def replace_acl_frontend(
         index=index,
         client=client,
         body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# Backend Switching Rule API functions
+
+
+@api_function()
+async def get_all_backend_switching_rule_frontend(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[BackendSwitchingRule]]:
+    return await _get_all_backend_switching_rules.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_backend_switching_rule_frontend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: BackendSwitchingRule,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[BackendSwitchingRule | Error]:
+    return await _create_backend_switching_rule.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_backend_switching_rule_frontend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: BackendSwitchingRule,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[BackendSwitchingRule | Error]:
+    return await _replace_backend_switching_rule.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_backend_switching_rule_frontend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Any | Error]:
+    return await _delete_backend_switching_rule.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
         transaction_id=transaction_id,
         version=version,
         force_reload=force_reload,

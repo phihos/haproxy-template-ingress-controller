@@ -39,7 +39,6 @@ from haproxy_template_ic.models.state import (
     RuntimeState,
 )
 
-# from haproxy_template_ic.webhook import start_webhook_server  # Function may not exist
 from haproxy_template_ic.operator.configmap import (
     fetch_configmap,
     handle_configmap_change,

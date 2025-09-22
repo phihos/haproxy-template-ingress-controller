@@ -6,10 +6,12 @@ including an autouse fixture that prevents any network requests from
 being made during unit test execution.
 """
 
+import logging
+
 import pytest
 from contextlib import contextmanager, asynccontextmanager
 from typing import Dict, Any, Optional
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock, AsyncMock, MagicMock
 from pydantic import SecretStr
 
 from haproxy_template_ic.credentials import DataplaneAuth
@@ -295,14 +297,19 @@ def assert_raises_template_error(error_type=None, match_pattern=None):
 # AsyncMock factory patterns for dataplane tests
 def create_async_mock_with_return_value(return_value):
     """Create an AsyncMock that returns a specific value."""
+    return AsyncMock(return_value=return_value)
+
+
+def create_async_mock_with_config(return_value=None, side_effect=None, **kwargs):
+    """Create an AsyncMock with common configurations."""
     mock = AsyncMock()
-    mock.return_value = return_value
+    if return_value is not None:
+        mock.return_value = return_value
+    if side_effect is not None:
+        mock.side_effect = side_effect
+    for key, value in kwargs.items():
+        setattr(mock, key, value)
     return mock
-
-
-def create_async_mock_coroutine(return_value=None):
-    """Create an AsyncMock that returns an awaitable coroutine."""
-    return AsyncMock(return_value=return_value)()
 
 
 def create_dataplane_client_mock():
@@ -412,17 +419,19 @@ def create_configmap_mock(data=None):
 # Timing and performance mock utilities
 def create_mock_timer(expected_duration=None):
     """Create a mock timer that tracks timing operations."""
-    import time
-
     timer = Mock()
     timer.start_time = None
     timer.end_time = None
     timer.duration = expected_duration or 0.1
 
     def start():
+        import time
+
         timer.start_time = time.time()
 
     def stop():
+        import time
+
         timer.end_time = time.time()
         return timer.duration
 
@@ -604,9 +613,6 @@ def create_kopf_index_mock(resources=None):
 
 def create_logger_with_handlers_mock():
     """Create a mock logger with common handler methods."""
-    from unittest.mock import MagicMock
-    import logging
-
     logger = MagicMock(spec=logging.Logger)
     logger.debug = MagicMock()
     logger.info = MagicMock()
@@ -622,7 +628,6 @@ def create_logger_with_handlers_mock():
 
 def create_metrics_collector_mock():
     """Create a comprehensive mock metrics collector."""
-    from unittest.mock import MagicMock
     from haproxy_template_ic.metrics import MetricsCollector
 
     collector = MagicMock(spec=MetricsCollector)
@@ -1726,14 +1731,7 @@ def create_fallback_snippet_mock(fallback_content="fallback content"):
 
 def create_logger_mock():
     """Create a standardized logger mock for operator tests."""
-    from unittest.mock import MagicMock
-
-    logger = MagicMock()
-    logger.info = MagicMock()
-    logger.warning = MagicMock()
-    logger.error = MagicMock()
-    logger.debug = MagicMock()
-    return logger
+    return create_logger_with_handlers_mock()
 
 
 # Performance test utilities
@@ -2470,22 +2468,6 @@ def create_magic_mock_with_attrs(**attrs):
     return mock
 
 
-def create_async_mock_with_config(return_value=None, side_effect=None, **kwargs):
-    """Create an AsyncMock with common configurations."""
-    mock = AsyncMock()
-
-    if return_value is not None:
-        mock.return_value = return_value
-    if side_effect is not None:
-        mock.side_effect = side_effect
-
-    # Add any additional configurations
-    for key, value in kwargs.items():
-        setattr(mock, key, value)
-
-    return mock
-
-
 def create_exception_mock(exception_class=Exception, message="Test error"):
     """Create a mock that raises an exception when called."""
     mock = Mock()
@@ -2536,10 +2518,7 @@ def create_context_manager_mock(return_value=None, enter_return=None):
 
 def create_timer_context_mock():
     """Create a mock timer context manager for metrics timing."""
-    mock_timer = Mock()
-    mock_timer.__enter__ = Mock(return_value=mock_timer)
-    mock_timer.__exit__ = Mock(return_value=None)
-    return mock_timer
+    return create_context_manager_mock()
 
 
 def create_dataplane_api_mock_set():

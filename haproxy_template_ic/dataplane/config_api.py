@@ -81,6 +81,7 @@ from .adapter import (
     edit_mailers_section,
     get_all_acl_backend,
     get_all_acl_frontend,
+    get_all_backend_switching_rule_frontend,
     get_all_bind_frontend,
     get_all_filter_backend,
     get_all_filter_frontend,
@@ -417,6 +418,14 @@ class ConfigAPI:
                 ),
             ),
             (
+                "frontend_backend_switching_rules",
+                _fetch_with_timing(
+                    f"fetch_frontend_backend_switching_rules_{frontend_name}",
+                    get_all_backend_switching_rule_frontend,
+                    parent_name=frontend_name,
+                ),
+            ),
+            (
                 "frontend_filters",
                 _fetch_with_timing(
                     f"fetch_frontend_filters_{frontend_name}",
@@ -492,6 +501,7 @@ class ConfigAPI:
             "frontend_acls",
             "frontend_http_request_rules",
             "frontend_http_response_rules",
+            "frontend_backend_switching_rules",
             "frontend_filters",
             "frontend_log_targets",
         ]

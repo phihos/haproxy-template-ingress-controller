@@ -781,8 +781,6 @@ async def log_resource_operation(
         details: Additional details (e.g., file size, change description)
         reload_triggered: Whether this operation triggered an HAProxy reload
     """
-    import structlog
-
     logger = structlog.get_logger(__name__)
 
     # Build the log message with consistent format

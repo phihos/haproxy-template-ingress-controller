@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Any, Callable
 
+from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
 from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext
 
@@ -52,6 +53,11 @@ _SECTION_ELEMENTS = {
         ("binds", ConfigElementType.BIND, True),  # Named elements
         ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
         ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
+        (
+            "backend_switching_rules",
+            ConfigElementType.BACKEND_SWITCHING_RULE,
+            False,
+        ),  # Ordered
         ("acls", ConfigElementType.ACL, False),  # Ordered
         ("filters", ConfigElementType.FILTER, False),  # Ordered
         ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
@@ -74,12 +80,14 @@ class ConfigSynchronizer:
         self._production_clients: dict[str, DataplaneClient] = {}
 
     def create_client(
-        self, endpoint: DataplaneEndpoint, timeout: float = 30.0
+        self, endpoint: DataplaneEndpoint, timeout: float = DEFAULT_API_TIMEOUT
     ) -> DataplaneClient:
         """Factory method for creating clients."""
         return DataplaneClient(endpoint=endpoint, timeout=timeout)
 
-    def create_client_for_url(self, url: str, timeout: float = 30.0) -> DataplaneClient:
+    def create_client_for_url(
+        self, url: str, timeout: float = DEFAULT_API_TIMEOUT
+    ) -> DataplaneClient:
         """Factory method for creating clients by URL (convenience method)."""
         endpoint = self.endpoints.find_by_url(url)
         if not endpoint:
@@ -496,6 +504,7 @@ class ConfigSynchronizer:
                 "binds": "frontend_binds",
                 "http_request_rules": "frontend_http_request_rules",
                 "http_response_rules": "frontend_http_response_rules",
+                "backend_switching_rules": "frontend_backend_switching_rules",
                 "filters": "frontend_filters",
                 "log_targets": "frontend_log_targets",
             }
