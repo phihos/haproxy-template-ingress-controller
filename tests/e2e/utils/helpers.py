@@ -203,6 +203,7 @@ def _wait_for_operator_initialization(
         operator,
         "✅ Configuration and credentials loaded successfully.",
         timeout=timeout,
+        since_milliseconds=10000,  # Look back 10 seconds in logs
     )
 
 
