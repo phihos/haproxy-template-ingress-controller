@@ -1213,6 +1213,7 @@ class ConfigSynchronizer:
                         method="raw_fallback",
                         version=fallback_result.version,
                         reload_info=fallback_result.reload_info,
+                        dataplane_errors=[structured_error],
                     )
 
         except Exception as fetch_error:
@@ -1270,10 +1271,19 @@ class ConfigSynchronizer:
                     url,
                 )
 
+                # Create a DataplaneAPIError wrapper for the generic exception
+                fallback_error = DataplaneAPIError(
+                    message=f"Structured comparison failed: {fetch_error}",
+                    endpoint=url,
+                    operation="structured_comparison",
+                    original_error=fetch_error,
+                )
+
                 return SynchronizationResult(
                     method="fallback",
                     version=final_result.version,
                     reload_info=final_result.reload_info,
+                    dataplane_errors=[fallback_error],
                 )
 
     def _handle_deployment_error(
@@ -1487,6 +1497,10 @@ class ConfigSynchronizer:
             results["reload_triggered"] = True
             if result.reload_info.reload_id:
                 results["reload_ids"].append(result.reload_info.reload_id)
+
+        # Collect dataplane errors (e.g., from fallback scenarios)
+        for error in result.dataplane_errors:
+            results["errors"].append(f"{url}: {error}")
 
         # Log detailed deployment information
         self._log_deployment_details(url, result)
