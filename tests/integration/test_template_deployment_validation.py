@@ -22,6 +22,8 @@ from typing import Dict, List
 import httpx
 import pytest
 
+from .conftest import assert_config_sync_success
+
 
 async def get_deployed_haproxy_config(dataplane_client: httpx.AsyncClient) -> str:
     """
@@ -244,7 +246,8 @@ backend default_backend
 
     # Deploy the configuration through ConfigSynchronizer
     context = haproxy_context_factory(config_content=config_with_logging)
-    await config_synchronizer.sync_configuration(context)
+    result = await config_synchronizer.sync_configuration(context)
+    assert_config_sync_success(result)
 
     # Give the deployment a moment to complete
     await asyncio.sleep(2)
@@ -299,7 +302,17 @@ async def test_ingress_routing_deployment(
     context = await create_minimal_ingress_context(haproxy_context_factory)
 
     # Deploy the ingress configuration
-    await config_synchronizer.sync_configuration(context)
+    result = await config_synchronizer.sync_configuration(context)
+
+    # Verify no fallbacks occurred (would indicate structured deployment issues)
+    assert result.failed == 0, (
+        f"Deployment failed for {result.failed} endpoints: {result.errors}"
+    )
+
+    # Check that no DataplaneAPIErrors occurred during deployment
+    assert result.errors == [], (
+        f"DataplaneAPIErrors occurred during deployment, indicating structured deployment issues: {result.errors}"
+    )
 
     # Give deployment time to complete
     await asyncio.sleep(3)
@@ -402,7 +415,8 @@ backend test_backend
 
     # Deploy the comprehensive configuration
     context = haproxy_context_factory(config_content=comprehensive_config)
-    await config_synchronizer.sync_configuration(context)
+    result = await config_synchronizer.sync_configuration(context)
+    assert_config_sync_success(result)
 
     # Give deployment time to complete
     await asyncio.sleep(2)
@@ -482,7 +496,8 @@ backend servers
 
     # Deploy configuration
     context = haproxy_context_factory(config_content=minimal_config_with_logging)
-    await config_synchronizer.sync_configuration(context)
+    result = await config_synchronizer.sync_configuration(context)
+    assert_config_sync_success(result)
 
     # Wait for deployment
     await asyncio.sleep(1)

@@ -449,6 +449,22 @@ def haproxy_context_factory():
     return _create_context
 
 
+def assert_config_sync_success(result, allow_failures: bool = False):
+    """Assert ConfigSynchronizer result indicates successful deployment.
+
+    Args:
+        result: ConfigSynchronizerResult from sync_configuration()
+        allow_failures: If True, allows failed deployments (for negative tests)
+    """
+    if not allow_failures:
+        assert result.failed == 0, (
+            f"Deployment failed for {result.failed} endpoints: {result.errors}"
+        )
+        assert result.errors == [], (
+            f"DataplaneAPIErrors occurred during deployment: {result.errors}"
+        )
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create an instance of the default event loop for the test session."""

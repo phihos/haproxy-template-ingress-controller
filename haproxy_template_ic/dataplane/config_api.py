@@ -25,6 +25,7 @@ from .adapter import (
     create_acl_backend,
     create_acl_frontend,
     create_backend,
+    create_backend_switching_rule_frontend,
     create_bind_frontend,
     create_cache,
     create_defaults_section,
@@ -53,6 +54,7 @@ from .adapter import (
     delete_acl_backend,
     delete_acl_frontend,
     delete_backend,
+    delete_backend_switching_rule_frontend,
     delete_bind_frontend,
     delete_cache,
     delete_defaults_section,
@@ -112,6 +114,7 @@ from .adapter import (
     replace_acl_backend,
     replace_acl_frontend,
     replace_backend,
+    replace_backend_switching_rule_frontend,
     replace_bind_frontend,
     replace_cache,
     replace_defaults_section,
@@ -177,6 +180,54 @@ logger = logging.getLogger(__name__)
 
 class ConfigAPI:
     """Configuration API operations for HAProxy Dataplane API."""
+
+    # Single source of truth for nested operations - prevents array synchronization bugs
+    BACKEND_NESTED_OPERATIONS = [
+        ("backend_servers", get_all_server_backend),
+        ("backend_acls", get_all_acl_backend),
+        ("backend_http_request_rules", get_all_http_request_rule_backend),
+        ("backend_http_response_rules", get_all_http_response_rule_backend),
+        ("backend_filters", get_all_filter_backend),
+        ("backend_log_targets", get_all_log_target_backend),
+    ]
+
+    FRONTEND_NESTED_OPERATIONS = [
+        ("frontend_binds", get_all_bind_frontend),
+        ("frontend_acls", get_all_acl_frontend),
+        ("frontend_http_request_rules", get_all_http_request_rule_frontend),
+        ("frontend_http_response_rules", get_all_http_response_rule_frontend),
+        ("frontend_backend_switching_rules", get_all_backend_switching_rule_frontend),
+        ("frontend_filters", get_all_filter_frontend),
+        ("frontend_log_targets", get_all_log_target_frontend),
+    ]
+
+    # Other section types (simpler patterns, but included for completeness)
+    GLOBAL_NESTED_OPERATIONS = [
+        ("global_log_targets", get_all_log_target_global),
+    ]
+
+    PEER_NESTED_OPERATIONS = [
+        ("peer_log_targets", get_all_log_target_peer),
+    ]
+
+    @property
+    def all_backend_keys(self) -> list[str]:
+        """Get all backend nested element keys."""
+        return [key for key, _ in self.BACKEND_NESTED_OPERATIONS]
+
+    @property
+    def all_frontend_keys(self) -> list[str]:
+        """Get all frontend nested element keys."""
+        return [key for key, _ in self.FRONTEND_NESTED_OPERATIONS]
+
+    @property
+    def all_nested_keys(self) -> list[str]:
+        """Get all nested element keys for initialization."""
+        return (
+            self.all_backend_keys
+            + self.all_frontend_keys
+            + ["global_log_targets", "peer_log_targets", "log_forward_log_targets"]
+        )
 
     def __init__(
         self,
@@ -316,56 +367,15 @@ class ConfigAPI:
                 )
                 return result.content or []
 
-        return [
-            (
-                "backend_servers",
-                _fetch_with_timing(
-                    f"fetch_backend_servers_{backend_name}",
-                    get_all_server_backend,
-                    parent_name=backend_name,
-                ),
-            ),
-            (
-                "backend_acls",
-                _fetch_with_timing(
-                    f"fetch_backend_acls_{backend_name}",
-                    get_all_acl_backend,
-                    parent_name=backend_name,
-                ),
-            ),
-            (
-                "backend_http_request_rules",
-                _fetch_with_timing(
-                    f"fetch_backend_http_request_rules_{backend_name}",
-                    get_all_http_request_rule_backend,
-                    parent_name=backend_name,
-                ),
-            ),
-            (
-                "backend_http_response_rules",
-                _fetch_with_timing(
-                    f"fetch_backend_http_response_rules_{backend_name}",
-                    get_all_http_response_rule_backend,
-                    parent_name=backend_name,
-                ),
-            ),
-            (
-                "backend_filters",
-                _fetch_with_timing(
-                    f"fetch_backend_filters_{backend_name}",
-                    get_all_filter_backend,
-                    parent_name=backend_name,
-                ),
-            ),
-            (
-                "backend_log_targets",
-                _fetch_with_timing(
-                    f"fetch_backend_log_targets_{backend_name}",
-                    get_all_log_target_backend,
-                    parent_name=backend_name,
-                ),
-            ),
-        ]
+        tasks = []
+        for key, func in self.BACKEND_NESTED_OPERATIONS:
+            task = _fetch_with_timing(
+                f"fetch_{key}_{backend_name}",
+                func,
+                parent_name=backend_name,
+            )
+            tasks.append((key, task))
+        return tasks
 
     def _create_frontend_tasks(
         self, frontend_name: str, metrics: Any
@@ -385,79 +395,30 @@ class ConfigAPI:
                 )
                 return result.content or []
 
-        return [
-            (
-                "frontend_binds",
-                _fetch_with_timing(
-                    f"fetch_frontend_binds_{frontend_name}",
-                    get_all_bind_frontend,
-                    parent_name=frontend_name,
-                ),
-            ),
-            (
-                "frontend_acls",
-                _fetch_with_timing(
-                    f"fetch_frontend_acls_{frontend_name}",
-                    get_all_acl_frontend,
-                    parent_name=frontend_name,
-                ),
-            ),
-            (
-                "frontend_http_request_rules",
-                _fetch_with_timing(
-                    f"fetch_frontend_http_request_rules_{frontend_name}",
-                    get_all_http_request_rule_frontend,
-                    parent_name=frontend_name,
-                ),
-            ),
-            (
-                "frontend_http_response_rules",
-                _fetch_with_timing(
-                    f"fetch_frontend_http_response_rules_{frontend_name}",
-                    get_all_http_response_rule_frontend,
-                    parent_name=frontend_name,
-                ),
-            ),
-            (
-                "frontend_backend_switching_rules",
-                _fetch_with_timing(
-                    f"fetch_frontend_backend_switching_rules_{frontend_name}",
-                    get_all_backend_switching_rule_frontend,
-                    parent_name=frontend_name,
-                ),
-            ),
-            (
-                "frontend_filters",
-                _fetch_with_timing(
-                    f"fetch_frontend_filters_{frontend_name}",
-                    get_all_filter_frontend,
-                    parent_name=frontend_name,
-                ),
-            ),
-            (
-                "frontend_log_targets",
-                _fetch_with_timing(
-                    f"fetch_frontend_log_targets_{frontend_name}",
-                    get_all_log_target_frontend,
-                    parent_name=frontend_name,
-                ),
-            ),
-        ]
+        tasks = []
+        for key, func in self.FRONTEND_NESTED_OPERATIONS:
+            task = _fetch_with_timing(
+                f"fetch_{key}_{frontend_name}",
+                func,
+                parent_name=frontend_name,
+            )
+            tasks.append((key, task))
+        return tasks
 
     async def _process_backend_results(
         self, backend_name: str, results: list[Any], nested: dict[str, Any]
     ) -> None:
         """Process results from concurrent backend nested element fetching."""
-        nested_keys = [
-            "backend_servers",
-            "backend_acls",
-            "backend_http_request_rules",
-            "backend_http_response_rules",
-            "backend_filters",
-            "backend_log_targets",
-        ]
+        nested_keys = self.all_backend_keys
 
-        for i, (nested_key, result) in enumerate(zip(nested_keys, results)):
+        # Runtime validation to catch future synchronization issues
+        if len(results) != len(nested_keys):
+            raise ValueError(
+                f"Backend result count {len(results)} != expected key count {len(nested_keys)} "
+                f"for backend '{backend_name}'. Keys: {nested_keys}"
+            )
+
+        for nested_key, result in zip(nested_keys, results):
             if nested_key not in nested:
                 nested[nested_key] = {}
             nested[nested_key][backend_name] = result or []
@@ -466,16 +427,16 @@ class ConfigAPI:
         self, frontend_name: str, results: list[Any], nested: dict[str, Any]
     ) -> None:
         """Process results from concurrent frontend nested element fetching."""
-        nested_keys = [
-            "frontend_binds",
-            "frontend_acls",
-            "frontend_http_request_rules",
-            "frontend_http_response_rules",
-            "frontend_filters",
-            "frontend_log_targets",
-        ]
+        nested_keys = self.all_frontend_keys
 
-        for i, (nested_key, result) in enumerate(zip(nested_keys, results)):
+        # Runtime validation to catch future synchronization issues
+        if len(results) != len(nested_keys):
+            raise ValueError(
+                f"Frontend result count {len(results)} != expected key count {len(nested_keys)} "
+                f"for frontend '{frontend_name}'. Keys: {nested_keys}"
+            )
+
+        for nested_key, result in zip(nested_keys, results):
             if nested_key not in nested:
                 nested[nested_key] = {}
             nested[nested_key][frontend_name] = result or []
@@ -491,21 +452,7 @@ class ConfigAPI:
         nested: dict[str, Any] = {}
 
         # Initialize nested element dictionaries
-        nested_keys = [
-            "backend_servers",
-            "backend_acls",
-            "backend_http_request_rules",
-            "backend_http_response_rules",
-            "backend_filters",
-            "backend_log_targets",
-            "frontend_binds",
-            "frontend_acls",
-            "frontend_http_request_rules",
-            "frontend_http_response_rules",
-            "frontend_backend_switching_rules",
-            "frontend_filters",
-            "frontend_log_targets",
-        ]
+        nested_keys = self.all_nested_keys
         for key in nested_keys:
             nested[key] = {}
 
@@ -542,14 +489,7 @@ class ConfigAPI:
                                 f"backend {backend_name} nested elements", "", results
                             )
                             # Initialize with empty lists for failed backend
-                            for key in [
-                                "backend_servers",
-                                "backend_acls",
-                                "backend_http_request_rules",
-                                "backend_http_response_rules",
-                                "backend_filters",
-                                "backend_log_targets",
-                            ]:
+                            for key in self.all_backend_keys:
                                 nested[key][backend_name] = []
                         else:
                             await self._process_backend_results(
@@ -561,14 +501,7 @@ class ConfigAPI:
                     # Initialize all backends with empty lists on total failure
                     for backend in config_sections["backends"]:
                         backend_name = backend.name
-                        for key in [
-                            "backend_servers",
-                            "backend_acls",
-                            "backend_http_request_rules",
-                            "backend_http_response_rules",
-                            "backend_filters",
-                            "backend_log_targets",
-                        ]:
+                        for key in self.all_backend_keys:
                             nested[key][backend_name] = []
 
         # Concurrent frontend processing
@@ -604,14 +537,7 @@ class ConfigAPI:
                                 f"frontend {frontend_name} nested elements", "", results
                             )
                             # Initialize with empty lists for failed frontend
-                            for key in [
-                                "frontend_binds",
-                                "frontend_acls",
-                                "frontend_http_request_rules",
-                                "frontend_http_response_rules",
-                                "frontend_filters",
-                                "frontend_log_targets",
-                            ]:
+                            for key in self.all_frontend_keys:
                                 nested[key][frontend_name] = []
                         else:
                             await self._process_frontend_results(
@@ -623,14 +549,7 @@ class ConfigAPI:
                     # Initialize all frontends with empty lists on total failure
                     for frontend in config_sections["frontends"]:
                         frontend_name = frontend.name
-                        for key in [
-                            "frontend_binds",
-                            "frontend_acls",
-                            "frontend_http_request_rules",
-                            "frontend_http_response_rules",
-                            "frontend_filters",
-                            "frontend_log_targets",
-                        ]:
+                        for key in self.all_frontend_keys:
                             nested[key][frontend_name] = []
 
         # Fetch global log targets (single call, no concurrency needed)
@@ -1049,6 +968,13 @@ class ConfigAPI:
                 "create": create_http_response_rule_frontend,
                 "update": replace_http_response_rule_frontend,
                 "delete": delete_http_response_rule_frontend,
+                "parent_field": "parent_name",
+                "id_field": "index",
+            },
+            (ConfigSectionType.FRONTEND, ConfigElementType.BACKEND_SWITCHING_RULE): {
+                "create": create_backend_switching_rule_frontend,
+                "update": replace_backend_switching_rule_frontend,
+                "delete": delete_backend_switching_rule_frontend,
                 "parent_field": "parent_name",
                 "id_field": "index",
             },

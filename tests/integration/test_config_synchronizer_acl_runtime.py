@@ -8,6 +8,7 @@ Tests use the existing Docker infrastructure with minimal additional fixtures.
 
 import pytest
 
+from .conftest import assert_config_sync_success
 from .utils import (
     exec_container_command,
     read_container_file,
@@ -44,7 +45,7 @@ async def test_acl_runtime_operations_no_reload(
     )
 
     result1 = await config_synchronizer.sync_configuration(initial_context)
-    assert "success" in str(result1).lower() or "completed" in str(result1).lower()
+    assert_config_sync_success(result1)
 
     # Step 2: Capture HAProxy process state before update
     process_before = await get_haproxy_process_info(
@@ -68,7 +69,7 @@ async def test_acl_runtime_operations_no_reload(
 
     # Step 4: Deploy updated configuration via ConfigSynchronizer
     result2 = await config_synchronizer.sync_configuration(updated_context)
-    assert "success" in str(result2).lower() or "completed" in str(result2).lower()
+    assert_config_sync_success(result2)
 
     # Step 5: Verify ACL file updated on disk with new content
     acl_content_after = await read_container_file(
@@ -174,7 +175,7 @@ async def test_acl_deployment_basic(
     )
 
     result = await config_synchronizer.sync_configuration(context)
-    assert "success" in str(result).lower() or "completed" in str(result).lower()
+    assert_config_sync_success(result)
 
     # Verify ACL file was created with correct content
     acl_content = await read_container_file(
@@ -216,7 +217,7 @@ async def test_acl_file_creation_and_removal(
     )
 
     result = await config_synchronizer.sync_configuration(with_acl_context)
-    assert "success" in str(result).lower() or "completed" in str(result).lower()
+    assert_config_sync_success(result)
 
     # Verify ACL file was created
     acl_content = await read_container_file(
@@ -232,7 +233,7 @@ async def test_acl_file_creation_and_removal(
     )
 
     result2 = await config_synchronizer.sync_configuration(clean_context)
-    assert "success" in str(result2).lower() or "completed" in str(result2).lower()
+    assert_config_sync_success(result2)
 
     # Verify ACL file was removed or cleared
     try:
@@ -301,7 +302,7 @@ backend servers
     )
 
     result = await config_synchronizer.sync_configuration(context)
-    assert "success" in str(result).lower() or "completed" in str(result).lower()
+    assert_config_sync_success(result)
 
     # Verify all ACL files were created with correct content
     blocked_content = await read_container_file(
