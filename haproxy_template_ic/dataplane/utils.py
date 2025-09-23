@@ -16,7 +16,6 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 from haproxy_dataplane_v3 import errors
 
-from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.tracing import (
     record_span_event,
     set_span_error,
@@ -391,7 +390,7 @@ def handle_dataplane_errors(
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
             op_name = operation_name or func.__name__
-            metrics = get_metrics_collector()
+            metrics = self.metrics
             endpoint = getattr(self, "endpoint", getattr(self, "base_url", "unknown"))
 
             try:

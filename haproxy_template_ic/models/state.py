@@ -16,6 +16,7 @@ from haproxy_template_ic.operator.debouncer import TemplateRenderDebouncer
 from haproxy_template_ic.operator.index_sync import IndexSynchronizationTracker
 from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.templating import TemplateRenderer
+from haproxy_template_ic.tracing import TracingManager
 
 from .config import Config
 from .context import HAProxyConfigContext
@@ -69,6 +70,10 @@ class OperationalState(BaseModel):
     )
     index_tracker: IndexSynchronizationTracker = Field(
         ..., description="Index initialization synchronization tracker"
+    )
+    tracing_manager: TracingManager | None = Field(
+        default=None,
+        description="Distributed tracing manager, None when tracing disabled",
     )
 
     model_config = {"arbitrary_types_allowed": True}

@@ -15,7 +15,6 @@ from haproxy_template_ic.dataplane.types import (
     ValidationError,
 )
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
-from haproxy_template_ic.metrics import get_metrics_collector
 from haproxy_template_ic.models.context import HAProxyConfigContext
 from haproxy_template_ic.tracing import trace_async_function
 
@@ -116,7 +115,7 @@ async def synchronize_with_haproxy_instances(
         config_synchronizer: Synchronizer with current production endpoints
     """
     logger.debug("🚀 SYNC FUNCTION CALLED - Starting synchronization...")
-    metrics = get_metrics_collector()
+    metrics = config_synchronizer.metrics
 
     if not _validate_sync_prerequisites(haproxy_config_context):
         return

@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from typing_extensions import TypedDict
 
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from .endpoint import DataplaneEndpoint
 from .adapter import (
     ReloadInfo,
@@ -181,13 +181,16 @@ class ConfigAPI:
     def __init__(
         self,
         endpoint: DataplaneEndpoint,
+        metrics: MetricsCollector,
     ):
         """Initialize configuration API.
 
         Args:
             endpoint: Dataplane endpoint for error context
+            metrics: MetricsCollector instance for metrics tracking
         """
         self.endpoint = endpoint
+        self.metrics = metrics
 
     async def _call_api_with_reload_info(
         self,
@@ -237,25 +240,23 @@ class ConfigAPI:
         Raises:
             DataplaneAPIError: If fetching configuration fails
         """
-        metrics = get_metrics_collector()
-
-        with metrics.time_dataplane_api_operation("fetch_structured"):
+        with self.metrics.time_dataplane_api_operation("fetch_structured"):
             try:
                 # Fetch all top-level configuration sections
-                config_sections = await self._fetch_top_level_sections(metrics)
+                config_sections = await self._fetch_top_level_sections(self.metrics)
 
                 # Fetch nested elements for sections that support them
                 nested_elements = await self._fetch_nested_elements(
-                    config_sections, metrics
+                    config_sections, self.metrics
                 )
 
                 # Record success metrics and return combined result
                 return self._build_configuration_result(
-                    config_sections, nested_elements, metrics
+                    config_sections, nested_elements, self.metrics
                 )
 
             except Exception as e:
-                metrics.record_dataplane_api_request("fetch_structured", "error")
+                self.metrics.record_dataplane_api_request("fetch_structured", "error")
                 _log_fetch_error("structured configuration", "all", e)
                 raise DataplaneAPIError(
                     f"Failed to fetch structured configuration: {e}",

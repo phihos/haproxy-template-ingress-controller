@@ -207,6 +207,7 @@ class MetricsCollector:
         """Initialize the metrics collector."""
         self.start_time = time.time()
         self._server_started = False
+        self.metrics_history = MetricsHistory()
 
     @handle_exceptions(logger=logger, context="metrics server startup")
     async def start_metrics_server(self, port: int = DEFAULT_METRICS_PORT) -> None:
@@ -325,7 +326,7 @@ class MetricsCollector:
                 template_type=template_type
             ).observe(duration)
             # Also store in history for sparklines
-            _metrics_history.add_template_render_time(duration)
+            self.metrics_history.add_template_render_time(duration)
 
     @contextmanager
     def time_config_reload(self) -> Iterator[None]:
@@ -347,7 +348,7 @@ class MetricsCollector:
             duration = time.time() - start_time
             dataplane_api_duration_seconds.labels(operation=operation).observe(duration)
             # Also store in history for sparklines
-            _metrics_history.add_dataplane_api_time(duration)
+            self.metrics_history.add_dataplane_api_time(duration)
 
     def increment_dataplane_fallback(self, fallback_type: str) -> None:
         """Increment the counter for dataplane deployment fallbacks.
@@ -386,7 +387,7 @@ class MetricsCollector:
             method=method, success=success_str
         ).inc()
         # Also record sync result in history for dashboard sparklines
-        _metrics_history.add_sync_result(success)
+        self.metrics_history.add_sync_result(success)
 
     def record_debouncer_trigger(self) -> None:
         """Record a debouncer trigger event."""
@@ -505,17 +506,6 @@ def timed_operation(
     return decorator
 
 
-# Global Metrics Instance
-
-# Global metrics collector instance
-metrics = MetricsCollector()
-
-
-def get_metrics_collector() -> MetricsCollector:
-    """Get the global metrics collector instance."""
-    return metrics
-
-
 def export_metrics() -> str:
     """Export current metrics in Prometheus format."""
     return generate_latest().decode("utf-8")
@@ -597,8 +587,11 @@ def calculate_histogram_percentiles(
 @handle_exceptions(
     logger=logger, default_return={}, context="performance metrics calculation"
 )
-def get_performance_metrics() -> dict[str, Any]:
+def get_performance_metrics(metrics_collector: MetricsCollector) -> dict[str, Any]:
     """Get performance metrics for dashboard display.
+
+    Args:
+        metrics_collector: The MetricsCollector instance to get history from
 
     Returns:
         Dictionary containing template_render, dataplane_api, and sync_success_rate metrics with historical data
@@ -612,7 +605,9 @@ def get_performance_metrics() -> dict[str, Any]:
     if template_percentiles:
         template_render_data = template_percentiles.copy()
         # Add historical data for sparklines
-        template_render_data["history"] = _metrics_history.get_template_render_values()
+        template_render_data["history"] = (
+            metrics_collector.metrics_history.get_template_render_values()
+        )
         performance["template_render"] = template_render_data
 
     # Dataplane API metrics
@@ -620,15 +615,17 @@ def get_performance_metrics() -> dict[str, Any]:
     if api_percentiles:
         dataplane_api_data = api_percentiles.copy()
         # Add historical data for sparklines
-        dataplane_api_data["history"] = _metrics_history.get_dataplane_api_values()
+        dataplane_api_data["history"] = (
+            metrics_collector.metrics_history.get_dataplane_api_values()
+        )
         performance["dataplane_api"] = dataplane_api_data
 
     # Add sync pattern and recent success rate from history
-    sync_pattern = _metrics_history.get_sync_success_pattern()
+    sync_pattern = metrics_collector.metrics_history.get_sync_success_pattern()
     if sync_pattern:
         performance["sync_pattern"] = sync_pattern
         performance["recent_sync_success_rate"] = (
-            _metrics_history.get_recent_sync_success_rate()
+            metrics_collector.metrics_history.get_recent_sync_success_rate()
         )
 
     return performance
@@ -702,12 +699,3 @@ class MetricsHistory:
 
         success_count = sum(recent_results)
         return success_count / len(recent_results)
-
-
-# Global metrics history instance
-_metrics_history = MetricsHistory()
-
-
-def get_metrics_history() -> MetricsHistory:
-    """Get the global metrics history instance."""
-    return _metrics_history

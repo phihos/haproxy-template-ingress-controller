@@ -8,13 +8,15 @@ and server state changes that don't require HAProxy reloads.
 import pytest
 from unittest.mock import Mock, patch
 
-from haproxy_template_ic.dataplane.runtime_api import RuntimeAPI
 from haproxy_template_ic.dataplane.types import (
     DataplaneAPIError,
     MapChange,
 )
 from tests.unit.conftest import (
     create_dataplane_endpoint_mock,
+)
+from tests.unit.dataplane.conftest import (
+    create_runtime_api,
 )
 from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
 
@@ -26,7 +28,7 @@ class TestRuntimeAPIInitialization:
         """Test RuntimeAPI initialization."""
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         assert runtime_api.endpoint == endpoint
 
@@ -42,7 +44,7 @@ class TestRuntimeAPIMapOperations:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="add", key="test.com", value="backend1")]
 
@@ -67,7 +69,7 @@ class TestRuntimeAPIMapOperations:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="set", key="test.com", value="backend2")]
 
@@ -92,7 +94,7 @@ class TestRuntimeAPIMapOperations:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="del", key="test.com", value="")]
 
@@ -114,7 +116,7 @@ class TestRuntimeAPIMapOperations:
         """Test applying empty map operations."""
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         # Should not raise error for empty operations
         await runtime_api.apply_runtime_map_operations("test.map", [])
@@ -131,7 +133,7 @@ class TestRuntimeAPIACLOperations:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="add", key="", value="192.168.1.1")]
 
@@ -156,7 +158,7 @@ class TestRuntimeAPIACLOperations:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="del", key="entry_id", value="")]
 
@@ -185,7 +187,7 @@ class TestRuntimeAPIServerOperations:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.replace_runtime_server"
@@ -212,7 +214,7 @@ class TestRuntimeAPIBulkOperations:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         map_updates = {
             "hosts.map": [
@@ -247,7 +249,7 @@ class TestRuntimeAPIBulkOperations:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         acl_updates = {
             "blocked_ips": [MapChange(operation="add", key="", value="192.168.1.100")]
@@ -275,7 +277,7 @@ class TestRuntimeAPIErrorHandling:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="add", key="test.com", value="backend1")]
 
@@ -295,7 +297,7 @@ class TestRuntimeAPIErrorHandling:
         mock_get_client.return_value = mock_client
         endpoint = create_dataplane_endpoint_mock()
 
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="unknown", key="test.com", value="backend1")]
 
@@ -310,7 +312,7 @@ class TestRuntimeAPIAdvancedMapOperations:
     async def test_apply_runtime_map_operations_mixed_operations(self):
         """Test applying mixed map operations in sequence."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [
             MapChange(operation="add", key="new.com", value="backend1"),
@@ -347,7 +349,7 @@ class TestRuntimeAPIAdvancedMapOperations:
     async def test_apply_runtime_map_operations_with_reload_info(self):
         """Test map operations return proper reload information."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="add", key="api.test.com", value="backend1")]
 
@@ -369,7 +371,7 @@ class TestRuntimeAPIAdvancedMapOperations:
     async def test_apply_runtime_map_operations_large_batch(self):
         """Test handling large batches of map operations."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         # Create large batch of operations
         operations = [
@@ -398,7 +400,7 @@ class TestRuntimeAPIAdvancedACLOperations:
     async def test_apply_runtime_acl_operations_add_multiple_ips(self):
         """Test adding multiple IP addresses to ACL."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [
             MapChange(operation="add", key="", value="192.168.1.100"),
@@ -423,7 +425,7 @@ class TestRuntimeAPIAdvancedACLOperations:
     async def test_apply_runtime_acl_operations_mixed_add_del(self):
         """Test mixed ACL add and delete operations."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [
             MapChange(operation="add", key="", value="192.168.1.200"),
@@ -455,7 +457,7 @@ class TestRuntimeAPIAdvancedACLOperations:
     async def test_apply_runtime_acl_operations_error_handling(self):
         """Test ACL operations with API errors."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         operations = [MapChange(operation="add", key="", value="192.168.1.1")]
 
@@ -477,7 +479,7 @@ class TestRuntimeAPIAdvancedServerOperations:
     async def test_update_server_state_multiple_states(self):
         """Test updating server to different states."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         states = ["ready", "drain", "maint"]
 
@@ -499,7 +501,7 @@ class TestRuntimeAPIAdvancedServerOperations:
     async def test_update_server_state_with_reload_trigger(self):
         """Test server state update that triggers reload."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.replace_runtime_server"
@@ -519,7 +521,7 @@ class TestRuntimeAPIAdvancedServerOperations:
     async def test_update_server_state_error_handling(self):
         """Test server state update with API errors."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         with patch(
             "haproxy_template_ic.dataplane.runtime_api.replace_runtime_server"
@@ -537,7 +539,7 @@ class TestRuntimeAPIAdvancedBulkOperations:
     async def test_bulk_map_updates_multiple_maps_large_scale(self):
         """Test bulk updates across multiple maps with many operations."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         # Setup large-scale map updates
         map_updates = {
@@ -584,7 +586,7 @@ class TestRuntimeAPIAdvancedBulkOperations:
     async def test_bulk_acl_updates_multiple_acls(self):
         """Test bulk ACL updates across multiple ACL files."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         acl_updates = {
             "blocked_ips": [
@@ -624,7 +626,7 @@ class TestRuntimeAPIAdvancedBulkOperations:
     async def test_bulk_operations_with_partial_failures(self):
         """Test bulk operations when some operations fail."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         map_updates = {
             "hosts.map": [
@@ -659,7 +661,7 @@ class TestRuntimeAPIIntegrationScenarios:
     async def test_full_ingress_runtime_update_scenario(self):
         """Test complete ingress runtime update scenario."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         # Simulate full ingress update with maps, ACLs, and server states
         map_updates = {
@@ -727,7 +729,7 @@ class TestRuntimeAPIIntegrationScenarios:
     async def test_runtime_api_performance_scenario(self):
         """Test runtime API performance with high-volume operations."""
         endpoint = create_dataplane_endpoint_mock()
-        runtime_api = RuntimeAPI(endpoint)
+        runtime_api = create_runtime_api(endpoint)
 
         # Create high-volume operation scenario
         large_map_updates = {

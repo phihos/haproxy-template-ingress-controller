@@ -10,6 +10,7 @@ from typing import Any
 
 
 from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
+from haproxy_template_ic.metrics import MetricsCollector
 from .types import (
     ConfigChange,
     MapChange,
@@ -49,12 +50,16 @@ class DataplaneClient:
     """
 
     def __init__(
-        self, endpoint: DataplaneEndpoint, timeout: float = DEFAULT_API_TIMEOUT
+        self,
+        endpoint: DataplaneEndpoint,
+        metrics: MetricsCollector,
+        timeout: float = DEFAULT_API_TIMEOUT,
     ):
         """Initialize the client with a DataplaneEndpoint.
 
         Args:
             endpoint: DataplaneEndpoint containing URL, auth, and pod context
+            metrics: MetricsCollector instance for metrics tracking
             timeout: Request timeout in seconds
         """
         self.endpoint = endpoint
@@ -66,7 +71,7 @@ class DataplaneClient:
         )
 
         # Initialize unified operations interface
-        self.operations = DataplaneOperations(self.endpoint)
+        self.operations = DataplaneOperations(self.endpoint, metrics)
 
     @property
     def endpoint_context(self) -> str:

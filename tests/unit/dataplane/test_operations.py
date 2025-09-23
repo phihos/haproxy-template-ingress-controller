@@ -8,7 +8,6 @@ specialized API modules.
 import pytest
 from unittest.mock import Mock, patch
 
-from haproxy_template_ic.dataplane.operations import DataplaneOperations
 from haproxy_template_ic.dataplane.types import (
     DataplaneAPIError,
     StructuredDeploymentResult,
@@ -17,6 +16,9 @@ from .conftest import create_frontend_config_change
 from tests.unit.conftest import (
     create_async_mock_with_return_value,
     create_async_mock_coroutine,
+)
+from tests.unit.dataplane.conftest import (
+    create_dataplane_operations,
 )
 
 
@@ -30,7 +32,7 @@ def operations():
     endpoint = DataplaneEndpoint(
         url="http://localhost:5555/v3", dataplane_auth=auth, pod_name="test-pod"
     )
-    return DataplaneOperations(endpoint)
+    return create_dataplane_operations(endpoint)
 
 
 def test_operations_initialization(operations):
@@ -182,10 +184,6 @@ async def test_sync_storage_resources(operations, mock_metrics):
     with (
         patch.object(operations.storage, "sync_maps") as mock_sync_maps,
         patch.object(operations.storage, "sync_certificates") as mock_sync_certs,
-        patch(
-            "haproxy_template_ic.dataplane.operations.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
     ):
         # Setup async mocks
         from haproxy_template_ic.dataplane.types import StorageOperationResult
@@ -214,10 +212,6 @@ async def test_apply_runtime_changes(operations, mock_metrics):
     with (
         patch.object(operations.runtime, "bulk_map_updates") as mock_map_updates,
         patch.object(operations.runtime, "update_server_state") as mock_server_update,
-        patch(
-            "haproxy_template_ic.dataplane.operations.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
     ):
         # Setup async mocks
         from haproxy_template_ic.dataplane.types import RuntimeOperationResult
@@ -258,10 +252,6 @@ async def test_validate_and_deploy(operations, mock_metrics):
             "deploy_configuration",
             return_value=mock_deployment_result,
         ) as mock_deploy,
-        patch(
-            "haproxy_template_ic.dataplane.operations.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
     ):
         # Setup async mocks
         mock_validate.return_value = create_async_mock_coroutine()
@@ -300,10 +290,6 @@ async def test_get_cluster_info(operations, mock_metrics):
             return_value=current_config,
         ),
         patch.object(operations.config, "fetch_structured_configuration"),
-        patch(
-            "haproxy_template_ic.dataplane.operations.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
     ):
         # Setup async mocks - these methods should return awaitables
         operations.validation.get_version = create_async_mock_with_return_value(

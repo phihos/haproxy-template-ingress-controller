@@ -113,7 +113,7 @@ def patch_storage_apis(
         mock_get_all: AsyncMock for get_all operation (default: returns [])
         mock_create: AsyncMock for create operation (default: returns appropriate model)
         mock_replace: AsyncMock for replace operation (default: returns appropriate model)
-        mock_metrics: Mock for get_metrics_collector (default: returns basic mock)
+        mock_metrics: Mock for metrics collector (default: returns basic mock)
     """
     from haproxy_dataplane_v3.models import MapFile, SSLFile, GeneralUseFile
 
@@ -184,7 +184,6 @@ def patch_storage_apis(
         config["get_all"]: mock_get_all,
         config["create"]: mock_create,
         config["replace"]: mock_replace,
-        "get_metrics_collector": lambda: mock_metrics,
     }
 
     # Apply all patches
@@ -229,3 +228,102 @@ def patch_storage_file_apis(
         "file", mock_get_all, mock_create, mock_replace, mock_metrics
     ) as mocks:
         yield mocks
+
+
+# API Factory Functions to eliminate constructor duplication
+def create_config_api(endpoint=None):
+    """Create ConfigAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.config_api import ConfigAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return ConfigAPI(endpoint, metrics)
+
+
+def create_runtime_api(endpoint=None):
+    """Create RuntimeAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.runtime_api import RuntimeAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return RuntimeAPI(endpoint, metrics)
+
+
+def create_storage_api(endpoint=None):
+    """Create StorageAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.storage_api import StorageAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return StorageAPI(endpoint, metrics)
+
+
+def create_validation_api(endpoint=None):
+    """Create ValidationAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.validation_api import ValidationAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return ValidationAPI(endpoint, metrics)
+
+
+def create_transaction_api(endpoint=None):
+    """Create TransactionAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.transaction_api import TransactionAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return TransactionAPI(endpoint, metrics)
+
+
+def create_dataplane_operations(endpoint=None):
+    """Create DataplaneOperations instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.operations import DataplaneOperations
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return DataplaneOperations(endpoint, metrics)
+
+
+def create_dataplane_client(endpoint=None, timeout=60.0):
+    """Create DataplaneClient instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.client import DataplaneClient
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return DataplaneClient(endpoint, metrics, timeout)
+
+
+def create_config_synchronizer(endpoints=None):
+    """Create ConfigSynchronizer instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoints is None:
+        from haproxy_template_ic.dataplane.endpoint import DataplaneEndpointSet
+
+        endpoints = DataplaneEndpointSet([create_dataplane_endpoint_mock()])
+    metrics = MetricsCollector()
+    return ConfigSynchronizer(endpoints=endpoints, metrics=metrics)

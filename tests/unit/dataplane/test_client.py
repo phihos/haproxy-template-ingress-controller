@@ -13,17 +13,22 @@ from tests.unit.conftest import (
     create_async_mock_coroutine,
     create_dataplane_endpoint_mock,
 )
+from tests.unit.dataplane.conftest import (
+    create_dataplane_client,
+)
 
 
 @pytest.fixture
 def client(test_endpoint):
     """Create DataplaneClient instance for testing."""
-    return DataplaneClient(endpoint=test_endpoint)
+    from .conftest import create_dataplane_client
+
+    return create_dataplane_client(test_endpoint)
 
 
 def test_client_initialization_defaults(test_endpoint):
     """Test DataplaneClient initialization with defaults."""
-    client = DataplaneClient(endpoint=test_endpoint)
+    client = create_dataplane_client(test_endpoint)
 
     assert client.base_url == "http://localhost:5555/v3"
     assert client.operations is not None
@@ -36,7 +41,7 @@ def test_client_initialization_custom(test_auth):
         url="https://api.example.com/v3",
         auth=test_auth,
     )
-    client = DataplaneClient(endpoint=custom_endpoint, timeout=60)
+    client = create_dataplane_client(custom_endpoint, timeout=60)
 
     assert client.base_url == "https://api.example.com/v3"
     assert client.operations.endpoint.url == "https://api.example.com/v3"
@@ -155,7 +160,10 @@ def test_client_url_normalization_on_init(test_auth):
         url="http://localhost:5555",
         dataplane_auth=test_auth,
     )
-    client = DataplaneClient(endpoint=endpoint_without_v3)
+    from haproxy_template_ic.metrics import MetricsCollector
+
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint=endpoint_without_v3, metrics=metrics)
     assert client.base_url == "http://localhost:5555/v3"
 
     # URL with /v3 should remain unchanged
@@ -163,13 +171,13 @@ def test_client_url_normalization_on_init(test_auth):
         url="http://localhost:5555/v3",
         dataplane_auth=test_auth,
     )
-    client = DataplaneClient(endpoint=endpoint_with_v3)
+    client = DataplaneClient(endpoint=endpoint_with_v3, metrics=metrics)
     assert client.base_url == "http://localhost:5555/v3"
 
 
 def test_client_auth_handling(test_endpoint):
     """Test that client properly handles authentication."""
-    client = DataplaneClient(endpoint=test_endpoint)
+    client = create_dataplane_client(test_endpoint)
 
     # Auth should be stored and accessible
     assert client.endpoint == test_endpoint

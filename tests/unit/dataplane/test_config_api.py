@@ -8,7 +8,6 @@ for backends/frontends/defaults, and nested element management.
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 
-from haproxy_template_ic.dataplane.config_api import ConfigAPI
 from haproxy_template_ic.dataplane.types import (
     ConfigChange,
     ConfigChangeType,
@@ -27,6 +26,7 @@ from tests.unit.conftest import (
 )
 from tests.unit.dataplane.conftest import (
     create_frontend_config_change,
+    create_config_api,
 )
 
 
@@ -36,7 +36,7 @@ class TestConfigAPIInitialization:
     def test_config_api_init(self):
         """Test ConfigAPI initialization."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
         assert config_api.endpoint == endpoint
 
 
@@ -47,7 +47,7 @@ class TestConfigAPIFetchOperations:
     async def test_fetch_structured_configuration_success(self, mock_metrics):
         """Test successful structured configuration fetching with all sections."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         mock_backends = [Backend(name="api", balance="roundrobin")]
         mock_frontends = [Frontend(name="web", mode="http")]
@@ -222,12 +222,6 @@ class TestConfigAPIFetchOperations:
                     new_callable=AsyncMock,
                 )
             )
-            stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                    return_value=mock_metrics,
-                )
-            )
             # Setup APIResponse return values using proper adapter fixtures
             from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
 
@@ -287,17 +281,11 @@ class TestConfigAPIFetchOperations:
     async def test_fetch_structured_configuration_api_error(self, mock_metrics):
         """Test structured configuration fetching with API error."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_backends"
-            ) as mock_get_backends,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.get_backends"
+        ) as mock_get_backends:
             mock_get_backends.side_effect = Exception("API Error")
 
             with pytest.raises(DataplaneAPIError) as exc_info:
@@ -313,7 +301,7 @@ class TestConfigAPIApplyConfigChange:
     async def test_apply_frontend_create_change(self, mock_metrics):
         """Test applying frontend CREATE change."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         frontend_config = {"name": "test-frontend", "mode": "http"}
         change = ConfigChange(
@@ -323,16 +311,10 @@ class TestConfigAPIApplyConfigChange:
             new_config=frontend_config,
         )
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.create_frontend",
-                new_callable=AsyncMock,
-            ) as mock_create,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.create_frontend",
+            new_callable=AsyncMock,
+        ) as mock_create:
             # Import adapter fixtures to create proper APIResponse mock
             from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
 
@@ -350,7 +332,7 @@ class TestConfigAPIApplyConfigChange:
     async def test_apply_backend_update_change(self, mock_metrics):
         """Test applying backend UPDATE change."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         backend_config = {"name": "test-backend", "balance": "leastconn"}
         change = ConfigChange(
@@ -360,15 +342,9 @@ class TestConfigAPIApplyConfigChange:
             new_config=backend_config,
         )
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.replace_backend"
-            ) as mock_replace,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.replace_backend"
+        ) as mock_replace:
             # Import adapter fixtures to create proper APIResponse mock
             from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
 
@@ -386,7 +362,7 @@ class TestConfigAPIApplyConfigChange:
     async def test_apply_delete_change(self, mock_metrics):
         """Test applying DELETE change."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         change = ConfigChange(
             change_type=ConfigChangeType.DELETE,
@@ -394,15 +370,9 @@ class TestConfigAPIApplyConfigChange:
             section_name="test-frontend",
         )
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.delete_frontend"
-            ) as mock_delete,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.delete_frontend"
+        ) as mock_delete:
             # Import adapter fixtures to create proper APIResponse mock
             from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
 
@@ -420,7 +390,7 @@ class TestConfigAPIApplyConfigChange:
     async def test_apply_config_change_with_api_error(self, mock_metrics):
         """Test apply config change handling API errors."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         change = ConfigChange(
             change_type=ConfigChangeType.CREATE,
@@ -429,15 +399,9 @@ class TestConfigAPIApplyConfigChange:
             new_config={"name": "test-backend"},
         )
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.create_backend"
-            ) as mock_create,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.create_backend"
+        ) as mock_create:
             mock_create.side_effect = Exception("API Error")
 
             with pytest.raises(DataplaneAPIError) as exc_info:
@@ -453,7 +417,7 @@ class TestConfigAPIErrorHandling:
     async def test_apply_config_change_with_api_error(self, mock_metrics):
         """Test handling API errors during config change application."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         change = ConfigChange(
             change_type=ConfigChangeType.CREATE,
@@ -462,15 +426,9 @@ class TestConfigAPIErrorHandling:
             new_config={"name": "test-backend"},
         )
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.create_backend"
-            ) as mock_create,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.create_backend"
+        ) as mock_create:
             mock_create.side_effect = Exception("Test API error")
 
             with pytest.raises(DataplaneAPIError) as exc_info:
@@ -488,7 +446,7 @@ class TestConfigAPIAdvancedOperations:
     async def test_apply_defaults_section_change(self, mock_metrics):
         """Test applying defaults section changes."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         # Use factory pattern similar to existing ones
         change = ConfigChange(
@@ -498,15 +456,9 @@ class TestConfigAPIAdvancedOperations:
             new_config={"mode": "tcp", "timeout": {"connect": "5s"}},
         )
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.replace_defaults_section"
-            ) as mock_replace,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.replace_defaults_section"
+        ) as mock_replace:
             # Import adapter fixtures to create proper APIResponse mock
             from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
 
@@ -525,7 +477,7 @@ class TestConfigAPIAdvancedOperations:
     async def test_apply_unsupported_section_type(self, mock_metrics):
         """Test applying change with unsupported section type."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         change = ConfigChange(
             change_type=ConfigChangeType.CREATE,
@@ -534,33 +486,23 @@ class TestConfigAPIAdvancedOperations:
             new_config={"test": "value"},
         )
 
-        with patch(
-            "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ):
-            with pytest.raises(DataplaneAPIError) as exc_info:
-                await config_api.apply_config_change(change, version=1)
+        with pytest.raises(DataplaneAPIError) as exc_info:
+            await config_api.apply_config_change(change, version=1)
 
-            assert "Unsupported section type" in str(exc_info.value)
+        assert "Unsupported section type" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_apply_config_change_with_transaction(self, mock_metrics):
         """Test applying config change within a transaction."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         # Use existing factory function
         change = create_frontend_config_change(section_name="test-frontend")
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.create_frontend"
-            ) as mock_create,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.create_frontend"
+        ) as mock_create:
             # Import adapter fixtures to create proper APIResponse mock
             from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
 
@@ -585,19 +527,13 @@ class TestConfigAPINestedElements:
     async def test_fetch_backend_servers(self, mock_metrics):
         """Test fetching servers for a backend."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         mock_servers = [Server(name="server1", address="10.0.0.1:8080")]
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_all_server_backend"
-            ) as mock_get_servers,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.get_all_server_backend"
+        ) as mock_get_servers:
             mock_get_servers.return_value = Mock(content=mock_servers)
 
             result = await mock_get_servers(
@@ -613,19 +549,13 @@ class TestConfigAPINestedElements:
     async def test_fetch_frontend_binds(self, mock_metrics):
         """Test fetching bind configurations for a frontend."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         mock_binds = [Bind(name="bind1", address="*:80")]
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_all_bind_frontend"
-            ) as mock_get_binds,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.get_all_bind_frontend"
+        ) as mock_get_binds:
             mock_get_binds.return_value = Mock(content=mock_binds)
 
             result = await mock_get_binds(
@@ -645,7 +575,7 @@ class TestConfigAPIPerformance:
     async def test_concurrent_config_changes(self, mock_metrics):
         """Test handling multiple config changes efficiently."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         # Use factory function for cleaner test
         changes = [
@@ -653,15 +583,9 @@ class TestConfigAPIPerformance:
             for i in range(3)
         ]
 
-        with (
-            patch(
-                "haproxy_template_ic.dataplane.config_api.create_frontend"
-            ) as mock_create,
-            patch(
-                "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
-        ):
+        with patch(
+            "haproxy_template_ic.dataplane.config_api.create_frontend"
+        ) as mock_create:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.headers = {}
@@ -681,7 +605,7 @@ class TestConfigAPIPerformance:
     async def test_large_configuration_fetch(self, mock_metrics):
         """Test fetching large configuration efficiently."""
         endpoint = create_dataplane_endpoint_mock()
-        config_api = ConfigAPI(endpoint)
+        config_api = create_config_api(endpoint)
 
         # Create large mock data sets
         large_backend_list = [Backend(name=f"backend-{i}") for i in range(100)]
@@ -854,12 +778,6 @@ class TestConfigAPIPerformance:
                 patch(
                     "haproxy_template_ic.dataplane.config_api.get_all_log_target_global",
                     new_callable=AsyncMock,
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_metrics_collector",
-                    return_value=mock_metrics,
                 )
             )
             # Setup async mocks properly - these functions are already AsyncMock due to patch

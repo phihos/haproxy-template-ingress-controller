@@ -16,6 +16,7 @@ import pytest
 from haproxy_template_ic.dataplane import (
     DataplaneClient,
 )
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.dataplane.endpoint import DataplaneEndpoint
 from haproxy_template_ic.dataplane.types import (
     ConfigChange,
@@ -134,7 +135,8 @@ async def test_structured_create_acl_operations(production_dataplane_client_raw)
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy minimal config with frontend and backend
     base_config = """
@@ -221,7 +223,8 @@ async def test_structured_create_http_rules_operations(production_dataplane_clie
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy minimal config
     base_config = """
@@ -308,7 +311,8 @@ async def test_structured_update_delete_operations(production_dataplane_client_r
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy config that already has elements we can update/delete
     await client.deploy_configuration(HAPROXY_CONFIG_WITH_NESTED_ELEMENTS)
@@ -370,7 +374,8 @@ async def test_comprehensive_structured_api_workflow(production_dataplane_client
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Start with simple config
     simple_config = """
