@@ -100,24 +100,23 @@ class DataplaneEndpointSet:
     def find_by_url(self, url: str) -> DataplaneEndpoint | None:
         """Find endpoint by URL (with normalization)."""
         try:
-            normalized_url = normalize_dataplane_url(url)
-            for endpoint in self.all_endpoints():
-                if endpoint.url == normalized_url:
-                    return endpoint
+            search_url = normalize_dataplane_url(url)
         except Exception:
-            # If URL normalization fails, try direct comparison
-            for endpoint in self.all_endpoints():
-                if endpoint.url == url:
-                    return endpoint
+            # If URL normalization fails, use original URL
+            search_url = url
+
+        for endpoint in self.all_endpoints():
+            if endpoint.url == search_url:
+                return endpoint
         return None
 
     def find_by_hostname(self, hostname: str) -> list[DataplaneEndpoint]:
         """Find endpoints by hostname (may return multiple)."""
-        matches = []
-        for endpoint in self.all_endpoints():
-            if endpoint.hostname == hostname:
-                matches.append(endpoint)
-        return matches
+        return [
+            endpoint
+            for endpoint in self.all_endpoints()
+            if endpoint.hostname == hostname
+        ]
 
     def get_production_by_index(self, index: int) -> DataplaneEndpoint | None:
         """Get production endpoint by index (safe access)."""

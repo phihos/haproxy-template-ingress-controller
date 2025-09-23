@@ -1100,18 +1100,12 @@ class TestConfigSynchronizerErrorHandling:
 
         synchronizer = create_config_synchronizer(mock_endpoints)
 
-        with patch(
-            "haproxy_template_ic.dataplane.synchronizer.extract_hostname_from_url"
-        ) as mock_extract:
-            mock_extract.return_value = "192.168.1.5"
-
-            # Act
-            pod_info = synchronizer._extract_pod_info_from_url(
-                "http://192.168.1.5:5555"
-            )
+        # Act
+        endpoint = synchronizer._extract_pod_info_from_url("http://192.168.1.5:5555")
 
         # Assert
-        assert pod_info == {"pod_ip": "192.168.1.5", "pod_name": "haproxy-pod-1"}
+        assert endpoint is mock_production_endpoint
+        assert endpoint.pod_name == "haproxy-pod-1"
 
     def test_extract_pod_info_from_url_no_endpoint(self):
         """Test pod information extraction when endpoint not found."""
@@ -1121,35 +1115,24 @@ class TestConfigSynchronizerErrorHandling:
 
         synchronizer = create_config_synchronizer(mock_endpoints)
 
-        with patch(
-            "haproxy_template_ic.dataplane.synchronizer.extract_hostname_from_url"
-        ) as mock_extract:
-            mock_extract.return_value = "192.168.1.5"
-
-            # Act
-            pod_info = synchronizer._extract_pod_info_from_url(
-                "http://192.168.1.5:5555"
-            )
+        # Act
+        endpoint = synchronizer._extract_pod_info_from_url("http://192.168.1.5:5555")
 
         # Assert
-        assert pod_info == {"pod_ip": "192.168.1.5", "pod_name": "pod-192-168-1-5"}
+        assert endpoint is None
 
     def test_extract_pod_info_from_url_error(self):
         """Test pod information extraction when parsing fails."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
+        mock_endpoints.find_by_url.return_value = None
         synchronizer = create_config_synchronizer(mock_endpoints)
 
-        with patch(
-            "haproxy_template_ic.dataplane.synchronizer.extract_hostname_from_url"
-        ) as mock_extract:
-            mock_extract.side_effect = ValueError("Invalid URL")
-
-            # Act
-            pod_info = synchronizer._extract_pod_info_from_url("invalid-url")
+        # Act
+        endpoint = synchronizer._extract_pod_info_from_url("invalid-url")
 
         # Assert
-        assert pod_info == {"pod_ip": "unknown", "pod_name": "unknown"}
+        assert endpoint is None
 
 
 class TestConfigSynchronizerMainFlow:

@@ -15,6 +15,9 @@ DEFAULT_METRICS_PORT: Final[int] = 9090
 DEFAULT_WEBHOOK_PORT: Final[int] = 9443
 DEFAULT_HEALTHZ_PORT: Final[int] = 8080
 
+# HTTP Status Codes
+HTTP_STATUS_ACCEPTED: Final[int] = 202  # HAProxy operations that trigger reloads
+
 # Timeouts
 DEFAULT_API_TIMEOUT: Final[float] = 30.0
 CONNECT_TIMEOUT: Final[timedelta] = timedelta(milliseconds=5000)

@@ -512,36 +512,36 @@ def get_production_urls_from_index(
 
         logger.debug(f"🔍 Pod phase: {phase}, IP: {pod_ip}")
 
-        if phase == "Running" and pod_ip:
-            metadata = _safe_dict_get(pod_dict, "metadata", {})
-            pod_name = _safe_dict_get(
-                metadata, "name", f"pod-{pod_ip.replace('.', '-')}"
+        if phase != "Running" or not pod_ip:
+            continue
+
+        metadata = _safe_dict_get(pod_dict, "metadata", {})
+        pod_name = _safe_dict_get(metadata, "name", f"pod-{pod_ip.replace('.', '-')}")
+
+        annotations = _safe_dict_get(metadata, "annotations", {})
+        port_str = _safe_dict_get(
+            annotations,
+            "haproxy-template-ic/dataplane-port",
+            str(DEFAULT_DATAPLANE_PORT),
+        )
+
+        # Validate port is a valid number, fallback to default if not
+        try:
+            port_num = (
+                int(port_str)
+                if port_str and port_str.strip()
+                else DEFAULT_DATAPLANE_PORT
             )
+            if not (1 <= port_num <= 65535):  # Valid port range
+                port_num = DEFAULT_DATAPLANE_PORT
+            port = str(port_num)
+        except (ValueError, TypeError):
+            port = str(DEFAULT_DATAPLANE_PORT)
 
-            annotations = _safe_dict_get(metadata, "annotations", {})
-            port_str = _safe_dict_get(
-                annotations,
-                "haproxy-template-ic/dataplane-port",
-                str(DEFAULT_DATAPLANE_PORT),
-            )
-
-            # Validate port is a valid number, fallback to default if not
-            try:
-                port_num = (
-                    int(port_str)
-                    if port_str and port_str.strip()
-                    else DEFAULT_DATAPLANE_PORT
-                )
-                if not (1 <= port_num <= 65535):  # Valid port range
-                    port_num = DEFAULT_DATAPLANE_PORT
-                port = str(port_num)
-            except (ValueError, TypeError):
-                port = str(DEFAULT_DATAPLANE_PORT)
-
-            url = f"http://{pod_ip}:{port}"
-            urls.append(url)
-            url_to_pod_name[url] = pod_name
-            logger.debug(f"🔍 Found production URL: {url} for pod: {pod_name}")
+        url = f"http://{pod_ip}:{port}"
+        urls.append(url)
+        url_to_pod_name[url] = pod_name
+        logger.debug(f"🔍 Found production URL: {url} for pod: {pod_name}")
 
     logger.debug(f"🔍 Found {len(urls)} production URLs: {urls}")
     return urls, url_to_pod_name
