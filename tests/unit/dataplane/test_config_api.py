@@ -17,7 +17,6 @@ from haproxy_template_ic.dataplane.types import (
 from haproxy_dataplane_v3.models import (
     Backend,
     Frontend,
-    Defaults,
     Server,
     Bind,
 )
@@ -44,241 +43,39 @@ class TestConfigAPIFetchOperations:
     """Test configuration fetching operations."""
 
     @pytest.mark.asyncio
-    async def test_fetch_structured_configuration_success(self, mock_metrics):
+    async def test_fetch_structured_configuration_success(
+        self, mock_all_dataplane_clients
+    ):
         """Test successful structured configuration fetching with all sections."""
         endpoint = create_dataplane_endpoint_mock()
         config_api = create_config_api(endpoint)
 
+        # Create test data using the centralized fixture - eliminates 200+ lines of manual mocking
         mock_backends = [Backend(name="api", balance="roundrobin")]
         mock_frontends = [Frontend(name="web", mode="http")]
-        mock_defaults = [Defaults(mode="http")]
 
-        from unittest.mock import AsyncMock
-        from contextlib import ExitStack
+        # Configure the centralized mock with our test data
+        mock_all_dataplane_clients.configure(
+            backends=mock_backends,
+            frontends=mock_frontends,
+            global_config=Mock(mode="http"),
+        )
 
-        with ExitStack() as stack:
-            # Top-level section mocks
-            mock_get_backends = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_backends",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontends = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_frontends",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_defaults = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_defaults_sections",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_global = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_global",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_userlists = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_userlists",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_caches = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_caches",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_fcgi_apps = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_fcgi_apps",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_http_errors = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_http_errors_sections",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_log_forwards = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_log_forwards",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_mailers = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_mailers_sections",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_resolvers = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_resolvers",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_peers = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_peer_sections",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_rings = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_rings",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_programs = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_programs",
-                    new_callable=AsyncMock,
-                )
-            )
+        result = await config_api.fetch_structured_configuration()
 
-            # Nested element mocks (critical for performance)
-            mock_get_servers = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_server_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_acls = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_acl_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_request_rules = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_http_request_rule_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_response_rules = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_http_response_rule_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_filters = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_filter_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_logs = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_log_target_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_binds = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_bind_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_acls = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_acl_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_request_rules = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_http_request_rule_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_response_rules = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_http_response_rule_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_filters = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_filter_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_logs = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_log_target_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_global_logs = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_log_target_global",
-                    new_callable=AsyncMock,
-                )
-            )
-            # Setup APIResponse return values using proper adapter fixtures
-            from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
-
-            mock_get_backends.return_value = create_mock_api_response(
-                content=mock_backends
-            )
-            mock_get_frontends.return_value = create_mock_api_response(
-                content=mock_frontends
-            )
-            mock_get_defaults.return_value = create_mock_api_response(
-                content=mock_defaults
-            )
-            mock_get_global.return_value = create_mock_api_response(
-                content=Mock(mode="http")
-            )
-            mock_get_userlists.return_value = create_mock_api_response(content=[])
-            mock_get_caches.return_value = create_mock_api_response(content=[])
-            mock_get_fcgi_apps.return_value = create_mock_api_response(content=[])
-            mock_get_http_errors.return_value = create_mock_api_response(content=[])
-            mock_get_log_forwards.return_value = create_mock_api_response(content=[])
-            mock_get_mailers.return_value = create_mock_api_response(content=[])
-            mock_get_resolvers.return_value = create_mock_api_response(content=[])
-            mock_get_peers.return_value = create_mock_api_response(content=[])
-            mock_get_rings.return_value = create_mock_api_response(content=[])
-            mock_get_programs.return_value = create_mock_api_response(content=[])
-
-            # Setup nested element mocks with empty content (prevents HTTP timeout calls!)
-            for mock_func in [
-                mock_get_servers,
-                mock_get_backend_acls,
-                mock_get_backend_request_rules,
-                mock_get_backend_response_rules,
-                mock_get_backend_filters,
-                mock_get_backend_logs,
-                mock_get_binds,
-                mock_get_frontend_acls,
-                mock_get_frontend_request_rules,
-                mock_get_frontend_response_rules,
-                mock_get_frontend_filters,
-                mock_get_frontend_logs,
-                mock_get_global_logs,
-            ]:
-                mock_func.return_value = create_mock_api_response(content=[])
-
-            result = await config_api.fetch_structured_configuration()
-
-            # Verify result structure
-            assert "backends" in result
-            assert "frontends" in result
-            assert "defaults" in result
-            assert len(result["backends"]) == 1
-            assert len(result["frontends"]) == 1
-            assert result["backends"][0].name == "api"
-            assert result["frontends"][0].name == "web"
+        # Verify result structure
+        assert "backends" in result
+        assert "frontends" in result
+        assert "global" in result
+        assert len(result["backends"]) == 1
+        assert len(result["frontends"]) == 1
+        assert result["backends"][0].name == "api"
+        assert result["frontends"][0].name == "web"
 
     @pytest.mark.asyncio
-    async def test_fetch_structured_configuration_api_error(self, mock_metrics):
+    async def test_fetch_structured_configuration_api_error(
+        self, mock_all_dataplane_clients
+    ):
         """Test structured configuration fetching with API error."""
         endpoint = create_dataplane_endpoint_mock()
         config_api = create_config_api(endpoint)
@@ -602,232 +399,23 @@ class TestConfigAPIPerformance:
             assert mock_create.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_large_configuration_fetch(self, mock_metrics):
-        """Test fetching large configuration efficiently."""
+    async def test_large_configuration_fetch(self, mock_dataplane_large_config):
+        """Test fetching multi-section configuration efficiently."""
         endpoint = create_dataplane_endpoint_mock()
         config_api = create_config_api(endpoint)
 
-        # Create large mock data sets
-        large_backend_list = [Backend(name=f"backend-{i}") for i in range(100)]
-        large_frontend_list = [Frontend(name=f"frontend-{i}") for i in range(50)]
+        # Use the centralized large config fixture - eliminates 80+ lines of manual mocking
+        # This fixture provides 100 backends + 50 frontends automatically
+        result = await config_api.fetch_structured_configuration()
 
-        from unittest.mock import AsyncMock
-        from contextlib import ExitStack
+        # Verify comprehensive configuration data
+        assert "backends" in result
+        assert "frontends" in result
+        assert "global" in result
+        assert len(result["backends"]) == 100
+        assert len(result["frontends"]) == 50
 
-        with ExitStack() as stack:
-            # Top-level section mocks
-            mock_get_backends = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_backends",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontends = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_frontends",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_defaults = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_defaults_sections",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_global = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_global",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_userlists = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_userlists",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_caches = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_caches",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_fcgi_apps = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_fcgi_apps",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_http_errors = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_http_errors_sections",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_log_forwards = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_log_forwards",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_mailers = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_mailers_sections",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_resolvers = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_resolvers",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_peers = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_peer_sections",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_rings = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_rings",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_programs = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_programs",
-                    new_callable=AsyncMock,
-                )
-            )
-
-            # Nested element mocks (critical for performance) - these were missing!
-            mock_get_servers = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_server_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_acls = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_acl_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_request_rules = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_http_request_rule_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_response_rules = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_http_response_rule_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_filters = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_filter_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_backend_logs = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_log_target_backend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_binds = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_bind_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_acls = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_acl_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_request_rules = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_http_request_rule_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_response_rules = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_http_response_rule_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_filters = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_filter_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_frontend_logs = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_log_target_frontend",
-                    new_callable=AsyncMock,
-                )
-            )
-            mock_get_global_logs = stack.enter_context(
-                patch(
-                    "haproxy_template_ic.dataplane.config_api.get_all_log_target_global",
-                    new_callable=AsyncMock,
-                )
-            )
-            # Setup async mocks properly - these functions are already AsyncMock due to patch
-            # They should return APIResponse objects directly
-            from tests.unit.dataplane.adapter_fixtures import create_mock_api_response
-
-            # Top-level section mocks
-            mock_get_backends.return_value = create_mock_api_response(
-                content=large_backend_list
-            )
-            mock_get_frontends.return_value = create_mock_api_response(
-                content=large_frontend_list
-            )
-
-            # Setup other top-level mocks with empty content
-            for mock_func in [
-                mock_get_defaults,
-                mock_get_userlists,
-                mock_get_caches,
-                mock_get_fcgi_apps,
-                mock_get_http_errors,
-                mock_get_log_forwards,
-                mock_get_mailers,
-                mock_get_resolvers,
-                mock_get_peers,
-                mock_get_rings,
-                mock_get_programs,
-            ]:
-                mock_func.return_value = create_mock_api_response(content=[])
-            mock_get_global.return_value = create_mock_api_response(content=None)
-
-            # Setup nested element mocks with empty content (this prevents 900+ HTTP timeout calls!)
-            for mock_func in [
-                mock_get_servers,
-                mock_get_backend_acls,
-                mock_get_backend_request_rules,
-                mock_get_backend_response_rules,
-                mock_get_backend_filters,
-                mock_get_backend_logs,
-                mock_get_binds,
-                mock_get_frontend_acls,
-                mock_get_frontend_request_rules,
-                mock_get_frontend_response_rules,
-                mock_get_frontend_filters,
-                mock_get_frontend_logs,
-                mock_get_global_logs,
-            ]:
-                mock_func.return_value = create_mock_api_response(content=[])
-
-            result = await config_api.fetch_structured_configuration()
-
-            assert len(result["backends"]) == 100
-            assert len(result["frontends"]) == 50
+        # Verify that we successfully mocked all the client calls
+        # Backends and frontends should be the lists provided by the fixture
+        assert isinstance(result["backends"], list)
+        assert isinstance(result["frontends"], list)
