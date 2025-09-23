@@ -7,10 +7,10 @@ functionality including support for template snippets and custom filters.
 
 import base64
 import math
-import os
 import re
 import sys
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Callable
 
 import jinja2
@@ -126,20 +126,19 @@ def get_path_filter(filename: str, content_type: str, config: Any | None = None)
         base_dir = base_dirs[content_type]
 
     # Construct and validate path using pathlib for additional security
-    full_path = os.path.join(base_dir, safe_filename)
-    normalized_path = os.path.normpath(full_path)
-    normalized_base = os.path.normpath(base_dir)
+    base_path = Path(base_dir).resolve()
+    full_path = base_path / safe_filename
+    resolved_path = full_path.resolve()
 
     # Ensure path doesn't escape base directory (additional defense)
-    if (
-        not normalized_path.startswith(normalized_base + os.sep)
-        and normalized_path != normalized_base
-    ):
+    try:
+        resolved_path.relative_to(base_path)
+    except ValueError:
         raise ValueError(
             f"Path traversal detected for filename '{filename}' in {content_type}"
-        )
+        ) from None
 
-    return normalized_path
+    return str(resolved_path)
 
 
 class SnippetLoader(BaseLoader):

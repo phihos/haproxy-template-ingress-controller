@@ -258,12 +258,15 @@ class ConfigChange:
             element_description = f"{self.element_type.value} {element_id}".strip()
             base_description = f"{base_description}/{element_description}"
 
-        if self.change_type == ConfigChangeType.CREATE:
-            return f"create {base_description}"
-        elif self.change_type == ConfigChangeType.DELETE:
-            return f"remove {base_description}"
-        else:  # UPDATE
-            return f"modify {base_description}"
+        match self.change_type:
+            case ConfigChangeType.CREATE:
+                return f"create {base_description}"
+            case ConfigChangeType.DELETE:
+                return f"remove {base_description}"
+            case ConfigChangeType.UPDATE:
+                return f"modify {base_description}"
+            case _:
+                return f"{self.change_type.value} {base_description}"
 
     @classmethod
     def create_section_change(
