@@ -133,10 +133,10 @@ def get_path_filter(filename: str, content_type: str, config: Any | None = None)
     # Ensure path doesn't escape base directory (additional defense)
     try:
         resolved_path.relative_to(base_path)
-    except ValueError:
+    except ValueError as e:
         raise ValueError(
             f"Path traversal detected for filename '{filename}' in {content_type}"
-        ) from None
+        ) from e
 
     return str(resolved_path)
 
