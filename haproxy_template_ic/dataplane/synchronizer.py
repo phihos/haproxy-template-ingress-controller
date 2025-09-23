@@ -8,7 +8,7 @@ across multiple instances with validation-first deployment and structured compar
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Final
 
 from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
 from haproxy_template_ic.metrics import MetricsCollector
@@ -34,13 +34,14 @@ from .utils import (
     extract_exception_origin,
     natural_sort_key,
     _to_dict_safe,
-    extract_hostname_from_url,
     parse_validation_error_details,
 )
 
 
 # Section elements registry defining nested elements each section supports
-_SECTION_ELEMENTS = {
+_SECTION_ELEMENTS: Final[
+    dict[ConfigSectionType, list[tuple[str, ConfigElementType, bool]]]
+] = {
     ConfigSectionType.BACKEND: [
         ("servers", ConfigElementType.SERVER, True),  # Named elements
         ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
@@ -1516,9 +1517,10 @@ class ConfigSynchronizer:
             "fallback": "🔄",
         }
         method_emoji = method_emojis.get(result.method, "✅")
-        pod_info = self._extract_pod_info_from_url(url)
+        endpoint = self._extract_pod_info_from_url(url)
+        pod_name = endpoint.pod_name if endpoint else "unknown"
         logger.info(
-            f"{method_emoji} Deployed to {pod_info['pod_name']} ({url}) ({result.method}), version: {result.version}"
+            f"{method_emoji} Deployed to {pod_name} ({url}) ({result.method}), version: {result.version}"
         )
 
     def _log_deployment_details(self, url: str, result: SynchronizationResult) -> None:
@@ -1531,21 +1533,20 @@ class ConfigSynchronizer:
             f"reload_id={reload_id}, method={result.method}, version={result.version}"
         )
 
-        pod_info = self._extract_pod_info_from_url(url)
+        endpoint = self._extract_pod_info_from_url(url)
+        pod_name = endpoint.pod_name if endpoint else "unknown"
         if result.method == "skipped":
-            logger.debug(
-                f"ℹ️  Configuration unchanged on {pod_info['pod_name']} ({url})"
-            )
+            logger.debug(f"ℹ️  Configuration unchanged on {pod_name} ({url})")
         else:
             logger.debug(
-                f"🔄 Configuration updated on {pod_info['pod_name']} ({url}) using {result.method}"
+                f"🔄 Configuration updated on {pod_name} ({url}) using {result.method}"
             )
 
         # Log INFO-level message when reload is triggered on production instance
         if reload_triggered and reload_id:
             logger.info(
                 f"🔄 Production instance reload triggered: {reload_id} "
-                f"({pod_info['pod_name']} - {url})"
+                f"({pod_name} - {url})"
             )
 
     def _log_sync_results(self, result: ConfigSynchronizerResult) -> None:
@@ -1581,32 +1582,13 @@ class ConfigSynchronizer:
                 f"{result.failed} failed out of {total_instances} instances{reload_suffix}"
             )
 
-    def _extract_pod_info_from_url(self, url: str) -> dict[str, str]:
+    def _extract_pod_info_from_url(self, url: str) -> DataplaneEndpoint | None:
         """Extract pod information from dataplane URL.
 
         Args:
             url: Dataplane URL in format http://pod_ip:port
 
         Returns:
-            Dictionary with 'pod_ip' and 'pod_name' keys
+            DataplaneEndpoint if found, None otherwise
         """
-        try:
-            # Parse URL to extract IP address
-            pod_ip = extract_hostname_from_url(url)
-
-            if not pod_ip:
-                return {"pod_ip": "unknown", "pod_name": "unknown"}
-
-            # Use actual pod name from endpoint if available, otherwise fallback to IP-based name
-            endpoint = self.endpoints.find_by_url(url)
-            pod_name = (
-                endpoint.pod_name
-                if endpoint and endpoint.pod_name
-                else f"pod-{pod_ip.replace('.', '-')}"
-            )
-
-            return {"pod_ip": pod_ip, "pod_name": pod_name}
-
-        except Exception as e:
-            logger.debug(f"Error extracting pod info from URL {url}: {e}")
-            return {"pod_ip": "unknown", "pod_name": "unknown"}
+        return self.endpoints.find_by_url(url)

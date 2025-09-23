@@ -306,7 +306,7 @@ from haproxy_dataplane_v3.models import (
 )
 from haproxy_dataplane_v3.types import UNSET, File, Response, Unset
 
-from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
+from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT, HTTP_STATUS_ACCEPTED
 from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.tracing import record_span_event
 
@@ -364,15 +364,15 @@ class ReloadInfo:
         Returns:
             ReloadInfo instance with reload_id if reload was triggered
         """
-        reload_id = None
+        if response.status_code != HTTP_STATUS_ACCEPTED:
+            return cls(reload_id=None)
 
-        if response.status_code == 202:
-            for header_name in ["Reload-ID", "reload-id", "RELOAD-ID", "reload_id"]:
-                reload_id = response.headers.get(header_name)
-                if reload_id:
-                    break
+        for header_name in ["Reload-ID", "reload-id", "RELOAD-ID", "reload_id"]:
+            reload_id = response.headers.get(header_name)
+            if reload_id:
+                return cls(reload_id=reload_id)
 
-        return cls(reload_id=reload_id)
+        return cls(reload_id=None)
 
     @classmethod
     def combine(cls, *reload_infos: "ReloadInfo") -> "ReloadInfo":
