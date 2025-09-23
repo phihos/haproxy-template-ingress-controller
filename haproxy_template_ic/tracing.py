@@ -362,36 +362,6 @@ def initialize_tracing(config: TracingConfig) -> TracingManager:
     return manager
 
 
-def get_tracing_manager() -> TracingManager | None:
-    """Get tracing manager from global tracer provider.
-
-    This is a compatibility function for tests that expect global access.
-    In production code, the TracingManager should be passed via dependency injection.
-
-    Returns:
-        TracingManager instance if available, None otherwise
-    """
-    # This is a fallback for tests - in production, tracing manager should be injected
-    provider = trace.get_tracer_provider()
-    if hasattr(provider, "_tracing_manager"):
-        return provider._tracing_manager  # type: ignore[return-value]
-    return None
-
-
-def shutdown_tracing(tracing_manager: TracingManager | None = None) -> None:
-    """Shutdown tracing and flush any pending spans.
-
-    Args:
-        tracing_manager: TracingManager instance to shutdown.
-                        If None, attempts to get from global state.
-    """
-    if tracing_manager is None:
-        tracing_manager = get_tracing_manager()
-
-    if tracing_manager:
-        tracing_manager.shutdown()
-
-
 def create_tracing_config_from_env() -> TracingConfig:
     """Create tracing configuration from environment variables."""
     return TracingConfig(
