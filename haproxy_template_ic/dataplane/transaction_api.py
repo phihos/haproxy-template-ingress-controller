@@ -18,7 +18,7 @@ from .adapter import (
     get_configuration_version,
 )
 
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.tracing import record_span_event, set_span_error
 
 from .types import (
@@ -42,13 +42,16 @@ class TransactionAPI:
     def __init__(
         self,
         endpoint: DataplaneEndpoint,
+        metrics: MetricsCollector,
     ):
         """Initialize transaction API.
 
         Args:
             endpoint: Dataplane endpoint for error context
+            metrics: MetricsCollector instance for metrics tracking
         """
         self.endpoint = endpoint
+        self.metrics = metrics
 
     @handle_dataplane_errors("start_transaction")
     @autolog()
@@ -61,7 +64,7 @@ class TransactionAPI:
         Raises:
             DataplaneAPIError: If transaction creation fails
         """
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         with metrics.time_dataplane_api_operation("start_transaction"):
             try:
@@ -123,7 +126,7 @@ class TransactionAPI:
         Raises:
             DataplaneAPIError: If transaction commit fails
         """
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         with metrics.time_dataplane_api_operation("commit_transaction"):
             try:
@@ -167,7 +170,7 @@ class TransactionAPI:
         Raises:
             DataplaneAPIError: If transaction rollback fails
         """
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         with metrics.time_dataplane_api_operation("rollback_transaction"):
             try:

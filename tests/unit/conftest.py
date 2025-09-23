@@ -1857,7 +1857,6 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
         mock_metrics.record_dataplane_api_request = Mock()
 
     patches = {
-        "get_metrics_collector": Mock(return_value=mock_metrics),
         "check_dataplane_response": Mock(
             side_effect=lambda response, op, endpoint: response
         ),
@@ -1881,18 +1880,8 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
     get_haproxy_process_info_mock = AsyncMock()
     get_haproxy_process_info_mock.asyncio = get_haproxy_process_info_mock
 
-    {
-        "get_metrics_collector": patches["get_metrics_collector"],
-        "record_span_event": patches["record_span_event"],
-        "post_haproxy_configuration": post_ha_proxy_config_mock,
-        "get_ha_proxy_configuration": get_ha_proxy_config_mock,
-        "get_info": get_info_mock,
-        "get_haproxy_process_info": get_haproxy_process_info_mock,
-    }
-
     # Utils patches only for functions actually in utils module
     utils_patches = {
-        "get_metrics_collector": patches["get_metrics_collector"],
         "record_span_event": patches["record_span_event"],
     }
 
@@ -1910,7 +1899,6 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
     delete_transaction_mock.asyncio_detailed = AsyncMock()
 
     transaction_patches = {
-        "get_metrics_collector": patches["get_metrics_collector"],
         "record_span_event": patches["record_span_event"],
         "start_transaction": start_transaction_mock,
         "commit_transaction": commit_transaction_mock,
@@ -1919,7 +1907,6 @@ def patch_dataplane_apis(mock_client=None, mock_metrics=None):
 
     # Split validation patches - some go to adapter, some stay in validation_api
     validation_api_patches = {
-        "get_metrics_collector": patches["get_metrics_collector"],
         "record_span_event": patches["record_span_event"],
         # Patch adapter functions imported by validation_api
         "post_haproxy_configuration": post_ha_proxy_config_mock,
@@ -2684,10 +2671,6 @@ def patch_metrics_and_tracing():
     mock_metrics.time_dataplane_api_operation.return_value = mock_timer
 
     with (
-        patch(
-            "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
         patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
         patch("haproxy_template_ic.dataplane.validation_api.set_span_error"),
     ):

@@ -10,7 +10,7 @@ from dataclasses import asdict
 from typing import Any
 
 from haproxy_template_ic.core.logging import autolog
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.tracing import record_span_event, set_span_error
 from haproxy_dataplane_v3.models import Information
 
@@ -47,13 +47,16 @@ class ValidationAPI:
     def __init__(
         self,
         endpoint: DataplaneEndpoint,
+        metrics: MetricsCollector,
     ):
         """Initialize validation API.
 
         Args:
             endpoint: Dataplane endpoint for error context
+            metrics: MetricsCollector instance for metrics tracking
         """
         self.endpoint = endpoint
+        self.metrics = metrics
 
     @handle_dataplane_errors("get_version")
     async def get_version(self) -> dict[str, Any]:
@@ -65,7 +68,7 @@ class ValidationAPI:
         Raises:
             DataplaneAPIError: If version retrieval fails
         """
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         with metrics.time_dataplane_api_operation("get_version"):
             try:
@@ -128,7 +131,7 @@ class ValidationAPI:
         if not config_content.endswith("\n"):
             config_content = config_content + "\n"
 
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         await logger.ainfo(f"Validating configuration ({len(config_content)} bytes)")
 
@@ -208,7 +211,7 @@ class ValidationAPI:
         if not config_content.endswith("\n"):
             config_content = config_content + "\n"
 
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         await logger.ainfo(f"Deploying configuration ({len(config_content)} bytes)")
 
@@ -297,7 +300,7 @@ class ValidationAPI:
         Raises:
             DataplaneAPIError: If configuration retrieval fails
         """
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         with metrics.time_dataplane_api_operation("get_config"):
             try:

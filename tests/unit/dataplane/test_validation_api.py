@@ -7,7 +7,6 @@ Tests validation and deployment operations for HAProxy configuration.
 import pytest
 from unittest.mock import Mock, patch
 
-from haproxy_template_ic.dataplane.validation_api import ValidationAPI
 from haproxy_template_ic.dataplane.types import (
     ValidationDeploymentResult,
 )
@@ -19,12 +18,15 @@ from tests.unit.conftest import (
     expect_validation_error,
     expect_dataplane_error,
 )
+from tests.unit.dataplane.conftest import (
+    create_validation_api,
+)
 
 
 @pytest.fixture
 def validation_api(test_endpoint):
     """Create ValidationAPI instance for testing."""
-    return ValidationAPI(test_endpoint)
+    return create_validation_api(test_endpoint)
 
 
 @pytest.mark.asyncio
@@ -38,10 +40,6 @@ async def test_validate_configuration_success(
         patch(
             "haproxy_template_ic.dataplane.validation_api.post_haproxy_configuration"
         ) as mock_post_config,
-        patch(
-            "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
         patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
     ):
         # Mock the response from post_haproxy_configuration
@@ -106,10 +104,6 @@ async def test_deploy_configuration_success(validation_api, mock_client, mock_me
         patch(
             "haproxy_template_ic.dataplane.validation_api.get_configuration_version"
         ) as mock_get_version,
-        patch(
-            "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
         patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
     ):
         # Setup mocks
@@ -159,10 +153,6 @@ async def test_deploy_configuration_no_version(
         patch(
             "haproxy_template_ic.dataplane.validation_api.get_configuration_version"
         ) as mock_get_version,
-        patch(
-            "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
         patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
     ):
         # Setup mocks - version is None
@@ -316,10 +306,6 @@ backend api
             patch(
                 "haproxy_template_ic.dataplane.validation_api.post_haproxy_configuration"
             ) as mock_post_config,
-            patch(
-                "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
             patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
         ):
             mock_response = Mock()
@@ -385,10 +371,6 @@ frontend web
             patch(
                 "haproxy_template_ic.dataplane.validation_api.post_haproxy_configuration"
             ) as mock_post_config,
-            patch(
-                "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
             patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
         ):
             mock_response = Mock()
@@ -434,10 +416,6 @@ class TestValidationAPIAdvancedDeployment:
             patch(
                 "haproxy_template_ic.dataplane.validation_api.get_configuration_version"
             ) as mock_get_version,
-            patch(
-                "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
             patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
         ):
             # Import adapter fixtures to create proper APIResponse mock
@@ -497,10 +475,6 @@ backend web
             patch(
                 "haproxy_template_ic.dataplane.validation_api.get_configuration_version"
             ) as mock_get_version,
-            patch(
-                "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
             patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
         ):
             # Import adapter fixtures to create proper APIResponse mock
@@ -564,10 +538,6 @@ backend web
             patch(
                 "haproxy_template_ic.dataplane.validation_api.get_configuration_version"
             ) as mock_get_version,
-            patch(
-                "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
             patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
         ):
             # Import adapter fixtures to create proper APIResponse mock
@@ -746,10 +716,6 @@ backend api_v2
             patch(
                 "haproxy_template_ic.dataplane.validation_api.get_configuration_version"
             ) as mock_get_version,
-            patch(
-                "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
             patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
         ):
             # Import adapter fixtures to create proper APIResponse mocks
@@ -805,10 +771,6 @@ backend api_v2
             patch(
                 "haproxy_template_ic.dataplane.validation_api.get_configuration_version"
             ) as mock_get_version,
-            patch(
-                "haproxy_template_ic.dataplane.validation_api.get_metrics_collector",
-                return_value=mock_metrics,
-            ),
             patch("haproxy_template_ic.dataplane.validation_api.record_span_event"),
         ):
             # Import adapter fixtures to create proper APIResponse mock

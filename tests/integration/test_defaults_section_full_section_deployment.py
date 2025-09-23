@@ -19,6 +19,8 @@ import asyncio
 
 import pytest
 
+from .conftest import assert_config_sync_success
+
 
 async def get_deployed_haproxy_config(dataplane_client) -> str:
     """
@@ -99,7 +101,8 @@ backend default_backend
 
     # Deploy the configuration through ConfigSynchronizer
     context = haproxy_context_factory(config_content=config_with_log_global)
-    await config_synchronizer.sync_configuration(context)
+    result = await config_synchronizer.sync_configuration(context)
+    assert_config_sync_success(result)
 
     # Give the deployment a moment to complete
     await asyncio.sleep(2)
@@ -169,7 +172,8 @@ backend servers
 
     # Deploy the configuration
     context = haproxy_context_factory(config_content=config_with_timeouts)
-    await config_synchronizer.sync_configuration(context)
+    result = await config_synchronizer.sync_configuration(context)
+    assert_config_sync_success(result)
 
     # Wait for deployment
     await asyncio.sleep(2)
@@ -244,7 +248,8 @@ backend default_backend
 
     # Deploy comprehensive configuration
     context = haproxy_context_factory(config_content=comprehensive_config)
-    await config_synchronizer.sync_configuration(context)
+    result = await config_synchronizer.sync_configuration(context)
+    assert_config_sync_success(result)
 
     # Wait for deployment
     await asyncio.sleep(2)
@@ -323,7 +328,8 @@ backend servers
 
     # Deploy configuration
     context = haproxy_context_factory(config_content=minimal_config_with_log_global)
-    await config_synchronizer.sync_configuration(context)
+    result = await config_synchronizer.sync_configuration(context)
+    assert_config_sync_success(result)
 
     # Wait for deployment
     await asyncio.sleep(1)

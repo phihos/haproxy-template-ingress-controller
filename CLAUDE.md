@@ -52,7 +52,7 @@ This file provides guidance to Claude Code when working with this repository.
 ### Code Patterns
 - **Explicit types over primitives**: Use dataclasses/Pydantic models instead of raw dicts/tuples
 - **Module-level imports**: Prefer over local imports when possible
-- **No defensive programming**: Leverage type safety instead of getattr()/hasattr() patterns
+- **Minimize defensive programming**: Excessive use of hasattr()/getattr() patterns MUST be avoided unless absolutely necessary. Leverage type safety and explicit type checking instead
 - **Package exports**: Import from packages (`from haproxy_template_ic.dataplane import DataplaneClient`), not submodules
 
 ### Comment Quality Standards

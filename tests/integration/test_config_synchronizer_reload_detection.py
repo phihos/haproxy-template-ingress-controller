@@ -17,6 +17,8 @@ import asyncio
 
 import pytest
 
+from .conftest import assert_config_sync_success
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -138,7 +140,8 @@ backend servers
 
     # First deployment
     context1 = haproxy_context_factory(config_content=test_config)
-    await config_synchronizer.sync_configuration(context1)
+    result1 = await config_synchronizer.sync_configuration(context1)
+    assert_config_sync_success(result1)
 
     # Second deployment with identical config
     context2 = haproxy_context_factory(config_content=test_config)
@@ -190,7 +193,8 @@ backend servers
 
     # Deploy initial config
     initial_context = haproxy_context_factory(config_content=initial_config)
-    await config_synchronizer.sync_configuration(initial_context)
+    result = await config_synchronizer.sync_configuration(initial_context)
+    assert_config_sync_success(result)
 
     await asyncio.sleep(10)
 
@@ -264,7 +268,8 @@ backend servers
 
     # Deploy initial config
     initial_context = haproxy_context_factory(config_content=initial_config)
-    await config_synchronizer.sync_configuration(initial_context)
+    result = await config_synchronizer.sync_configuration(initial_context)
+    assert_config_sync_success(result)
 
     # Config with modified server (different IP)
     modified_config = """
@@ -335,7 +340,8 @@ backend servers
 
     # Deploy initial config
     initial_context = haproxy_context_factory(config_content=initial_config)
-    await config_synchronizer.sync_configuration(initial_context)
+    result = await config_synchronizer.sync_configuration(initial_context)
+    assert_config_sync_success(result)
 
     # Config with additional frontend
     config_with_new_frontend = """

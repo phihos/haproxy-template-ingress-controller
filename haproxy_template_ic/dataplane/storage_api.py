@@ -55,7 +55,7 @@ from .adapter import (
     ReloadInfo,
 )
 
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.tracing import record_span_event, set_span_error
 
 from .types import (
@@ -88,14 +88,17 @@ class StorageAPI:
     def __init__(
         self,
         endpoint: DataplaneEndpoint,
+        metrics: MetricsCollector,
     ):
         """Initialize storage API.
 
         Args:
             endpoint: Dataplane endpoint for error context
+            metrics: MetricsCollector instance for metrics tracking
         """
         self.endpoint = endpoint
-        self.runtime_api = RuntimeAPI(endpoint)
+        self.metrics = metrics
+        self.runtime_api = RuntimeAPI(endpoint, metrics)
 
     def _extract_storage_content(self, storage_item) -> str | None:
         """Extract content from HAProxy storage API response.
@@ -142,7 +145,7 @@ class StorageAPI:
                 reload_info=ReloadInfo(),
             )
 
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         logger.info(f"Synchronizing {len(maps)} map files")
 
@@ -242,7 +245,7 @@ class StorageAPI:
                 reload_info=ReloadInfo(),
             )
 
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         logger.info(f"Synchronizing {len(certificates)} SSL certificates")
 
@@ -721,7 +724,7 @@ class StorageAPI:
         Raises:
             DataplaneAPIError: If fetching storage info fails
         """
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         with metrics.time_dataplane_api_operation("get_storage_info"):
             try:
@@ -783,7 +786,7 @@ class StorageAPI:
         Raises:
             DataplaneAPIError: If ACL synchronization fails
         """
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         logger.info(f"Synchronizing {len(acls)} ACL files")
 
@@ -1114,7 +1117,7 @@ class StorageAPI:
                 reload_info=ReloadInfo(),
             )
 
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         logger.info(f"Synchronizing {len(files)} general files")
 

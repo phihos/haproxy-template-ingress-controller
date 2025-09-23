@@ -15,8 +15,6 @@ import haproxy_template_ic.tracing as tracing_module
 from haproxy_template_ic.tracing import (
     TracingConfig,
     TracingManager,
-    initialize_tracing,
-    get_tracing_manager,
     get_tracer,
     trace_operation,
     trace_async_function,
@@ -28,9 +26,7 @@ from haproxy_template_ic.tracing import (
     trace_dataplane_operation,
     trace_kubernetes_operation,
     create_tracing_config_from_env,
-    shutdown_tracing,
 )
-from tests.unit.conftest import patch_tracing_manager
 
 
 def test_tracing_config_defaults():
@@ -158,80 +154,72 @@ def test_tracing_manager_shutdown():
     mock_tracer_provider.shutdown.assert_called_once()
 
 
-def test_initialize_tracing(mock_tracing_manager, monkeypatch):
-    """Test global tracing initialization."""
+def test_initialize_tracing_manager(mock_tracing_manager, monkeypatch):
+    """Test TracingManager initialization with dependency injection."""
     config = TracingConfig(enabled=True)
 
     mock_manager_cls = MagicMock(return_value=mock_tracing_manager)
     monkeypatch.setattr(tracing_module, "TracingManager", mock_manager_cls)
 
-    initialize_tracing(config)
+    # Create manager directly (no global initialization)
+    manager = TracingManager(config)
+    manager.initialize()
 
-    mock_manager_cls.assert_called_once_with(config)
-    mock_tracing_manager.initialize.assert_called_once()
-
-    # Verify global state was set
-    manager = get_tracing_manager()
-    assert manager is mock_tracing_manager
+    # Verify manager was created and initialized
+    assert manager is not None
 
 
-def test_get_tracer_with_manager(mock_tracing_manager, monkeypatch):
-    """Test get_tracer with active tracing manager."""
-    # Set the global tracing manager
-    monkeypatch.setattr(tracing_module, "_tracing_manager", mock_tracing_manager)
-    tracer = get_tracer()
+def test_get_tracer_with_manager(mock_tracing_manager):
+    """Test get_tracer with passed tracing manager."""
+    tracer = get_tracer(mock_tracing_manager)
     assert tracer is mock_tracing_manager.tracer
 
 
-def test_get_tracer_without_manager(monkeypatch):
-    """Test get_tracer without active tracing manager."""
-    monkeypatch.setattr(tracing_module, "_tracing_manager", None)
-    tracer = get_tracer()
+def test_get_tracer_without_manager():
+    """Test get_tracer without tracing manager."""
+    tracer = get_tracer(None)
     assert tracer is None
 
 
-def test_shutdown_tracing(mock_tracing_manager):
-    """Test shutdown tracing."""
-    with patch_tracing_manager(mock_tracing_manager):
-        shutdown_tracing()
-        # The patch context manager handles the shutdown verification
+def test_shutdown_tracing_manager(mock_tracing_manager):
+    """Test tracing manager shutdown."""
+    mock_tracing_manager.shutdown()
+    mock_tracing_manager.shutdown.assert_called_once()
 
 
 def test_trace_operation_with_tracer(mock_tracer, mock_span):
     """Test trace_operation context manager with active tracer."""
-    # Use the passed mock_tracer which already has context manager support
-    with patch_tracing_manager(Mock(tracer=mock_tracer)):
-        attributes = {"test": "value"}
+    # Create a mock tracing manager with the tracer
+    mock_tracing_manager = Mock(tracer=mock_tracer)
+    attributes = {"test": "value"}
 
-        with trace_operation("test_operation", attributes) as span:
-            assert span is mock_span
+    with trace_operation(
+        "test_operation", attributes, tracing_manager=mock_tracing_manager
+    ) as span:
+        assert span is mock_span
 
-        mock_tracer.start_as_current_span.assert_called_once_with("test_operation")
-        mock_span.set_attribute.assert_called_once_with("test", "value")
+    mock_tracer.start_as_current_span.assert_called_once_with("test_operation")
+    mock_span.set_attribute.assert_called_once_with("test", "value")
 
 
-def test_trace_operation_without_tracer(monkeypatch):
+def test_trace_operation_without_tracer():
     """Test trace_operation context manager without active tracer."""
-    monkeypatch.setattr(
-        "haproxy_template_ic.tracing.get_tracer", Mock(return_value=None)
-    )
-
-    with trace_operation("test_operation") as span:
+    with trace_operation("test_operation", tracing_manager=None) as span:
         assert span is None
 
 
 def test_trace_operation_with_exception(mock_tracer, mock_span):
     """Test trace_operation context manager with exception."""
-    # Use the passed mock_tracer which already has context manager support
-    with patch_tracing_manager(Mock(tracer=mock_tracer)):
-        test_exception = ValueError("test error")
+    # Create a mock tracing manager with the tracer
+    mock_tracing_manager = Mock(tracer=mock_tracer)
+    test_exception = ValueError("test error")
 
-        with pytest.raises(ValueError):
-            with trace_operation("test_operation"):
-                raise test_exception
+    with pytest.raises(ValueError):
+        with trace_operation("test_operation", tracing_manager=mock_tracing_manager):
+            raise test_exception
 
-        mock_span.set_status.assert_called_once()
-        mock_span.record_exception.assert_called_once_with(test_exception)
+    mock_span.set_status.assert_called_once()
+    mock_span.record_exception.assert_called_once_with(test_exception)
 
 
 def test_add_span_attributes(mock_span, monkeypatch):
@@ -295,7 +283,9 @@ async def test_trace_async_function_decorator(mock_span, monkeypatch):
     result = await test_function("test_arg")
 
     assert result == "result: test_arg"
-    mock_trace_operation.assert_called_once_with("custom_span_name", {"attr": "value"})
+    mock_trace_operation.assert_called_once_with(
+        "custom_span_name", {"attr": "value"}, tracing_manager=None
+    )
     mock_span.set_attribute.assert_any_call("function.name", "test_function")
     mock_span.set_attribute.assert_any_call("function.module", test_function.__module__)
 
@@ -316,7 +306,9 @@ def test_trace_function_decorator(mock_span, monkeypatch):
     result = test_function("test_arg")
 
     assert result == "result: test_arg"
-    mock_trace_operation.assert_called_once_with("custom_span_name", {"attr": "value"})
+    mock_trace_operation.assert_called_once_with(
+        "custom_span_name", {"attr": "value"}, tracing_manager=None
+    )
     mock_span.set_attribute.assert_any_call("function.name", "test_function")
     mock_span.set_attribute.assert_any_call("function.module", test_function.__module__)
 
@@ -335,7 +327,7 @@ def test_trace_template_render(monkeypatch):
         "operation.category": "template_rendering",
     }
     mock_trace_operation.assert_called_once_with(
-        "render_map_template", expected_attributes
+        "render_map_template", expected_attributes, tracing_manager=None
     )
 
 
@@ -353,7 +345,7 @@ def test_trace_dataplane_operation(monkeypatch):
         "operation.category": "dataplane_api",
     }
     mock_trace_operation.assert_called_once_with(
-        "dataplane_validate", expected_attributes
+        "dataplane_validate", expected_attributes, tracing_manager=None
     )
 
 
@@ -372,7 +364,7 @@ def test_trace_kubernetes_operation(monkeypatch):
         "operation.category": "kubernetes",
     }
     mock_trace_operation.assert_called_once_with(
-        "k8s_pods_operation", expected_attributes
+        "k8s_pods_operation", expected_attributes, tracing_manager=None
     )
 
 
@@ -420,9 +412,10 @@ def test_create_tracing_config_from_env_custom(monkeypatch):
 async def test_end_to_end_tracing_disabled():
     """Test end-to-end tracing workflow when disabled."""
     config = TracingConfig(enabled=False)
-    initialize_tracing(config)
+    manager = TracingManager(config)
+    manager.initialize()
 
-    @trace_async_function("test_operation")
+    @trace_async_function("test_operation", tracing_manager=manager)
     async def test_function():
         add_span_attributes(test="value")
         record_span_event("test_event")
@@ -432,7 +425,7 @@ async def test_end_to_end_tracing_disabled():
     assert result == "success"
 
     # Verify no tracer is available
-    assert get_tracer() is None
+    assert get_tracer(manager) is None
 
 
 @pytest.mark.asyncio
@@ -465,10 +458,11 @@ async def test_end_to_end_tracing_enabled(
     mock_get_tracer = MagicMock(return_value=mock_tracer)
     monkeypatch.setattr(tracing_module.trace, "get_tracer", mock_get_tracer)
 
-    initialize_tracing(config)
+    manager = TracingManager(config)
+    manager.initialize()
 
     # Verify initialization
-    assert get_tracing_manager() is not None
+    assert manager is not None
     mock_tracer_provider_cls.assert_called_once()
     mock_httpx_instrumentor.instrument.assert_called_once()
     mock_asyncio_instrumentor.instrument.assert_called_once()
@@ -479,10 +473,11 @@ def test_tracing_with_errors_handled_gracefully():
     config = TracingConfig(enabled=True, jaeger_endpoint="invalid:endpoint")
 
     # This should not raise an exception even with invalid endpoint
-    initialize_tracing(config)
+    manager = TracingManager(config)
+    manager.initialize()
 
     # Application functionality should continue to work
-    @trace_function("test_operation")
+    @trace_function("test_operation", tracing_manager=manager)
     def test_function():
         return "success"
 

@@ -15,7 +15,7 @@ from dataclasses import asdict
 from typing import Any
 
 from haproxy_template_ic.core.logging import autolog
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.tracing import record_span_event
 
 from .adapter import ReloadInfo, get_configuration_version
@@ -54,19 +54,22 @@ class DataplaneOperations:
     def __init__(
         self,
         endpoint: DataplaneEndpoint,
+        metrics: MetricsCollector,
     ):
         """Initialize unified operations.
 
         Args:
             endpoint: Dataplane endpoint for error context
+            metrics: MetricsCollector instance for metrics tracking
         """
         self.endpoint = endpoint
+        self.metrics = metrics
 
-        self.config = ConfigAPI(endpoint)
-        self.runtime = RuntimeAPI(endpoint)
-        self.storage = StorageAPI(endpoint)
-        self.transactions = TransactionAPI(endpoint)
-        self.validation = ValidationAPI(endpoint)
+        self.config = ConfigAPI(endpoint, metrics)
+        self.runtime = RuntimeAPI(endpoint, metrics)
+        self.storage = StorageAPI(endpoint, metrics)
+        self.transactions = TransactionAPI(endpoint, metrics)
+        self.validation = ValidationAPI(endpoint, metrics)
 
     # === Storage Operations ===
 
@@ -92,9 +95,7 @@ class DataplaneOperations:
         Raises:
             DataplaneAPIError: If any synchronization fails
         """
-        metrics = get_metrics_collector()
-
-        with metrics.time_dataplane_api_operation("sync_storage_resources"):
+        with self.metrics.time_dataplane_api_operation("sync_storage_resources"):
             reload_infos = []
 
             if maps:
@@ -127,7 +128,9 @@ class DataplaneOperations:
                     "files_count": len(files) if files else 0,
                 },
             )
-            metrics.record_dataplane_api_request("sync_storage_resources", "success")
+            self.metrics.record_dataplane_api_request(
+                "sync_storage_resources", "success"
+            )
             logger.info("Storage resource synchronization completed successfully")
 
             return ReloadInfo.combine(*reload_infos)
@@ -154,9 +157,7 @@ class DataplaneOperations:
         Raises:
             DataplaneAPIError: If any runtime operation fails
         """
-        metrics = get_metrics_collector()
-
-        with metrics.time_dataplane_api_operation("apply_runtime_changes"):
+        with self.metrics.time_dataplane_api_operation("apply_runtime_changes"):
             reload_infos = []
 
             # Apply map changes
@@ -185,7 +186,9 @@ class DataplaneOperations:
                     "server_changes": len(server_changes) if server_changes else 0,
                 },
             )
-            metrics.record_dataplane_api_request("apply_runtime_changes", "success")
+            self.metrics.record_dataplane_api_request(
+                "apply_runtime_changes", "success"
+            )
             logger.info("Runtime changes applied successfully")
 
             return ReloadInfo.combine(*reload_infos)
@@ -210,9 +213,7 @@ class DataplaneOperations:
         Raises:
             DataplaneAPIError: If deployment fails
         """
-        metrics = get_metrics_collector()
-
-        with metrics.time_dataplane_api_operation("deploy_structured_config"):
+        with self.metrics.time_dataplane_api_operation("deploy_structured_config"):
             if not changes:
                 logger.info("No configuration changes to deploy")
                 return StructuredDeploymentResult(
@@ -231,7 +232,7 @@ class DataplaneOperations:
                     return await self._deploy_without_transaction(changes)
 
             except Exception as e:
-                metrics.record_dataplane_api_request(
+                self.metrics.record_dataplane_api_request(
                     "deploy_structured_config", "error"
                 )
 
@@ -555,9 +556,7 @@ class DataplaneOperations:
             ValidationError: If configuration validation fails
             DataplaneAPIError: If deployment fails
         """
-        metrics = get_metrics_collector()
-
-        with metrics.time_dataplane_api_operation("validate_and_deploy"):
+        with self.metrics.time_dataplane_api_operation("validate_and_deploy"):
             # First validate
             await self.validation.validate_configuration(config_content)
 
@@ -572,7 +571,7 @@ class DataplaneOperations:
             )
 
             record_span_event("config_validated_and_deployed", asdict(result))
-            metrics.record_dataplane_api_request("validate_and_deploy", "success")
+            self.metrics.record_dataplane_api_request("validate_and_deploy", "success")
 
             return result
 
@@ -588,9 +587,7 @@ class DataplaneOperations:
         Raises:
             DataplaneAPIError: If information retrieval fails
         """
-        metrics = get_metrics_collector()
-
-        with metrics.time_dataplane_api_operation("get_cluster_info"):
+        with self.metrics.time_dataplane_api_operation("get_cluster_info"):
             try:
                 # Get version information
                 version_info = await self.validation.get_version()
@@ -622,11 +619,11 @@ class DataplaneOperations:
                     "endpoint": self.endpoint,
                 }
 
-                metrics.record_dataplane_api_request("get_cluster_info", "success")
+                self.metrics.record_dataplane_api_request("get_cluster_info", "success")
                 return result
 
             except Exception as e:
-                metrics.record_dataplane_api_request("get_cluster_info", "error")
+                self.metrics.record_dataplane_api_request("get_cluster_info", "error")
                 raise DataplaneAPIError(
                     f"Failed to get cluster info: {e}",
                     endpoint=self.endpoint,

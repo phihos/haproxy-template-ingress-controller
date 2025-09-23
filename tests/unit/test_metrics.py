@@ -13,7 +13,6 @@ import pytest
 import haproxy_template_ic.metrics as metrics_module
 from haproxy_template_ic.metrics import (
     MetricsCollector,
-    get_metrics_collector,
     export_metrics,
     timed_operation,
 )
@@ -238,14 +237,6 @@ def test_timed_operation_with_exception():
         failing_function()
 
 
-def test_get_metrics_collector():
-    """Test getting the global metrics collector instance."""
-    collector1 = get_metrics_collector()
-    collector2 = get_metrics_collector()
-
-    assert collector1 is collector2  # Should be the same instance
-
-
 def test_export_metrics():
     """Test exporting metrics in Prometheus format."""
     metrics_output = export_metrics()
@@ -256,7 +247,7 @@ def test_export_metrics():
 
 def test_complete_workflow_metrics():
     """Test a complete workflow with various metrics recording."""
-    collector = get_metrics_collector()
+    collector = MetricsCollector()
 
     # Simulate a complete operator workflow
     collector.set_app_info("test-version")
@@ -297,7 +288,7 @@ def test_complete_workflow_metrics():
 
 def test_error_scenarios_metrics():
     """Test metrics recording for various error scenarios."""
-    collector = get_metrics_collector()
+    collector = MetricsCollector()
 
     # Template render errors
     collector.record_template_render("map", "error")
@@ -321,7 +312,7 @@ def test_error_scenarios_metrics():
 def test_concurrent_metrics_recording():
     """Test that metrics recording is thread-safe."""
 
-    collector = get_metrics_collector()
+    collector = MetricsCollector()
 
     def record_metrics():
         for _ in range(10):

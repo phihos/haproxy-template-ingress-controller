@@ -11,7 +11,7 @@ import time
 from typing import Any, Callable
 
 from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.models.context import HAProxyConfigContext
 
 from .client import DataplaneClient
@@ -73,8 +73,9 @@ logger = logging.getLogger(__name__)
 class ConfigSynchronizer:
     """Configuration synchronizer using endpoint bundling."""
 
-    def __init__(self, endpoints: DataplaneEndpointSet):
+    def __init__(self, endpoints: DataplaneEndpointSet, metrics: MetricsCollector):
         self.endpoints = endpoints
+        self.metrics = metrics
 
         self._validation_client: DataplaneClient | None = None
         self._production_clients: dict[str, DataplaneClient] = {}
@@ -83,7 +84,7 @@ class ConfigSynchronizer:
         self, endpoint: DataplaneEndpoint, timeout: float = DEFAULT_API_TIMEOUT
     ) -> DataplaneClient:
         """Factory method for creating clients."""
-        return DataplaneClient(endpoint=endpoint, timeout=timeout)
+        return DataplaneClient(endpoint=endpoint, metrics=self.metrics, timeout=timeout)
 
     def create_client_for_url(
         self, url: str, timeout: float = DEFAULT_API_TIMEOUT
@@ -169,7 +170,7 @@ class ConfigSynchronizer:
         for url in newly_added_urls:
             # Find endpoint with auth from new_endpoints list
             endpoint = next(ep for ep in new_endpoints if ep.url == url)
-            self._production_clients[url] = DataplaneClient(endpoint)
+            self._production_clients[url] = DataplaneClient(endpoint, self.metrics)
             logger.debug(f"Created cached client for {url}")
 
         self.endpoints = DataplaneEndpointSet(
@@ -1098,10 +1099,9 @@ class ConfigSynchronizer:
         )
 
         # Record metrics
-        metrics = get_metrics_collector()
-        if hasattr(metrics, "record_custom_metric"):
-            metrics.record_custom_metric("structured_comparison_time", elapsed)  # type: ignore[misc]
-            metrics.record_custom_metric("structured_changes_count", changes_count)  # type: ignore[misc]
+        if hasattr(self.metrics, "record_custom_metric"):
+            self.metrics.record_custom_metric("structured_comparison_time", elapsed)  # type: ignore[misc]
+            self.metrics.record_custom_metric("structured_changes_count", changes_count)  # type: ignore[misc]
 
     async def _deploy_to_single_instance(
         self,
@@ -1193,8 +1193,7 @@ class ConfigSynchronizer:
                     )
 
                     # Record structured deployment failure metrics
-                    metrics = get_metrics_collector()
-                    metrics.increment_dataplane_fallback("structured_to_raw")
+                    self.metrics.increment_dataplane_fallback("structured_to_raw")
 
                     fallback_result: ValidationDeploymentResult = (
                         await client.deploy_configuration(config)
@@ -1214,6 +1213,7 @@ class ConfigSynchronizer:
                         method="raw_fallback",
                         version=fallback_result.version,
                         reload_info=fallback_result.reload_info,
+                        dataplane_errors=[structured_error],
                     )
 
         except Exception as fetch_error:
@@ -1223,8 +1223,7 @@ class ConfigSynchronizer:
             )
 
             # Record fallback metrics
-            metrics = get_metrics_collector()
-            metrics.increment_dataplane_fallback("structured_to_conditional")
+            self.metrics.increment_dataplane_fallback("structured_to_conditional")
 
             try:
                 conditional_result: ValidationDeploymentResult = (
@@ -1256,7 +1255,7 @@ class ConfigSynchronizer:
                 )
 
                 # Record double fallback metrics
-                metrics.increment_dataplane_fallback("conditional_to_regular")
+                self.metrics.increment_dataplane_fallback("conditional_to_regular")
 
                 final_result: ValidationDeploymentResult = (
                     await client.deploy_configuration(config)
@@ -1272,10 +1271,19 @@ class ConfigSynchronizer:
                     url,
                 )
 
+                # Create a DataplaneAPIError wrapper for the generic exception
+                fallback_error = DataplaneAPIError(
+                    message=f"Structured comparison failed: {fetch_error}",
+                    endpoint=url,
+                    operation="structured_comparison",
+                    original_error=fetch_error,
+                )
+
                 return SynchronizationResult(
                     method="fallback",
                     version=final_result.version,
                     reload_info=final_result.reload_info,
+                    dataplane_errors=[fallback_error],
                 )
 
     def _handle_deployment_error(
@@ -1489,6 +1497,10 @@ class ConfigSynchronizer:
             results["reload_triggered"] = True
             if result.reload_info.reload_id:
                 results["reload_ids"].append(result.reload_info.reload_id)
+
+        # Collect dataplane errors (e.g., from fallback scenarios)
+        for error in result.dataplane_errors:
+            results["errors"].append(f"{url}: {error}")
 
         # Log detailed deployment information
         self._log_deployment_details(url, result)

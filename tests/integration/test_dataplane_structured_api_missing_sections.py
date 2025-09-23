@@ -21,6 +21,7 @@ Missing section types being tested:
 
 import pytest
 from haproxy_template_ic.dataplane import DataplaneClient
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.dataplane.endpoint import DataplaneEndpoint
 from haproxy_template_ic.dataplane.types import (
     ConfigChange,
@@ -89,7 +90,8 @@ async def test_userlist_section_create_operations(production_dataplane_client_ra
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -141,7 +143,8 @@ async def test_cache_section_create_operations(production_dataplane_client_raw):
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -193,7 +196,8 @@ async def test_mailers_section_create_operations(production_dataplane_client_raw
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -236,7 +240,8 @@ async def test_resolver_section_create_operations(production_dataplane_client_ra
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -288,7 +293,8 @@ async def test_peer_section_create_operations(production_dataplane_client_raw):
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -331,7 +337,8 @@ async def test_fcgi_app_section_create_operations(production_dataplane_client_ra
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -383,7 +390,8 @@ async def test_http_errors_section_create_operations(production_dataplane_client
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -426,7 +434,8 @@ async def test_ring_section_create_operations(production_dataplane_client_raw):
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -478,7 +487,8 @@ async def test_log_forward_section_create_operations(production_dataplane_client
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -532,7 +542,8 @@ async def test_program_section_create_operations(production_dataplane_client_raw
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -585,7 +596,8 @@ async def test_comprehensive_missing_sections_workflow(production_dataplane_clie
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)
@@ -650,7 +662,8 @@ async def test_section_update_and_delete_operations(production_dataplane_client_
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Deploy base configuration
     await setup_base_config(client)

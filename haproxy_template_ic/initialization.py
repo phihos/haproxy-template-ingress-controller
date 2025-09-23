@@ -29,7 +29,7 @@ from haproxy_template_ic.dataplane.endpoint import (
     DataplaneEndpointSet,
 )
 from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.models.context import HAProxyConfigContext, TemplateContext
 from haproxy_template_ic.models.state import (
     ApplicationState,
@@ -54,9 +54,8 @@ from haproxy_template_ic.operator.secrets import fetch_secret, handle_secret_cha
 from haproxy_template_ic.operator.utils import get_current_namespace
 from haproxy_template_ic.templating import TemplateRenderer
 from haproxy_template_ic.tracing import (
+    TracingManager,
     create_tracing_config_from_env,
-    initialize_tracing,
-    shutdown_tracing,
 )
 
 if TYPE_CHECKING:
@@ -80,7 +79,7 @@ __all__ = [
 
 async def initialize_post_config(memo: ApplicationState) -> None:
     """Initialize logging and tracing after configuration is loaded."""
-    metrics = get_metrics_collector()
+    metrics = memo.operations.metrics
 
     try:
         with metrics.time_config_reload():
@@ -96,7 +95,9 @@ async def initialize_post_config(memo: ApplicationState) -> None:
                 final_tracing_config = base_tracing_config.override_with_app_config(
                     memo.configuration.config.tracing
                 )
-                initialize_tracing(final_tracing_config)
+                tracing_manager = TracingManager(final_tracing_config)
+                tracing_manager.initialize()
+                memo.operations.tracing_manager = tracing_manager
 
         metrics.record_config_reload(success=True)
         logger.info("✅ Configuration and credentials loaded successfully.")
@@ -143,8 +144,8 @@ async def cleanup_template_debouncer(memo: ApplicationState, **kwargs: Any) -> N
 async def cleanup_tracing(memo: ApplicationState, **kwargs: Any) -> None:
     """Clean up distributed tracing."""
     try:
-        if memo.configuration.config.tracing.enabled:
-            shutdown_tracing()
+        if memo.operations.tracing_manager:
+            memo.operations.tracing_manager.shutdown()
             logger.debug("🔍 Tracing shutdown complete")
     except Exception as e:
         logger.error(f"❌ Error shutting down tracing: {e}")
@@ -264,14 +265,18 @@ def _create_application_state(
 
     # No production endpoints during initialization - they're created dynamically
     endpoints = DataplaneEndpointSet(validation=validation_endpoint, production=[])
-    config_synchronizer = ConfigSynchronizer(endpoints=endpoints)
+
+    index_tracker = IndexSynchronizationTracker(config)
+    metrics_collector = MetricsCollector()
+
+    config_synchronizer = ConfigSynchronizer(
+        endpoints=endpoints, metrics=metrics_collector
+    )
 
     haproxy_config_context = HAProxyConfigContext(
         template_context=TemplateContext(),
         rendered_config=None,
     )
-
-    index_tracker = IndexSynchronizationTracker(config)
 
     return ApplicationState(
         runtime=RuntimeState(
@@ -297,10 +302,10 @@ def _create_application_state(
                 template_renderer=renderer,
                 config_synchronizer=config_synchronizer,
                 kopf_indices=indexers.indices,
-                metrics=get_metrics_collector(),
+                metrics=metrics_collector,
                 index_tracker=index_tracker,
             ),
-            metrics=get_metrics_collector(),
+            metrics=metrics_collector,
             config_synchronizer=config_synchronizer,
             index_tracker=index_tracker,
         ),
@@ -326,9 +331,6 @@ def _setup_kopf_handlers(memo: ApplicationState) -> None:
 
 def run_operator_loop(cli_options: "CliOptions") -> None:
     """Run the main operator loop with config reload capability."""
-    metrics = get_metrics_collector()
-    metrics.set_app_info()
-
     logger = structlog.get_logger("operator")
 
     try:
@@ -388,6 +390,9 @@ def run_operator_loop(cli_options: "CliOptions") -> None:
             config_reload_flag,
             indexers,
         )
+
+        # Set app info metrics
+        memo.operations.metrics.set_app_info()
 
         try:
             loop.run_until_complete(initialize_post_config(memo))

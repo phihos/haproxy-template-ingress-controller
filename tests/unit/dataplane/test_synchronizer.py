@@ -7,7 +7,6 @@ Tests configuration synchronization across production and validation endpoints.
 import pytest
 
 from haproxy_template_ic.dataplane import (
-    ConfigSynchronizer,
     get_production_urls_from_index,
 )
 from haproxy_template_ic.credentials import Credentials
@@ -15,6 +14,7 @@ from tests.unit.conftest import (
     create_dataplane_endpoint_set_mock,
     create_dataplane_auth_mock,
 )
+from tests.unit.dataplane.conftest import create_config_synchronizer
 
 
 @pytest.fixture
@@ -39,12 +39,12 @@ def test_endpoints(test_credentials):
 @pytest.fixture
 def synchronizer(test_endpoints):
     """Create ConfigSynchronizer instance for testing."""
-    return ConfigSynchronizer(endpoints=test_endpoints)
+    return create_config_synchronizer(test_endpoints)
 
 
 def test_synchronizer_initialization(test_endpoints):
     """Test synchronizer initialization."""
-    synchronizer = ConfigSynchronizer(endpoints=test_endpoints)
+    synchronizer = create_config_synchronizer(test_endpoints)
 
     assert synchronizer.endpoints == test_endpoints
     assert synchronizer._get_validation_client() is not None
@@ -73,7 +73,7 @@ def test_endpoint_url_normalization(test_credentials):
         production_urls=["http://192.168.1.1:5555"],
     )
 
-    synchronizer = ConfigSynchronizer(endpoints=endpoints)
+    synchronizer = create_config_synchronizer(endpoints)
 
     # URLs should be normalized with /v3 suffix
     assert synchronizer._get_validation_client().base_url == "http://localhost:5555/v3"
@@ -199,7 +199,7 @@ class TestConfigSynchronizerAdvancedScenarios:
             ],
         )
 
-        synchronizer = ConfigSynchronizer(endpoints=endpoints)
+        synchronizer = create_config_synchronizer(endpoints)
 
         # Verify validation endpoint
         validation_client = synchronizer._get_validation_client()
@@ -216,7 +216,7 @@ class TestConfigSynchronizerAdvancedScenarios:
 
     def test_synchronizer_endpoint_client_caching(self, test_endpoints):
         """Test that endpoint clients are properly cached."""
-        synchronizer = ConfigSynchronizer(endpoints=test_endpoints)
+        synchronizer = create_config_synchronizer(test_endpoints)
 
         # Get validation client multiple times
         validation_client_1 = synchronizer._get_validation_client()
@@ -263,7 +263,7 @@ class TestConfigSynchronizerAdvancedScenarios:
             production_urls=["http://production:5555/v3"],
         )
 
-        synchronizer = ConfigSynchronizer(endpoints=endpoints)
+        synchronizer = create_config_synchronizer(endpoints)
 
         # Verify different auth is properly handled
         validation_client = synchronizer._get_validation_client()
@@ -530,7 +530,7 @@ class TestConfigSynchronizerIntegrationScenarios:
             ],
         )
 
-        synchronizer = ConfigSynchronizer(endpoints=endpoints)
+        synchronizer = create_config_synchronizer(endpoints)
 
         # Verify synchronizer is properly initialized
         assert synchronizer.endpoints == endpoints
@@ -575,7 +575,7 @@ class TestConfigSynchronizerIntegrationScenarios:
                 production_urls=[production_url],
             )
 
-            synchronizer = ConfigSynchronizer(endpoints=endpoints)
+            synchronizer = create_config_synchronizer(endpoints)
 
             # Test validation URL normalization
             validation_client = synchronizer._get_validation_client()

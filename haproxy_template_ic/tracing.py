@@ -167,26 +167,10 @@ class TracingManager:
             logger.info("Distributed tracing shutdown complete")
 
 
-# Global tracing manager instance
-_tracing_manager: TracingManager | None = None
-
-
-def get_tracing_manager() -> TracingManager | None:
-    """Get the global tracing manager instance."""
-    return _tracing_manager
-
-
-def initialize_tracing(config: TracingConfig) -> None:
-    """Initialize global tracing with configuration."""
-    global _tracing_manager
-    _tracing_manager = TracingManager(config)
-    _tracing_manager.initialize()
-
-
-def get_tracer() -> trace.Tracer | None:
+def get_tracer(tracing_manager: TracingManager | None = None) -> trace.Tracer | None:
     """Get the configured tracer instance."""
-    if _tracing_manager and _tracing_manager.tracer:
-        return _tracing_manager.tracer
+    if tracing_manager and tracing_manager.tracer:
+        return tracing_manager.tracer
     return None
 
 
@@ -195,9 +179,10 @@ def trace_operation(
     operation_name: str,
     attributes: dict[str, Any] | None = None,
     set_status_on_exception: bool = True,
+    tracing_manager: TracingManager | None = None,
 ) -> Iterator[trace.Span | None]:
     """Context manager for tracing operations with error handling."""
-    tracer = get_tracer()
+    tracer = get_tracer(tracing_manager)
     if not tracer:
         yield None
         return
@@ -219,7 +204,9 @@ def trace_operation(
 
 
 def trace_async_function(
-    span_name: str | None = None, attributes: dict[str, Any] | None = None
+    span_name: str | None = None,
+    attributes: dict[str, Any] | None = None,
+    tracing_manager: TracingManager | None = None,
 ) -> Callable[[AsyncF], AsyncF]:
     """Decorator for tracing async functions."""
 
@@ -230,7 +217,9 @@ def trace_async_function(
 
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            with trace_operation(operation_name, attributes) as span:
+            with trace_operation(
+                operation_name, attributes, tracing_manager=tracing_manager
+            ) as span:
                 if span:
                     # Add function metadata
                     span.set_attribute(
@@ -246,7 +235,9 @@ def trace_async_function(
 
 
 def trace_function(
-    span_name: str | None = None, attributes: dict[str, Any] | None = None
+    span_name: str | None = None,
+    attributes: dict[str, Any] | None = None,
+    tracing_manager: TracingManager | None = None,
 ) -> Callable[[F], F]:
     """Decorator for tracing synchronous functions."""
 
@@ -257,7 +248,9 @@ def trace_function(
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            with trace_operation(operation_name, attributes) as span:
+            with trace_operation(
+                operation_name, attributes, tracing_manager=tracing_manager
+            ) as span:
                 if span:
                     # Add function metadata
                     span.set_attribute(
@@ -298,7 +291,9 @@ def set_span_error(error: Exception, description: str | None = None) -> None:
 # Convenience context managers for common operations
 @contextmanager
 def trace_template_render(
-    template_type: str, template_path: str = ""
+    template_type: str,
+    template_path: str = "",
+    tracing_manager: TracingManager | None = None,
 ) -> Iterator[None]:
     """Context manager for tracing template rendering operations."""
     attributes = {
@@ -307,12 +302,18 @@ def trace_template_render(
         "operation.category": "template_rendering",
     }
 
-    with trace_operation(f"render_{template_type}_template", attributes):
+    with trace_operation(
+        f"render_{template_type}_template", attributes, tracing_manager=tracing_manager
+    ):
         yield
 
 
 @contextmanager
-def trace_dataplane_operation(operation: str, instance_url: str = "") -> Iterator[None]:
+def trace_dataplane_operation(
+    operation: str,
+    instance_url: str = "",
+    tracing_manager: TracingManager | None = None,
+) -> Iterator[None]:
     """Context manager for tracing Dataplane API operations."""
     attributes = {
         "dataplane.operation": operation,
@@ -320,13 +321,18 @@ def trace_dataplane_operation(operation: str, instance_url: str = "") -> Iterato
         "operation.category": "dataplane_api",
     }
 
-    with trace_operation(f"dataplane_{operation}", attributes):
+    with trace_operation(
+        f"dataplane_{operation}", attributes, tracing_manager=tracing_manager
+    ):
         yield
 
 
 @contextmanager
 def trace_kubernetes_operation(
-    resource_type: str, namespace: str = "", name: str = ""
+    resource_type: str,
+    namespace: str = "",
+    name: str = "",
+    tracing_manager: TracingManager | None = None,
 ) -> Iterator[None]:
     """Context manager for tracing Kubernetes operations."""
     attributes = {
@@ -336,8 +342,24 @@ def trace_kubernetes_operation(
         "operation.category": "kubernetes",
     }
 
-    with trace_operation(f"k8s_{resource_type}_operation", attributes):
+    with trace_operation(
+        f"k8s_{resource_type}_operation", attributes, tracing_manager=tracing_manager
+    ):
         yield
+
+
+def initialize_tracing(config: TracingConfig) -> TracingManager:
+    """Initialize tracing with the given configuration.
+
+    Args:
+        config: TracingConfig instance
+
+    Returns:
+        TracingManager instance (initialized if enabled)
+    """
+    manager = TracingManager(config)
+    manager.initialize()
+    return manager
 
 
 def create_tracing_config_from_env() -> TracingConfig:
@@ -350,9 +372,3 @@ def create_tracing_config_from_env() -> TracingConfig:
         sample_rate=float(os.getenv("TRACING_SAMPLE_RATE", "1.0")),
         console_export=os.getenv("TRACING_CONSOLE_EXPORT", "false").lower() == "true",
     )
-
-
-def shutdown_tracing() -> None:
-    """Shutdown distributed tracing."""
-    if _tracing_manager:
-        _tracing_manager.shutdown()

@@ -307,7 +307,7 @@ from haproxy_dataplane_v3.models import (
 from haproxy_dataplane_v3.types import UNSET, File, Response, Unset
 
 from haproxy_template_ic.constants import DEFAULT_API_TIMEOUT
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.tracing import record_span_event
 
 from .types import DataplaneAPIError, ValidationError
@@ -476,7 +476,6 @@ def retry_on(
     ) -> Callable[P, Awaitable[Response[T] | Error]]:
         @functools.wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> Response[T] | Error:
-            metrics = get_metrics_collector()
             operation_name = getattr(func, "__name__", "unknown")
 
             for attempt in range(max_attempts):
@@ -504,9 +503,6 @@ def retry_on(
                                 )
                                 await asyncio.sleep(delay)
 
-                            metrics.record_dataplane_api_request(
-                                f"{operation_name}_retry", "attempt"
-                            )
                             record_span_event(
                                 f"{operation_name}_retry",
                                 {
@@ -522,9 +518,6 @@ def retry_on(
 
                     # Success or final attempt - return response (Response[T] or Error)
                     if attempt > 0:
-                        metrics.record_dataplane_api_request(
-                            f"{operation_name}_retry", "success"
-                        )
                         record_span_event(
                             f"{operation_name}_retry_success",
                             {
@@ -728,7 +721,7 @@ def inject_client_for_endpoint():
     return decorator
 
 
-def with_metrics(operation_name: str):
+def with_metrics(operation_name: str, metrics: "MetricsCollector | None" = None):
     """Decorator to add metrics timing to API functions.
 
     This decorator wraps functions with metrics.time_dataplane_api_operation() context
@@ -736,6 +729,7 @@ def with_metrics(operation_name: str):
 
     Args:
         operation_name: Name of the operation for metrics tracking
+        metrics: MetricsCollector instance, optional
 
     Returns:
         Decorator that adds metrics timing to the wrapped function
@@ -744,8 +738,10 @@ def with_metrics(operation_name: str):
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            metrics = get_metrics_collector()
-            with metrics.time_dataplane_api_operation(operation_name):
+            if metrics:
+                with metrics.time_dataplane_api_operation(operation_name):
+                    return await func(*args, **kwargs)
+            else:
                 return await func(*args, **kwargs)
 
         return wrapper

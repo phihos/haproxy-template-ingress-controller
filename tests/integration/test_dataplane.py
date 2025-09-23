@@ -18,6 +18,7 @@ from haproxy_template_ic.dataplane import (
     DataplaneClient,
     ValidationError,
 )
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.dataplane.endpoint import DataplaneEndpoint
 from haproxy_template_ic.dataplane.types import (
     ConfigChange,
@@ -66,7 +67,8 @@ async def test_dataplane_client_validate_invalid_configuration(
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     # Test with invalid configuration - should raise ValidationError
     with pytest.raises((ValidationError, DataplaneAPIError)):
@@ -112,7 +114,8 @@ async def test_dataplane_client_network_error_handling():
     # Use a non-existent URL
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url="http://localhost:59999", dataplane_auth=auth)
-    client = DataplaneClient(endpoint, timeout=1.0)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics, timeout=1.0)
 
     # Should handle network errors gracefully - validation should raise exception
     with pytest.raises(DataplaneAPIError):
@@ -197,7 +200,8 @@ async def test_resilience_timeout_adaptation(
     base_client = validation_dataplane_client
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_client.base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint, timeout=5.0)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics, timeout=5.0)
 
     # Multiple successful operations should work
     for _ in range(3):

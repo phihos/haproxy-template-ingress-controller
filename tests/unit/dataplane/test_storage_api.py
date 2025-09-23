@@ -9,9 +9,9 @@ import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from io import BytesIO
 
-from haproxy_template_ic.dataplane.storage_api import StorageAPI
 from haproxy_template_ic.dataplane.types import (
     StorageOperationResult,
+    DataplaneAPIError,
 )
 from haproxy_template_ic.dataplane.adapter import ReloadInfo
 from haproxy_dataplane_v3.models import Error, MapFile, SSLFile, GeneralUseFile
@@ -32,6 +32,7 @@ from tests.unit.dataplane.conftest import (
     patch_storage_map_apis,
     patch_storage_certificate_apis,
     patch_storage_file_apis,
+    create_storage_api,
 )
 from tests.unit.dataplane.adapter_fixtures import (
     create_mock_api_response,
@@ -49,7 +50,7 @@ def storage_api():
     endpoint = DataplaneEndpoint(
         url="http://localhost:5555/v3", dataplane_auth=auth, pod_name="test-pod"
     )
-    return StorageAPI(endpoint)
+    return create_storage_api(endpoint)
 
 
 # API Signature Tests
@@ -74,10 +75,6 @@ async def test_storage_api_create_map_uses_correct_signature(
         patch(
             "haproxy_template_ic.dataplane.storage_api.create_storage_map_file",
             mock_create,
-        ),
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
         ),
     ):
         # This should fail with current implementation due to invalid signature
@@ -112,10 +109,6 @@ async def test_storage_api_create_certificate_uses_correct_signature(
         patch(
             "haproxy_template_ic.dataplane.storage_api.create_storage_ssl_certificate",
             mock_create,
-        ),
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
         ),
     ):
         # This should fail with current implementation due to invalid signature
@@ -156,10 +149,6 @@ async def test_storage_api_replace_map_uses_correct_signature(
             "haproxy_template_ic.dataplane.storage_api.replace_storage_map_file",
             AsyncMock(return_value=mock_replace_response),
         ) as mock_replace_detailed,
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
-        ),
     ):
         # This should test the replace operation
         maps = {"test.map": "new map content"}
@@ -198,10 +187,6 @@ async def test_storage_api_error_response_handling(
             "haproxy_template_ic.dataplane.storage_api.create_storage_map_file",
             mock_create,
         ),
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
-        ),
     ):
         # This should handle the Error response gracefully
         maps = {"test.map": "map content"}
@@ -215,13 +200,10 @@ async def test_storage_api_error_response_handling(
 async def test_storage_api_storage_info_handles_error_responses(
     storage_api, mock_metrics_collector_patch
 ):
-    """Test that get_storage_info handles Error responses correctly."""
-    # Setup mocks to return Error objects using new helpers
-    error_response = Error(code=500, message="server error")
-    mock_get_maps = Mock()
-    mock_get_maps.asyncio = AsyncMock(return_value=error_response)
-    mock_get_certs = Mock()
-    mock_get_certs.asyncio = AsyncMock(return_value=error_response)
+    """Test that get_storage_info handles API errors correctly."""
+    # Setup mocks to throw exceptions (which is how API errors are handled)
+    mock_get_maps = AsyncMock(side_effect=Exception("Maps API error"))
+    mock_get_certs = AsyncMock(side_effect=Exception("Certificates API error"))
 
     with (
         patch(
@@ -232,16 +214,10 @@ async def test_storage_api_storage_info_handles_error_responses(
             "haproxy_template_ic.dataplane.storage_api.get_all_storage_ssl_certificates",
             mock_get_certs,
         ),
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
-        ),
     ):
-        # This should handle Error responses gracefully by returning None
-        result = await storage_api.get_storage_info()
-
-        # The function returns None when APIs return errors due to error handling decorator
-        assert result is None
+        # This should raise DataplaneAPIError due to error handling decorator
+        with pytest.raises(DataplaneAPIError, match="Failed to get storage info"):
+            await storage_api.get_storage_info()
 
 
 # Body Structure Tests
@@ -304,10 +280,6 @@ async def test_storage_edge_sync_maps_with_unicode_content(
             "haproxy_template_ic.dataplane.storage_api.create_storage_map_file",
             AsyncMock(return_value=Mock(content=MapFile(storage_name="unicode.map"))),
         ),
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
-        ),
     ):
         # Test with Unicode content
         maps = {"unicode.map": "# Map with émojis 🚀 and ünïcødé characters"}
@@ -341,10 +313,6 @@ async def test_storage_api_create_file_uses_correct_signature(
                 )
             ),
         ) as mock_create,
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
-        ),
     ):
         # This should call file creation API with correct signature
         files = {"test.txt": "file content"}
@@ -396,10 +364,6 @@ async def test_storage_api_replace_file_uses_correct_signature(
             "haproxy_template_ic.dataplane.storage_api.replace_storage_general_file",
             AsyncMock(return_value=mock_replace_response),
         ) as mock_replace_detailed,
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
-        ),
     ):
         # This should test the replace operation
         files = {"test.txt": "new file content"}
@@ -445,10 +409,6 @@ async def test_storage_api_sync_files_with_unicode_content(
                 return_value=Mock(content=GeneralUseFile(storage_name="unicode.txt"))
             ),
         ),
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
-        ),
     ):
         # Test with Unicode content
         files = {"unicode.txt": "# File with émojis 🚀 and ünïcødé characters"}
@@ -479,10 +439,6 @@ async def test_storage_body_includes_description_via_additional_properties(
         patch(
             "haproxy_template_ic.dataplane.storage_api.create_storage_map_file",
             mock_create,
-        ),
-        patch(
-            "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-            return_value=mock_metrics_collector_patch,
         ),
     ):
         # Create map with specific content to generate predictable hash
@@ -518,10 +474,6 @@ class TestStorageAPIReturnTypes:
                 "haproxy_template_ic.dataplane.storage_api.get_all_storage_map_files",
                 mock_get_all,
             ),
-            patch(
-                "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-                return_value=mock_metrics_collector_patch,
-            ),
         ):
             result = await storage_api.sync_maps({})
 
@@ -541,10 +493,6 @@ class TestStorageAPIReturnTypes:
             patch(
                 "haproxy_template_ic.dataplane.storage_api.get_all_storage_ssl_certificates",
                 mock_get_all,
-            ),
-            patch(
-                "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-                return_value=mock_metrics_collector_patch,
             ),
         ):
             result = await storage_api.sync_certificates({})
@@ -566,10 +514,6 @@ class TestStorageAPIReturnTypes:
                 "haproxy_template_ic.dataplane.storage_api.get_all_storage_general_files",
                 AsyncMock(return_value=mock_api_response),
             ),
-            patch(
-                "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-                return_value=mock_metrics_collector_patch,
-            ),
         ):
             result = await storage_api.sync_acls({})
 
@@ -589,10 +533,6 @@ class TestStorageAPIReturnTypes:
             patch(
                 "haproxy_template_ic.dataplane.storage_api.get_all_storage_general_files",
                 mock_get_all,
-            ),
-            patch(
-                "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-                return_value=mock_metrics_collector_patch,
             ),
         ):
             result = await storage_api.sync_files({})
@@ -623,10 +563,6 @@ class TestStorageAPIReturnTypes:
                 AsyncMock(
                     return_value=create_mock_api_response(reload_id="test-reload-123")
                 ),
-            ),
-            patch(
-                "haproxy_template_ic.dataplane.storage_api.get_metrics_collector",
-                return_value=mock_metrics_collector_patch,
             ),
         ):
             maps = {"test.map": "content"}

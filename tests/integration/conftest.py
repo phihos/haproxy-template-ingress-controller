@@ -30,6 +30,7 @@ from haproxy_template_ic.dataplane import (
     DataplaneClient,
     DataplaneEndpoint,
 )
+from haproxy_template_ic.metrics import MetricsCollector
 
 # HAProxyInstance removed in simplification - using direct URLs now
 from .utils import (
@@ -204,7 +205,8 @@ async def validation_dataplane_client(docker_compose_dataplane):
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     yield client
 
@@ -224,7 +226,8 @@ async def production_dataplane_client(docker_compose_dataplane):
 
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    client = DataplaneClient(endpoint)
+    metrics = MetricsCollector()
+    client = DataplaneClient(endpoint, metrics)
 
     yield client
 
@@ -347,7 +350,8 @@ async def config_synchronizer(mock_haproxy_urls):
     )
 
     # Create and return ConfigSynchronizer
-    synchronizer = ConfigSynchronizer(endpoint_set)
+    metrics = MetricsCollector()
+    synchronizer = ConfigSynchronizer(endpoint_set, metrics)
 
     yield synchronizer
 
@@ -443,6 +447,22 @@ def haproxy_context_factory():
         )
 
     return _create_context
+
+
+def assert_config_sync_success(result, allow_failures: bool = False):
+    """Assert ConfigSynchronizer result indicates successful deployment.
+
+    Args:
+        result: ConfigSynchronizerResult from sync_configuration()
+        allow_failures: If True, allows failed deployments (for negative tests)
+    """
+    if not allow_failures:
+        assert result.failed == 0, (
+            f"Deployment failed for {result.failed} endpoints: {result.errors}"
+        )
+        assert result.errors == [], (
+            f"DataplaneAPIErrors occurred during deployment: {result.errors}"
+        )
 
 
 @pytest.fixture(scope="session")

@@ -113,7 +113,7 @@ def patch_storage_apis(
         mock_get_all: AsyncMock for get_all operation (default: returns [])
         mock_create: AsyncMock for create operation (default: returns appropriate model)
         mock_replace: AsyncMock for replace operation (default: returns appropriate model)
-        mock_metrics: Mock for get_metrics_collector (default: returns basic mock)
+        mock_metrics: Mock for metrics collector (default: returns basic mock)
     """
     from haproxy_dataplane_v3.models import MapFile, SSLFile, GeneralUseFile
 
@@ -184,7 +184,6 @@ def patch_storage_apis(
         config["get_all"]: mock_get_all,
         config["create"]: mock_create,
         config["replace"]: mock_replace,
-        "get_metrics_collector": lambda: mock_metrics,
     }
 
     # Apply all patches
@@ -229,3 +228,365 @@ def patch_storage_file_apis(
         "file", mock_get_all, mock_create, mock_replace, mock_metrics
     ) as mocks:
         yield mocks
+
+
+# API Factory Functions to eliminate constructor duplication
+def create_config_api(endpoint=None):
+    """Create ConfigAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.config_api import ConfigAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return ConfigAPI(endpoint, metrics)
+
+
+def create_runtime_api(endpoint=None):
+    """Create RuntimeAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.runtime_api import RuntimeAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return RuntimeAPI(endpoint, metrics)
+
+
+def create_storage_api(endpoint=None):
+    """Create StorageAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.storage_api import StorageAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return StorageAPI(endpoint, metrics)
+
+
+def create_validation_api(endpoint=None):
+    """Create ValidationAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.validation_api import ValidationAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return ValidationAPI(endpoint, metrics)
+
+
+def create_transaction_api(endpoint=None):
+    """Create TransactionAPI instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.transaction_api import TransactionAPI
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return TransactionAPI(endpoint, metrics)
+
+
+def create_dataplane_operations(endpoint=None):
+    """Create DataplaneOperations instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.operations import DataplaneOperations
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return DataplaneOperations(endpoint, metrics)
+
+
+def create_dataplane_client(endpoint=None, timeout=60.0):
+    """Create DataplaneClient instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.client import DataplaneClient
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoint is None:
+        endpoint = create_dataplane_endpoint_mock()
+    metrics = MetricsCollector()
+    return DataplaneClient(endpoint, metrics, timeout)
+
+
+def create_config_synchronizer(endpoints=None):
+    """Create ConfigSynchronizer instance with metrics for testing."""
+    from haproxy_template_ic.dataplane.synchronizer import ConfigSynchronizer
+    from haproxy_template_ic.metrics import MetricsCollector
+    from tests.unit.conftest import create_dataplane_endpoint_mock
+
+    if endpoints is None:
+        from haproxy_template_ic.dataplane.endpoint import DataplaneEndpointSet
+
+        endpoints = DataplaneEndpointSet([create_dataplane_endpoint_mock()])
+    metrics = MetricsCollector()
+    return ConfigSynchronizer(endpoints=endpoints, metrics=metrics)
+
+
+# ============================================================================
+# Universal Dataplane Client Mocking Infrastructure
+# ============================================================================
+
+
+def create_dataplane_response_factory():
+    """Factory for creating proper dataplane Response objects."""
+    from haproxy_dataplane_v3.types import Response
+    from http import HTTPStatus
+
+    def create_response(content):
+        """Create proper Response object for dataplane client."""
+        return Response(
+            status_code=HTTPStatus.OK, content=b"", headers={}, parsed=content
+        )
+
+    return create_response
+
+
+@pytest.fixture
+def mock_all_dataplane_clients():
+    """
+    Universal fixture that mocks all dataplane client API calls.
+
+    This fixture solves the @api_function decorator bypass issue by mocking
+    directly at the haproxy_dataplane_v3 client level, preventing all network calls.
+
+    Usage:
+        def test_my_function(mock_all_dataplane_clients):
+            # Override specific responses as needed
+            mock_all_dataplane_clients.configure(
+                backends=[Backend(name="test")],
+                frontends=[Frontend(name="web")]
+            )
+            # Test code here - no network calls will be made
+    """
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    create_response = create_dataplane_response_factory()
+
+    # Default response data
+    default_responses = {
+        "backends": [],
+        "frontends": [],
+        "global": None,
+        "empty_list": [],
+    }
+
+    # Create mock functions for each response type
+    async def mock_get_backends(*args, **kwargs):
+        return create_response(default_responses["backends"])
+
+    async def mock_get_frontends(*args, **kwargs):
+        return create_response(default_responses["frontends"])
+
+    async def mock_get_global(*args, **kwargs):
+        return create_response(default_responses["global"])
+
+    async def mock_empty_list(*args, **kwargs):
+        return create_response(default_responses["empty_list"])
+
+    # All dataplane client patches that need to be applied
+    client_patches = [
+        (
+            "haproxy_dataplane_v3.api.backend.get_backends.asyncio_detailed",
+            mock_get_backends,
+        ),
+        (
+            "haproxy_dataplane_v3.api.frontend.get_frontends.asyncio_detailed",
+            mock_get_frontends,
+        ),
+        (
+            "haproxy_dataplane_v3.api.global_.get_global.asyncio_detailed",
+            mock_get_global,
+        ),
+        (
+            "haproxy_dataplane_v3.api.defaults.get_defaults_sections.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.userlist.get_userlists.asyncio_detailed",
+            mock_empty_list,
+        ),
+        ("haproxy_dataplane_v3.api.cache.get_caches.asyncio_detailed", mock_empty_list),
+        (
+            "haproxy_dataplane_v3.api.fcgi_app.get_fcgi_apps.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.http_errors.get_http_errors_sections.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.log_forward.get_log_forwards.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.mailers.get_mailers_sections.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.resolver.get_resolvers.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.peer.get_peer_sections.asyncio_detailed",
+            mock_empty_list,
+        ),
+        ("haproxy_dataplane_v3.api.ring.get_rings.asyncio_detailed", mock_empty_list),
+        (
+            "haproxy_dataplane_v3.api.process_manager.get_programs.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.server.get_all_server_backend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.acl.get_all_acl_backend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.acl.get_all_acl_frontend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.http_request_rule.get_all_http_request_rule_backend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.http_request_rule.get_all_http_request_rule_frontend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.http_response_rule.get_all_http_response_rule_backend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.http_response_rule.get_all_http_response_rule_frontend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.backend_switching_rule.get_backend_switching_rules.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.filter_.get_all_filter_backend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.filter_.get_all_filter_frontend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.log_target.get_all_log_target_backend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.log_target.get_all_log_target_frontend.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.log_target.get_all_log_target_global.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.log_target.get_all_log_target_peer.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.log_target.get_all_log_target_log_forward.asyncio_detailed",
+            mock_empty_list,
+        ),
+        (
+            "haproxy_dataplane_v3.api.bind.get_all_bind_frontend.asyncio_detailed",
+            mock_empty_list,
+        ),
+    ]
+
+    # Apply all patches using ExitStack
+    with ExitStack() as stack:
+        for patch_path, mock_func in client_patches:
+            stack.enter_context(patch(patch_path, side_effect=mock_func))
+
+        # Create configurable mock controller
+        class DataplaneMockController:
+            def configure(self, backends=None, frontends=None, global_config=None):
+                """Configure specific response data for test scenarios."""
+                if backends is not None:
+                    default_responses["backends"] = backends
+                if frontends is not None:
+                    default_responses["frontends"] = frontends
+                if global_config is not None:
+                    default_responses["global"] = global_config
+
+            def reset(self):
+                """Reset all responses to default empty values."""
+                default_responses["backends"] = []
+                default_responses["frontends"] = []
+                default_responses["global"] = None
+
+        controller = DataplaneMockController()
+        yield controller
+
+
+@pytest.fixture
+def mock_dataplane_empty(mock_all_dataplane_clients):
+    """
+    Convenience fixture for tests that need empty dataplane responses.
+
+    All API calls return empty lists or None. Perfect for testing error handling
+    or scenarios with no existing configuration.
+    """
+    mock_all_dataplane_clients.reset()  # Already defaults to empty
+    return mock_all_dataplane_clients
+
+
+@pytest.fixture
+def mock_dataplane_large_config(mock_all_dataplane_clients):
+    """
+    Convenience fixture for performance testing with large configuration datasets.
+
+    Provides the same 100 backends + 50 frontends used in the performance test,
+    ensuring consistent performance testing across the codebase.
+    """
+    from haproxy_dataplane_v3.models import Backend, Frontend
+
+    large_backend_list = [Backend(name=f"backend-{i}") for i in range(100)]
+    large_frontend_list = [Frontend(name=f"frontend-{i}") for i in range(50)]
+
+    mock_all_dataplane_clients.configure(
+        backends=large_backend_list, frontends=large_frontend_list
+    )
+    return mock_all_dataplane_clients
+
+
+def mock_dataplane_with_data(backends=None, frontends=None, global_config=None):
+    """
+    Factory function for creating dataplane mocks with specific test data.
+
+    Use this when you need custom test data that doesn't fit the standard fixtures.
+
+    Example:
+        @pytest.fixture
+        def my_custom_mock(mock_all_dataplane_clients):
+            return mock_dataplane_with_data(
+                backends=[Backend(name="api")],
+                frontends=[Frontend(name="web")]
+            )(mock_all_dataplane_clients)
+    """
+
+    def configure_mock(mock_controller):
+        mock_controller.configure(
+            backends=backends or [],
+            frontends=frontends or [],
+            global_config=global_config,
+        )
+        return mock_controller
+
+    return configure_mock

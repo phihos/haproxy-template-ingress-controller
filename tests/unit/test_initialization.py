@@ -31,7 +31,7 @@ from tests.unit.conftest import (
 @pytest.fixture
 def mock_application_state():
     """Create a mock ApplicationState."""
-    return create_application_state_mock(
+    mock_state = create_application_state_mock(
         {
             "logging": {
                 "verbose": 1,
@@ -47,6 +47,12 @@ def mock_application_state():
             },
         }
     )
+    # Add the operations mock structure
+    operations_mock = MagicMock()
+    operations_mock.metrics = MagicMock()
+    operations_mock.tracing_manager = None  # Default to None
+    mock_state.operations = operations_mock
+    return mock_state
 
 
 @pytest.mark.asyncio
@@ -64,19 +70,19 @@ async def test_tracing_initialization_enabled(
     )
 
     mock_create_tracing_config = MagicMock(return_value=mock_base_tracing_config)
-    mock_init_tracing = MagicMock()
+    mock_tracing_manager = MagicMock()
+    mock_tracing_manager_cls = MagicMock(return_value=mock_tracing_manager)
     mock_setup_logging = MagicMock()
 
-    # Mock metrics
-    mock_get_metrics = MagicMock(return_value=mock_config_metrics)
+    # Update the mock application state with the provided metrics collector
+    mock_application_state.operations.metrics = mock_config_metrics
 
     # Apply patches
     with mock_module_attributes(
         init_module,
         create_tracing_config_from_env=mock_create_tracing_config,
-        initialize_tracing=mock_init_tracing,
+        TracingManager=mock_tracing_manager_cls,
         setup_structured_logging=mock_setup_logging,
-        get_metrics_collector=mock_get_metrics,
     ):
         # Call the function
         await initialize_post_config(mock_application_state)
@@ -86,8 +92,14 @@ async def test_tracing_initialization_enabled(
             mock_application_state.configuration.config.tracing
         )
 
-        # Verify tracing was initialized with the final config
-        mock_init_tracing.assert_called_once_with(mock_final_tracing_config)
+        # Verify TracingManager was created with the final config
+        mock_tracing_manager_cls.assert_called_once_with(mock_final_tracing_config)
+
+        # Verify TracingManager was initialized
+        mock_tracing_manager.initialize.assert_called_once()
+
+        # Verify TracingManager was stored in application state
+        assert mock_application_state.operations.tracing_manager == mock_tracing_manager
 
 
 @pytest.mark.asyncio
@@ -98,30 +110,29 @@ async def test_tracing_initialization_disabled(
 ):
     """Test tracing initialization when disabled."""
     # Disable tracing in config
-    mock_application_state.config.tracing.enabled = False
+    mock_application_state.configuration.config.tracing.enabled = False
 
     # Setup mocks
     mock_create_tracing_config = MagicMock()
-    mock_init_tracing = MagicMock()
+    mock_tracing_manager_cls = MagicMock()
     mock_setup_logging = MagicMock()
 
-    # Mock metrics
-    mock_get_metrics = MagicMock(return_value=mock_config_metrics)
+    # Update the mock application state with the provided metrics collector
+    mock_application_state.operations.metrics = mock_config_metrics
 
     # Apply patches
     with mock_module_attributes(
         init_module,
         create_tracing_config_from_env=mock_create_tracing_config,
-        initialize_tracing=mock_init_tracing,
+        TracingManager=mock_tracing_manager_cls,
         setup_structured_logging=mock_setup_logging,
-        get_metrics_collector=mock_get_metrics,
     ):
         # Call the function
         await initialize_post_config(mock_application_state)
 
         # Verify tracing initialization was not called when disabled
         mock_create_tracing_config.assert_not_called()
-        mock_init_tracing.assert_not_called()
+        mock_tracing_manager_cls.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -132,7 +143,7 @@ async def test_tracing_initialization_with_fallback_values(
 ):
     """Test tracing initialization with fallback to environment values."""
     # Setup tracing config with None values to test fallback
-    config_mock = mock_application_state.config
+    config_mock = mock_application_state.configuration.config
     config_mock.tracing.enabled = True
     config_mock.tracing.service_name = None  # Should fallback to env
     config_mock.tracing.service_version = ""  # Should fallback to env
@@ -146,19 +157,19 @@ async def test_tracing_initialization_with_fallback_values(
     mock_env_tracing_config.jaeger_endpoint = "env-jaeger:14268"
     mock_env_tracing_config.console_export = True
     mock_create_tracing_config = MagicMock(return_value=mock_env_tracing_config)
-    mock_init_tracing = MagicMock()
+    mock_tracing_manager = MagicMock()
+    mock_tracing_manager_cls = MagicMock(return_value=mock_tracing_manager)
     mock_setup_logging = MagicMock()
 
-    # Mock metrics
-    mock_get_metrics = MagicMock(return_value=mock_config_metrics)
+    # Update the mock application state with the provided metrics collector
+    mock_application_state.operations.metrics = mock_config_metrics
 
     # Apply patches
     with mock_module_attributes(
         init_module,
         create_tracing_config_from_env=mock_create_tracing_config,
-        initialize_tracing=mock_init_tracing,
+        TracingManager=mock_tracing_manager_cls,
         setup_structured_logging=mock_setup_logging,
-        get_metrics_collector=mock_get_metrics,
     ):
         # Call the function
         await initialize_post_config(mock_application_state)
@@ -178,17 +189,18 @@ async def test_metrics_recording_success(
 ):
     """Test that metrics are recorded for successful config reload."""
     mock_setup_logging = MagicMock()
-    mock_get_metrics = MagicMock(return_value=mock_config_metrics)
 
-    mock_application_state.config.tracing.enabled = (
+    mock_application_state.configuration.config.tracing.enabled = (
         False  # Disable tracing for simpler test
     )
+
+    # Update the mock application state with the provided metrics collector
+    mock_application_state.operations.metrics = mock_config_metrics
 
     # Apply patches
     with mock_module_attributes(
         init_module,
         setup_structured_logging=mock_setup_logging,
-        get_metrics_collector=mock_get_metrics,
     ):
         # Call the function
         await initialize_post_config(mock_application_state)
@@ -255,9 +267,6 @@ def test_run_operator_loop_initialization_flow(
     from haproxy_template_ic.models.cli import CliOptions
     import haproxy_template_ic.credentials as creds_module
 
-    # Mock the metrics collector
-    mock_get_metrics = MagicMock(return_value=mock_config_metrics)
-
     # Mock k8s config loading
     mock_k8s_config = MagicMock()
     mock_k8s_config.load_incluster_config.return_value = None
@@ -316,6 +325,10 @@ def test_run_operator_loop_initialization_flow(
     # Set up required attributes that the code expects
     mock_app_state_instance.configuration = mock_config_state_instance
     mock_app_state_instance.configuration.config = mock_config
+    # Add operations structure to prevent AttributeError
+    mock_operations = MagicMock()
+    mock_operations.metrics = mock_config_metrics
+    mock_app_state_instance.operations = mock_operations
     mock_application_state = MagicMock(return_value=mock_app_state_instance)
 
     mock_setup_haproxy_pod_indexing = MagicMock()
@@ -327,7 +340,6 @@ def test_run_operator_loop_initialization_flow(
     )
 
     # Apply all patches (complex test requires traditional monkeypatch for classes)
-    monkeypatch.setattr(init_module, "get_metrics_collector", mock_get_metrics)
     monkeypatch.setattr(init_module, "k8s_config", mock_k8s_config)
     monkeypatch.setattr(init_module, "fetch_configmap", mock_fetch_configmap)
     monkeypatch.setattr(init_module, "load_config_from_configmap", mock_load_config)
@@ -487,7 +499,7 @@ def test_create_application_state():
         TemplateContext=MagicMock(),
         IndexSynchronizationTracker=MagicMock(return_value=mock_index_tracker),
         TemplateRenderDebouncer=MagicMock(),
-        get_metrics_collector=MagicMock(return_value=mock_metrics),
+        MetricsCollector=MagicMock(return_value=mock_metrics),
         RuntimeState=MagicMock(),
         ConfigurationState=MagicMock(),
         ResourceState=MagicMock(),
@@ -638,7 +650,7 @@ def test_run_operator_loop_kubernetes_config_loading():
 
     with mock_module_attributes(
         init_module,
-        get_metrics_collector=MagicMock(return_value=mock_metrics),
+        MetricsCollector=MagicMock(return_value=mock_metrics),
         k8s_config=mock_k8s_config,
         get_current_namespace=MagicMock(return_value="default"),
         # Mock the rest to prevent actual execution
@@ -672,7 +684,7 @@ def test_run_operator_loop_fallback_to_kubeconfig():
 
     with mock_module_attributes(
         init_module,
-        get_metrics_collector=MagicMock(return_value=mock_metrics),
+        MetricsCollector=MagicMock(return_value=mock_metrics),
         k8s_config=mock_k8s_config,
         get_current_namespace=MagicMock(return_value="default"),
         # Mock the rest to prevent actual execution
@@ -707,7 +719,7 @@ def test_run_operator_loop_kubernetes_config_failure():
 
     with mock_module_attributes(
         init_module,
-        get_metrics_collector=MagicMock(return_value=mock_metrics),
+        MetricsCollector=MagicMock(return_value=mock_metrics),
         k8s_config=mock_k8s_config,
     ):
         with pytest.raises(Exception, match="Kubeconfig failed"):
@@ -715,28 +727,27 @@ def test_run_operator_loop_kubernetes_config_failure():
 
 
 @pytest.mark.asyncio
-async def test_initialize_post_config_exception_handling():
+async def test_initialize_post_config_exception_handling(
+    mock_application_state,
+    mock_config_metrics,
+):
     """Test initialize_post_config handles exceptions properly."""
-    from tests.unit.conftest import (
-        create_application_state_mock,
-        create_metrics_collector_mock,
-    )
-
-    mock_application_state = create_application_state_mock()
-    mock_metrics = create_metrics_collector_mock()
+    # Update the mock application state with the provided metrics collector
+    mock_application_state.operations.metrics = mock_config_metrics
 
     # Mock setup_structured_logging to raise an exception
     with mock_module_attributes(
         init_module,
         setup_structured_logging=MagicMock(side_effect=RuntimeError("Setup failed")),
-        get_metrics_collector=MagicMock(return_value=mock_metrics),
     ):
         with pytest.raises(RuntimeError, match="Setup failed"):
             await initialize_post_config(mock_application_state)
 
         # Verify error metrics were recorded
-        mock_metrics.record_config_reload.assert_called_with(success=False)
-        mock_metrics.record_error.assert_called_with("config_load_failed", "operator")
+        mock_config_metrics.record_config_reload.assert_called_with(success=False)
+        mock_config_metrics.record_error.assert_called_with(
+            "config_load_failed", "operator"
+        )
 
 
 @pytest.mark.asyncio
@@ -782,53 +793,42 @@ async def test_cleanup_template_debouncer():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_tracing_enabled():
+async def test_cleanup_tracing_enabled(mock_application_state):
     """Test cleanup_tracing when tracing is enabled."""
-    from tests.unit.conftest import create_application_state_mock
-
-    mock_application_state = create_application_state_mock()
     mock_application_state.configuration.config.tracing.enabled = True
 
-    with mock_module_attributes(
-        init_module,
-        shutdown_tracing=MagicMock(),
-    ):
-        await cleanup_tracing(mock_application_state)
+    # Set up a mock tracing manager
+    mock_tracing_manager = MagicMock()
+    mock_application_state.operations.tracing_manager = mock_tracing_manager
 
-        init_module.shutdown_tracing.assert_called_once()
+    await cleanup_tracing(mock_application_state)
 
-
-@pytest.mark.asyncio
-async def test_cleanup_tracing_disabled():
-    """Test cleanup_tracing when tracing is disabled."""
-    from tests.unit.conftest import create_application_state_mock
-
-    mock_application_state = create_application_state_mock()
-    mock_application_state.configuration.config.tracing.enabled = False
-
-    with mock_module_attributes(
-        init_module,
-        shutdown_tracing=MagicMock(),
-    ):
-        await cleanup_tracing(mock_application_state)
-
-        init_module.shutdown_tracing.assert_not_called()
+    # Verify tracing manager shutdown was called
+    mock_tracing_manager.shutdown.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_cleanup_tracing_exception_handling():
+async def test_cleanup_tracing_disabled(mock_application_state):
+    """Test cleanup_tracing when tracing manager is None."""
+    # Set tracing_manager to None to simulate no tracing initialized
+    mock_application_state.operations.tracing_manager = None
+
+    # Should not raise any exception
+    await cleanup_tracing(mock_application_state)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_tracing_exception_handling(mock_application_state):
     """Test cleanup_tracing handles exceptions properly."""
-    from tests.unit.conftest import create_application_state_mock
-
-    mock_application_state = create_application_state_mock()
     mock_application_state.configuration.config.tracing.enabled = True
 
-    with mock_module_attributes(
-        init_module,
-        shutdown_tracing=MagicMock(side_effect=RuntimeError("Shutdown failed")),
-    ):
-        # Should not raise - exception is caught and logged
-        await cleanup_tracing(mock_application_state)
+    # Set up a mock tracing manager that raises an exception
+    mock_tracing_manager = MagicMock()
+    mock_tracing_manager.shutdown.side_effect = RuntimeError("Shutdown failed")
+    mock_application_state.operations.tracing_manager = mock_tracing_manager
+
+    # Should not raise - exception is caught and logged
+    await cleanup_tracing(mock_application_state)
 
 
 @pytest.mark.asyncio

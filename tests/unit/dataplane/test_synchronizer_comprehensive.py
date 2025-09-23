@@ -16,7 +16,6 @@ from haproxy_template_ic.dataplane.endpoint import (
 from haproxy_template_ic.credentials import DataplaneAuth
 from pydantic import SecretStr
 from haproxy_template_ic.dataplane.synchronizer import (
-    ConfigSynchronizer,
     _SECTION_ELEMENTS,
 )
 from haproxy_template_ic.dataplane.types import (
@@ -36,6 +35,7 @@ from haproxy_template_ic.models.templates import (
     RenderedContent,
     ContentType,
 )
+from tests.unit.dataplane.conftest import create_config_synchronizer
 
 
 def create_mock_endpoint(
@@ -68,7 +68,7 @@ class TestConfigSynchronizerInit:
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
 
         # Act
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         # Assert
         assert synchronizer.endpoints is mock_endpoints
@@ -79,7 +79,7 @@ class TestConfigSynchronizerInit:
         """Test client creation factory method."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
         mock_auth = Mock(spec=DataplaneAuth)
         mock_auth.username = "admin"
         mock_auth.password = SecretStr("password")
@@ -107,7 +107,7 @@ class TestConfigSynchronizerInit:
         mock_endpoint.dataplane_auth = mock_auth
         mock_endpoints.find_by_url.return_value = mock_endpoint
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         # Act
         client = synchronizer.create_client_for_url("http://test:5555", timeout=60.0)
@@ -124,7 +124,7 @@ class TestConfigSynchronizerInit:
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
         mock_endpoints.find_by_url.return_value = None
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         # Act & Assert
         with pytest.raises(ValueError, match="No endpoint found for URL"):
@@ -142,7 +142,7 @@ class TestConfigSynchronizerInit:
         mock_validation_endpoint.dataplane_auth = mock_auth
         mock_endpoints.validation = mock_validation_endpoint
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         # Act
         client1 = synchronizer._get_validation_client()
@@ -157,7 +157,7 @@ class TestConfigSynchronizerInit:
         """Test production client creation and caching."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_auth = Mock(spec=DataplaneAuth)
         mock_auth.username = "admin"
@@ -188,7 +188,7 @@ class TestConfigSynchronizerInit:
         )
         mock_endpoints.all_endpoints.return_value = [mock_endpoint1, mock_endpoint2]
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         # Act
         health = synchronizer.get_endpoint_health()
@@ -204,7 +204,7 @@ class TestConfigSynchronizerContentMethods:
         """Test content preparation from HAProxy config context."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         context = HAProxyConfigContext(template_context=TemplateContext())
         context.rendered_content = [
@@ -241,7 +241,7 @@ class TestConfigSynchronizerContentMethods:
         """Test content preparation with no rendered content."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         context = HAProxyConfigContext(template_context=TemplateContext())
         context.rendered_content = []
@@ -259,7 +259,7 @@ class TestConfigSynchronizerContentMethods:
         """Test template hash computation."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         context = HAProxyConfigContext(template_context=TemplateContext())
         context.rendered_config = RenderedConfig(content="global\n    daemon")
@@ -297,7 +297,7 @@ class TestConfigSynchronizerContentMethods:
         """Test template hash computation with no rendered config."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         context = HAProxyConfigContext(template_context=TemplateContext())
         context.rendered_config = None
@@ -335,7 +335,7 @@ class TestConfigSynchronizerClientManagement:
         mock_endpoints.validation = mock_validation_endpoint
         mock_endpoints.production = []
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         new_endpoint1 = Mock(spec=DataplaneEndpoint)
         new_endpoint1.url = "http://new-pod-1:5555"
@@ -374,7 +374,7 @@ class TestConfigSynchronizerClientManagement:
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
         mock_endpoints.validation = mock_validation_endpoint
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         # Pre-populate with old clients
         synchronizer._production_clients = {
@@ -408,7 +408,7 @@ class TestConfigSynchronizerClientManagement:
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
         mock_endpoints.validation = mock_validation_endpoint
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         # Pre-populate with existing clients
         existing_client = Mock()
@@ -453,7 +453,7 @@ class TestConfigSynchronizerContentSync:
         """Test synchronizing all content types to a client."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_client = Mock(spec=DataplaneClient)
         mock_client.sync_maps = AsyncMock()
@@ -483,7 +483,7 @@ class TestConfigSynchronizerContentSync:
         """Test pre-deployment content synchronization."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_client = Mock(spec=DataplaneClient)
         mock_client.sync_maps = AsyncMock()
@@ -516,7 +516,7 @@ class TestConfigSynchronizerContentSync:
         """Test pre-deployment sync with empty content collections."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_client = Mock(spec=DataplaneClient)
         mock_client.sync_maps = AsyncMock()
@@ -540,7 +540,7 @@ class TestConfigSynchronizerContentSync:
         """Test post-deployment content synchronization."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_client = Mock(spec=DataplaneClient)
         mock_client.sync_maps = AsyncMock()
@@ -586,7 +586,7 @@ class TestConfigSynchronizerValidation:
         mock_endpoints.validation = mock_validation_endpoint
         mock_endpoints.validation.url = "http://validation:5555"
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_client = Mock(spec=DataplaneClient)
         mock_client.validate_configuration = AsyncMock()
@@ -613,7 +613,7 @@ class TestConfigSynchronizerValidation:
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
         mock_endpoints.validation = mock_validation_endpoint
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_client = Mock(spec=DataplaneClient)
         mock_client.validate_configuration = AsyncMock(
@@ -635,7 +635,7 @@ class TestConfigSynchronizerElementComparison:
         """Test element identifier extraction for ACL objects."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_item = Mock()
         mock_item.acl_name = "test_acl"
@@ -652,7 +652,7 @@ class TestConfigSynchronizerElementComparison:
         """Test element identifier extraction for server objects."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_item = Mock()
         mock_item.name = "web_server"
@@ -669,7 +669,7 @@ class TestConfigSynchronizerElementComparison:
         """Test element identifier extraction falling back to id attribute."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_item = Mock()
         mock_item.name = None
@@ -687,7 +687,7 @@ class TestConfigSynchronizerElementComparison:
         """Test element identifier extraction when no identifier found."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_item = Mock()
         del mock_item.name
@@ -706,7 +706,7 @@ class TestConfigSynchronizerElementComparison:
         """Test named element comparison for additions."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         current_items = []
 
@@ -740,7 +740,7 @@ class TestConfigSynchronizerElementComparison:
         """Test named element comparison for deletions."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         old_server = Mock()
         old_server.name = "web1"
@@ -770,7 +770,7 @@ class TestConfigSynchronizerElementComparison:
         """Test named element comparison for modifications."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         old_server = Mock()
         old_server.name = "web1"
@@ -812,7 +812,7 @@ class TestConfigSynchronizerElementComparison:
         """Test ordered element comparison for additions."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         current_items = []
 
@@ -841,7 +841,7 @@ class TestConfigSynchronizerElementComparison:
         """Test ordered element comparison for deletions."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         old_rule = Mock()
         current_items = [old_rule]
@@ -869,7 +869,7 @@ class TestConfigSynchronizerElementComparison:
         """Test ordered element comparison for modifications."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         old_rule = Mock()
         old_rule.condition = "if path_beg /api"
@@ -913,7 +913,7 @@ class TestConfigSynchronizerSectionComparison:
         """Test nested element extraction for frontend sections."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         config = {
             "frontend_acls": {
@@ -944,7 +944,7 @@ class TestConfigSynchronizerSectionComparison:
         """Test nested element extraction for backend sections."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         config = {
             "backend_servers": {
@@ -968,7 +968,7 @@ class TestConfigSynchronizerSectionComparison:
         """Test nested element extraction for global section."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         config = {
             "global_log_targets": [{"address": "stdout", "facility": "local0"}],
@@ -987,7 +987,7 @@ class TestConfigSynchronizerSectionComparison:
         """Test nested element extraction for unknown section types."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         config = {"some_data": "value"}
 
@@ -1007,7 +1007,7 @@ class TestConfigSynchronizerErrorHandling:
         """Test basic deployment error handling."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         results = {"failed": 0, "errors": []}
         error = RuntimeError("Connection failed")
@@ -1027,7 +1027,7 @@ class TestConfigSynchronizerErrorHandling:
         """Test deployment error handling with configuration context parsing."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         results = {"failed": 0, "errors": []}
         error = RuntimeError("Parsing error at line 5")
@@ -1056,7 +1056,7 @@ class TestConfigSynchronizerErrorHandling:
         """Test deployment error handling when context parsing fails."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         results = {"failed": 0, "errors": []}
         error = RuntimeError("Some error")
@@ -1098,7 +1098,7 @@ class TestConfigSynchronizerErrorHandling:
         mock_endpoints.production = [mock_production_endpoint]
         mock_endpoints.find_by_url.return_value = mock_production_endpoint
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         with patch(
             "haproxy_template_ic.dataplane.synchronizer.extract_hostname_from_url"
@@ -1119,7 +1119,7 @@ class TestConfigSynchronizerErrorHandling:
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
         mock_endpoints.find_by_url.return_value = None
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         with patch(
             "haproxy_template_ic.dataplane.synchronizer.extract_hostname_from_url"
@@ -1138,7 +1138,7 @@ class TestConfigSynchronizerErrorHandling:
         """Test pod information extraction when parsing fails."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         with patch(
             "haproxy_template_ic.dataplane.synchronizer.extract_hostname_from_url"
@@ -1160,7 +1160,7 @@ class TestConfigSynchronizerMainFlow:
         """Test sync_configuration with no rendered config."""
         # Arrange
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         context = HAProxyConfigContext(template_context=TemplateContext())
         context.rendered_config = None
@@ -1178,7 +1178,7 @@ class TestConfigSynchronizerMainFlow:
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
         mock_endpoints.production = [Mock(url="http://prod1:5555")]
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         context = HAProxyConfigContext(template_context=TemplateContext())
         context.rendered_config = RenderedConfig(content="global\n    daemon")
@@ -1211,7 +1211,7 @@ class TestConfigSynchronizerMainFlow:
         mock_endpoints = Mock(spec=DataplaneEndpointSet)
         mock_endpoints.validation = Mock(url="http://validation:5555")
 
-        synchronizer = ConfigSynchronizer(mock_endpoints)
+        synchronizer = create_config_synchronizer(mock_endpoints)
 
         mock_client = Mock(spec=DataplaneClient)
         mock_client.validate_configuration = AsyncMock()

@@ -8,13 +8,15 @@ import pytest
 from unittest.mock import Mock, patch
 from dataclasses import asdict
 
-from haproxy_template_ic.dataplane.transaction_api import TransactionAPI
 from haproxy_template_ic.dataplane.types import (
     DataplaneAPIError,
     TransactionCommitResult,
 )
 from tests.unit.conftest import (
     expect_dataplane_error,
+)
+from tests.unit.dataplane.conftest import (
+    create_transaction_api,
 )
 from tests.unit.dataplane.adapter_fixtures import (
     create_transaction_async_mock,
@@ -26,7 +28,7 @@ from tests.unit.dataplane.adapter_fixtures import (
 @pytest.fixture
 def transaction_api(test_endpoint):
     """Create TransactionAPI instance for testing."""
-    return TransactionAPI(test_endpoint)
+    return create_transaction_api(test_endpoint)
 
 
 @pytest.mark.asyncio
@@ -46,10 +48,6 @@ async def test_start_transaction_success(transaction_api, mock_client, mock_metr
             create_transaction_async_mock("test-transaction-123"),
         ) as mock_start_transaction,
         patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
-        patch(
             "haproxy_template_ic.dataplane.transaction_api.record_span_event"
         ) as mock_record_event,
     ):
@@ -66,15 +64,9 @@ async def test_start_transaction_success(transaction_api, mock_client, mock_metr
 @pytest.mark.asyncio
 async def test_start_transaction_no_version(transaction_api, mock_metrics):
     """Test transaction start when version retrieval fails."""
-    with (
-        patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_configuration_version"
-        ) as mock_get_version,
-        patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
-    ):
+    with patch(
+        "haproxy_template_ic.dataplane.transaction_api.get_configuration_version"
+    ) as mock_get_version:
         mock_get_version.return_value = create_mock_api_response(content=None)
 
         with pytest.raises(DataplaneAPIError) as exc_info:
@@ -93,10 +85,6 @@ async def test_commit_transaction_success(transaction_api, mock_client, mock_met
                 "test-transaction-123", reload_id="reload-456"
             ),
         ) as mock_commit_transaction,
-        patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
         patch(
             "haproxy_template_ic.dataplane.transaction_api.record_span_event"
         ) as mock_record_event,
@@ -128,10 +116,6 @@ async def test_rollback_transaction_success(transaction_api, mock_client, mock_m
             AsyncMock(),
         ) as mock_delete_transaction,
         patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
-        patch(
             "haproxy_template_ic.dataplane.transaction_api.record_span_event"
         ) as mock_record_event,
     ):
@@ -152,10 +136,6 @@ async def test_start_transaction_error_handling(transaction_api, mock_metrics):
         patch(
             "haproxy_template_ic.dataplane.transaction_api.get_configuration_version"
         ) as mock_get_version,
-        patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
         patch(
             "haproxy_template_ic.dataplane.transaction_api.set_span_error"
         ) as mock_set_error,
@@ -180,10 +160,6 @@ async def test_commit_transaction_error_handling(transaction_api, mock_metrics):
             AsyncMock(side_effect=Exception("Commit failed")),
         ),
         patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_metrics_collector",
-            return_value=mock_metrics,
-        ),
-        patch(
             "haproxy_template_ic.dataplane.transaction_api.set_span_error"
         ) as mock_set_error,
     ):
@@ -205,10 +181,6 @@ async def test_rollback_transaction_error_handling(transaction_api, mock_metrics
         patch(
             "haproxy_template_ic.dataplane.transaction_api.delete_transaction",
             AsyncMock(side_effect=Exception("Rollback failed")),
-        ),
-        patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_metrics_collector",
-            return_value=mock_metrics,
         ),
         patch(
             "haproxy_template_ic.dataplane.transaction_api.set_span_error"
@@ -239,10 +211,6 @@ async def test_start_transaction_invalid_response(transaction_api, mock_metrics)
         patch(
             "haproxy_template_ic.dataplane.transaction_api.start_transaction",
             AsyncMock(return_value=create_mock_api_response(content=mock_transaction)),
-        ),
-        patch(
-            "haproxy_template_ic.dataplane.transaction_api.get_metrics_collector",
-            return_value=mock_metrics,
         ),
     ):
         with expect_dataplane_error("Invalid transaction response - missing ID"):

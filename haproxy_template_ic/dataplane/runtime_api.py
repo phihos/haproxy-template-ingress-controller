@@ -27,7 +27,7 @@ from .adapter import (
     delete_runtime_acl_file_entry,
 )
 
-from haproxy_template_ic.metrics import get_metrics_collector
+from haproxy_template_ic.metrics import MetricsCollector
 from haproxy_template_ic.tracing import record_span_event, set_span_error
 from .types import DataplaneAPIError, MapChange, RuntimeOperationResult
 from .adapter import ReloadInfo
@@ -46,13 +46,16 @@ class RuntimeAPI:
     def __init__(
         self,
         endpoint: DataplaneEndpoint,
+        metrics: MetricsCollector,
     ):
         """Initialize runtime API.
 
         Args:
             endpoint: Dataplane endpoint for error context
+            metrics: MetricsCollector instance for metrics tracking
         """
         self.endpoint = endpoint
+        self.metrics = metrics
 
     @handle_dataplane_errors("apply_runtime_map_operations")
     @autolog()
@@ -78,7 +81,7 @@ class RuntimeAPI:
                 reload_info=ReloadInfo(),
             )
 
-        metrics = get_metrics_collector()
+        metrics = self.metrics
         reload_infos = []
 
         await logger.ainfo(
@@ -182,7 +185,7 @@ class RuntimeAPI:
                 reload_info=ReloadInfo(),
             )
 
-        metrics = get_metrics_collector()
+        metrics = self.metrics
         reload_infos = []
 
         await logger.ainfo(
@@ -268,7 +271,7 @@ class RuntimeAPI:
         Raises:
             DataplaneAPIError: If server state update fails
         """
-        metrics = get_metrics_collector()
+        metrics = self.metrics
 
         await logger.ainfo(
             f"Updating server {backend_name}/{server_name} state to {state}"

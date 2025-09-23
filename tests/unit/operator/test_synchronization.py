@@ -117,7 +117,7 @@ class TestRecordSyncMetrics:
             )
 
             # Assert
-            mock_metrics.record_haproxy_sync.assert_called_once_with(3, 0)
+            # Metrics recording is handled by ConfigSynchronizer internally
             mock_logger.info.assert_called_once_with(
                 "✅ Successfully synchronized 3/3 instances"
             )
@@ -137,7 +137,7 @@ class TestRecordSyncMetrics:
             )
 
             # Assert
-            mock_metrics.record_haproxy_sync.assert_called_once_with(0, 2)
+            # Metrics recording is handled by ConfigSynchronizer internally
             mock_logger.warning.assert_called_once_with(
                 "❌ Failed to synchronize 2/2 instances"
             )
@@ -157,7 +157,7 @@ class TestRecordSyncMetrics:
             )
 
             # Assert
-            mock_metrics.record_haproxy_sync.assert_called_once_with(2, 1)
+            # Metrics recording is handled by ConfigSynchronizer internally
             mock_logger.info.assert_called_once_with(
                 "✅ Successfully synchronized 2/3 instances"
             )
@@ -179,7 +179,7 @@ class TestRecordSyncMetrics:
             )
 
             # Assert
-            mock_metrics.record_haproxy_sync.assert_called_once_with(0, 0)
+            # Metrics recording is handled by ConfigSynchronizer internally
             mock_logger.info.assert_not_called()
             mock_logger.warning.assert_not_called()
 
@@ -459,6 +459,7 @@ class TestSynchronizeWithHAProxyInstances:
         mock_synchronizer.sync_configuration = AsyncMock()
         mock_synchronizer.endpoints = Mock()
         mock_synchronizer.endpoints.production = ["endpoint1", "endpoint2"]
+        mock_synchronizer.metrics = Mock()
         return mock_synchronizer
 
     @pytest.mark.asyncio
@@ -474,15 +475,9 @@ class TestSynchronizeWithHAProxyInstances:
             mock_sync_result
         )
 
-        with (
-            patch(
-                "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-            ) as mock_get_metrics,
-            patch("haproxy_template_ic.operator.synchronization.logger") as mock_logger,
-        ):
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
+        with patch(
+            "haproxy_template_ic.operator.synchronization.logger"
+        ) as mock_logger:
             # Act
             await synchronize_with_haproxy_instances(
                 mock_context_with_config, mock_synchronizer_with_endpoints
@@ -492,7 +487,7 @@ class TestSynchronizeWithHAProxyInstances:
         mock_synchronizer_with_endpoints.sync_configuration.assert_called_once_with(
             mock_context_with_config
         )
-        mock_metrics.record_haproxy_sync.assert_called_once_with(2, 0)
+        # Metrics recording is handled by ConfigSynchronizer internally
 
         # Verify logging
         mock_logger.debug.assert_called_with(
@@ -514,19 +509,15 @@ class TestSynchronizeWithHAProxyInstances:
         )  # No config
 
         mock_synchronizer = Mock(spec=ConfigSynchronizer)
+        mock_synchronizer.metrics = Mock()
 
-        with patch(
-            "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-        ) as mock_get_metrics:
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
-            # Act
-            await synchronize_with_haproxy_instances(context, mock_synchronizer)
+        # Act
+        await synchronize_with_haproxy_instances(context, mock_synchronizer)
 
         # Assert - should return early without calling synchronizer
         mock_synchronizer.sync_configuration.assert_not_called()
-        mock_metrics.record_haproxy_sync.assert_not_called()
+
+    # Metrics recording is handled by ConfigSynchronizer internally
 
     @pytest.mark.asyncio
     async def test_synchronize_no_production_endpoints(self, mock_context_with_config):
@@ -535,16 +526,11 @@ class TestSynchronizeWithHAProxyInstances:
         mock_synchronizer = Mock(spec=ConfigSynchronizer)
         mock_synchronizer.endpoints = Mock()
         mock_synchronizer.endpoints.production = []  # No production endpoints
+        mock_synchronizer.metrics = Mock()
 
-        with (
-            patch(
-                "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-            ) as mock_get_metrics,
-            patch("haproxy_template_ic.operator.synchronization.logger") as mock_logger,
-        ):
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
+        with patch(
+            "haproxy_template_ic.operator.synchronization.logger"
+        ) as mock_logger:
             # Act
             await synchronize_with_haproxy_instances(
                 mock_context_with_config, mock_synchronizer
@@ -571,22 +557,16 @@ class TestSynchronizeWithHAProxyInstances:
 
         mock_synchronizer_with_endpoints.sync_configuration.return_value = mock_result
 
-        with (
-            patch(
-                "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-            ) as mock_get_metrics,
-            patch("haproxy_template_ic.operator.synchronization.logger") as mock_logger,
-        ):
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
+        with patch(
+            "haproxy_template_ic.operator.synchronization.logger"
+        ) as mock_logger:
             # Act
             await synchronize_with_haproxy_instances(
                 mock_context_with_config, mock_synchronizer_with_endpoints
             )
 
         # Assert
-        mock_metrics.record_haproxy_sync.assert_called_once_with(1, 1)
+        # Metrics recording is handled by ConfigSynchronizer internally
 
         # Verify error logging
         mock_logger.error.assert_called_with(
@@ -612,26 +592,18 @@ class TestSynchronizeWithHAProxyInstances:
         )
 
         with (
-            patch(
-                "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-            ) as mock_get_metrics,
             patch("haproxy_template_ic.operator.synchronization.logger") as mock_logger,
             patch(
                 "haproxy_template_ic.operator.synchronization._log_haproxy_error_hints"
             ) as mock_hints,
         ):
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
             # Act
             await synchronize_with_haproxy_instances(
                 mock_context_with_config, mock_synchronizer_with_endpoints
             )
 
         # Assert
-        mock_metrics.record_error.assert_called_once_with(
-            "validation_failed", "dataplane"
-        )
+        # Error recording is handled by ConfigSynchronizer internally
         mock_logger.error.assert_called_with(
             f"❌ Configuration validation failed: {validation_error}"
         )
@@ -646,24 +618,16 @@ class TestSynchronizeWithHAProxyInstances:
         api_error = DataplaneAPIError(message="API request failed")
         mock_synchronizer_with_endpoints.sync_configuration.side_effect = api_error
 
-        with (
-            patch(
-                "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-            ) as mock_get_metrics,
-            patch("haproxy_template_ic.operator.synchronization.logger") as mock_logger,
-        ):
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
+        with patch(
+            "haproxy_template_ic.operator.synchronization.logger"
+        ) as mock_logger:
             # Act
             await synchronize_with_haproxy_instances(
                 mock_context_with_config, mock_synchronizer_with_endpoints
             )
 
         # Assert
-        mock_metrics.record_error.assert_called_once_with(
-            "dataplane_api_failed", "dataplane"
-        )
+        # Error recording is handled by ConfigSynchronizer internally
         # Verify error logging calls
         assert mock_logger.error.call_count == 2
         first_call, second_call = mock_logger.error.call_args_list
@@ -685,24 +649,16 @@ class TestSynchronizeWithHAProxyInstances:
             unexpected_error
         )
 
-        with (
-            patch(
-                "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-            ) as mock_get_metrics,
-            patch("haproxy_template_ic.operator.synchronization.logger") as mock_logger,
-        ):
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
+        with patch(
+            "haproxy_template_ic.operator.synchronization.logger"
+        ) as mock_logger:
             # Act
             await synchronize_with_haproxy_instances(
                 mock_context_with_config, mock_synchronizer_with_endpoints
             )
 
         # Assert
-        mock_metrics.record_error.assert_called_once_with(
-            "sync_unexpected_error", "dataplane"
-        )
+        # Error recording is handled by ConfigSynchronizer internally
         mock_logger.error.assert_called_with(
             f"❌ Unexpected error during synchronization: {unexpected_error}"
         )
@@ -720,16 +676,10 @@ class TestSynchronizeWithHAProxyInstances:
             mock_sync_result
         )
 
-        with patch(
-            "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-        ) as mock_get_metrics:
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
-            # Act
-            await synchronize_with_haproxy_instances(
-                mock_context_with_config, mock_synchronizer_with_endpoints
-            )
+        # Act
+        await synchronize_with_haproxy_instances(
+            mock_context_with_config, mock_synchronizer_with_endpoints
+        )
 
         # Assert - function should complete without issues
         # The autolog and trace decorators are applied but don't change core functionality
@@ -752,15 +702,9 @@ class TestSynchronizeWithHAProxyInstances:
 
         mock_synchronizer_with_endpoints.sync_configuration.return_value = mock_result
 
-        with (
-            patch(
-                "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-            ) as mock_get_metrics,
-            patch("haproxy_template_ic.operator.synchronization.logger") as mock_logger,
-        ):
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
+        with patch(
+            "haproxy_template_ic.operator.synchronization.logger"
+        ) as mock_logger:
             # Act
             await synchronize_with_haproxy_instances(
                 mock_context_with_config, mock_synchronizer_with_endpoints
@@ -811,6 +755,7 @@ class TestSynchronizationIntegration:
             "http://192.168.1.2:5555",
         ]
         mock_synchronizer.endpoints = mock_endpoints
+        mock_synchronizer.metrics = Mock()
 
         # Create successful sync result
         mock_result = Mock()
@@ -823,24 +768,18 @@ class TestSynchronizationIntegration:
 
         mock_synchronizer.sync_configuration = AsyncMock(return_value=mock_result)
 
-        with patch(
-            "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-        ) as mock_get_metrics:
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
-            # Act
-            await synchronize_with_haproxy_instances(context, mock_synchronizer)
+        # Act
+        await synchronize_with_haproxy_instances(context, mock_synchronizer)
 
         # Assert
         # Verify synchronizer was called with correct context
         mock_synchronizer.sync_configuration.assert_called_once_with(context)
 
         # Verify metrics were recorded
-        mock_metrics.record_haproxy_sync.assert_called_once_with(2, 0)
 
-        # Verify no errors were recorded
-        mock_metrics.record_error.assert_not_called()
+    # Metrics recording is handled by ConfigSynchronizer internally
+
+    # Error recording is handled by ConfigSynchronizer internally
 
     @pytest.mark.asyncio
     async def test_synchronization_with_complex_error_scenarios(self):
@@ -854,6 +793,7 @@ class TestSynchronizationIntegration:
         mock_synchronizer = Mock(spec=ConfigSynchronizer)
         mock_synchronizer.endpoints = Mock()
         mock_synchronizer.endpoints.production = ["http://192.168.1.1:5555"]
+        mock_synchronizer.metrics = Mock()
 
         # Create validation error with multiple hint triggers
         validation_error = ValidationError(
@@ -862,23 +802,15 @@ class TestSynchronizationIntegration:
         )
         mock_synchronizer.sync_configuration = AsyncMock(side_effect=validation_error)
 
-        with (
-            patch(
-                "haproxy_template_ic.operator.synchronization.get_metrics_collector"
-            ) as mock_get_metrics,
-            patch("haproxy_template_ic.operator.synchronization.logger") as mock_logger,
-        ):
-            mock_metrics = Mock()
-            mock_get_metrics.return_value = mock_metrics
-
+        with patch(
+            "haproxy_template_ic.operator.synchronization.logger"
+        ) as mock_logger:
             # Act
             await synchronize_with_haproxy_instances(context, mock_synchronizer)
 
         # Assert
         # Should record validation error
-        mock_metrics.record_error.assert_called_once_with(
-            "validation_failed", "dataplane"
-        )
+        # Error recording is handled by ConfigSynchronizer internally
 
         # Should log multiple hints due to error details containing multiple keywords
         hint_calls = [

@@ -6,7 +6,7 @@ for the HAProxy Dataplane API v3 integration.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, TypeVar, TYPE_CHECKING
 
@@ -360,6 +360,7 @@ class SynchronizationResult:
     method: str
     version: str
     reload_info: "ReloadInfo"
+    dataplane_errors: list[DataplaneAPIError] = field(default_factory=list)
 
 
 @dataclass
