@@ -28,6 +28,7 @@ from .adapter import (
     create_backend_switching_rule_frontend,
     create_bind_frontend,
     create_cache,
+    create_capture_frontend,
     create_defaults_section,
     create_fcgi_app,
     create_filter_backend,
@@ -45,11 +46,18 @@ from .adapter import (
     create_log_target_log_forward,
     create_log_target_peer,
     create_mailers_section,
+    create_mailer_mailers,
+    create_nameserver_resolvers,
     create_peer,
+    create_server_template_backends,
+    create_http_check_backends,
+    create_tcp_check_backends,
+    create_peer_entry_peer,
     create_program,
     create_resolver,
     create_ring,
     create_server_backend,
+    create_stick_rule_backend,
     create_userlist,
     delete_acl_backend,
     delete_acl_frontend,
@@ -57,6 +65,7 @@ from .adapter import (
     delete_backend_switching_rule_frontend,
     delete_bind_frontend,
     delete_cache,
+    delete_capture_frontend,
     delete_defaults_section,
     delete_fcgi_app,
     delete_filter_backend,
@@ -74,17 +83,25 @@ from .adapter import (
     delete_log_target_log_forward,
     delete_log_target_peer,
     delete_mailers_section,
+    delete_mailer_mailers,
+    delete_nameserver_resolvers,
     delete_peer,
+    delete_server_template_backends,
+    delete_http_check_backends,
+    delete_tcp_check_backends,
+    delete_peer_entry_peer,
     delete_program,
     delete_resolver,
     delete_ring,
     delete_server_backend,
+    delete_stick_rule_backend,
     delete_userlist,
     edit_mailers_section,
     get_all_acl_backend,
     get_all_acl_frontend,
     get_all_backend_switching_rule_frontend,
     get_all_bind_frontend,
+    get_all_capture_frontend,
     get_all_filter_backend,
     get_all_filter_frontend,
     get_all_http_request_rule_backend,
@@ -96,7 +113,14 @@ from .adapter import (
     get_all_log_target_global,
     get_all_log_target_log_forward,
     get_all_log_target_peer,
+    get_all_mailer_mailers,
+    get_all_nameserver_resolvers,
+    get_all_peer_entry_peer,
+    get_all_server_template_backends,
+    get_all_http_check_backends,
+    get_all_tcp_check_backends,
     get_all_server_backend,
+    get_stick_rules_backend,
     get_backends,
     get_caches,
     get_defaults_sections,
@@ -117,6 +141,7 @@ from .adapter import (
     replace_backend_switching_rule_frontend,
     replace_bind_frontend,
     replace_cache,
+    replace_capture_frontend,
     replace_defaults_section,
     replace_fcgi_app,
     replace_filter_backend,
@@ -134,10 +159,17 @@ from .adapter import (
     replace_log_target_global,
     replace_log_target_log_forward,
     replace_log_target_peer,
+    replace_mailer_mailers,
+    replace_nameserver_resolvers,
+    replace_peer_entry_peer,
+    replace_server_template_backends,
+    replace_http_check_backends,
+    replace_tcp_check_backends,
     replace_program,
     replace_resolver,
     replace_ring,
     replace_server_backend,
+    replace_stick_rule_backend,
     APIResponse,
 )
 from .types import (
@@ -184,6 +216,10 @@ class ConfigAPI:
     # Single source of truth for nested operations - prevents array synchronization bugs
     BACKEND_NESTED_OPERATIONS = [
         ("backend_servers", get_all_server_backend),
+        ("backend_server_templates", get_all_server_template_backends),
+        ("backend_http_checks", get_all_http_check_backends),
+        ("backend_tcp_checks", get_all_tcp_check_backends),
+        ("backend_stick_rules", get_stick_rules_backend),
         ("backend_acls", get_all_acl_backend),
         ("backend_http_request_rules", get_all_http_request_rule_backend),
         ("backend_http_response_rules", get_all_http_response_rule_backend),
@@ -194,6 +230,7 @@ class ConfigAPI:
     FRONTEND_NESTED_OPERATIONS = [
         ("frontend_binds", get_all_bind_frontend),
         ("frontend_acls", get_all_acl_frontend),
+        ("frontend_captures", get_all_capture_frontend),
         ("frontend_http_request_rules", get_all_http_request_rule_frontend),
         ("frontend_http_response_rules", get_all_http_response_rule_frontend),
         ("frontend_backend_switching_rules", get_all_backend_switching_rule_frontend),
@@ -207,7 +244,20 @@ class ConfigAPI:
     ]
 
     PEER_NESTED_OPERATIONS = [
+        ("peer_entries", get_all_peer_entry_peer),
         ("peer_log_targets", get_all_log_target_peer),
+    ]
+
+    MAILERS_NESTED_OPERATIONS = [
+        ("mailer_entries", get_all_mailer_mailers),
+    ]
+
+    LOG_FORWARD_NESTED_OPERATIONS = [
+        ("log_forward_log_targets", get_all_log_target_log_forward),
+    ]
+
+    RESOLVERS_NESTED_OPERATIONS = [
+        ("nameservers", get_all_nameserver_resolvers),
     ]
 
     @property
@@ -221,12 +271,35 @@ class ConfigAPI:
         return [key for key, _ in self.FRONTEND_NESTED_OPERATIONS]
 
     @property
+    def all_peer_keys(self) -> list[str]:
+        """Get all peer nested element keys."""
+        return [key for key, _ in self.PEER_NESTED_OPERATIONS]
+
+    @property
+    def all_mailers_keys(self) -> list[str]:
+        """Get all mailers nested element keys."""
+        return [key for key, _ in self.MAILERS_NESTED_OPERATIONS]
+
+    @property
+    def all_log_forward_keys(self) -> list[str]:
+        """Get all log_forward nested element keys."""
+        return [key for key, _ in self.LOG_FORWARD_NESTED_OPERATIONS]
+
+    @property
+    def all_resolvers_keys(self) -> list[str]:
+        """Get all resolvers nested element keys."""
+        return [key for key, _ in self.RESOLVERS_NESTED_OPERATIONS]
+
+    @property
     def all_nested_keys(self) -> list[str]:
         """Get all nested element keys for initialization."""
         return (
             self.all_backend_keys
             + self.all_frontend_keys
-            + ["global_log_targets", "peer_log_targets", "log_forward_log_targets"]
+            + self.all_mailers_keys
+            + self.all_log_forward_keys
+            + self.all_resolvers_keys
+            + ["global_log_targets", "peer_log_targets"]
         )
 
     def __init__(
@@ -349,10 +422,15 @@ class ConfigAPI:
             "programs": await _fetch_with_timing("fetch_programs", get_programs, []),
         }
 
-    def _create_backend_tasks(
-        self, backend_name: str, metrics: Any
+    def _create_section_tasks(
+        self, section_name: str, nested_operations: list, metrics: Any
     ) -> list[tuple[str, Any]]:
-        """Create concurrent tasks for fetching all nested elements of a backend.
+        """Create concurrent tasks for fetching all nested elements of any section type.
+
+        Args:
+            section_name: Name of the section instance
+            nested_operations: List of (key, function) tuples for this section type
+            metrics: Metrics collector for timing operations
 
         Returns:
             List of (nested_key, task) tuples for concurrent execution
@@ -368,39 +446,11 @@ class ConfigAPI:
                 return result.content or []
 
         tasks = []
-        for key, func in self.BACKEND_NESTED_OPERATIONS:
+        for key, func in nested_operations:
             task = _fetch_with_timing(
-                f"fetch_{key}_{backend_name}",
+                f"fetch_{key}_{section_name}",
                 func,
-                parent_name=backend_name,
-            )
-            tasks.append((key, task))
-        return tasks
-
-    def _create_frontend_tasks(
-        self, frontend_name: str, metrics: Any
-    ) -> list[tuple[str, Any]]:
-        """Create concurrent tasks for fetching all nested elements of a frontend.
-
-        Returns:
-            List of (nested_key, task) tuples for concurrent execution
-        """
-
-        async def _fetch_with_timing(
-            operation_name: str, adapter_func, *args, **kwargs
-        ):
-            with metrics.time_dataplane_api_operation(operation_name):
-                result: APIResponse = await adapter_func(
-                    *args, endpoint=self.endpoint, **kwargs
-                )
-                return result.content or []
-
-        tasks = []
-        for key, func in self.FRONTEND_NESTED_OPERATIONS:
-            task = _fetch_with_timing(
-                f"fetch_{key}_{frontend_name}",
-                func,
-                parent_name=frontend_name,
+                parent_name=section_name,
             )
             tasks.append((key, task))
         return tasks
@@ -441,6 +491,78 @@ class ConfigAPI:
                 nested[nested_key] = {}
             nested[nested_key][frontend_name] = result or []
 
+    async def _process_peer_results(
+        self, peer_name: str, results: list[Any], nested: dict[str, Any]
+    ) -> None:
+        """Process results from concurrent peer nested element fetching."""
+        nested_keys = self.all_peer_keys
+
+        # Runtime validation to catch future synchronization issues
+        if len(results) != len(nested_keys):
+            raise ValueError(
+                f"Peer result count {len(results)} != expected key count {len(nested_keys)} "
+                f"for peer '{peer_name}'. Keys: {nested_keys}"
+            )
+
+        for nested_key, result in zip(nested_keys, results):
+            if nested_key not in nested:
+                nested[nested_key] = {}
+            nested[nested_key][peer_name] = result or []
+
+    async def _process_mailers_results(
+        self, mailer_name: str, results: list[Any], nested: dict[str, Any]
+    ) -> None:
+        """Process results from concurrent mailers nested element fetching."""
+        nested_keys = self.all_mailers_keys
+
+        # Runtime validation to catch future synchronization issues
+        if len(results) != len(nested_keys):
+            raise ValueError(
+                f"Mailers result count {len(results)} != expected key count {len(nested_keys)} "
+                f"for mailer '{mailer_name}'. Keys: {nested_keys}"
+            )
+
+        for nested_key, result in zip(nested_keys, results):
+            if nested_key not in nested:
+                nested[nested_key] = {}
+            nested[nested_key][mailer_name] = result or []
+
+    async def _process_resolvers_results(
+        self, resolver_name: str, results: list[Any], nested: dict[str, Any]
+    ) -> None:
+        """Process results from concurrent resolvers nested element fetching."""
+        nested_keys = self.all_resolvers_keys
+
+        # Runtime validation to catch future synchronization issues
+        if len(results) != len(nested_keys):
+            raise ValueError(
+                f"Resolvers result count {len(results)} != expected key count {len(nested_keys)} "
+                f"for resolver '{resolver_name}'. Keys: {nested_keys}"
+            )
+
+        for nested_key, result in zip(nested_keys, results):
+            if nested_key not in nested:
+                nested[nested_key] = {}
+            nested[nested_key][resolver_name] = result or []
+
+    async def _process_log_forward_results(
+        self, log_forward_name: str, results: list[Any], nested: dict[str, Any]
+    ) -> None:
+        """Process results from concurrent log_forward nested element fetching."""
+        nested_keys = self.all_log_forward_keys
+
+        # Runtime validation to catch future synchronization issues
+        if len(results) != len(nested_keys):
+            raise ValueError(
+                f"Log_forward result count {len(results)} != expected key count {len(nested_keys)} "
+                f"for log_forward '{log_forward_name}'. Keys: {nested_keys}"
+            )
+
+        for nested_key, result in zip(nested_keys, results):
+            if nested_key not in nested:
+                nested[nested_key] = {}
+            nested[nested_key][log_forward_name] = result or []
+
     async def _fetch_nested_elements(
         self, config_sections: dict[str, Any], metrics: Any
     ) -> dict[str, Any]:
@@ -466,7 +588,9 @@ class ConfigAPI:
                 backend_names.append(backend_name)
 
                 # Create concurrent tasks for this backend
-                tasks = self._create_backend_tasks(backend_name, metrics)
+                tasks = self._create_section_tasks(
+                    backend_name, self.BACKEND_NESTED_OPERATIONS, metrics
+                )
                 # Extract just the tasks (second element of each tuple)
                 task_coroutines = [task for _, task in tasks]
                 backend_tasks.append(
@@ -514,7 +638,9 @@ class ConfigAPI:
                 frontend_names.append(frontend_name)
 
                 # Create concurrent tasks for this frontend
-                tasks = self._create_frontend_tasks(frontend_name, metrics)
+                tasks = self._create_section_tasks(
+                    frontend_name, self.FRONTEND_NESTED_OPERATIONS, metrics
+                )
                 # Extract just the tasks (second element of each tuple)
                 task_coroutines = [task for _, task in tasks]
                 frontend_tasks.append(
@@ -567,53 +693,207 @@ class ConfigAPI:
             _log_fetch_error("global log targets", "", e)
             nested["global_log_targets"] = []
 
-        # Fetch peer log targets
-        nested["peer_log_targets"] = {}
+        # Concurrent peer processing
         if config_sections.get("peers"):
-            for peer_section in config_sections["peers"]:
-                peer_name = peer_section.name
+            peer_tasks = []
+            peer_names = []
+
+            for peer in config_sections["peers"]:
+                peer_name = peer.name
+                peer_names.append(peer_name)
+
+                # Create concurrent tasks for this peer
+                tasks = self._create_section_tasks(
+                    peer_name, self.PEER_NESTED_OPERATIONS, metrics
+                )
+                # Extract just the tasks (second element of each tuple)
+                task_coroutines = [task for _, task in tasks]
+                peer_tasks.append(
+                    asyncio.gather(*task_coroutines, return_exceptions=True)
+                )
+
+            if peer_tasks:
                 try:
-
-                    async def _fetch_peer_logs(name):
-                        with metrics.time_dataplane_api_operation(
-                            f"fetch_peer_log_targets_{name}"
-                        ):
-                            result: APIResponse = await get_all_log_target_peer(
-                                parent_name=name, endpoint=self.endpoint
-                            )
-                            return result.content or []
-
-                    nested["peer_log_targets"][peer_name] = await _fetch_peer_logs(
-                        peer_name
+                    # Execute all peer tasks concurrently
+                    all_peer_results = await asyncio.gather(
+                        *peer_tasks, return_exceptions=True
                     )
-                except Exception as e:
-                    _log_fetch_error(f"peer {peer_name} log targets", "", e)
-                    nested["peer_log_targets"][peer_name] = []
 
-        # Fetch log_forward log targets
-        nested["log_forward_log_targets"] = {}
+                    # Process results for each peer
+                    for i, (peer_name, results) in enumerate(
+                        zip(peer_names, all_peer_results)
+                    ):
+                        if isinstance(results, Exception):
+                            _log_fetch_error(
+                                f"peer {peer_name} nested elements", "", results
+                            )
+                            # Initialize with empty lists for failed peer
+                            for key in self.all_peer_keys:
+                                nested[key][peer_name] = []
+                        else:
+                            await self._process_peer_results(peer_name, results, nested)
+                except Exception as e:
+                    _log_fetch_error("peer concurrent operations", "", e)
+            else:
+                # Initialize empty structure when no peers
+                for peer in config_sections["peers"]:
+                    peer_name = peer.name
+                    for key in self.all_peer_keys:
+                        nested[key][peer_name] = []
+
+        # Concurrent mailers processing
+        if config_sections.get("mailers"):
+            mailer_tasks = []
+            mailer_names = []
+
+            for mailer in config_sections["mailers"]:
+                mailer_name = mailer.name
+                mailer_names.append(mailer_name)
+
+                # Create concurrent tasks for this mailer
+                tasks = self._create_section_tasks(
+                    mailer_name, self.MAILERS_NESTED_OPERATIONS, metrics
+                )
+                # Extract just the tasks (second element of each tuple)
+                task_coroutines = [task for _, task in tasks]
+                mailer_tasks.append(
+                    asyncio.gather(*task_coroutines, return_exceptions=True)
+                )
+
+            if mailer_tasks:
+                try:
+                    # Execute all mailer tasks concurrently
+                    all_mailer_results = await asyncio.gather(
+                        *mailer_tasks, return_exceptions=True
+                    )
+
+                    # Process results for each mailer
+                    for i, (mailer_name, results) in enumerate(
+                        zip(mailer_names, all_mailer_results)
+                    ):
+                        if isinstance(results, Exception):
+                            _log_fetch_error(
+                                f"mailers {mailer_name} nested elements", "", results
+                            )
+                            # Initialize with empty lists for failed mailer
+                            for key in self.all_mailers_keys:
+                                nested[key][mailer_name] = []
+                        else:
+                            await self._process_mailers_results(
+                                mailer_name, results, nested
+                            )
+                except Exception as e:
+                    _log_fetch_error("mailers concurrent operations", "", e)
+            else:
+                # Initialize empty structure when no mailers
+                for mailer in config_sections["mailers"]:
+                    mailer_name = mailer.name
+                    for key in self.all_mailers_keys:
+                        nested[key][mailer_name] = []
+
+        # Concurrent resolvers processing
+        if config_sections.get("resolvers"):
+            resolver_tasks = []
+            resolver_names = []
+
+            for resolver in config_sections["resolvers"]:
+                resolver_name = resolver.name
+                resolver_names.append(resolver_name)
+
+                # Create concurrent tasks for this resolver
+                tasks = self._create_section_tasks(
+                    resolver_name, self.RESOLVERS_NESTED_OPERATIONS, metrics
+                )
+                # Extract just the tasks (second element of each tuple)
+                task_coroutines = [task for _, task in tasks]
+                resolver_tasks.append(
+                    asyncio.gather(*task_coroutines, return_exceptions=True)
+                )
+
+            if resolver_tasks:
+                try:
+                    # Execute all resolver tasks concurrently
+                    all_resolver_results = await asyncio.gather(
+                        *resolver_tasks, return_exceptions=True
+                    )
+
+                    # Process results for each resolver
+                    for i, (resolver_name, results) in enumerate(
+                        zip(resolver_names, all_resolver_results)
+                    ):
+                        if isinstance(results, Exception):
+                            _log_fetch_error(
+                                f"resolvers {resolver_name} nested elements",
+                                "",
+                                results,
+                            )
+                            # Initialize with empty lists for failed resolver
+                            for key in self.all_resolvers_keys:
+                                nested[key][resolver_name] = []
+                        else:
+                            await self._process_resolvers_results(
+                                resolver_name, results, nested
+                            )
+                except Exception as e:
+                    _log_fetch_error("resolvers concurrent operations", "", e)
+            else:
+                # Initialize empty structure when no resolvers
+                for resolver in config_sections["resolvers"]:
+                    resolver_name = resolver.name
+                    for key in self.all_resolvers_keys:
+                        nested[key][resolver_name] = []
+
+        # Concurrent log_forward processing
         if config_sections.get("log_forwards"):
-            for log_forward_section in config_sections["log_forwards"]:
-                log_forward_name = log_forward_section.name
+            log_forward_tasks = []
+            log_forward_names = []
+
+            for log_forward in config_sections["log_forwards"]:
+                log_forward_name = log_forward.name
+                log_forward_names.append(log_forward_name)
+
+                # Create concurrent tasks for this log_forward
+                tasks = self._create_section_tasks(
+                    log_forward_name, self.LOG_FORWARD_NESTED_OPERATIONS, metrics
+                )
+                # Extract just the tasks (second element of each tuple)
+                task_coroutines = [task for _, task in tasks]
+                log_forward_tasks.append(
+                    asyncio.gather(*task_coroutines, return_exceptions=True)
+                )
+
+            if log_forward_tasks:
                 try:
-
-                    async def _fetch_log_forward_logs(name):
-                        with metrics.time_dataplane_api_operation(
-                            f"fetch_log_forward_log_targets_{name}"
-                        ):
-                            result: APIResponse = await get_all_log_target_log_forward(
-                                parent_name=name, endpoint=self.endpoint
-                            )
-                            return result.content or []
-
-                    nested["log_forward_log_targets"][
-                        log_forward_name
-                    ] = await _fetch_log_forward_logs(log_forward_name)
-                except Exception as e:
-                    _log_fetch_error(
-                        f"log_forward {log_forward_name} log targets", "", e
+                    # Execute all log_forward tasks concurrently
+                    all_log_forward_results = await asyncio.gather(
+                        *log_forward_tasks, return_exceptions=True
                     )
-                    nested["log_forward_log_targets"][log_forward_name] = []
+
+                    # Process results for each log_forward
+                    for i, (log_forward_name, results) in enumerate(
+                        zip(log_forward_names, all_log_forward_results)
+                    ):
+                        if isinstance(results, Exception):
+                            _log_fetch_error(
+                                f"log_forward {log_forward_name} nested elements",
+                                "",
+                                results,
+                            )
+                            # Initialize with empty lists for failed log_forward
+                            for key in self.all_log_forward_keys:
+                                nested[key][log_forward_name] = []
+                        else:
+                            await self._process_log_forward_results(
+                                log_forward_name, results, nested
+                            )
+                except Exception as e:
+                    _log_fetch_error("log_forward concurrent operations", "", e)
+            else:
+                # Initialize empty structure when no log_forwards
+                for log_forward in config_sections["log_forwards"]:
+                    log_forward_name = log_forward.name
+                    for key in self.all_log_forward_keys:
+                        nested[key][log_forward_name] = []
 
         return nested
 
@@ -908,6 +1188,34 @@ class ConfigAPI:
                 "parent_field": "parent_name",
                 "id_field": "name",
             },
+            (ConfigSectionType.BACKEND, ConfigElementType.SERVER_TEMPLATE): {
+                "create": create_server_template_backends,
+                "update": replace_server_template_backends,
+                "delete": delete_server_template_backends,
+                "parent_field": "parent_name",
+                "id_field": "prefix",
+            },
+            (ConfigSectionType.BACKEND, ConfigElementType.HTTP_CHECK): {
+                "create": create_http_check_backends,
+                "update": replace_http_check_backends,
+                "delete": delete_http_check_backends,
+                "parent_field": "parent_name",
+                "id_field": "index",
+            },
+            (ConfigSectionType.BACKEND, ConfigElementType.TCP_CHECK): {
+                "create": create_tcp_check_backends,
+                "update": replace_tcp_check_backends,
+                "delete": delete_tcp_check_backends,
+                "parent_field": "parent_name",
+                "id_field": "index",
+            },
+            (ConfigSectionType.BACKEND, ConfigElementType.STICK_RULE): {
+                "create": create_stick_rule_backend,
+                "update": replace_stick_rule_backend,
+                "delete": delete_stick_rule_backend,
+                "parent_field": "parent_name",
+                "id_field": "index",
+            },
             (ConfigSectionType.BACKEND, ConfigElementType.ACL): {
                 "create": create_acl_backend,
                 "update": replace_acl_backend,
@@ -957,6 +1265,13 @@ class ConfigAPI:
                 "parent_field": "parent_name",
                 "id_field": "index",
             },
+            (ConfigSectionType.FRONTEND, ConfigElementType.CAPTURE): {
+                "create": create_capture_frontend,
+                "update": replace_capture_frontend,
+                "delete": delete_capture_frontend,
+                "parent_field": "parent_name",
+                "id_field": "index",
+            },
             (ConfigSectionType.FRONTEND, ConfigElementType.HTTP_REQUEST_RULE): {
                 "create": create_http_request_rule_frontend,
                 "update": replace_http_request_rule_frontend,
@@ -999,6 +1314,13 @@ class ConfigAPI:
                 "parent_field": None,  # Global log targets don't have a parent
                 "id_field": "index",
             },
+            (ConfigSectionType.PEER, ConfigElementType.PEER_ENTRY): {
+                "create": create_peer_entry_peer,
+                "update": replace_peer_entry_peer,
+                "delete": delete_peer_entry_peer,
+                "parent_field": "parent_name",
+                "id_field": "name",
+            },
             (ConfigSectionType.PEER, ConfigElementType.LOG_TARGET): {
                 "create": create_log_target_peer,
                 "update": replace_log_target_peer,
@@ -1012,6 +1334,20 @@ class ConfigAPI:
                 "delete": delete_log_target_log_forward,
                 "parent_field": "parent_name",
                 "id_field": "index",
+            },
+            (ConfigSectionType.MAILERS, ConfigElementType.MAILER): {
+                "create": create_mailer_mailers,
+                "update": replace_mailer_mailers,
+                "delete": delete_mailer_mailers,
+                "parent_field": "parent_name",
+                "id_field": "name",
+            },
+            (ConfigSectionType.RESOLVER, ConfigElementType.NAMESERVER): {
+                "create": create_nameserver_resolvers,
+                "update": replace_nameserver_resolvers,
+                "delete": delete_nameserver_resolvers,
+                "parent_field": "parent_name",
+                "id_field": "name",
             },
         }
 
@@ -1096,8 +1432,71 @@ class ConfigAPI:
                             version=version,
                         )
             else:
-                # For other APIs that expect all parameters as keyword arguments
-                await handler_config["create"](body=change.new_config, **base_params)
+                # For named elements, check if we need to pass the name as a separate argument
+                if (
+                    change.element_type
+                    in [ConfigElementType.MAILER, ConfigElementType.NAMESERVER]
+                    and handler_config["id_field"] == "name"
+                ):
+                    # Special handling for mailer/nameserver entries which need name as separate argument
+                    element_id = change.element_id
+                    if element_id is None:
+                        raise DataplaneAPIError(
+                            "CREATE operation for named element requires element_id",
+                            endpoint=self.endpoint,
+                            operation="apply_nested_element_change",
+                        )
+                    parent_name = change.section_name
+                    if transaction_id:
+                        await handler_config["create"](
+                            parent_name=parent_name,
+                            name=element_id,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            transaction_id=transaction_id,
+                        )
+                    else:
+                        await handler_config["create"](
+                            parent_name=parent_name,
+                            name=element_id,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            version=version,
+                        )
+                elif (
+                    change.element_type == ConfigElementType.SERVER_TEMPLATE
+                    and handler_config["id_field"] == "prefix"
+                ):
+                    # Special handling for server templates which need prefix as separate argument
+                    element_id = change.element_id
+                    if element_id is None:
+                        raise DataplaneAPIError(
+                            "CREATE operation for server template requires element_id (prefix)",
+                            endpoint=self.endpoint,
+                            operation="apply_nested_element_change",
+                        )
+                    parent_name = change.section_name
+                    if transaction_id:
+                        await handler_config["create"](
+                            parent_name=parent_name,
+                            prefix=element_id,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            transaction_id=transaction_id,
+                        )
+                    else:
+                        await handler_config["create"](
+                            parent_name=parent_name,
+                            prefix=element_id,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            version=version,
+                        )
+                else:
+                    # For other APIs that expect all parameters as keyword arguments
+                    await handler_config["create"](
+                        body=change.new_config, **base_params
+                    )
 
         elif change.change_type == ConfigChangeType.UPDATE:
             params = {**base_params, "body": change.new_config}
@@ -1127,9 +1526,33 @@ class ConfigAPI:
                         },
                     )
             elif element_id is not None:
-                # For other APIs that expect the id as keyword argument
-                params[handler_config["id_field"]] = element_id
-                await handler_config["update"](**params)
+                # Special handling for mailer/nameserver entries which need name as separate argument
+                if (
+                    change.element_type
+                    in [ConfigElementType.MAILER, ConfigElementType.NAMESERVER]
+                    and handler_config["id_field"] == "name"
+                ):
+                    parent_name = change.section_name
+                    if transaction_id:
+                        await handler_config["update"](
+                            parent_name=parent_name,
+                            name=element_id,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            transaction_id=transaction_id,
+                        )
+                    else:
+                        await handler_config["update"](
+                            parent_name=parent_name,
+                            name=element_id,
+                            endpoint=self.endpoint,
+                            body=change.new_config,
+                            version=version,
+                        )
+                else:
+                    # For other APIs that expect the id as keyword argument
+                    params[handler_config["id_field"]] = element_id
+                    await handler_config["update"](**params)
             else:
                 await handler_config["update"](**params)
 
@@ -1161,9 +1584,31 @@ class ConfigAPI:
                         },
                     )
             elif element_id is not None:
-                # For other APIs that expect the id as keyword argument
-                params[handler_config["id_field"]] = element_id
-                await handler_config["delete"](**params)
+                # Special handling for mailer/nameserver entries which need name as separate argument
+                if (
+                    change.element_type
+                    in [ConfigElementType.MAILER, ConfigElementType.NAMESERVER]
+                    and handler_config["id_field"] == "name"
+                ):
+                    parent_name = change.section_name
+                    if transaction_id:
+                        await handler_config["delete"](
+                            parent_name=parent_name,
+                            name=element_id,
+                            endpoint=self.endpoint,
+                            transaction_id=transaction_id,
+                        )
+                    else:
+                        await handler_config["delete"](
+                            parent_name=parent_name,
+                            name=element_id,
+                            endpoint=self.endpoint,
+                            version=version,
+                        )
+                else:
+                    # For other APIs that expect the id as keyword argument
+                    params[handler_config["id_field"]] = element_id
+                    await handler_config["delete"](**params)
             else:
                 await handler_config["delete"](**params)
 

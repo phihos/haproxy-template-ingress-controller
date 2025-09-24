@@ -44,6 +44,10 @@ _SECTION_ELEMENTS: Final[
 ] = {
     ConfigSectionType.BACKEND: [
         ("servers", ConfigElementType.SERVER, True),  # Named elements
+        ("server_templates", ConfigElementType.SERVER_TEMPLATE, True),  # Named elements
+        ("http_checks", ConfigElementType.HTTP_CHECK, False),  # Ordered elements
+        ("tcp_checks", ConfigElementType.TCP_CHECK, False),  # Ordered elements
+        ("stick_rules", ConfigElementType.STICK_RULE, False),  # Ordered
         ("http_request_rules", ConfigElementType.HTTP_REQUEST_RULE, False),  # Ordered
         ("http_response_rules", ConfigElementType.HTTP_RESPONSE_RULE, False),  # Ordered
         ("acls", ConfigElementType.ACL, False),  # Ordered
@@ -62,9 +66,20 @@ _SECTION_ELEMENTS: Final[
         ("acls", ConfigElementType.ACL, False),  # Ordered
         ("filters", ConfigElementType.FILTER, False),  # Ordered
         ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
+        ("captures", ConfigElementType.CAPTURE, False),  # Ordered
     ],
     ConfigSectionType.GLOBAL: [
         ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
+    ],
+    ConfigSectionType.PEER: [
+        ("peer_entries", ConfigElementType.PEER_ENTRY, True),  # Named elements
+        ("log_targets", ConfigElementType.LOG_TARGET, False),  # Ordered
+    ],
+    ConfigSectionType.MAILERS: [
+        ("mailer_entries", ConfigElementType.MAILER, True),  # Named elements
+    ],
+    ConfigSectionType.RESOLVER: [
+        ("nameservers", ConfigElementType.NAMESERVER, True),  # Named elements
     ],
 }
 
@@ -358,6 +373,8 @@ class ConfigSynchronizer:
         """
         if element_type == ConfigElementType.ACL:
             return getattr(item, "acl_name", None)
+        elif element_type == ConfigElementType.SERVER_TEMPLATE:
+            return getattr(item, "prefix", None)
 
         # For other element types, try standard attributes
         return getattr(item, "name", None) or getattr(item, "id", None)
@@ -504,6 +521,7 @@ class ConfigSynchronizer:
             flat_key_mappings = {
                 "acls": "frontend_acls",
                 "binds": "frontend_binds",
+                "captures": "frontend_captures",
                 "http_request_rules": "frontend_http_request_rules",
                 "http_response_rules": "frontend_http_response_rules",
                 "backend_switching_rules": "frontend_backend_switching_rules",
@@ -513,6 +531,10 @@ class ConfigSynchronizer:
         elif section_type == ConfigSectionType.BACKEND:
             flat_key_mappings = {
                 "servers": "backend_servers",
+                "server_templates": "backend_server_templates",
+                "http_checks": "backend_http_checks",
+                "tcp_checks": "backend_tcp_checks",
+                "stick_rules": "backend_stick_rules",
                 "acls": "backend_acls",
                 "http_request_rules": "backend_http_request_rules",
                 "http_response_rules": "backend_http_response_rules",
@@ -522,6 +544,19 @@ class ConfigSynchronizer:
         elif section_type == ConfigSectionType.GLOBAL:
             flat_key_mappings = {
                 "log_targets": "global_log_targets",
+            }
+        elif section_type == ConfigSectionType.PEER:
+            flat_key_mappings = {
+                "peer_entries": "peer_entries",
+                "log_targets": "peer_log_targets",
+            }
+        elif section_type == ConfigSectionType.MAILERS:
+            flat_key_mappings = {
+                "mailer_entries": "mailer_entries",
+            }
+        elif section_type == ConfigSectionType.RESOLVER:
+            flat_key_mappings = {
+                "nameservers": "nameservers",
             }
         else:
             # Other section types (DEFAULTS) don't have nested elements
@@ -600,6 +635,7 @@ class ConfigSynchronizer:
             new_nested = self._extract_nested_elements_for_section(
                 new, section_type, name
             )
+
             self._compare_nested_elements(
                 current_nested, new_nested, section_type, name, changes
             )
@@ -771,15 +807,16 @@ class ConfigSynchronizer:
                     )
                 )
 
-                for name in new_names - current_names:
-                    changes.append(
-                        ConfigChange(
-                            change_type=ConfigChangeType.CREATE,
-                            section_type=section_type,
-                            section_name=name,
-                            new_config=new_sections[name],
-                        )
+            # Creations
+            for name in new_names - current_names:
+                changes.append(
+                    ConfigChange(
+                        change_type=ConfigChangeType.CREATE,
+                        section_type=section_type,
+                        section_name=name,
+                        new_config=new_sections[name],
                     )
+                )
 
             # Modifications
             for name in current_names & new_names:
@@ -796,12 +833,20 @@ class ConfigSynchronizer:
                         )
                     )
 
-        # Analyze all named sections
+        # Analyze sections with nested elements
+        self._compare_section_configs(
+            current, new, "peers", ConfigSectionType.PEER, changes
+        )
+        self._compare_section_configs(
+            current, new, "mailers", ConfigSectionType.MAILERS, changes
+        )
+        self._compare_section_configs(
+            current, new, "resolvers", ConfigSectionType.RESOLVER, changes
+        )
+
+        # Analyze other named sections (using generic handler)
         analyze_named_sections("userlists", ConfigSectionType.USERLIST)
         analyze_named_sections("caches", ConfigSectionType.CACHE)
-        analyze_named_sections("mailers", ConfigSectionType.MAILERS)
-        analyze_named_sections("resolvers", ConfigSectionType.RESOLVER)
-        analyze_named_sections("peers", ConfigSectionType.PEER)
         analyze_named_sections("fcgi_apps", ConfigSectionType.FCGI_APP)
         analyze_named_sections("http_errors", ConfigSectionType.HTTP_ERRORS)
         analyze_named_sections("rings", ConfigSectionType.RING)

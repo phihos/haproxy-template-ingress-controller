@@ -79,6 +79,12 @@ from haproxy_dataplane_v3.api.cache import (
     get_caches as _get_caches,
     replace_cache as _replace_cache,
 )
+from haproxy_dataplane_v3.api.declare_capture import (
+    create_declare_capture as _create_declare_capture,
+    delete_declare_capture as _delete_declare_capture,
+    get_declare_captures as _get_declare_captures,
+    replace_declare_capture as _replace_declare_capture,
+)
 
 from haproxy_dataplane_v3.api.configuration import (
     get_configuration_version as _get_configuration_version,
@@ -188,6 +194,36 @@ from haproxy_dataplane_v3.api.mailers import (
     edit_mailers_section as _edit_mailers_section,
     get_mailers_sections as _get_mailers_sections,
 )
+from haproxy_dataplane_v3.api.mailer_entry import (
+    create_mailer_entry as _create_mailer_entry,
+    delete_mailer_entry as _delete_mailer_entry,
+    get_mailer_entries as _get_mailer_entries,
+    replace_mailer_entry as _replace_mailer_entry,
+)
+from haproxy_dataplane_v3.api.nameserver import (
+    create_nameserver as _create_nameserver,
+    delete_nameserver as _delete_nameserver,
+    get_nameservers as _get_nameservers,
+    replace_nameserver as _replace_nameserver,
+)
+from haproxy_dataplane_v3.api.server_template import (
+    create_server_template as _create_server_template,
+    delete_server_template as _delete_server_template,
+    get_server_templates as _get_server_templates,
+    replace_server_template as _replace_server_template,
+)
+from haproxy_dataplane_v3.api.http_check import (
+    create_http_check_backend as _create_http_check_backend,
+    delete_http_check_backend as _delete_http_check_backend,
+    get_all_http_check_backend as _get_all_http_check_backend,
+    replace_http_check_backend as _replace_http_check_backend,
+)
+from haproxy_dataplane_v3.api.tcp_check import (
+    create_tcp_check_backend as _create_tcp_check_backend,
+    delete_tcp_check_backend as _delete_tcp_check_backend,
+    get_all_tcp_check_backend as _get_all_tcp_check_backend,
+    replace_tcp_check_backend as _replace_tcp_check_backend,
+)
 
 from haproxy_dataplane_v3.api.maps import (
     add_map_entry as _add_map_entry,
@@ -199,6 +235,12 @@ from haproxy_dataplane_v3.api.peer import (
     create_peer as _create_peer,
     delete_peer as _delete_peer,
     get_peer_sections as _get_peer_sections,
+)
+from haproxy_dataplane_v3.api.peer_entry import (
+    create_peer_entry as _create_peer_entry,
+    delete_peer_entry as _delete_peer_entry,
+    get_peer_entries as _get_peer_entries,
+    replace_peer_entry as _replace_peer_entry,
 )
 from haproxy_dataplane_v3.api.process_manager import (
     create_program as _create_program,
@@ -228,6 +270,14 @@ from haproxy_dataplane_v3.api.server import (
     get_all_server_backend as _get_all_server_backend,
     replace_runtime_server as _replace_runtime_server,
     replace_server_backend as _replace_server_backend,
+)
+from haproxy_dataplane_v3.api.stick_rule import (
+    create_stick_rule as _create_stick_rule,
+    delete_stick_rule as _delete_stick_rule,
+    get_stick_rule as _get_stick_rule,
+    get_stick_rules as _get_stick_rules,
+    replace_stick_rule as _replace_stick_rule,
+    replace_stick_rules as _replace_stick_rules,
 )
 
 from haproxy_dataplane_v3.api.storage import (
@@ -270,6 +320,7 @@ from haproxy_dataplane_v3.models import (
     CreateStorageMapFileBody,
     CreateStorageSSLCertificateBody,
     Defaults,
+    DeclareCapture,
     Error,
     FcgiApp,
     Filter,
@@ -285,9 +336,15 @@ from haproxy_dataplane_v3.models import (
     LogForward,
     LogTarget,
     MailersSection,
+    MailerEntry,
     MapFile,
+    Nameserver,
     OneACLFileEntry,
     OneMapEntry,
+    PeerEntry,
+    ServerTemplate,
+    HTTPCheck,
+    TCPCheck,
     PeerSection,
     Program,
     ReplaceRuntimeMapEntryBody,
@@ -298,6 +355,7 @@ from haproxy_dataplane_v3.models import (
     RuntimeServer,
     # Nested element models
     Server,
+    StickRule,
     Userlist,
 )
 from haproxy_dataplane_v3.models import (
@@ -2759,6 +2817,477 @@ async def replace_frontend(
     )
 
 
+# Capture functions
+@api_function()
+async def get_all_capture_frontend(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[DeclareCapture]]:
+    return await _get_declare_captures.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_capture_frontend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: DeclareCapture,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[DeclareCapture | Error]:
+    return await _create_declare_capture.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_capture_frontend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error]:
+    return await _delete_declare_capture.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_capture_frontend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: DeclareCapture,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[DeclareCapture | Error]:
+    return await _replace_declare_capture.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# Mailer entry functions
+@api_function()
+async def get_all_mailer_mailers(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[MailerEntry]]:
+    return await _get_mailer_entries.asyncio_detailed(
+        mailers_section=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_mailer_mailers(
+    parent_name: str,
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: MailerEntry,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[MailerEntry | Error]:
+    return await _create_mailer_entry.asyncio_detailed(
+        mailers_section=parent_name,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_mailer_mailers(
+    parent_name: str,
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error]:
+    return await _delete_mailer_entry.asyncio_detailed(
+        mailers_section=parent_name,
+        name=name,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_mailer_mailers(
+    parent_name: str,
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: MailerEntry,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[MailerEntry | Error]:
+    return await _replace_mailer_entry.asyncio_detailed(
+        mailers_section=parent_name,
+        name=name,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# Nameserver entry functions
+@api_function()
+async def get_all_nameserver_resolvers(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[Nameserver]]:
+    return await _get_nameservers.asyncio_detailed(
+        resolver=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_nameserver_resolvers(
+    parent_name: str,
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: Nameserver,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Nameserver | Error]:
+    return await _create_nameserver.asyncio_detailed(
+        resolver=parent_name,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_nameserver_resolvers(
+    parent_name: str,
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error]:
+    return await _delete_nameserver.asyncio_detailed(
+        resolver=parent_name,
+        name=name,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_nameserver_resolvers(
+    parent_name: str,
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: Nameserver,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Nameserver | Error]:
+    return await _replace_nameserver.asyncio_detailed(
+        resolver=parent_name,
+        name=name,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# Server template functions
+@api_function()
+async def get_all_server_template_backends(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[ServerTemplate]]:
+    return await _get_server_templates.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_server_template_backends(
+    parent_name: str,
+    prefix: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: ServerTemplate,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[ServerTemplate | Error]:
+    return await _create_server_template.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_server_template_backends(
+    parent_name: str,
+    prefix: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error]:
+    return await _delete_server_template.asyncio_detailed(
+        parent_name=parent_name,
+        prefix=prefix,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_server_template_backends(
+    parent_name: str,
+    prefix: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: ServerTemplate,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[ServerTemplate | Error]:
+    return await _replace_server_template.asyncio_detailed(
+        parent_name=parent_name,
+        prefix=prefix,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# HTTP check functions
+@api_function()
+async def get_all_http_check_backends(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[HTTPCheck]]:
+    return await _get_all_http_check_backend.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_http_check_backends(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: HTTPCheck,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[HTTPCheck | Error]:
+    return await _create_http_check_backend.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_http_check_backends(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error]:
+    return await _delete_http_check_backend.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_http_check_backends(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: HTTPCheck,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[HTTPCheck | Error]:
+    return await _replace_http_check_backend.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+# TCP check functions
+@api_function()
+async def get_all_tcp_check_backends(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[TCPCheck]]:
+    return await _get_all_tcp_check_backend.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_tcp_check_backends(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: TCPCheck,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[TCPCheck | Error]:
+    return await _create_tcp_check_backend.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_tcp_check_backends(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error]:
+    return await _delete_tcp_check_backend.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_tcp_check_backends(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: TCPCheck,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[TCPCheck | Error]:
+    return await _replace_tcp_check_backend.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
 # Global functions
 @api_function()
 async def get_global(
@@ -3409,6 +3938,83 @@ async def delete_peer(
     )
 
 
+# Peer Entry functions
+@api_function()
+async def get_all_peer_entry_peer(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[PeerEntry]]:
+    return await _get_peer_entries.asyncio_detailed(
+        peer_section=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_peer_entry_peer(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: PeerEntry,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | PeerEntry]:
+    return await _create_peer_entry.asyncio_detailed(
+        peer_section=parent_name,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_peer_entry_peer(
+    parent_name: str,
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | None]:
+    return await _delete_peer_entry.asyncio_detailed(
+        name=name,
+        peer_section=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_peer_entry_peer(
+    parent_name: str,
+    name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: PeerEntry,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | PeerEntry]:
+    return await _replace_peer_entry.asyncio_detailed(
+        name=name,
+        peer_section=parent_name,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
 # Program functions
 @api_function()
 async def get_programs(
@@ -3804,3 +4410,120 @@ def check_configuration_response(
             pass
 
     return response
+
+
+# Stick Rule backend functions
+
+
+@api_function()
+async def get_stick_rules_backend(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | list[StickRule]]:
+    return await _get_stick_rules.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def get_stick_rule_backend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+) -> Response[Error | StickRule]:
+    return await _get_stick_rule.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+    )
+
+
+@api_function()
+async def create_stick_rule_backend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: StickRule,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | StickRule]:
+    return await _create_stick_rule.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def delete_stick_rule_backend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Any | Error]:
+    return await _delete_stick_rule.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_stick_rule_backend(
+    parent_name: str,
+    index: int,
+    *,
+    client: AuthenticatedClient | Client,
+    body: StickRule,
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | StickRule]:
+    return await _replace_stick_rule.asyncio_detailed(
+        parent_name=parent_name,
+        index=index,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
+
+
+@api_function()
+async def replace_stick_rules_backend(
+    parent_name: str,
+    *,
+    client: AuthenticatedClient | Client,
+    body: list[StickRule],
+    transaction_id: Unset | str = UNSET,
+    version: Unset | int = UNSET,
+    force_reload: Unset | bool = False,
+) -> Response[Error | list[StickRule]]:
+    return await _replace_stick_rules.asyncio_detailed(
+        parent_name=parent_name,
+        client=client,
+        body=body,
+        transaction_id=transaction_id,
+        version=version,
+        force_reload=force_reload,
+    )
