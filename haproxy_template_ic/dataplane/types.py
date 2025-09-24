@@ -91,6 +91,7 @@ class ConfigElementType(Enum):
     """Types of nested configuration elements within sections."""
 
     SERVER = "server"
+    SERVER_TEMPLATE = "server_template"
     SERVER_SWITCHING_RULE = "server_switching_rule"
     STICK_RULE = "stick_rule"
 
@@ -104,7 +105,13 @@ class ConfigElementType(Enum):
     TCP_RESPONSE_RULE = "tcp_response_rule"
     FILTER = "filter"
     LOG_TARGET = "log_target"
+    PEER_ENTRY = "peer_entry"
+    CAPTURE = "capture"
+    MAILER = "mailer"
+    NAMESERVER = "nameserver"
 
+    HTTP_CHECK = "http_check"
+    TCP_CHECK = "tcp_check"
     ERROR_FILE = "error_file"
 
 

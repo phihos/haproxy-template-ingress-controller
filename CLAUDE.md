@@ -12,12 +12,13 @@ This file provides guidance to Claude Code when working with this repository.
 
 ### Documentation Links
 - [Development Workflow](docs/DEVELOPMENT.md) - Setup, testing, debugging, build process
-- [Architecture](docs/ARCHITECTURE.md) - Code structure, components, design decisions  
+- [Architecture](docs/ARCHITECTURE.md) - Code structure, components, design decisions
 - [Configuration](docs/CONFIGURATION.md) - ConfigMap structure, runtime settings
 - [Templates](docs/TEMPLATES.md) - Jinja2 syntax, resource access patterns
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
 - [Operations](docs/OPERATIONS.md) - Monitoring, deployment, production guidance
 - [Style Guide](STYLEGUIDE.md) - Code quality standards and patterns
+- [Extending Synchronization](docs/EXTENDING_SYNCHRONIZATION.md) - Adding new HAProxy sections and elements
 
 ## Architecture Context
 

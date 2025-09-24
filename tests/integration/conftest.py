@@ -32,6 +32,7 @@ from haproxy_template_ic.dataplane import (
 )
 from haproxy_template_ic.metrics import MetricsCollector
 
+
 # HAProxyInstance removed in simplification - using direct URLs now
 from .utils import (
     DockerComposeManager,
@@ -190,12 +191,9 @@ async def validation_dataplane_client_raw(docker_compose_dataplane):
         yield client
 
 
-@pytest_asyncio.fixture
-async def validation_dataplane_client(docker_compose_dataplane):
-    """Ready-to-use DataplaneClient instance for validation integration tests."""
-    ports, compose_manager = docker_compose_dataplane
-
-    base_url = f"http://localhost:{ports['validation_port']}"
+async def _create_dataplane_client(port: int, compose_manager) -> DataplaneClient:
+    """Helper function to create DataplaneClient instances for integration tests."""
+    base_url = f"http://localhost:{port}"
     # Check readiness with base URL (without /v3)
     await assert_dataplane_api_ready(base_url, ("admin", "adminpass"), compose_manager)
 
@@ -206,8 +204,14 @@ async def validation_dataplane_client(docker_compose_dataplane):
     auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
     endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
     metrics = MetricsCollector()
-    client = DataplaneClient(endpoint, metrics)
+    return DataplaneClient(endpoint, metrics)
 
+
+@pytest_asyncio.fixture
+async def validation_dataplane_client(docker_compose_dataplane):
+    """Ready-to-use DataplaneClient instance for validation integration tests."""
+    ports, compose_manager = docker_compose_dataplane
+    client = await _create_dataplane_client(ports["validation_port"], compose_manager)
     yield client
 
 
@@ -215,20 +219,7 @@ async def validation_dataplane_client(docker_compose_dataplane):
 async def production_dataplane_client(docker_compose_dataplane):
     """Ready-to-use DataplaneClient instance for integration tests."""
     ports, compose_manager = docker_compose_dataplane
-
-    base_url = f"http://localhost:{ports['production_port']}"
-    # Check readiness with base URL (without /v3)
-    await assert_dataplane_api_ready(base_url, ("admin", "adminpass"), compose_manager)
-
-    # Add /v3 for the actual client
-    if not base_url.endswith("/v3"):
-        base_url += "/v3"
-
-    auth = DataplaneAuth(username="admin", password=SecretStr("adminpass"))
-    endpoint = DataplaneEndpoint(url=base_url, dataplane_auth=auth)
-    metrics = MetricsCollector()
-    client = DataplaneClient(endpoint, metrics)
-
+    client = await _create_dataplane_client(ports["production_port"], compose_manager)
     yield client
 
 
@@ -463,6 +454,40 @@ def assert_config_sync_success(result, allow_failures: bool = False):
         assert result.errors == [], (
             f"DataplaneAPIErrors occurred during deployment: {result.errors}"
         )
+
+
+async def assert_config_contains_pattern(
+    compose_manager, pattern: str, description: str = None
+) -> None:
+    """Assert that production HAProxy config contains the specified pattern.
+
+    Args:
+        compose_manager: DockerComposeManager instance
+        pattern: Regex pattern or literal string to search for
+        description: Optional description for better error messages
+    """
+    from .utils import read_container_file
+    import re
+
+    deployed_config = await read_container_file(
+        compose_manager, "production-haproxy", "/etc/haproxy/haproxy.cfg"
+    )
+
+    if re.search(pattern, deployed_config):
+        return
+
+    error_msg = f"Pattern '{pattern}' not found in deployed config"
+    if description:
+        error_msg = f"{description}: {error_msg}"
+
+    # Show snippet of config for debugging
+    lines = deployed_config.split("\n")
+    config_snippet = (
+        "\n".join(lines[:20]) + "\n..." if len(lines) > 20 else deployed_config
+    )
+    error_msg += f"\n\nDeployed config:\n{config_snippet}"
+
+    assert False, error_msg
 
 
 @pytest.fixture(scope="session")
