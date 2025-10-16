@@ -1,0 +1,335 @@
+package config
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestParseConfig_Success(t *testing.T) {
+	yamlConfig := `
+pod_selector:
+  match_labels:
+    app: haproxy
+
+controller:
+  healthz_port: 8080
+  metrics_port: 9090
+
+logging:
+  verbose: 1
+
+validation:
+  dataplane_host: localhost
+  dataplane_port: 5555
+
+watched_resources:
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    index_by: ["metadata.namespace"]
+
+haproxy_config:
+  template: |
+    global
+      log stdout
+`
+
+	cfg, err := ParseConfig(yamlConfig)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	assert.Equal(t, "haproxy", cfg.PodSelector.MatchLabels["app"])
+	assert.Equal(t, 8080, cfg.Controller.HealthzPort)
+	assert.Equal(t, "localhost", cfg.Validation.DataplaneHost)
+	assert.Contains(t, cfg.HAProxyConfig.Template, "global")
+}
+
+func TestParseConfig_EmptyString(t *testing.T) {
+	cfg, err := ParseConfig("")
+	assert.Error(t, err)
+	assert.Nil(t, cfg)
+	assert.Contains(t, err.Error(), "config YAML is empty")
+}
+
+func TestParseConfig_InvalidYAML(t *testing.T) {
+	yamlConfig := `
+pod_selector:
+  match_labels:
+    app: haproxy
+  invalid_indentation
+`
+
+	cfg, err := ParseConfig(yamlConfig)
+	assert.Error(t, err)
+	assert.Nil(t, cfg)
+	assert.Contains(t, err.Error(), "failed to unmarshal YAML")
+}
+
+func TestParseConfig_PartialConfig(t *testing.T) {
+	// Test that parsing works even with minimal config
+	// (validation is separate from parsing)
+	yamlConfig := `
+pod_selector:
+  match_labels:
+    app: haproxy
+
+watched_resources:
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    index_by: ["metadata.namespace"]
+
+haproxy_config:
+  template: "global"
+`
+
+	cfg, err := ParseConfig(yamlConfig)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	// Zero values should be present for unset fields
+	assert.Equal(t, 0, cfg.Controller.HealthzPort) // Will be set by defaults
+	assert.Equal(t, 0, cfg.Logging.Verbose)
+}
+
+func TestParseConfig_ComplexWatchedResources(t *testing.T) {
+	yamlConfig := `
+pod_selector:
+  match_labels:
+    app: haproxy
+
+watched_resources:
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    enable_validation_webhook: true
+    index_by: ["metadata.namespace", "metadata.name"]
+  services:
+    api_version: v1
+    kind: Service
+    enable_validation_webhook: false
+    index_by: ["metadata.namespace"]
+  endpoints:
+    api_version: discovery.k8s.io/v1
+    kind: EndpointSlice
+    index_by: ["metadata.labels['kubernetes.io/service-name']"]
+
+haproxy_config:
+  template: "global"
+`
+
+	cfg, err := ParseConfig(yamlConfig)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	assert.Len(t, cfg.WatchedResources, 3)
+
+	ingress := cfg.WatchedResources["ingresses"]
+	assert.True(t, ingress.EnableValidationWebhook)
+	assert.Len(t, ingress.IndexBy, 2)
+
+	service := cfg.WatchedResources["services"]
+	assert.False(t, service.EnableValidationWebhook)
+	assert.Len(t, service.IndexBy, 1)
+
+	endpoints := cfg.WatchedResources["endpoints"]
+	assert.Contains(t, endpoints.IndexBy[0], "kubernetes.io/service-name")
+}
+
+func TestLoadCredentials_Success(t *testing.T) {
+	secretData := map[string][]byte{
+		"dataplane_username":  []byte("admin"),
+		"dataplane_password":  []byte("adminpass"),
+		"validation_username": []byte("validator"),
+		"validation_password": []byte("validatorpass"),
+	}
+
+	creds, err := LoadCredentials(secretData)
+	require.NoError(t, err)
+	require.NotNil(t, creds)
+
+	assert.Equal(t, "admin", creds.DataplaneUsername)
+	assert.Equal(t, "adminpass", creds.DataplanePassword)
+	assert.Equal(t, "validator", creds.ValidationUsername)
+	assert.Equal(t, "validatorpass", creds.ValidationPassword)
+}
+
+func TestLoadCredentials_NilData(t *testing.T) {
+	creds, err := LoadCredentials(nil)
+	assert.Error(t, err)
+	assert.Nil(t, creds)
+	assert.Contains(t, err.Error(), "secret data is nil")
+}
+
+func TestLoadCredentials_MissingDataplaneUsername(t *testing.T) {
+	secretData := map[string][]byte{
+		"dataplane_password":  []byte("adminpass"),
+		"validation_username": []byte("validator"),
+		"validation_password": []byte("validatorpass"),
+	}
+
+	creds, err := LoadCredentials(secretData)
+	assert.Error(t, err)
+	assert.Nil(t, creds)
+	assert.Contains(t, err.Error(), "dataplane_username")
+}
+
+func TestLoadCredentials_MissingDataplanePassword(t *testing.T) {
+	secretData := map[string][]byte{
+		"dataplane_username":  []byte("admin"),
+		"validation_username": []byte("validator"),
+		"validation_password": []byte("validatorpass"),
+	}
+
+	creds, err := LoadCredentials(secretData)
+	assert.Error(t, err)
+	assert.Nil(t, creds)
+	assert.Contains(t, err.Error(), "dataplane_password")
+}
+
+func TestLoadCredentials_MissingValidationUsername(t *testing.T) {
+	secretData := map[string][]byte{
+		"dataplane_username":  []byte("admin"),
+		"dataplane_password":  []byte("adminpass"),
+		"validation_password": []byte("validatorpass"),
+	}
+
+	creds, err := LoadCredentials(secretData)
+	assert.Error(t, err)
+	assert.Nil(t, creds)
+	assert.Contains(t, err.Error(), "validation_username")
+}
+
+func TestLoadCredentials_MissingValidationPassword(t *testing.T) {
+	secretData := map[string][]byte{
+		"dataplane_username":  []byte("admin"),
+		"dataplane_password":  []byte("adminpass"),
+		"validation_username": []byte("validator"),
+	}
+
+	creds, err := LoadCredentials(secretData)
+	assert.Error(t, err)
+	assert.Nil(t, creds)
+	assert.Contains(t, err.Error(), "validation_password")
+}
+
+func TestLoadCredentials_EmptyValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     map[string][]byte
+		errField string
+	}{
+		{
+			name: "empty dataplane_username",
+			data: map[string][]byte{
+				"dataplane_username":  []byte(""),
+				"dataplane_password":  []byte("adminpass"),
+				"validation_username": []byte("validator"),
+				"validation_password": []byte("validatorpass"),
+			},
+			errField: "dataplane_username",
+		},
+		{
+			name: "empty dataplane_password",
+			data: map[string][]byte{
+				"dataplane_username":  []byte("admin"),
+				"dataplane_password":  []byte(""),
+				"validation_username": []byte("validator"),
+				"validation_password": []byte("validatorpass"),
+			},
+			errField: "dataplane_password",
+		},
+		{
+			name: "empty validation_username",
+			data: map[string][]byte{
+				"dataplane_username":  []byte("admin"),
+				"dataplane_password":  []byte("adminpass"),
+				"validation_username": []byte(""),
+				"validation_password": []byte("validatorpass"),
+			},
+			errField: "validation_username",
+		},
+		{
+			name: "empty validation_password",
+			data: map[string][]byte{
+				"dataplane_username":  []byte("admin"),
+				"dataplane_password":  []byte("adminpass"),
+				"validation_username": []byte("validator"),
+				"validation_password": []byte(""),
+			},
+			errField: "validation_password",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creds, err := LoadCredentials(tt.data)
+			assert.Error(t, err)
+			assert.Nil(t, creds)
+			assert.Contains(t, err.Error(), tt.errField)
+		})
+	}
+}
+
+func TestParseConfig_WithAllSections(t *testing.T) {
+	yamlConfig := `
+pod_selector:
+  match_labels:
+    app: haproxy
+
+controller:
+  healthz_port: 8080
+  metrics_port: 9090
+
+logging:
+  verbose: 2
+
+validation:
+  dataplane_host: 127.0.0.1
+  dataplane_port: 5556
+
+watched_resources_ignore_fields:
+  - metadata.managedFields
+  - metadata.annotations
+
+watched_resources:
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    index_by: ["metadata.namespace"]
+
+template_snippets:
+  test-snippet:
+    name: test-snippet
+    template: "test template"
+
+maps:
+  host.map:
+    template: "test map"
+
+files:
+  404.http:
+    template: "test file"
+
+haproxy_config:
+  template: "global"
+`
+
+	cfg, err := ParseConfig(yamlConfig)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	// Verify all sections were parsed
+	assert.Equal(t, "haproxy", cfg.PodSelector.MatchLabels["app"])
+	assert.Equal(t, 8080, cfg.Controller.HealthzPort)
+	assert.Equal(t, 2, cfg.Logging.Verbose)
+	assert.Equal(t, "127.0.0.1", cfg.Validation.DataplaneHost)
+	assert.Len(t, cfg.WatchedResourcesIgnoreFields, 2)
+	assert.Len(t, cfg.WatchedResources, 1)
+	assert.Len(t, cfg.TemplateSnippets, 1)
+	assert.Len(t, cfg.Maps, 1)
+	assert.Len(t, cfg.Files, 1)
+	assert.NotEmpty(t, cfg.HAProxyConfig.Template)
+}

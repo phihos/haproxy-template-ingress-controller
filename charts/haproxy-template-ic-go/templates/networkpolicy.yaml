@@ -1,0 +1,104 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "haproxy-template-ic-go.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic-go.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "haproxy-template-ic-go.selectorLabels" . | nindent 6 }}
+
+  policyTypes:
+    - Egress
+    - Ingress
+
+  # Egress rules - what the controller can access
+  egress:
+    {{- if .Values.networkPolicy.egress.allowDNS }}
+    # Allow DNS resolution (kube-dns/coredns)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- end }}
+
+    {{- if .Values.networkPolicy.egress.kubernetesApi }}
+    # Allow Kubernetes API Server access
+    {{- range .Values.networkPolicy.egress.kubernetesApi }}
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr }}
+      ports:
+        {{- range .ports }}
+        - port: {{ .port }}
+          protocol: {{ .protocol }}
+        {{- end }}
+    {{- end }}
+    {{- end }}
+
+    {{- if .Values.networkPolicy.egress.haproxyPods.enabled }}
+    # Allow access to HAProxy Dataplane API pods (cross-namespace)
+    - to:
+        - podSelector:
+            {{- toYaml .Values.networkPolicy.egress.haproxyPods.podSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.egress.haproxyPods.namespaceSelector }}
+          namespaceSelector:
+            {{- toYaml .Values.networkPolicy.egress.haproxyPods.namespaceSelector | nindent 12 }}
+          {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.egress.haproxyPods.ports }}
+        - port: {{ .port }}
+          protocol: {{ .protocol }}
+        {{- end }}
+    {{- end }}
+
+    {{- with .Values.networkPolicy.egress.additionalRules }}
+    # Additional egress rules
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+
+  # Ingress rules - what can access the controller
+  ingress:
+    {{- if .Values.networkPolicy.ingress.healthChecks.enabled }}
+    # Allow health checks
+    - from:
+        {{- toYaml .Values.networkPolicy.ingress.healthChecks.from | nindent 8 }}
+      ports:
+        {{- range .Values.networkPolicy.ingress.healthChecks.ports }}
+        - port: {{ .port }}
+          protocol: {{ .protocol }}
+        {{- end }}
+    {{- end }}
+
+    {{- if .Values.networkPolicy.ingress.monitoring.enabled }}
+    # Allow Prometheus/monitoring to scrape metrics
+    - from:
+        - podSelector:
+            {{- toYaml .Values.networkPolicy.ingress.monitoring.podSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.ingress.monitoring.namespaceSelector }}
+          namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingress.monitoring.namespaceSelector | nindent 12 }}
+          {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.ingress.monitoring.ports }}
+        - port: {{ .port }}
+          protocol: {{ .protocol }}
+        {{- end }}
+    {{- end }}
+
+    {{- with .Values.networkPolicy.ingress.additionalRules }}
+    # Additional ingress rules
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

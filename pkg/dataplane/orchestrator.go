@@ -1,0 +1,601 @@
+package dataplane
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
+	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/comparator"
+	"haproxy-template-ic/pkg/dataplane/comparator/sections"
+	"haproxy-template-ic/pkg/dataplane/parser"
+	"haproxy-template-ic/pkg/dataplane/synchronizer"
+)
+
+// orchestrator handles the complete sync workflow.
+type orchestrator struct {
+	client     *client.DataplaneClient
+	parser     *parser.Parser
+	comparator *comparator.Comparator
+	logger     *slog.Logger
+}
+
+// newOrchestrator creates a new orchestrator instance.
+func newOrchestrator(c *client.DataplaneClient) (*orchestrator, error) {
+	p, err := parser.New()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create parser: %w", err)
+	}
+
+	return &orchestrator{
+		client:     c,
+		parser:     p,
+		comparator: comparator.New(),
+		logger:     slog.Default(),
+	}, nil
+}
+
+// sync implements the complete sync workflow with automatic fallback.
+func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *SyncOptions, auxFiles *AuxiliaryFiles) (*SyncResult, error) {
+	startTime := time.Now()
+
+	// Step 1: Fetch current configuration from dataplane API
+	o.logger.Info("Fetching current configuration from dataplane API",
+		"endpoint", o.client.Endpoint.URL)
+
+	currentConfigStr, err := o.client.GetRawConfiguration(ctx)
+	if err != nil {
+		return nil, NewConnectionError(o.client.Endpoint.URL, err)
+	}
+
+	// Step 2: Parse current configuration
+	o.logger.Debug("Parsing current configuration")
+	currentConfig, err := o.parser.ParseFromString(currentConfigStr)
+	if err != nil {
+		snippet := currentConfigStr
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return nil, NewParseError("current", snippet, err)
+	}
+
+	// Step 3: Parse desired configuration
+	o.logger.Debug("Parsing desired configuration")
+	desiredParsed, err := o.parser.ParseFromString(desiredConfig)
+	if err != nil {
+		snippet := desiredConfig
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return nil, NewParseError("desired", snippet, err)
+	}
+
+	// Step 4: Compare configurations
+	o.logger.Info("Comparing configurations")
+	diff, err := o.comparator.Compare(currentConfig, desiredParsed)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare",
+			Message: "failed to compare configurations",
+			Cause:   err,
+			Hints: []string{
+				"Check that both configurations are valid",
+				"Review the comparison error for details",
+			},
+		}
+	}
+
+	// Step 5: Check if there are any changes
+	if !diff.Summary.HasChanges() {
+		o.logger.Info("No configuration changes detected")
+		return &SyncResult{
+			Success:           true,
+			AppliedOperations: nil,
+			ReloadTriggered:   false,
+			FallbackToRaw:     false,
+			Duration:          time.Since(startTime),
+			Retries:           0,
+			Details:           convertDiffSummary(diff.Summary),
+			Message:           "No configuration changes detected",
+		}, nil
+	}
+
+	o.logger.Info("Configuration changes detected",
+		"total_operations", diff.Summary.TotalOperations(),
+		"creates", diff.Summary.TotalCreates,
+		"updates", diff.Summary.TotalUpdates,
+		"deletes", diff.Summary.TotalDeletes)
+
+	// Step 6: Attempt fine-grained sync with retry logic
+	result, err := o.attemptFineGrainedSync(ctx, diff, opts, auxFiles, startTime)
+
+	// Step 7: If fine-grained sync failed and fallback is enabled, try raw config push
+	if err != nil && opts.FallbackToRaw {
+		o.logger.Warn("Fine-grained sync failed, attempting fallback to raw config push",
+			"error", err)
+
+		fallbackResult, fallbackErr := o.attemptRawFallback(ctx, desiredConfig, diff, startTime)
+		if fallbackErr != nil {
+			return nil, NewFallbackError(err, fallbackErr)
+		}
+
+		return fallbackResult, nil
+	}
+
+	return result, err
+}
+
+// attemptFineGrainedSync attempts to sync using fine-grained operations with retry logic.
+func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *comparator.ConfigDiff, opts *SyncOptions, auxFiles *AuxiliaryFiles, startTime time.Time) (*SyncResult, error) {
+	// Phase 1: Compare and sync auxiliary files (pre-config)
+	var fileDiff *auxiliaryfiles.FileDiff
+	var sslDiff *auxiliaryfiles.SSLCertificateDiff
+	var mapDiff *auxiliaryfiles.MapFileDiff
+
+	// 1.1: General Files
+	if len(auxFiles.GeneralFiles) > 0 {
+		o.logger.Info("Comparing general files",
+			"desired_files", len(auxFiles.GeneralFiles))
+
+		var err error
+		fileDiff, err = auxiliaryfiles.CompareGeneralFiles(ctx, o.client, auxFiles.GeneralFiles)
+		if err != nil {
+			return nil, &SyncError{
+				Stage:   "compare_files",
+				Message: "failed to compare general files",
+				Cause:   err,
+				Hints: []string{
+					"Verify Dataplane API is accessible",
+					"Check file permissions on HAProxy storage",
+				},
+			}
+		}
+
+		// Check if there are file changes
+		hasFileChanges := len(fileDiff.ToCreate) > 0 || len(fileDiff.ToUpdate) > 0 || len(fileDiff.ToDelete) > 0
+		if hasFileChanges {
+			o.logger.Info("General file changes detected",
+				"creates", len(fileDiff.ToCreate),
+				"updates", len(fileDiff.ToUpdate),
+				"deletes", len(fileDiff.ToDelete))
+
+			// Sync creates and updates BEFORE config sync
+			preConfigDiff := &auxiliaryfiles.FileDiff{
+				ToCreate: fileDiff.ToCreate,
+				ToUpdate: fileDiff.ToUpdate,
+				ToDelete: nil, // Don't delete yet
+			}
+
+			if err := auxiliaryfiles.SyncGeneralFiles(ctx, o.client, preConfigDiff); err != nil {
+				return nil, &SyncError{
+					Stage:   "sync_files_pre",
+					Message: "failed to sync general files before config sync",
+					Cause:   err,
+					Hints: []string{
+						"Check HAProxy storage is writable",
+						"Verify file contents are valid",
+						"Review error message for specific file failures",
+					},
+				}
+			}
+
+			o.logger.Info("General files synced successfully (pre-config phase)")
+		} else {
+			o.logger.Info("No general file changes detected")
+		}
+	}
+
+	// 1.2: SSL Certificates
+	if len(auxFiles.SSLCertificates) > 0 {
+		o.logger.Info("Comparing SSL certificates",
+			"desired_certs", len(auxFiles.SSLCertificates))
+
+		var err error
+		sslDiff, err = auxiliaryfiles.CompareSSLCertificates(ctx, o.client, auxFiles.SSLCertificates)
+		if err != nil {
+			return nil, &SyncError{
+				Stage:   "compare_ssl",
+				Message: "failed to compare SSL certificates",
+				Cause:   err,
+				Hints: []string{
+					"Verify Dataplane API is accessible",
+					"Check SSL storage permissions",
+				},
+			}
+		}
+
+		// Check if there are SSL changes
+		hasSSLChanges := len(sslDiff.ToCreate) > 0 || len(sslDiff.ToUpdate) > 0 || len(sslDiff.ToDelete) > 0
+		if hasSSLChanges {
+			o.logger.Info("SSL certificate changes detected",
+				"creates", len(sslDiff.ToCreate),
+				"updates", len(sslDiff.ToUpdate),
+				"deletes", len(sslDiff.ToDelete))
+
+			// Sync creates and updates BEFORE config sync
+			preConfigSSL := &auxiliaryfiles.SSLCertificateDiff{
+				ToCreate: sslDiff.ToCreate,
+				ToUpdate: sslDiff.ToUpdate,
+				ToDelete: nil, // Don't delete yet
+			}
+
+			if err := auxiliaryfiles.SyncSSLCertificates(ctx, o.client, preConfigSSL); err != nil {
+				return nil, &SyncError{
+					Stage:   "sync_ssl_pre",
+					Message: "failed to sync SSL certificates before config sync",
+					Cause:   err,
+					Hints: []string{
+						"Check SSL storage is writable",
+						"Verify certificate contents are valid PEM format",
+						"Review error message for specific certificate failures",
+					},
+				}
+			}
+
+			o.logger.Info("SSL certificates synced successfully (pre-config phase)")
+		} else {
+			o.logger.Info("No SSL certificate changes detected")
+		}
+	}
+
+	// 1.3: Map Files
+	if len(auxFiles.MapFiles) > 0 {
+		o.logger.Info("Comparing map files",
+			"desired_maps", len(auxFiles.MapFiles))
+
+		var err error
+		mapDiff, err = auxiliaryfiles.CompareMapFiles(ctx, o.client, auxFiles.MapFiles)
+		if err != nil {
+			return nil, &SyncError{
+				Stage:   "compare_maps",
+				Message: "failed to compare map files",
+				Cause:   err,
+				Hints: []string{
+					"Verify Dataplane API is accessible",
+					"Check map storage permissions",
+				},
+			}
+		}
+
+		// Check if there are map changes
+		hasMapChanges := len(mapDiff.ToCreate) > 0 || len(mapDiff.ToUpdate) > 0 || len(mapDiff.ToDelete) > 0
+		if hasMapChanges {
+			o.logger.Info("Map file changes detected",
+				"creates", len(mapDiff.ToCreate),
+				"updates", len(mapDiff.ToUpdate),
+				"deletes", len(mapDiff.ToDelete))
+
+			// Sync creates and updates BEFORE config sync
+			preConfigMap := &auxiliaryfiles.MapFileDiff{
+				ToCreate: mapDiff.ToCreate,
+				ToUpdate: mapDiff.ToUpdate,
+				ToDelete: nil, // Don't delete yet
+			}
+
+			if err := auxiliaryfiles.SyncMapFiles(ctx, o.client, preConfigMap); err != nil {
+				return nil, &SyncError{
+					Stage:   "sync_maps_pre",
+					Message: "failed to sync map files before config sync",
+					Cause:   err,
+					Hints: []string{
+						"Check map storage is writable",
+						"Verify map file contents are valid",
+						"Review error message for specific map file failures",
+					},
+				}
+			}
+
+			o.logger.Info("Map files synced successfully (pre-config phase)")
+		} else {
+			o.logger.Info("No map file changes detected")
+		}
+	}
+
+	// Phase 2: Execute configuration sync with retry logic
+	adapter := client.NewVersionAdapter(o.client, opts.MaxRetries)
+
+	var appliedOps []AppliedOperation
+	var reloadTriggered bool
+	var reloadID string
+	var retries int
+
+	// Execute with automatic retry on 409 conflicts
+	err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
+		retries++
+		o.logger.Info("Executing fine-grained sync",
+			"attempt", retries,
+			"transaction_id", tx.ID,
+			"version", tx.Version)
+
+		// Execute operations
+		syncResult, err := synchronizer.SyncOperations(ctx, o.client, diff.Operations)
+		if err != nil {
+			return err
+		}
+
+		reloadTriggered = syncResult.ReloadTriggered
+		reloadID = syncResult.ReloadID
+
+		// Convert operations to AppliedOperation
+		appliedOps = convertOperationsToApplied(diff.Operations)
+
+		return nil
+	})
+
+	if err != nil {
+		// Check if it's a version conflict error
+		var conflictErr *client.VersionConflictError
+		if errors.As(err, &conflictErr) {
+			return nil, NewConflictError(retries, conflictErr.ExpectedVersion, conflictErr.ActualVersion)
+		}
+
+		// Other errors - return with details
+		return nil, &SyncError{
+			Stage:   "apply",
+			Message: "failed to apply configuration changes",
+			Cause:   err,
+			Hints: []string{
+				"Review the error message for specific operation failures",
+				"Check HAProxy logs for detailed error information",
+				"Verify all resource references are valid",
+			},
+		}
+	}
+
+	// Phase 3: Delete obsolete files AFTER successful config sync
+	// 3.1: General Files
+	if fileDiff != nil && len(fileDiff.ToDelete) > 0 {
+		o.logger.Info("Deleting obsolete general files",
+			"count", len(fileDiff.ToDelete))
+
+		postConfigDiff := &auxiliaryfiles.FileDiff{
+			ToCreate: nil,
+			ToUpdate: nil,
+			ToDelete: fileDiff.ToDelete,
+		}
+
+		if err := auxiliaryfiles.SyncGeneralFiles(ctx, o.client, postConfigDiff); err != nil {
+			// Log warning but don't fail the sync - config is already applied
+			o.logger.Warn("Failed to delete obsolete general files",
+				"error", err,
+				"files", fileDiff.ToDelete)
+		} else {
+			o.logger.Info("Obsolete general files deleted successfully")
+		}
+	}
+
+	// 3.2: SSL Certificates
+	if sslDiff != nil && len(sslDiff.ToDelete) > 0 {
+		o.logger.Info("Deleting obsolete SSL certificates",
+			"count", len(sslDiff.ToDelete))
+
+		postConfigSSL := &auxiliaryfiles.SSLCertificateDiff{
+			ToCreate: nil,
+			ToUpdate: nil,
+			ToDelete: sslDiff.ToDelete,
+		}
+
+		if err := auxiliaryfiles.SyncSSLCertificates(ctx, o.client, postConfigSSL); err != nil {
+			// Log warning but don't fail the sync - config is already applied
+			o.logger.Warn("Failed to delete obsolete SSL certificates",
+				"error", err,
+				"certificates", sslDiff.ToDelete)
+		} else {
+			o.logger.Info("Obsolete SSL certificates deleted successfully")
+		}
+	}
+
+	// 3.3: Map Files
+	if mapDiff != nil && len(mapDiff.ToDelete) > 0 {
+		o.logger.Info("Deleting obsolete map files",
+			"count", len(mapDiff.ToDelete))
+
+		postConfigMap := &auxiliaryfiles.MapFileDiff{
+			ToCreate: nil,
+			ToUpdate: nil,
+			ToDelete: mapDiff.ToDelete,
+		}
+
+		if err := auxiliaryfiles.SyncMapFiles(ctx, o.client, postConfigMap); err != nil {
+			// Log warning but don't fail the sync - config is already applied
+			o.logger.Warn("Failed to delete obsolete map files",
+				"error", err,
+				"maps", mapDiff.ToDelete)
+		} else {
+			o.logger.Info("Obsolete map files deleted successfully")
+		}
+	}
+
+	o.logger.Info("Fine-grained sync completed successfully",
+		"operations", len(appliedOps),
+		"reload_triggered", reloadTriggered,
+		"retries", retries-1,
+		"duration", time.Since(startTime))
+
+	return &SyncResult{
+		Success:           true,
+		AppliedOperations: appliedOps,
+		ReloadTriggered:   reloadTriggered,
+		ReloadID:          reloadID,
+		FallbackToRaw:     false,
+		Duration:          time.Since(startTime),
+		Retries:           retries - 1,
+		Details:           convertDiffSummary(diff.Summary),
+		Message:           fmt.Sprintf("Successfully applied %d configuration changes", len(appliedOps)),
+	}, nil
+}
+
+// attemptRawFallback attempts to sync using raw configuration push.
+func (o *orchestrator) attemptRawFallback(ctx context.Context, desiredConfig string, diff *comparator.ConfigDiff, startTime time.Time) (*SyncResult, error) {
+	o.logger.Warn("Falling back to raw configuration push")
+
+	reloadID, err := o.client.PushRawConfiguration(ctx, desiredConfig)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "fallback",
+			Message: "failed to push raw configuration",
+			Cause:   err,
+			Hints: []string{
+				"The configuration may have fundamental issues",
+				"Validate the configuration with: haproxy -c -f <config>",
+				"Check HAProxy logs for detailed validation errors",
+			},
+		}
+	}
+
+	o.logger.Info("Raw configuration push completed successfully",
+		"duration", time.Since(startTime),
+		"reload_id", reloadID)
+
+	// Preserve detailed operation information from diff
+	// Even though we used raw config push, we still know what changes were applied
+	appliedOps := convertOperationsToApplied(diff.Operations)
+
+	return &SyncResult{
+		Success:           true,
+		AppliedOperations: appliedOps, // Preserve detailed operations instead of generic message
+		ReloadTriggered:   true,       // Raw push always triggers reload
+		ReloadID:          reloadID,   // Capture reload ID from raw config push
+		FallbackToRaw:     true,
+		Duration:          time.Since(startTime),
+		Retries:           0,
+		Details:           convertDiffSummary(diff.Summary),
+		Message:           "Successfully applied configuration via raw config push (fallback)",
+	}, nil
+}
+
+// diff generates a diff without applying any changes.
+func (o *orchestrator) diff(ctx context.Context, desiredConfig string) (*DiffResult, error) {
+	// Step 1: Fetch current configuration
+	currentConfigStr, err := o.client.GetRawConfiguration(ctx)
+	if err != nil {
+		return nil, NewConnectionError(o.client.Endpoint.URL, err)
+	}
+
+	// Step 2: Parse current configuration
+	currentConfig, err := o.parser.ParseFromString(currentConfigStr)
+	if err != nil {
+		snippet := currentConfigStr
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return nil, NewParseError("current", snippet, err)
+	}
+
+	// Step 3: Parse desired configuration
+	desiredParsed, err := o.parser.ParseFromString(desiredConfig)
+	if err != nil {
+		snippet := desiredConfig
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return nil, NewParseError("desired", snippet, err)
+	}
+
+	// Step 4: Compare configurations
+	diff, err := o.comparator.Compare(currentConfig, desiredParsed)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare",
+			Message: "failed to compare configurations",
+			Cause:   err,
+		}
+	}
+
+	// Convert to DiffResult
+	plannedOps := convertOperationsToPlanned(diff.Operations)
+
+	return &DiffResult{
+		HasChanges:        diff.Summary.HasChanges(),
+		PlannedOperations: plannedOps,
+		Details:           convertDiffSummary(diff.Summary),
+	}, nil
+}
+
+// Helper functions to convert internal types to public API types
+
+func convertOperationsToApplied(ops []comparator.Operation) []AppliedOperation {
+	applied := make([]AppliedOperation, 0, len(ops))
+	for _, op := range ops {
+		applied = append(applied, AppliedOperation{
+			Type:        operationTypeToString(op.Type()),
+			Section:     op.Section(),
+			Resource:    extractResourceName(op),
+			Description: op.Describe(),
+		})
+	}
+	return applied
+}
+
+func convertOperationsToPlanned(ops []comparator.Operation) []PlannedOperation {
+	planned := make([]PlannedOperation, 0, len(ops))
+	for _, op := range ops {
+		planned = append(planned, PlannedOperation{
+			Type:        operationTypeToString(op.Type()),
+			Section:     op.Section(),
+			Resource:    extractResourceName(op),
+			Description: op.Describe(),
+			Priority:    op.Priority(),
+		})
+	}
+	return planned
+}
+
+func operationTypeToString(opType sections.OperationType) string {
+	switch opType {
+	case sections.OperationCreate:
+		return "create"
+	case sections.OperationUpdate:
+		return "update"
+	case sections.OperationDelete:
+		return "delete"
+	default:
+		return "unknown"
+	}
+}
+
+func extractResourceName(op comparator.Operation) string {
+	desc := op.Describe()
+	// Extract resource name from description (format: "Action section 'name'")
+	// This is a simple heuristic - we look for text between single quotes
+	start := -1
+	for i, ch := range desc {
+		if ch == '\'' {
+			if start == -1 {
+				start = i + 1
+			} else {
+				return desc[start:i]
+			}
+		}
+	}
+	return "unknown"
+}
+
+func convertDiffSummary(summary comparator.DiffSummary) DiffDetails {
+	return DiffDetails{
+		TotalOperations:   summary.TotalOperations(),
+		Creates:           summary.TotalCreates,
+		Updates:           summary.TotalUpdates,
+		Deletes:           summary.TotalDeletes,
+		GlobalChanged:     summary.GlobalChanged,
+		DefaultsChanged:   summary.DefaultsChanged,
+		FrontendsAdded:    summary.FrontendsAdded,
+		FrontendsModified: summary.FrontendsModified,
+		FrontendsDeleted:  summary.FrontendsDeleted,
+		BackendsAdded:     summary.BackendsAdded,
+		BackendsModified:  summary.BackendsModified,
+		BackendsDeleted:   summary.BackendsDeleted,
+		ServersAdded:      summary.ServersAdded,
+		ServersModified:   summary.ServersModified,
+		ServersDeleted:    summary.ServersDeleted,
+		ACLsAdded:         make(map[string][]string),
+		ACLsModified:      make(map[string][]string),
+		ACLsDeleted:       make(map[string][]string),
+		HTTPRulesAdded:    make(map[string]int),
+		HTTPRulesModified: make(map[string]int),
+		HTTPRulesDeleted:  make(map[string]int),
+	}
+}

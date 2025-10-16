@@ -1,0 +1,187 @@
+package auxiliaryfiles
+
+import (
+	"context"
+	"fmt"
+)
+
+// FileItem represents any auxiliary file type (GeneralFile, SSLCertificate, MapFile).
+//
+// All auxiliary file types must implement this interface to work with the
+// generic Compare and Sync functions.
+type FileItem interface {
+	// GetIdentifier returns the unique identifier for this file (filename or path).
+	GetIdentifier() string
+
+	// GetContent returns the file content.
+	GetContent() string
+}
+
+// FileOperations defines CRUD operations for a specific auxiliary file type.
+//
+// Implementations wrap the DataplaneClient methods for general files, SSL certificates,
+// or map files.
+type FileOperations[T FileItem] interface {
+	// GetAll returns all file identifiers (filenames/paths) currently stored.
+	GetAll(ctx context.Context) ([]string, error)
+
+	// GetContent retrieves the content for a specific file by identifier.
+	GetContent(ctx context.Context, id string) (string, error)
+
+	// Create creates a new file with the given identifier and content.
+	Create(ctx context.Context, id, content string) error
+
+	// Update updates an existing file with new content.
+	Update(ctx context.Context, id, content string) error
+
+	// Delete removes a file by identifier.
+	Delete(ctx context.Context, id string) error
+}
+
+// FileDiffGeneric represents the differences between current and desired file states.
+//
+// This is a generic version of FileDiff/SSLCertificateDiff/MapFileDiff that works
+// with any FileItem type.
+type FileDiffGeneric[T FileItem] struct {
+	// ToCreate contains files that exist in the desired state but not in the current state.
+	ToCreate []T
+
+	// ToUpdate contains files that exist in both states but have different content.
+	ToUpdate []T
+
+	// ToDelete contains identifiers of files that exist in the current state but not in the desired state.
+	ToDelete []string
+}
+
+// Compare compares the current state of files with the desired state using generic operations.
+//
+// This function:
+//  1. Fetches all current file identifiers from the API
+//  2. Downloads content for each current file
+//  3. Compares with the desired files list
+//  4. Returns a FileDiffGeneric with operations needed to reach desired state
+//
+// Type Parameters:
+//   - T: The file item type (must implement FileItem interface)
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - ops: File operations adapter for the specific file type
+//   - desired: Desired file state
+//   - newFile: Constructor function to create a new file item from identifier and content
+//
+// Returns:
+//   - *FileDiffGeneric[T]: Diff containing create, update, and delete operations
+//   - error: Any error encountered during comparison
+func Compare[T FileItem](
+	ctx context.Context,
+	ops FileOperations[T],
+	desired []T,
+	newFile func(id, content string) T,
+) (*FileDiffGeneric[T], error) {
+	// Fetch current file identifiers from API
+	currentIDs, err := ops.GetAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch current files: %w", err)
+	}
+
+	// Download content for all current files
+	currentFiles := make([]T, 0, len(currentIDs))
+	for _, id := range currentIDs {
+		content, err := ops.GetContent(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get content for file '%s': %w", id, err)
+		}
+		currentFiles = append(currentFiles, newFile(id, content))
+	}
+
+	// Build maps for easier comparison
+	currentMap := make(map[string]T)
+	for _, file := range currentFiles {
+		currentMap[file.GetIdentifier()] = file
+	}
+
+	desiredMap := make(map[string]T)
+	for _, file := range desired {
+		desiredMap[file.GetIdentifier()] = file
+	}
+
+	diff := &FileDiffGeneric[T]{
+		ToCreate: []T{},
+		ToUpdate: []T{},
+		ToDelete: []string{},
+	}
+
+	// Find files to create or update
+	for id, desiredFile := range desiredMap {
+		currentFile, exists := currentMap[id]
+		if !exists {
+			// File doesn't exist in current state → create
+			diff.ToCreate = append(diff.ToCreate, desiredFile)
+		} else if currentFile.GetContent() != desiredFile.GetContent() {
+			// File exists but content differs → update
+			diff.ToUpdate = append(diff.ToUpdate, desiredFile)
+		}
+		// If content is identical, no action needed
+	}
+
+	// Find files to delete (exist in current but not in desired)
+	for id := range currentMap {
+		if _, exists := desiredMap[id]; !exists {
+			diff.ToDelete = append(diff.ToDelete, id)
+		}
+	}
+
+	return diff, nil
+}
+
+// Sync synchronizes files to the desired state by applying the provided diff.
+//
+// This function should be called in two phases:
+//   - Phase 1 (pre-config): Call with diff containing ToCreate and ToUpdate
+//   - Phase 2 (post-config): Call with diff containing ToDelete
+//
+// The caller is responsible for splitting the diff into these phases.
+//
+// Type Parameters:
+//   - T: The file item type (must implement FileItem interface)
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - ops: File operations adapter for the specific file type
+//   - diff: The diff to apply (may contain create, update, and/or delete operations)
+//
+// Returns:
+//   - error: Any error encountered during synchronization
+func Sync[T FileItem](
+	ctx context.Context,
+	ops FileOperations[T],
+	diff *FileDiffGeneric[T],
+) error {
+	if diff == nil {
+		return nil
+	}
+
+	// Create new files
+	for _, file := range diff.ToCreate {
+		if err := ops.Create(ctx, file.GetIdentifier(), file.GetContent()); err != nil {
+			return fmt.Errorf("failed to create file '%s': %w", file.GetIdentifier(), err)
+		}
+	}
+
+	// Update existing files
+	for _, file := range diff.ToUpdate {
+		if err := ops.Update(ctx, file.GetIdentifier(), file.GetContent()); err != nil {
+			return fmt.Errorf("failed to update file '%s': %w", file.GetIdentifier(), err)
+		}
+	}
+
+	// Delete obsolete files
+	for _, id := range diff.ToDelete {
+		if err := ops.Delete(ctx, id); err != nil {
+			return fmt.Errorf("failed to delete file '%s': %w", id, err)
+		}
+	}
+
+	return nil
+}

@@ -1,0 +1,58 @@
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+
+# Documentation
+docs/
+*.md
+README
+LICENSE
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+
+# Test files and test data
+*_test.go
+testdata/
+coverage.out
+coverage.html
+
+# Build artifacts and binaries
+bin/
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+controller
+
+# Temporary files
+*.tmp
+*.log
+*.pid
+.cache/
+
+# Local configuration
+.env
+.env.*
+*.local
+kubeconfig
+kubeconfig.*
+
+# Dependencies (using go modules, not vendor)
+vendor/
+
+# Other development files
+Makefile.local
+docker-compose*.yml

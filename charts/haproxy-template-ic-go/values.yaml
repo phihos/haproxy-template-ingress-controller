@@ -1,0 +1,324 @@
+# Default values for haproxy-template-ic-go.
+
+# Replica count for controller
+replicaCount: 1
+
+# Controller image configuration
+image:
+  repository: ghcr.io/phihos/haproxy-template-ic-go
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion
+  tag: ""
+
+# HAProxy image for validation sidecar
+haproxyImage:
+  repository: haproxytech/haproxy-debian
+  tag: "3.2"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Controller configuration
+controller:
+  # Name of the ConfigMap containing controller config
+  configmapName: haproxy-template-ic-config
+
+  # Controller configuration (rendered into ConfigMap)
+  config:
+    pod_selector:
+      match_labels:
+        app: haproxy
+        component: loadbalancer
+
+    controller:
+      healthz_port: 8080
+      metrics_port: 9090
+
+    logging:
+      verbose: 1  # 0=WARNING, 1=INFO, 2=DEBUG
+
+    validation:
+      dataplane_host: localhost
+      dataplane_port: 5555
+
+    watched_resources_ignore_fields:
+      - metadata.managedFields
+
+    watched_resources:
+      ingresses:
+        api_version: networking.k8s.io/v1
+        kind: Ingress
+        index_by: ["metadata.namespace", "metadata.name"]
+      services:
+        api_version: v1
+        kind: Service
+        index_by: ["metadata.namespace", "metadata.name"]
+      endpoints:
+        api_version: discovery.k8s.io/v1
+        kind: EndpointSlice
+        index_by: ["metadata.labels['kubernetes.io/service-name']"]
+      secrets:
+        api_version: v1
+        kind: Secret
+        index_by: ["metadata.namespace", "type"]
+
+    template_snippets:
+      backend-name:
+        name: backend-name
+        template: |
+          ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+
+    maps:
+      host.map:
+        template: |
+          {% for _, ingress in resources.get('ingresses', {}).items() %}
+          {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
+          {% set host_without_asterisk = rule.host | replace('*', '', 1) %}
+          {{ host_without_asterisk }} {{ host_without_asterisk }}
+          {% endfor %}
+          {% endfor %}
+
+    files:
+      400.http:
+        template: |
+          HTTP/1.0 400 Bad Request
+          Cache-Control: no-cache
+          Connection: close
+          Content-Type: text/html
+
+          <html><body><h1>400 Bad Request</h1>
+          <p>Your browser sent a request that this server could not understand.</p>
+          </body></html>
+
+    haproxy_config:
+      template: |
+        global
+            log stdout len 4096 local0 info
+            chroot /var/lib/haproxy
+            user haproxy
+            group haproxy
+            daemon
+
+        defaults
+            mode http
+            log global
+            option httplog
+            option dontlognull
+            timeout connect 5000
+            timeout client 50000
+            timeout server 50000
+
+        frontend status
+            bind *:8404
+            http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+
+        frontend http_frontend
+            bind *:80
+            default_backend default_backend
+
+        backend default_backend
+            http-request return status 404
+
+# Dataplane API credentials
+credentials:
+  dataplane:
+    username: admin
+    password: adminpass
+  validation:
+    username: admin
+    password: validationpass
+
+# Validation sidecar (optional)
+validation:
+  enabled: false
+  haproxy:
+    port: 8404
+
+# ServiceAccount configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Automatically mount a ServiceAccount's API credentials
+  automount: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# RBAC configuration
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels
+podLabels: {}
+
+# Pod security context
+podSecurityContext: {}
+  # fsGroup: 2000
+
+# Container security context
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# Service configuration
+service:
+  type: ClusterIP
+  healthzPort: 8080
+  metricsPort: 9090
+
+# Liveness and readiness probes
+# Disabled until /healthz endpoint is implemented in the controller
+# livenessProbe:
+#   httpGet:
+#     path: /healthz
+#     port: healthz
+#   initialDelaySeconds: 10
+#   periodSeconds: 10
+#
+# readinessProbe:
+#   httpGet:
+#     path: /healthz
+#     port: healthz
+#   initialDelaySeconds: 5
+#   periodSeconds: 5
+
+# Resources limits and requests
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 200m
+  #   memory: 256Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity rules
+affinity: {}
+
+# Autoscaling configuration
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: false
+  # Only one of minAvailable or maxUnavailable should be set
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# Prometheus ServiceMonitor
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Additional labels for ServiceMonitor
+    labels: {}
+    # Relabeling configurations
+    relabelings: []
+    # Metric relabeling configurations
+    metricRelabelings: []
+
+# NetworkPolicy configuration
+networkPolicy:
+  enabled: true
+
+  # Egress rules
+  egress:
+    # Allow DNS resolution (required for service discovery)
+    allowDNS: true
+
+    # Kubernetes API Server access (required for watching resources)
+    # Configure based on your cluster setup
+    kubernetesApi:
+      # For kind/standard clusters
+      # Adjust this CIDR based on your cluster
+      - cidr: 0.0.0.0/0  # Allow all by default, restrict in production
+        ports:
+          - port: 443
+            protocol: TCP
+          - port: 6443
+            protocol: TCP
+
+    # HAProxy Dataplane API pods (in any namespace)
+    haproxyPods:
+      # Allow access to all pods matching the pod_selector
+      enabled: true
+      # Pod selector for HAProxy pods
+      podSelector:
+        matchLabels:
+          app: haproxy
+          component: loadbalancer
+      # Namespace selector - empty {} means all namespaces
+      namespaceSelector: {}
+      ports:
+        - port: 5555  # Dataplane API
+          protocol: TCP
+        - port: 8404  # Health/stats
+          protocol: TCP
+
+    # Additional custom egress rules
+    additionalRules: []
+    # Example:
+    # - to:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           name: monitoring
+    #   ports:
+    #     - port: 9090
+    #       protocol: TCP
+
+  # Ingress rules
+  ingress:
+    # Allow Prometheus/monitoring to scrape metrics
+    monitoring:
+      enabled: false
+      # Pod selector for monitoring systems (e.g., Prometheus)
+      podSelector: {}
+      #   matchLabels:
+      #     app: prometheus
+      # Namespace selector for monitoring systems
+      namespaceSelector: {}
+      #   matchLabels:
+      #     name: monitoring
+      ports:
+        - port: 9090  # Metrics
+          protocol: TCP
+
+    # Allow health checks from load balancers/ingress
+    healthChecks:
+      enabled: true
+      # Allow from anywhere for health checks
+      from:
+        - podSelector: {}
+      ports:
+        - port: 8080  # Healthz
+          protocol: TCP
+
+    # Additional custom ingress rules
+    additionalRules: []

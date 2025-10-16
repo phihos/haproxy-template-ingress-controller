@@ -1,0 +1,1 @@
+Radically rearchitect the current changes to be as structured, readable and small as possible - without changing the functionality.

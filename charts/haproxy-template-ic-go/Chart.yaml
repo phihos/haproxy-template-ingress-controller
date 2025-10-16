@@ -1,0 +1,17 @@
+apiVersion: v2
+name: haproxy-template-ic-go
+description: HAProxy Template Ingress Controller (Go version)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - haproxy
+  - ingress
+  - controller
+  - loadbalancer
+  - template
+home: https://github.com/phihos/haproxy-template-ic
+sources:
+  - https://github.com/phihos/haproxy-template-ic
+maintainers:
+  - name: phihos
