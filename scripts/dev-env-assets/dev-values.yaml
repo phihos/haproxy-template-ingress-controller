@@ -1,0 +1,81 @@
+# Development values for haproxy-template-ic-go Helm chart
+
+# Use local development image
+image:
+  repository: haproxy-template-ic-go
+  tag: dev
+  pullPolicy: Never  # Never pull, always use local image
+
+# Enable validation sidecars for development
+validation:
+  enabled: true
+  haproxy:
+    port: 8404
+
+# Increase verbosity for debugging
+controller:
+  config:
+    logging:
+      verbose: 2  # DEBUG level
+
+# Resource limits for development (allow more flexibility)
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Disable autoscaling for development (fixed replica count)
+autoscaling:
+  enabled: false
+
+# Keep network policy but allow permissive access for dev
+networkPolicy:
+  enabled: true
+  egress:
+    allowDNS: true
+    kubernetesApi:
+      - cidr: 0.0.0.0/0  # Permissive for development
+        ports:
+          - port: 443
+            protocol: TCP
+          - port: 6443
+            protocol: TCP
+    haproxyPods:
+      enabled: true
+      podSelector:
+        matchLabels:
+          app: haproxy
+          component: loadbalancer
+      namespaceSelector: {}
+      ports:
+        - port: 5555
+          protocol: TCP
+        - port: 8404
+          protocol: TCP
+  ingress:
+    healthChecks:
+      enabled: true
+      from:
+        - podSelector: {}
+      ports:
+        - port: 8080
+          protocol: TCP
+    monitoring:
+      enabled: false
+
+# Development-specific pod labels for easier identification
+podLabels:
+  environment: development
+  managed-by: dev-script
+
+# Disable health probes until /healthz endpoint is implemented
+livenessProbe: {}
+readinessProbe: {}
+
+# Disable monitoring for simpler development setup
+monitoring:
+  serviceMonitor:
+    enabled: false

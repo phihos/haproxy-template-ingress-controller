@@ -1,0 +1,67 @@
+version: 1
+
+threshold:
+  compliance: 100
+  coverage: 100
+
+dependenciesRules:
+  # Rule 1: Only controller packages can depend on other top-level packages
+  - package: "**.pkg.controller.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.core.**"
+        - "**.pkg.dataplane.**"
+        - "**.pkg.events.**"
+        - "**.pkg.k8s.**"
+        - "**.pkg.templating.**"
+        - "**.codegen.**"
+
+  # Rule 2: core packages should NOT depend on other top-level packages
+  - package: "**.pkg.core.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.dataplane.**"
+        - "**.pkg.k8s.**"
+        - "**.pkg.templating.**"
+
+  # Rule 3: dataplane packages should NOT depend on other top-level packages
+  - package: "**.pkg.dataplane.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.core.**"
+        - "**.pkg.events.**"
+        - "**.pkg.k8s.**"
+        - "**.pkg.templating.**"
+
+  # Rule 4: events package should NOT depend on other top-level packages
+  - package: "**.pkg.events.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.core.**"
+        - "**.pkg.dataplane.**"
+        - "**.pkg.k8s.**"
+        - "**.pkg.templating.**"
+
+  # Rule 5: k8s packages should NOT depend on other top-level packages
+  - package: "**.pkg.k8s.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.core.**"
+        - "**.pkg.dataplane.**"
+        - "**.pkg.events.**"
+        - "**.pkg.templating.**"
+
+  # Rule 6: templating package should NOT depend on other top-level packages
+  - package: "**.pkg.templating.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.core.**"
+        - "**.pkg.dataplane.**"
+        - "**.pkg.events.**"
+        - "**.pkg.k8s.**"

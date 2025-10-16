@@ -1,0 +1,13 @@
+HTTP/1.1 503 Service Unavailable
+Content-Type: text/html
+Cache-Control: no-cache
+Connection: close
+
+<!DOCTYPE html>
+<html>
+<head><title>503 Service Unavailable</title></head>
+<body>
+<h1>503 Service Unavailable</h1>
+<p>The server is temporarily unable to service your request due to maintenance downtime or capacity problems.</p>
+</body>
+</html>

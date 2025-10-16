@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/HEAD/configuration-schema.json
+#
+# Configuration for oapi-codegen code generation
+# Generates Go models for HAProxy Dataplane API v3
+#
+package: dataplaneapi
+output: codegen/dataplaneapi/models.gen.go
+generate:
+  models: true

@@ -1,0 +1,42 @@
+HAProxy Template Ingress Controller has been installed!
+
+Controller Status:
+  kubectl get pods -l app.kubernetes.io/name={{ include "haproxy-template-ic-go.name" . }} -n {{ .Release.Namespace }}
+
+View Logs:
+  kubectl logs -f -l app.kubernetes.io/name={{ include "haproxy-template-ic-go.name" . }} -n {{ .Release.Namespace }}
+
+Configuration:
+  ConfigMap: {{ .Values.controller.configmapName }}
+  Secret: {{ include "haproxy-template-ic-go.fullname" . }}-credentials
+
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy:
+  NetworkPolicy has been created to allow:
+  - DNS resolution (kube-system namespace)
+  - Kubernetes API access
+  - HAProxy Dataplane API access (cross-namespace)
+  {{- if .Values.networkPolicy.ingress.monitoring.enabled }}
+  - Prometheus metrics scraping
+  {{- end }}
+
+  If you experience connectivity issues, check the NetworkPolicy configuration.
+{{- end }}
+
+Next Steps:
+  1. Deploy HAProxy pods with labels matching pod_selector:
+{{- range $key, $value := .Values.controller.config.pod_selector.match_labels }}
+     {{ $key }}: {{ $value }}
+{{- end }}
+
+  2. Each HAProxy pod should include:
+     - HAProxy container with Dataplane API sidecar
+     - Shared emptyDir volume for config
+     - Dataplane API accessible on port 5555
+     - Same pod labels for NetworkPolicy matching
+
+  3. Create Ingress resources to configure routing
+
+For more information, visit:
+  https://github.com/phihos/haproxy-template-ic

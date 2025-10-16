@@ -1,0 +1,70 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Project-specific binaries
+controller
+integration.test
+*.test
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+coverage.txt
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Build artifacts
+/bin/
+/build/
+/dist/
+
+# Dependency directories
+/vendor/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+*.bak
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+*.pid
+*.seed
+*.gz
+
+# Local environment and configuration
+.env
+.env.*
+!.env.example
+*.local
+kubeconfig
+kubeconfig.*
+
+# Kind cluster artifacts
+.kind/
+
+# Cache directories
+.cache/
+.go-cache/
+
+# Debug files
+__debug_bin
+
+# Air (live reload) temporary files
+tmp/

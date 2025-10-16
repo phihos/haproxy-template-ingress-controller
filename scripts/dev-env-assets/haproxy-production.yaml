@@ -1,0 +1,253 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-production-config
+  namespace: haproxy-template-ic
+data:
+  haproxy.cfg: |
+    global
+        log stdout len 4096 local0 info
+        chroot /var/lib/haproxy
+        stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+        user haproxy
+        group haproxy
+        daemon
+
+    defaults
+        mode http
+        log global
+        option httplog
+        option dontlognull
+        timeout connect 5000
+        timeout client 50000
+        timeout server 50000
+
+    frontend status
+        bind *:8404
+        http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+
+    frontend http_frontend
+        bind *:80
+        default_backend default_backend
+
+    backend default_backend
+        http-request return status 404
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-production
+  namespace: haproxy-template-ic
+  labels:
+    app: haproxy
+    component: loadbalancer
+    environment: production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: haproxy
+      component: loadbalancer
+  template:
+    metadata:
+      labels:
+        app: haproxy
+        component: loadbalancer
+        environment: production
+    spec:
+      containers:
+        # HAProxy container
+        - name: haproxy
+          image: haproxytech/haproxy-debian:3.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Create required directories
+              mkdir -p /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors /etc/haproxy/general
+              chown -R haproxy:haproxy /etc/haproxy
+
+              # Copy initial config
+              cp /config/haproxy.cfg /etc/haproxy/haproxy.cfg
+
+              # Start HAProxy in master-worker mode with master socket
+              exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+            - name: https
+              containerPort: 443
+              protocol: TCP
+            - name: healthz
+              containerPort: 8404
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: haproxy-runtime
+              mountPath: /etc/haproxy
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8404
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8404
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+        # Dataplane API sidecar
+        - name: dataplane
+          image: haproxytech/haproxy-debian:3.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Wait for HAProxy to create the socket
+              while [ ! -S /etc/haproxy/haproxy-master.sock ]; do
+                echo "Waiting for HAProxy master socket..."
+                sleep 1
+              done
+
+              # Create required directories
+              mkdir -p /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
+              mkdir -p /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/general
+              chown -R haproxy:haproxy /var/lib/dataplaneapi /etc/haproxy
+
+              # Create Dataplane API config
+              cat > /etc/haproxy/dataplaneapi.yaml <<'EOF'
+              config_version: 2
+              name: haproxy-dataplaneapi
+              dataplaneapi:
+                host: 0.0.0.0
+                port: 5555
+                user:
+                  - name: admin
+                    password: adminpass
+                    insecure: true
+                transaction:
+                  transaction_dir: /var/lib/dataplaneapi/transactions
+                  backups_number: 10
+                  backups_dir: /var/lib/dataplaneapi/backups
+                resources:
+                  maps_dir: /etc/haproxy/maps
+                  ssl_certs_dir: /etc/haproxy/certs
+                  general_storage_dir: /etc/haproxy/general
+              haproxy:
+                config_file: /etc/haproxy/haproxy.cfg
+                haproxy_bin: /usr/local/sbin/haproxy
+                reload:
+                  reload_delay: 1
+                  reload_cmd: /bin/sh -c "echo 'reload' | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock"
+                  restart_cmd: /bin/sh -c "echo 'reload' | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock"
+                  reload_strategy: custom
+              log_targets:
+                - log_to: stdout
+                  log_level: info
+              EOF
+
+              # Start Dataplane API
+              exec dataplaneapi --config-file=/etc/haproxy/dataplaneapi.yaml
+          ports:
+            - name: dataplane
+              containerPort: 5555
+              protocol: TCP
+          volumeMounts:
+            - name: haproxy-runtime
+              mountPath: /etc/haproxy
+          livenessProbe:
+            httpGet:
+              path: /v3/info
+              port: 5555
+              httpHeaders:
+                - name: Authorization
+                  value: "Basic YWRtaW46YWRtaW5wYXNz"  # admin:adminpass
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /v3/info
+              port: 5555
+              httpHeaders:
+                - name: Authorization
+                  value: "Basic YWRtaW46YWRtaW5wYXNz"  # admin:adminpass
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+
+      volumes:
+        - name: config
+          configMap:
+            name: haproxy-production-config
+        - name: haproxy-runtime
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-production
+  namespace: haproxy-template-ic
+  labels:
+    app: haproxy
+    component: loadbalancer
+spec:
+  type: NodePort
+  selector:
+    app: haproxy
+    component: loadbalancer
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30080
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: 443
+      nodePort: 30443
+      protocol: TCP
+    - name: healthz
+      port: 8404
+      targetPort: 8404
+      nodePort: 30404
+      protocol: TCP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-production-dataplane
+  namespace: haproxy-template-ic
+  labels:
+    app: haproxy
+    component: loadbalancer
+spec:
+  type: ClusterIP
+  selector:
+    app: haproxy
+    component: loadbalancer
+  ports:
+    - name: dataplane
+      port: 5555
+      targetPort: 5555
+      protocol: TCP

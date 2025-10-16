@@ -1,0 +1,13 @@
+HTTP/1.1 400 Bad Request
+Content-Type: text/html
+Cache-Control: no-cache
+Connection: close
+
+<!DOCTYPE html>
+<html>
+<head><title>400 Bad Request (Custom)</title></head>
+<body>
+<h1>400 Bad Request - Custom Error Page</h1>
+<p>This is a customized error page for bad requests.</p>
+</body>
+</html>
