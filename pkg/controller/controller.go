@@ -38,6 +38,7 @@ import (
 	"haproxy-template-ic/pkg/controller/credentialsloader"
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/controller/indextracker"
+	"haproxy-template-ic/pkg/controller/reconciler"
 	"haproxy-template-ic/pkg/controller/resourcewatcher"
 	"haproxy-template-ic/pkg/controller/validator"
 	coreconfig "haproxy-template-ic/pkg/core/config"
@@ -367,6 +368,31 @@ func setupConfigWatchers(
 	return nil
 }
 
+// setupReconciliation creates and starts the reconciliation components (Stage 5).
+//
+// The Reconciler debounces resource changes and triggers reconciliation events.
+// It is started after initial resource synchronization to ensure we have a complete
+// view of the cluster state before beginning reconciliation cycles.
+func setupReconciliation(
+	iterCtx context.Context,
+	bus *busevents.EventBus,
+	logger *slog.Logger,
+	cancel context.CancelFunc,
+) {
+	// Create Reconciler with default configuration
+	reconcilerComponent := reconciler.New(bus, logger, nil)
+
+	// Start reconciler in background
+	go func() {
+		if err := reconcilerComponent.Start(iterCtx); err != nil {
+			logger.Error("reconciler failed", "error", err)
+			cancel()
+		}
+	}()
+
+	logger.Info("Reconciliation components started")
+}
+
 // runIteration runs a single controller iteration.
 //
 // This function orchestrates the initialization sequence:
@@ -375,7 +401,8 @@ func setupConfigWatchers(
 //  3. Creates and starts resource watchers, waits for sync
 //  4. Creates and starts ConfigMap/Secret watchers, waits for sync
 //  5. Starts the EventBus (releases buffered events)
-//  6. Waits for config change signal or context cancellation
+//  6. Starts reconciliation components (Stage 5)
+//  7. Waits for config change signal or context cancellation
 //
 // Returns:
 //   - Error if initialization fails (causes retry)
@@ -431,9 +458,13 @@ func runIteration(
 	// 5. Start the EventBus (releases buffered events and begins normal operation)
 	bus.Start()
 
+	// 6. Start reconciliation components (Stage 5)
+	logger.Info("Stage 5: Starting reconciliation components")
+	setupReconciliation(iterCtx, bus, logger, cancel)
+
 	logger.Info("Controller iteration initialized successfully - entering event loop")
 
-	// 6. Wait for config change signal or context cancellation
+	// 7. Wait for config change signal or context cancellation
 	select {
 	case <-iterCtx.Done():
 		logger.Info("Controller iteration cancelled", "reason", iterCtx.Err())
