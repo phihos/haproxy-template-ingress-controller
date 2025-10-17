@@ -77,7 +77,7 @@ Get the controller running in your cluster in a few minutes.
 
 Deploy HAProxy pods that the controller will manage. Here's a simplified example for testing:
 
-> **Note**: This is a minimal example for quick testing. For production deployments with proper volume sharing, health checks, and configuration management, see the [Helm chart HAProxy examples](charts/haproxy-template-ic-go/README.md#haproxy-pod-requirements).
+> **Note**: This is a minimal example for quick testing. For production deployments with proper volume sharing, health checks, and configuration management, see the [Helm chart HAProxy examples](charts/haproxy-template-ic/README.md#haproxy-pod-requirements).
 
 ```bash
 kubectl apply -f - <<EOF
@@ -118,14 +118,14 @@ spec:
 EOF
 ```
 
-See [charts/haproxy-template-ic-go/README.md](charts/haproxy-template-ic-go/README.md#haproxy-pod-requirements) for production-ready HAProxy deployment examples.
+See [charts/haproxy-template-ic/README.md](charts/haproxy-template-ic/README.md#haproxy-pod-requirements) for production-ready HAProxy deployment examples.
 
 ### 2. Install the Controller
 
 Install using Helm:
 
 ```bash
-helm install haproxy-ic ./charts/haproxy-template-ic-go \
+helm install haproxy-ic ./charts/haproxy-template-ic \
   --set credentials.dataplane.username=admin \
   --set credentials.dataplane.password=adminpass
 ```
@@ -163,7 +163,7 @@ Check that the controller generated HAProxy configuration:
 
 ```bash
 # Check controller logs
-kubectl logs -l app.kubernetes.io/name=haproxy-template-ic-go
+kubectl logs -l app.kubernetes.io/name=haproxy-template-ic
 
 # View generated HAProxy config in HAProxy pod
 kubectl exec -it deployment/haproxy -c haproxy -- cat /etc/haproxy/haproxy.cfg
@@ -173,10 +173,10 @@ You should see your Ingress translated into HAProxy frontend rules and backend s
 
 ### Next Steps
 
-- Customize templates in the [ConfigMap configuration](charts/haproxy-template-ic-go/README.md#controller-configuration)
+- Customize templates in the [ConfigMap configuration](charts/haproxy-template-ic/README.md#controller-configuration)
 - Add more watched resources (Services, EndpointSlices, custom CRDs)
-- Enable [validation sidecar](charts/haproxy-template-ic-go/README.md#validation-sidecar) for safer deployments
-- Review [HAProxy pod requirements](charts/haproxy-template-ic-go/README.md#haproxy-pod-requirements) for production
+- Enable [validation sidecar](charts/haproxy-template-ic/README.md#validation-sidecar) for safer deployments
+- Review [HAProxy pod requirements](charts/haproxy-template-ic/README.md#haproxy-pod-requirements) for production
 
 ## Architecture
 

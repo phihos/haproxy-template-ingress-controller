@@ -1,14 +1,14 @@
 HAProxy Template Ingress Controller has been installed!
 
 Controller Status:
-  kubectl get pods -l app.kubernetes.io/name={{ include "haproxy-template-ic-go.name" . }} -n {{ .Release.Namespace }}
+  kubectl get pods -l app.kubernetes.io/name={{ include "haproxy-template-ic.name" . }} -n {{ .Release.Namespace }}
 
 View Logs:
-  kubectl logs -f -l app.kubernetes.io/name={{ include "haproxy-template-ic-go.name" . }} -n {{ .Release.Namespace }}
+  kubectl logs -f -l app.kubernetes.io/name={{ include "haproxy-template-ic.name" . }} -n {{ .Release.Namespace }}
 
 Configuration:
   ConfigMap: {{ .Values.controller.configmapName }}
-  Secret: {{ include "haproxy-template-ic-go.fullname" . }}-credentials
+  Secret: {{ include "haproxy-template-ic.fullname" . }}-credentials
 
 {{- if .Values.networkPolicy.enabled }}
 

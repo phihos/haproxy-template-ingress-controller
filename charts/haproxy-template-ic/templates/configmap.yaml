@@ -4,7 +4,7 @@ metadata:
   name: {{ .Values.controller.configmapName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "haproxy-template-ic-go.labels" . | nindent 4 }}
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 data:
   config: |
     {{ .Values.controller.config | toYaml | nindent 4 }}

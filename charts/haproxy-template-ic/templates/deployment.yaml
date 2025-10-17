@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "haproxy-template-ic-go.fullname" . }}
+  name: {{ include "haproxy-template-ic.fullname" . }}
   labels:
-    {{- include "haproxy-template-ic-go.labels" . | nindent 4 }}
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "haproxy-template-ic-go.selectorLabels" . | nindent 6 }}
+      {{- include "haproxy-template-ic.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -20,7 +20,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "haproxy-template-ic-go.labels" . | nindent 8 }}
+        {{- include "haproxy-template-ic.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -29,7 +29,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "haproxy-template-ic-go.serviceAccountName" . }}
+      serviceAccountName: {{ include "haproxy-template-ic.serviceAccountName" . }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -55,7 +55,7 @@ spec:
             - name: CONFIGMAP_NAME
               value: {{ .Values.controller.configmapName | quote }}
             - name: SECRET_NAME
-              value: {{ include "haproxy-template-ic-go.fullname" . }}-credentials
+              value: {{ include "haproxy-template-ic.fullname" . }}-credentials
             - name: VERBOSE
               value: {{ .Values.controller.config.logging.verbose | quote }}
           {{- with .Values.livenessProbe }}

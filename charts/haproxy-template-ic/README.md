@@ -1,6 +1,6 @@
-# HAProxy Template Ingress Controller (Go) Helm Chart
+# HAProxy Template Ingress Controller Helm Chart
 
-This Helm chart deploys the HAProxy Template Ingress Controller (Go version), which manages HAProxy configurations dynamically based on Kubernetes Ingress resources.
+This Helm chart deploys the HAProxy Template Ingress Controller, which manages HAProxy configurations dynamically based on Kubernetes Ingress resources.
 
 ## Overview
 
@@ -22,13 +22,13 @@ The HAProxy Template Ingress Controller:
 ### Basic Installation
 
 ```bash
-helm install my-controller ./charts/haproxy-template-ic-go
+helm install my-controller ./charts/haproxy-template-ic
 ```
 
 ### With Custom Values
 
 ```bash
-helm install my-controller ./charts/haproxy-template-ic-go \
+helm install my-controller ./charts/haproxy-template-ic \
   --set image.tag=v0.1.0 \
   --set replicaCount=2
 ```
@@ -36,7 +36,7 @@ helm install my-controller ./charts/haproxy-template-ic-go \
 ### With Custom Values File
 
 ```bash
-helm install my-controller ./charts/haproxy-template-ic-go \
+helm install my-controller ./charts/haproxy-template-ic \
   -f my-values.yaml
 ```
 
@@ -47,7 +47,7 @@ helm install my-controller ./charts/haproxy-template-ic-go \
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Number of controller replicas | `1` |
-| `image.repository` | Controller image repository | `ghcr.io/phihos/haproxy-template-ic-go` |
+| `image.repository` | Controller image repository | `ghcr.io/phihos/haproxy-template-ic` |
 | `image.tag` | Controller image tag | Chart appVersion |
 | `controller.config.pod_selector` | Labels to match HAProxy pods | `{app: haproxy, component: loadbalancer}` |
 | `controller.config.logging.verbose` | Log level (0=WARN, 1=INFO, 2=DEBUG) | `1` |
@@ -255,13 +255,13 @@ autoscaling:
 ### Upgrade the Chart
 
 ```bash
-helm upgrade my-controller ./charts/haproxy-template-ic-go
+helm upgrade my-controller ./charts/haproxy-template-ic
 ```
 
 ### Upgrade with New Values
 
 ```bash
-helm upgrade my-controller ./charts/haproxy-template-ic-go \
+helm upgrade my-controller ./charts/haproxy-template-ic \
   -f my-values.yaml
 ```
 
@@ -279,7 +279,7 @@ This removes all resources created by the chart.
 
 Check logs:
 ```bash
-kubectl logs -f -l app.kubernetes.io/name=haproxy-template-ic-go
+kubectl logs -f -l app.kubernetes.io/name=haproxy-template-ic
 ```
 
 Common issues:

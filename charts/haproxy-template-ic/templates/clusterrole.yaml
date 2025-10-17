@@ -2,9 +2,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "haproxy-template-ic-go.fullname" . }}
+  name: {{ include "haproxy-template-ic.fullname" . }}
   labels:
-    {{- include "haproxy-template-ic-go.labels" . | nindent 4 }}
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 rules:
   # Core resources
   - apiGroups: [""]

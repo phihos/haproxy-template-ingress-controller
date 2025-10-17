@@ -1,0 +1,367 @@
+// Copyright 2025 Philipp Hossner
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package controller provides the main controller orchestration for the HAProxy template ingress controller.
+//
+// The controller follows an event-driven architecture with a reinitialization loop:
+// 1. Fetch and validate initial configuration
+// 2. Create EventBus and components
+// 3. Start components and watchers
+// 4. Wait for configuration changes
+// 5. Reinitialize on valid config changes
+package controller
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"haproxy-template-ic/pkg/controller/commentator"
+	"haproxy-template-ic/pkg/controller/configchange"
+	"haproxy-template-ic/pkg/controller/configloader"
+	"haproxy-template-ic/pkg/controller/credentialsloader"
+	"haproxy-template-ic/pkg/controller/events"
+	"haproxy-template-ic/pkg/controller/validator"
+	coreconfig "haproxy-template-ic/pkg/core/config"
+	busevents "haproxy-template-ic/pkg/events"
+	"haproxy-template-ic/pkg/k8s/client"
+	"haproxy-template-ic/pkg/k8s/types"
+	"haproxy-template-ic/pkg/k8s/watcher"
+)
+
+const (
+	// RetryDelay is the duration to wait before retrying after an iteration failure.
+	RetryDelay = 5 * time.Second
+)
+
+// Run is the main entry point for the controller.
+//
+// It performs initial configuration fetching and validation, then enters a reinitialization
+// loop where it responds to configuration changes by restarting with the new configuration.
+//
+// The controller uses an event-driven architecture:
+//   - EventBus coordinates all components
+//   - SingleWatchers monitor ConfigMap and Secret
+//   - Components react to events and publish results
+//   - ConfigChangeHandler detects validated config changes and signals reinitialization
+//
+// Parameters:
+//   - ctx: Context for cancellation (SIGTERM, SIGINT, etc.)
+//   - k8sClient: Kubernetes client for API access
+//   - configMapName: Name of the ConfigMap containing the controller configuration
+//   - secretName: Name of the Secret containing HAProxy Dataplane API credentials
+//
+// Returns:
+//   - Error if the controller cannot start or encounters a fatal error
+//   - nil if the context is cancelled (graceful shutdown)
+func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName string) error {
+	logger := slog.Default()
+
+	logger.Info("HAProxy Template Ingress Controller starting",
+		"configmap", configMapName,
+		"secret", secretName,
+		"namespace", k8sClient.Namespace())
+
+	// Main reinitialization loop
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("Controller shutting down", "reason", ctx.Err())
+			return nil
+		default:
+			// Run one iteration
+			err := runIteration(ctx, k8sClient, configMapName, secretName, logger)
+			if err != nil {
+				// Check if error is context cancellation (graceful shutdown)
+				if ctx.Err() != nil {
+					logger.Info("Controller shutting down during iteration", "reason", ctx.Err())
+					return nil //nolint:nilerr // Graceful shutdown is not an error
+				}
+
+				// Log error and retry after delay
+				logger.Error("Controller iteration failed, retrying",
+					"error", err,
+					"retry_delay", RetryDelay)
+				time.Sleep(RetryDelay)
+			}
+			// If err == nil, config change occurred and we reinitialize immediately
+		}
+	}
+}
+
+// runIteration runs a single controller iteration.
+//
+// This function:
+//  1. Fetches and validates initial ConfigMap and Secret synchronously
+//  2. Creates the EventBus
+//  3. Creates and starts all event-driven components
+//  4. Creates and starts watchers for ConfigMap and Secret
+//  5. Starts the EventBus (releases buffered events)
+//  6. Waits for config change signal or context cancellation
+//  7. Cleans up all resources
+//
+// Returns:
+//   - Error if initialization fails (causes retry)
+//   - nil if context is cancelled or config change occurs (normal exit)
+//
+//nolint:revive // function-length: Initialization sequence is clear as a single function
+func runIteration(
+	ctx context.Context,
+	k8sClient *client.Client,
+	configMapName string,
+	secretName string,
+	logger *slog.Logger,
+) error {
+	logger.Info("Starting controller iteration")
+
+	// Define GVRs for ConfigMap and Secret
+	configMapGVR := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "configmaps",
+	}
+
+	secretGVR := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "secrets",
+	}
+
+	// 1. Synchronously fetch initial ConfigMap and Secret
+	logger.Info("Fetching initial configuration and credentials")
+
+	configMapResource, err := k8sClient.GetResource(ctx, configMapGVR, configMapName)
+	if err != nil {
+		return fmt.Errorf("failed to fetch ConfigMap %q: %w", configMapName, err)
+	}
+
+	secretResource, err := k8sClient.GetResource(ctx, secretGVR, secretName)
+	if err != nil {
+		return fmt.Errorf("failed to fetch Secret %q: %w", secretName, err)
+	}
+
+	// 2. Parse initial configuration
+	logger.Info("Parsing initial configuration")
+
+	cfg, err := parseConfigMap(configMapResource)
+	if err != nil {
+		return fmt.Errorf("failed to parse initial ConfigMap: %w", err)
+	}
+
+	creds, err := parseSecret(secretResource)
+	if err != nil {
+		return fmt.Errorf("failed to parse initial Secret: %w", err)
+	}
+
+	// 3. Validate initial configuration
+	logger.Info("Validating initial configuration")
+
+	if err := coreconfig.ValidateStructure(cfg); err != nil {
+		return fmt.Errorf("initial configuration validation failed: %w", err)
+	}
+
+	if err := coreconfig.ValidateCredentials(creds); err != nil {
+		return fmt.Errorf("initial credentials validation failed: %w", err)
+	}
+
+	logger.Info("Initial configuration validated successfully",
+		"config_version", configMapResource.GetResourceVersion(),
+		"secret_version", secretResource.GetResourceVersion())
+
+	// 4. Create EventBus with buffer for pre-start events
+	bus := busevents.NewEventBus(100)
+
+	// 5. Create components
+	eventCommentator := commentator.NewEventCommentator(bus, logger, 1000)
+	configLoaderComponent := configloader.NewConfigLoaderComponent(bus, logger)
+	credentialsLoaderComponent := credentialsloader.NewCredentialsLoaderComponent(bus, logger)
+
+	// Create validators
+	basicValidator := validator.NewBasicValidator(bus, logger)
+	templateValidator := validator.NewTemplateValidator(bus, logger)
+	jsonpathValidator := validator.NewJSONPathValidator(bus, logger)
+
+	// Create config change channel for reinitialization signaling
+	configChangeCh := make(chan *coreconfig.Config, 1)
+
+	// Register validators for scatter-gather validation
+	// Using AllValidatorNames() ensures consistency between validator names
+	// and expected responders in the scatter-gather pattern
+	validators := validator.AllValidatorNames()
+
+	configChangeHandlerComponent := configchange.NewConfigChangeHandler(
+		bus,
+		logger,
+		configChangeCh,
+		validators,
+	)
+
+	// 6. Start components in goroutines with iteration-specific context
+	iterCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go eventCommentator.Start(iterCtx)
+	go configLoaderComponent.Start(iterCtx)
+	go credentialsLoaderComponent.Start(iterCtx)
+	go basicValidator.Start(iterCtx)
+	go templateValidator.Start(iterCtx)
+	go jsonpathValidator.Start(iterCtx)
+	go configChangeHandlerComponent.Start(iterCtx)
+
+	logger.Debug("All components started")
+
+	// 7. Create watchers for ConfigMap and Secret
+	// Callbacks publish events to the EventBus
+
+	configMapWatcher, err := watcher.NewSingle(types.SingleWatcherConfig{
+		GVR:       configMapGVR,
+		Namespace: k8sClient.Namespace(),
+		Name:      configMapName,
+		OnChange: func(obj interface{}) error {
+			bus.Publish(events.NewConfigResourceChangedEvent(obj))
+			return nil
+		},
+	}, k8sClient)
+	if err != nil {
+		return fmt.Errorf("failed to create ConfigMap watcher: %w", err)
+	}
+
+	secretWatcher, err := watcher.NewSingle(types.SingleWatcherConfig{
+		GVR:       secretGVR,
+		Namespace: k8sClient.Namespace(),
+		Name:      secretName,
+		OnChange: func(obj interface{}) error {
+			bus.Publish(events.NewSecretResourceChangedEvent(obj))
+			return nil
+		},
+	}, k8sClient)
+	if err != nil {
+		return fmt.Errorf("failed to create Secret watcher: %w", err)
+	}
+
+	// 8. Start watchers in goroutines
+	go func() {
+		if err := configMapWatcher.Start(iterCtx); err != nil {
+			logger.Error("ConfigMap watcher failed", "error", err)
+			// Cancel iteration to trigger retry
+			cancel()
+		}
+	}()
+
+	go func() {
+		if err := secretWatcher.Start(iterCtx); err != nil {
+			logger.Error("Secret watcher failed", "error", err)
+			// Cancel iteration to trigger retry
+			cancel()
+		}
+	}()
+
+	logger.Debug("Watchers started, waiting for initial sync")
+
+	// 9. Wait for watchers to complete initial sync
+	// This prevents initial state from triggering spurious config change events
+	if err := configMapWatcher.WaitForSync(iterCtx); err != nil {
+		return fmt.Errorf("ConfigMap watcher sync failed: %w", err)
+	}
+	if err := secretWatcher.WaitForSync(iterCtx); err != nil {
+		return fmt.Errorf("Secret watcher sync failed: %w", err)
+	}
+
+	logger.Info("Watchers synced successfully")
+
+	// 10. Start the EventBus (releases buffered events and begins normal operation)
+	bus.Start()
+
+	logger.Info("Controller iteration initialized successfully - entering event loop")
+
+	// 11. Wait for config change signal or context cancellation
+	select {
+	case <-iterCtx.Done():
+		logger.Info("Controller iteration cancelled", "reason", iterCtx.Err())
+		return nil
+
+	case newConfig := <-configChangeCh:
+		logger.Info("Configuration change detected, triggering reinitialization",
+			"new_config_version", fmt.Sprintf("%p", newConfig))
+
+		// Cancel iteration context to stop all components and watchers
+		cancel()
+
+		// Brief pause to allow cleanup
+		time.Sleep(500 * time.Millisecond)
+
+		logger.Info("Reinitialization triggered - starting new iteration")
+		return nil
+	}
+}
+
+// parseConfigMap extracts and parses configuration from a ConfigMap resource.
+func parseConfigMap(resource *unstructured.Unstructured) (*coreconfig.Config, error) {
+	// Extract ConfigMap data field
+	data, found, err := unstructured.NestedStringMap(resource.Object, "data")
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract data field: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("ConfigMap has no data field")
+	}
+
+	// Extract "config" key containing YAML
+	configYAML, ok := data["config"]
+	if !ok {
+		return nil, fmt.Errorf("ConfigMap data missing 'config' key")
+	}
+
+	// Parse YAML
+	cfg, err := coreconfig.ParseConfig(configYAML)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse config YAML: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// parseSecret extracts and parses credentials from a Secret resource.
+func parseSecret(resource *unstructured.Unstructured) (*coreconfig.Credentials, error) {
+	// Extract Secret data field
+	dataRaw, found, err := unstructured.NestedMap(resource.Object, "data")
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract data field: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("Secret has no data field")
+	}
+
+	// Convert map[string]interface{} to map[string][]byte
+	data := make(map[string][]byte)
+	for key, value := range dataRaw {
+		if strValue, ok := value.(string); ok {
+			data[key] = []byte(strValue)
+		} else {
+			return nil, fmt.Errorf("Secret data key %q has invalid type: %T", key, value)
+		}
+	}
+
+	// Load credentials
+	creds, err := coreconfig.LoadCredentials(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load credentials: %w", err)
+	}
+
+	return creds, nil
+}

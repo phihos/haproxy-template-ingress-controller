@@ -2,15 +2,15 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "haproxy-template-ic-go.fullname" . }}
+  name: {{ include "haproxy-template-ic.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "haproxy-template-ic-go.labels" . | nindent 4 }}
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "haproxy-template-ic-go.fullname" . }}
+    name: {{ include "haproxy-template-ic.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:
