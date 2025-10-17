@@ -13,7 +13,7 @@ CTRL_NAMESPACE="haproxy-template-ic"
 ECHO_NAMESPACE="echo"
 ECHO_APP_NAME="echo-server"
 ECHO_IMAGE="ealen/echo-server:latest"
-LOCAL_IMAGE="haproxy-template-ic-go:dev"
+LOCAL_IMAGE="haproxy-template-ic:dev"
 HELM_RELEASE_NAME="haproxy-template-ic"
 TIMEOUT="180"
 SKIP_BUILD=false
@@ -150,7 +150,7 @@ parse_args() {
                 shift 2
                 ;;
             --image-tag)
-                LOCAL_IMAGE="haproxy-template-ic-go:$2"
+                LOCAL_IMAGE="haproxy-template-ic:$2"
                 shift 2
                 ;;
             --timeout)
@@ -224,15 +224,38 @@ cleanup_on_exit() {
 cleanup_failed_deployment() {
     warn "Cleaning up failed deployment..."
 
-    # Delete any failed pods to allow clean retry
-    kubectl -n "$CTRL_NAMESPACE" delete pods --field-selector=status.phase=Failed 2>/dev/null || true
-
-    # Rollback Helm release if it exists
-    if helm list -n "$CTRL_NAMESPACE" | grep -q "$HELM_RELEASE_NAME"; then
-        helm rollback "$HELM_RELEASE_NAME" -n "$CTRL_NAMESPACE" 2>/dev/null || true
+    # Check if namespace exists before attempting cleanup
+    if ! kubectl get namespace "$CTRL_NAMESPACE" >/dev/null 2>&1; then
+        debug "Namespace '$CTRL_NAMESPACE' does not exist, skipping cleanup"
+        return 0
     fi
 
-    debug "Failed deployment cleanup completed"
+    # Delete any failed pods to allow clean retry
+    debug "Removing failed pods..."
+    kubectl -n "$CTRL_NAMESPACE" delete pods --field-selector=status.phase=Failed 2>/dev/null || true
+
+    # Delete pods stuck in ImagePullBackOff or CrashLoopBackOff
+    debug "Removing stuck pods..."
+    kubectl -n "$CTRL_NAMESPACE" get pods -o json 2>/dev/null | \
+        jq -r '.items[] | select(.status.containerStatuses[]? | .state.waiting? | .reason? | test("ImagePullBackOff|CrashLoopBackOff|ErrImagePull")) | .metadata.name' | \
+        xargs -r kubectl -n "$CTRL_NAMESPACE" delete pod 2>/dev/null || true
+
+    # Rollback Helm release if it exists and has previous revisions
+    if helm list -n "$CTRL_NAMESPACE" 2>/dev/null | grep -q "$HELM_RELEASE_NAME"; then
+        local revision_count
+        revision_count=$(helm history "$HELM_RELEASE_NAME" -n "$CTRL_NAMESPACE" 2>/dev/null | wc -l)
+
+        # Only rollback if there are previous revisions (more than 2 lines: header + current)
+        if [[ $revision_count -gt 2 ]]; then
+            debug "Rolling back Helm release..."
+            helm rollback "$HELM_RELEASE_NAME" -n "$CTRL_NAMESPACE" 2>/dev/null || true
+        else
+            debug "No previous Helm revision to rollback to, uninstalling release..."
+            helm uninstall "$HELM_RELEASE_NAME" -n "$CTRL_NAMESPACE" 2>/dev/null || true
+        fi
+    fi
+
+    ok "Failed deployment cleanup completed"
 }
 
 retry_with_backoff() {
@@ -310,28 +333,97 @@ ensure_cluster() {
 	ok "Context configured."
 }
 
+# Verify and auto-switch kubectl context (CONVENIENCE + SAFETY)
+# Automatically switches to the dev cluster context if it exists.
+# Only fails if the expected context doesn't exist at all.
+verify_cluster_context() {
+	local expected_ctx="kind-${CLUSTER_NAME}"
+	local current_ctx
+	current_ctx=$(kubectl config current-context 2>/dev/null || echo "")
+
+	# Check if we're already on the right context
+	if [[ "$current_ctx" == "$expected_ctx" ]]; then
+		debug "Context verified: $current_ctx ✓"
+		return 0
+	fi
+
+	# Not on right context - check if expected context exists
+	if ! kubectl config get-contexts -o name | grep -qx "$expected_ctx"; then
+		err "Kind cluster context '$expected_ctx' not found!"
+		err "Available contexts:"
+		kubectl config get-contexts -o name | sed 's/^/  /'
+		err ""
+		err "The development cluster doesn't appear to exist."
+		err "Run '$0 up' first to create and initialize it."
+		exit 1
+	fi
+
+	# Context exists, switch to it automatically
+	if [[ -n "$current_ctx" ]]; then
+		warn "Switching kubectl context: $current_ctx → $expected_ctx"
+	else
+		log INFO "Setting kubectl context to: $expected_ctx"
+	fi
+
+	kubectl config use-context "$expected_ctx" >/dev/null
+	ok "Context switched to development cluster"
+}
+
 build_and_load_local_image() {
-    if [[ "$SKIP_BUILD" == "true" ]] && docker image inspect "${LOCAL_IMAGE}" >/dev/null 2>&1; then
+    # Build image unless --skip-build is set
+    if [[ "$SKIP_BUILD" != "true" ]]; then
+        local build_args=("-t" "${LOCAL_IMAGE}")
+
+        if [[ "$FORCE_REBUILD" == "true" ]]; then
+            build_args+=("--no-cache")
+        fi
+
+        build_args+=("${REPO_ROOT}")
+
+        local docker_path
+        docker_path="$(command -v docker)"
+
+        run_with_spinner "Building controller image '${LOCAL_IMAGE}'" \
+            "${docker_path}" build "${build_args[@]}"
+    elif docker image inspect "${LOCAL_IMAGE}" >/dev/null 2>&1; then
         ok "Using existing image '${LOCAL_IMAGE}'"
-        return 0
+    else
+        err "Image '${LOCAL_IMAGE}' not found and --skip-build was specified"
+        return 1
     fi
 
-    local build_args=("-t" "${LOCAL_IMAGE}")
+    # Get image SHA and create unique tag
+    local image_sha
+    image_sha=$(docker inspect --format='{{.Id}}' "${LOCAL_IMAGE}" | cut -d: -f2 | head -c 12)
 
-    if [[ "$FORCE_REBUILD" == "true" ]]; then
-        build_args+=("--no-cache")
+    if [[ -z "$image_sha" ]]; then
+        err "Failed to extract image SHA"
+        return 1
     fi
 
-    build_args+=("${REPO_ROOT}")
+    # Create unique image tag with SHA
+    local unique_tag="dev-${image_sha}"
+    local image_with_sha="${LOCAL_IMAGE%%:*}:${unique_tag}"
 
-    local docker_path
-    docker_path="$(command -v docker)"
+    debug "Tagging image with SHA: ${unique_tag}"
+    docker tag "${LOCAL_IMAGE}" "${image_with_sha}"
 
-    run_with_spinner "Building controller image '${LOCAL_IMAGE}'" \
-        "${docker_path}" build "${build_args[@]}"
+    # Load uniquely-tagged image into kind cluster
+    run_with_spinner "Loading image '${image_with_sha}' into kind cluster '${CLUSTER_NAME}'" \
+        kind load docker-image "${image_with_sha}" --name "${CLUSTER_NAME}"
 
-    run_with_spinner "Loading image into kind cluster '${CLUSTER_NAME}'" \
-        kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
+    # Verify the image was loaded successfully into the cluster
+    debug "Verifying image '${LOCAL_IMAGE%%:*}' in kind cluster..."
+    if docker exec "${CLUSTER_NAME}-control-plane" crictl images | grep -q "${LOCAL_IMAGE%%:*}"; then
+        ok "Image verified in cluster"
+    else
+        err "Image not found in cluster after loading"
+        return 1
+    fi
+
+    # Export unique tag for use by Helm
+    IMAGE_TAG="${unique_tag}"
+    debug "Exported IMAGE_TAG=${IMAGE_TAG}"
 }
 
 deploy_controller() {
@@ -343,16 +435,41 @@ deploy_controller() {
     print_section "🚀 Deploying Controller via Helm"
 
     # Create namespace if it doesn't exist
-    kubectl create namespace "${CTRL_NAMESPACE}" 2>/dev/null || true
+    if ! kubectl get namespace "${CTRL_NAMESPACE}" >/dev/null 2>&1; then
+        log INFO "Creating namespace '${CTRL_NAMESPACE}'..."
+        kubectl create namespace "${CTRL_NAMESPACE}"
+
+        # Wait for namespace to become active
+        debug "Waiting for namespace to become active..."
+        local max_wait=30
+        local waited=0
+        while [[ $waited -lt $max_wait ]]; do
+            if kubectl get namespace "${CTRL_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null | grep -q "Active"; then
+                ok "Namespace '${CTRL_NAMESPACE}' is active"
+                break
+            fi
+            sleep 1
+            ((waited++)) || true
+        done
+
+        if [[ $waited -ge $max_wait ]]; then
+            warn "Namespace did not become active within ${max_wait}s, continuing anyway..."
+        fi
+    else
+        ok "Using existing namespace '${CTRL_NAMESPACE}'"
+    fi
 
     log INFO "Deploying haproxy-template-ic to namespace '${CTRL_NAMESPACE}' using Helm..."
+    log INFO "Using image tag: ${IMAGE_TAG}"
 
     # Use helm upgrade --install for idempotent deployment
     # The --wait flag ensures all resources are ready before returning
+    # Override image.tag with unique SHA-based tag to force pod restart
     if helm upgrade --install "${HELM_RELEASE_NAME}" \
-        "${REPO_ROOT}/charts/haproxy-template-ic-go" \
+        "${REPO_ROOT}/charts/haproxy-template-ic" \
         --namespace "${CTRL_NAMESPACE}" \
         --values "${ASSETS_DIR}/dev-values.yaml" \
+        --set "image.tag=${IMAGE_TAG}" \
         --wait \
         --timeout "${TIMEOUT}s" 2>&1 | tee /tmp/helm-output.log; then
         ok "Controller deployed and ready."
@@ -462,18 +579,21 @@ EOF
 
 # Development convenience functions
 dev_logs() {
+    verify_cluster_context
     # Use label selector to find controller deployment
-    kubectl -n "$CTRL_NAMESPACE" logs -f -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME},app.kubernetes.io/name=haproxy-template-ic-go"
+    kubectl -n "$CTRL_NAMESPACE" logs -f -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME},app.kubernetes.io/name=haproxy-template-ic"
 }
 
 dev_exec() {
+    verify_cluster_context
     # Get the deployment name using label selector
     local deploy_name
-    deploy_name=$(kubectl -n "$CTRL_NAMESPACE" get deployment -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME},app.kubernetes.io/name=haproxy-template-ic-go" -o jsonpath='{.items[0].metadata.name}')
+    deploy_name=$(kubectl -n "$CTRL_NAMESPACE" get deployment -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME},app.kubernetes.io/name=haproxy-template-ic" -o jsonpath='{.items[0].metadata.name}')
     kubectl -n "$CTRL_NAMESPACE" exec -it deploy/"$deploy_name" -- sh
 }
 
 dev_restart() {
+    verify_cluster_context
     print_section "🔄 Restarting Controller"
 
     # Build and load new image unless skipped
@@ -485,18 +605,27 @@ dev_restart() {
         }
     else
         log INFO "Skipping image rebuild (--skip-build flag set)"
+        # Still need to tag and load existing image with unique tag
+        build_and_load_local_image || {
+            err "Failed to prepare image"
+            return 1
+        }
     fi
 
     # Upgrade Helm release to pick up any changes
-    log INFO "Upgrading Helm release..."
-    helm upgrade "${HELM_RELEASE_NAME}" \
-        "${REPO_ROOT}/charts/haproxy-template-ic-go" \
+    # Using --install makes this idempotent (works even if release doesn't exist)
+    # Override image.tag with unique SHA-based tag to force pod restart
+    log INFO "Upgrading Helm release with image tag: ${IMAGE_TAG}..."
+    helm upgrade --install "${HELM_RELEASE_NAME}" \
+        "${REPO_ROOT}/charts/haproxy-template-ic" \
         --namespace "${CTRL_NAMESPACE}" \
+        --create-namespace \
         --values "${ASSETS_DIR}/dev-values.yaml" \
+        --set "image.tag=${IMAGE_TAG}" \
         --wait \
         --timeout "${TIMEOUT}s" || {
         warn "Helm upgrade failed, rolling back..."
-        helm rollback "${HELM_RELEASE_NAME}" -n "${CTRL_NAMESPACE}"
+        helm rollback "${HELM_RELEASE_NAME}" -n "${CTRL_NAMESPACE}" 2>/dev/null || true
         return 1
     }
 
@@ -504,12 +633,13 @@ dev_restart() {
 }
 
 dev_status() {
+    verify_cluster_context
     print_section "📊 Development Environment Status"
 
     echo "Cluster:"
     if kind get clusters 2>/dev/null | grep -q "$CLUSTER_NAME"; then
         ok "Cluster '$CLUSTER_NAME' exists"
-        kubectl cluster-info --context "kind-$CLUSTER_NAME" | head -n 3
+        kubectl cluster-info | head -n 3
     else
         err "Cluster '$CLUSTER_NAME' not found"
         return 1
@@ -565,6 +695,7 @@ dev_down() {
 }
 
 test_ingress() {
+    verify_cluster_context
     print_section "🧪 Testing Ingress Controller"
 
     # Check if the echo service is available
@@ -578,10 +709,29 @@ test_ingress() {
         log INFO "Testing via NodePort (localhost:30080)..."
         echo "Trying to connect to echo service through HAProxy ingress controller..."
 
-        # Wait a moment for the service to be ready
-        sleep 2
+        # Wait for the service to be ready with retries
+        local max_attempts=10
+        local delay=2
+        local attempt=1
+        local test_successful=false
 
-        if curl -s --max-time 10 -H "Host: echo.localdev.me" http://localhost:30080 >/dev/null 2>&1; then
+        while [[ $attempt -le $max_attempts ]]; do
+            debug "Connection attempt $attempt/$max_attempts..."
+
+            if curl -s --max-time 5 -H "Host: echo.localdev.me" http://localhost:30080 >/dev/null 2>&1; then
+                test_successful=true
+                break
+            fi
+
+            if [[ $attempt -lt $max_attempts ]]; then
+                debug "Connection failed, waiting ${delay}s before retry..."
+                sleep "$delay"
+            fi
+
+            ((attempt++)) || true
+        done
+
+        if [[ "$test_successful" == "true" ]]; then
             ok "Ingress controller is working! Echo service is accessible"
             echo
             echo "Test the ingress controller with:"
@@ -592,7 +742,8 @@ test_ingress() {
             echo "  Add '127.0.0.1 echo.localdev.me' to /etc/hosts"
             echo "  Then visit: http://echo.localdev.me:30080"
         else
-            warn "Could not reach echo service through ingress controller"
+            warn "Could not reach echo service through ingress controller after $max_attempts attempts"
+            echo
             echo "Troubleshooting steps:"
             echo "  1. Check HAProxy status: kubectl -n $CTRL_NAMESPACE get pods -l app=haproxy"
             echo "  2. Check HAProxy logs: kubectl -n $CTRL_NAMESPACE logs deploy/haproxy-production -c haproxy"
@@ -600,6 +751,7 @@ test_ingress() {
             echo "  4. Check controller logs: $0 logs"
             echo "  5. Check echo service: kubectl -n $ECHO_NAMESPACE get pods -l app=$ECHO_APP_NAME"
             echo "  6. Verify ingress: kubectl -n $ECHO_NAMESPACE get ingress $ECHO_APP_NAME -o wide"
+            echo "  7. Check HAProxy config: kubectl -n $CTRL_NAMESPACE exec deploy/haproxy-production -c haproxy -- cat /etc/haproxy/haproxy.cfg"
             return 1
         fi
     else
@@ -609,11 +761,18 @@ test_ingress() {
 }
 
 port_forward_haproxy() {
+    verify_cluster_context
     print_section "🔄 Setting up Port Forwarding"
 
     echo "Setting up port forwarding for HAProxy services..."
     echo "This will forward local ports to the HAProxy services in the cluster."
     echo
+
+    # Check if namespace exists
+    if ! kubectl get namespace "$CTRL_NAMESPACE" >/dev/null 2>&1; then
+        err "Namespace '$CTRL_NAMESPACE' not found. Deploy the environment first with: $0 up"
+        return 1
+    fi
 
     # Check if HAProxy is running
     if ! kubectl -n "$CTRL_NAMESPACE" get deployment haproxy-production >/dev/null 2>&1; then
@@ -621,16 +780,37 @@ port_forward_haproxy() {
         return 1
     fi
 
-    # Get controller deployment name
+    # Verify HAProxy deployment is ready
+    local haproxy_ready
+    haproxy_ready=$(kubectl -n "$CTRL_NAMESPACE" get deployment haproxy-production -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+    if [[ "$haproxy_ready" == "0" ]]; then
+        warn "HAProxy deployment exists but has no ready pods"
+        echo "Check deployment status with: kubectl -n $CTRL_NAMESPACE get deploy/haproxy-production"
+        return 1
+    fi
+
+    # Get controller deployment name and verify it exists
     local ctrl_deploy
-    ctrl_deploy=$(kubectl -n "$CTRL_NAMESPACE" get deployment -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME},app.kubernetes.io/name=haproxy-template-ic-go" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "controller")
+    ctrl_deploy=$(kubectl -n "$CTRL_NAMESPACE" get deployment -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME},app.kubernetes.io/name=haproxy-template-ic" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    if [[ -z "$ctrl_deploy" ]]; then
+        warn "Controller deployment not found"
+        ctrl_deploy="(not available)"
+    fi
 
     echo "Available port forwarding options:"
-    echo "  1. HAProxy HTTP (port 8080 -> 80): kubectl -n $CTRL_NAMESPACE port-forward svc/haproxy-production 8080:80"
-    echo "  2. HAProxy Health (port 8404 -> 8404): kubectl -n $CTRL_NAMESPACE port-forward svc/haproxy-production 8404:8404"
-    echo "  3. HAProxy Dataplane API (port 5555 -> 5555): kubectl -n $CTRL_NAMESPACE port-forward svc/haproxy-production-dataplane 5555:5555"
-    echo "  4. Controller Health (port 8081 -> 8080): kubectl -n $CTRL_NAMESPACE port-forward deploy/${ctrl_deploy} 8081:8080"
-    echo "  5. Controller Metrics (port 9090 -> 9090): kubectl -n $CTRL_NAMESPACE port-forward deploy/${ctrl_deploy} 9090:9090"
+    echo "  1. HAProxy HTTP (port 8080 -> 80)"
+    echo "  2. HAProxy Health (port 8404 -> 8404)"
+    echo "  3. HAProxy Dataplane API (port 5555 -> 5555)"
+
+    if [[ "$ctrl_deploy" != "(not available)" ]]; then
+        echo "  4. Controller Health (port 8081 -> 8080)"
+        echo "  5. Controller Metrics (port 9090 -> 9090)"
+    else
+        echo "  4. Controller Health - ${YELLOW}(not available)${NC}"
+        echo "  5. Controller Metrics - ${YELLOW}(not available)${NC}"
+    fi
+
     echo
 
     read -p "Choose an option (1-5) or 'q' to quit: " choice
@@ -652,11 +832,19 @@ port_forward_haproxy() {
             kubectl -n "$CTRL_NAMESPACE" port-forward svc/haproxy-production-dataplane 5555:5555
             ;;
         4)
+            if [[ "$ctrl_deploy" == "(not available)" ]]; then
+                err "Controller deployment not found. Deploy it first with: $0 up"
+                return 1
+            fi
             log INFO "Starting port forwarding: localhost:8081 -> Controller Health"
             echo "Test with: curl http://localhost:8081/healthz"
             kubectl -n "$CTRL_NAMESPACE" port-forward deploy/${ctrl_deploy} 8081:8080
             ;;
         5)
+            if [[ "$ctrl_deploy" == "(not available)" ]]; then
+                err "Controller deployment not found. Deploy it first with: $0 up"
+                return 1
+            fi
             log INFO "Starting port forwarding: localhost:9090 -> Controller Metrics"
             echo "Test with: curl http://localhost:9090/metrics"
             kubectl -n "$CTRL_NAMESPACE" port-forward deploy/${ctrl_deploy} 9090:9090

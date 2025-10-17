@@ -2,17 +2,17 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ include "haproxy-template-ic-go.fullname" . }}
+  name: {{ include "haproxy-template-ic.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "haproxy-template-ic-go.labels" . | nindent 4 }}
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
     {{- with .Values.monitoring.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   selector:
     matchLabels:
-      {{- include "haproxy-template-ic-go.selectorLabels" . | nindent 6 }}
+      {{- include "haproxy-template-ic.selectorLabels" . | nindent 6 }}
   endpoints:
     - port: metrics
       interval: {{ .Values.monitoring.serviceMonitor.interval }}

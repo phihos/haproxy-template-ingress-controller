@@ -1,6 +1,6 @@
 apiVersion: v2
-name: haproxy-template-ic-go
-description: HAProxy Template Ingress Controller (Go version)
+name: haproxy-template-ic
+description: HAProxy Template Ingress Controller
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

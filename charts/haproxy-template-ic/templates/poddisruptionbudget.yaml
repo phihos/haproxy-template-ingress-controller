@@ -2,10 +2,10 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "haproxy-template-ic-go.fullname" . }}
+  name: {{ include "haproxy-template-ic.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "haproxy-template-ic-go.labels" . | nindent 4 }}
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 spec:
   {{- if .Values.podDisruptionBudget.minAvailable }}
   minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
@@ -15,5 +15,5 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "haproxy-template-ic-go.selectorLabels" . | nindent 6 }}
+      {{- include "haproxy-template-ic.selectorLabels" . | nindent 6 }}
 {{- end }}

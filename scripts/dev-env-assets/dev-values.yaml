@@ -1,8 +1,8 @@
-# Development values for haproxy-template-ic-go Helm chart
+# Development values for haproxy-template-ic Helm chart
 
 # Use local development image
 image:
-  repository: haproxy-template-ic-go
+  repository: haproxy-template-ic
   tag: dev
   pullPolicy: Never  # Never pull, always use local image
 

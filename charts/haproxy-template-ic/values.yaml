@@ -1,11 +1,11 @@
-# Default values for haproxy-template-ic-go.
+# Default values for haproxy-template-ic.
 
 # Replica count for controller
 replicaCount: 1
 
 # Controller image configuration
 image:
-  repository: ghcr.io/phihos/haproxy-template-ic-go
+  repository: ghcr.io/phihos/haproxy-template-ic
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion
   tag: ""

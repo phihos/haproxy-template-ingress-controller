@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "haproxy-template-ic-go.name" -}}
+{{- define "haproxy-template-ic.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -10,7 +10,7 @@ Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 If release name contains chart name it will be used as a full name.
 */}}
-{{- define "haproxy-template-ic-go.fullname" -}}
+{{- define "haproxy-template-ic.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -26,16 +26,16 @@ If release name contains chart name it will be used as a full name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "haproxy-template-ic-go.chart" -}}
+{{- define "haproxy-template-ic.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "haproxy-template-ic-go.labels" -}}
-helm.sh/chart: {{ include "haproxy-template-ic-go.chart" . }}
-{{ include "haproxy-template-ic-go.selectorLabels" . }}
+{{- define "haproxy-template-ic.labels" -}}
+helm.sh/chart: {{ include "haproxy-template-ic.chart" . }}
+{{ include "haproxy-template-ic.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -45,17 +45,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "haproxy-template-ic-go.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "haproxy-template-ic-go.name" . }}
+{{- define "haproxy-template-ic.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "haproxy-template-ic.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 Create the name of the service account to use
 */}}
-{{- define "haproxy-template-ic-go.serviceAccountName" -}}
+{{- define "haproxy-template-ic.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "haproxy-template-ic-go.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "haproxy-template-ic.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
