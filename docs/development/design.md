@@ -254,6 +254,8 @@ haproxy-template-ic/
 │   │   ├── configloader/    # Config parsing and loading
 │   │   ├── credentialsloader/ # Credentials parsing and loading
 │   │   ├── events/          # Domain-specific event types
+│   │   ├── indextracker/    # Index synchronization tracking
+│   │   ├── resourcewatcher/ # Resource watcher lifecycle management
 │   │   ├── validator/       # Config validation (basic, template, jsonpath)
 │   │   └── controller.go    # Event coordination and startup orchestration
 │   └── templating/          # Template engine library
@@ -380,6 +382,8 @@ Both watchers use the event-driven architecture: changes publish events to Event
 - `pkg/controller/configloader`: Loads and parses controller configuration from ConfigMap resources, publishes ConfigParsedEvent
 - `pkg/controller/credentialsloader`: Loads and validates credentials from Secret resources, publishes CredentialsUpdatedEvent
 - `pkg/controller/configchange`: Handles configuration change events and coordinates reloading of resources
+- `pkg/controller/indextracker`: Tracks synchronization state across multiple resource types, publishes IndexSynchronizedEvent when all resources complete initial sync, enabling staged controller startup with clear initialization checkpoints
+- `pkg/controller/resourcewatcher`: Manages lifecycle of all Kubernetes resource watchers defined in configuration, provides centralized WaitForAllSync() method for coordinated initialization, publishes ResourceIndexUpdatedEvent with detailed change statistics
 - `pkg/controller/validator`: Contains validation components (basic structural validation, template syntax validation, JSONPath expression validation) that respond to ConfigValidationRequest events using scatter-gather pattern
 - `pkg/controller/events`: Domain-specific event type definitions (~30+ event types covering complete controller lifecycle)
 
@@ -1423,18 +1427,21 @@ func (e *ConfigInvalidEvent) Timestamp() time.Time { return e.timestamp }
 
 // Resource Events
 type ResourceIndexUpdatedEvent struct {
-    ResourceType string
-    Count        int
-    ChangeType   string
-    timestamp    time.Time
+    // ResourceTypeName identifies the resource type from config (e.g., "ingresses", "services").
+    ResourceTypeName string
+
+    // ChangeStats provides detailed change statistics including Created, Modified, Deleted counts
+    // and whether this event occurred during initial sync.
+    ChangeStats types.ChangeStats
+
+    timestamp time.Time
 }
 
-func NewResourceIndexUpdatedEvent(resourceType string, count int, changeType string) *ResourceIndexUpdatedEvent {
+func NewResourceIndexUpdatedEvent(resourceTypeName string, changeStats types.ChangeStats) *ResourceIndexUpdatedEvent {
     return &ResourceIndexUpdatedEvent{
-        ResourceType: resourceType,
-        Count:        count,
-        ChangeType:   changeType,
-        timestamp:    time.Now(),
+        ResourceTypeName: resourceTypeName,
+        ChangeStats:      changeStats,
+        timestamp:        time.Now(),
     }
 }
 
@@ -1442,21 +1449,48 @@ func (e *ResourceIndexUpdatedEvent) EventType() string    { return "resource.ind
 func (e *ResourceIndexUpdatedEvent) Timestamp() time.Time { return e.timestamp }
 
 type ResourceSyncCompleteEvent struct {
-    ResourceType string
+    // ResourceTypeName identifies the resource type from config (e.g., "ingresses").
+    ResourceTypeName string
+
+    // InitialCount is the number of resources loaded during initial sync.
     InitialCount int
-    timestamp    time.Time
+
+    timestamp time.Time
 }
 
-func NewResourceSyncCompleteEvent(resourceType string, initialCount int) *ResourceSyncCompleteEvent {
+func NewResourceSyncCompleteEvent(resourceTypeName string, initialCount int) *ResourceSyncCompleteEvent {
     return &ResourceSyncCompleteEvent{
-        ResourceType: resourceType,
-        InitialCount: initialCount,
-        timestamp:    time.Now(),
+        ResourceTypeName: resourceTypeName,
+        InitialCount:     initialCount,
+        timestamp:        time.Now(),
     }
 }
 
 func (e *ResourceSyncCompleteEvent) EventType() string    { return "resource.sync.complete" }
 func (e *ResourceSyncCompleteEvent) Timestamp() time.Time { return e.timestamp }
+
+type IndexSynchronizedEvent struct {
+    // ResourceCounts maps resource types to their counts.
+    ResourceCounts map[string]int
+    timestamp      time.Time
+}
+
+// NewIndexSynchronizedEvent creates a new IndexSynchronizedEvent with defensive copying
+func NewIndexSynchronizedEvent(resourceCounts map[string]int) *IndexSynchronizedEvent {
+    // Defensive copy of map
+    countsCopy := make(map[string]int, len(resourceCounts))
+    for k, v := range resourceCounts {
+        countsCopy[k] = v
+    }
+
+    return &IndexSynchronizedEvent{
+        ResourceCounts: countsCopy,
+        timestamp:      time.Now(),
+    }
+}
+
+func (e *IndexSynchronizedEvent) EventType() string    { return "index.synchronized" }
+func (e *IndexSynchronizedEvent) Timestamp() time.Time { return e.timestamp }
 
 // Reconciliation Events
 type ReconciliationTriggeredEvent struct {

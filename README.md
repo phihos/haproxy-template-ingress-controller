@@ -243,6 +243,30 @@ make docker-build
 make test-coverage
 ```
 
+### Pre-commit Hooks
+
+Automatic code quality checks can be set up using [pre-commit](https://pre-commit.com/):
+
+```bash
+# Install pre-commit (one-time setup)
+pip install pre-commit
+# or: brew install pre-commit
+
+# Install git hooks (one-time per repository clone)
+pre-commit install
+
+# Hooks now run automatically on git commit
+git commit -m "my changes"  # Runs make lint && make audit
+
+# Skip hooks if needed (e.g., for WIP commits)
+git commit --no-verify -m "WIP"
+
+# Run hooks manually on all files
+pre-commit run --all-files
+```
+
+The hooks will automatically run `make lint` and `make audit` before each commit, catching issues early.
+
 ## Contributing
 
 Contributions are welcome!
