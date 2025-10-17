@@ -10,7 +10,7 @@ Usage: `/pr`
 2. Checks if a PR already exists for the current branch
 3. If PR exists:
    - Updates the existing PR with any new commits
-   - Updates the PR title and description to reflect the full git diff between the current branhc and the main brnach
+   - Updates the PR title and description to reflect the full git diff between the current branch and the main branch
 4. If no PR exists:
    - Creates a new pull request using GitHub CLI
    - Auto-generates title and description based on commits

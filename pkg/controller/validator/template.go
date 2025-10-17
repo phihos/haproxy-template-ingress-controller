@@ -50,7 +50,7 @@ func NewTemplateValidator(bus *busevents.EventBus, logger *slog.Logger) *Templat
 
 // HandleRequest processes a ConfigValidationRequest by validating all templates.
 // This implements the ValidationHandler interface.
-func (v *TemplateValidator) HandleRequest(req events.ConfigValidationRequest) {
+func (v *TemplateValidator) HandleRequest(req *events.ConfigValidationRequest) {
 	start := time.Now()
 	v.logger.Debug("Validating templates", "version", req.Version)
 

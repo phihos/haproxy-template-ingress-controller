@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -15,6 +16,10 @@ import (
 // HTTPErrors are standalone sections that should be created after defaults
 // but before frontends/backends that might reference them.
 const PriorityHTTPErrors = 25
+
+const (
+	sectionHTTPErrors = "http-errors"
+)
 
 // CreateHTTPErrorsOperation represents creating a new http-errors section.
 type CreateHTTPErrorsOperation struct {
@@ -35,7 +40,7 @@ func (op *CreateHTTPErrorsOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateHTTPErrorsOperation) Section() string {
-	return "http-errors"
+	return sectionHTTPErrors
 }
 
 // Priority implements Operation.Priority.
@@ -94,7 +99,7 @@ func (op *CreateHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateHTTPErrorsOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.HTTPErrors.Name != "" {
 		name = op.HTTPErrors.Name
 	}
@@ -120,7 +125,7 @@ func (op *DeleteHTTPErrorsOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteHTTPErrorsOperation) Section() string {
-	return "http-errors"
+	return sectionHTTPErrors
 }
 
 // Priority implements Operation.Priority.
@@ -169,7 +174,7 @@ func (op *DeleteHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteHTTPErrorsOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.HTTPErrors.Name != "" {
 		name = op.HTTPErrors.Name
 	}
@@ -195,7 +200,7 @@ func (op *UpdateHTTPErrorsOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateHTTPErrorsOperation) Section() string {
-	return "http-errors"
+	return sectionHTTPErrors
 }
 
 // Priority implements Operation.Priority.
@@ -254,7 +259,7 @@ func (op *UpdateHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateHTTPErrorsOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.HTTPErrors.Name != "" {
 		name = op.HTTPErrors.Name
 	}

@@ -11,6 +11,11 @@ import (
 	"haproxy-template-ic/pkg/dataplane/parser"
 )
 
+const (
+	parentTypeFrontend = "frontend"
+	parentTypeBackend  = "backend"
+)
+
 // Comparator performs fine-grained comparison between HAProxy configurations.
 //
 // It generates the minimal set of operations needed to transform a current
@@ -25,6 +30,15 @@ type Comparator struct {
 // New creates a new Comparator instance.
 func New() *Comparator {
 	return &Comparator{}
+}
+
+// appendOperationsIfNotEmpty is a helper method that appends operations and marks as modified if operations exist.
+// This reduces cyclomatic complexity by extracting the common pattern used throughout comparison functions.
+func appendOperationsIfNotEmpty(dst *[]Operation, src []Operation, modified *bool) {
+	if len(src) > 0 {
+		*dst = append(*dst, src...)
+		*modified = true
+	}
 }
 
 // Compare performs a deep comparison between current and desired configurations.
@@ -68,47 +82,47 @@ func (c *Comparator) Compare(current, desired *parser.StructuredConfig) (*Config
 	operations = append(operations, defaultsOps...)
 
 	// Compare http-errors sections
-	httpErrorsOps := c.compareHTTPErrors(current, desired, &summary)
+	httpErrorsOps := c.compareHTTPErrors(current, desired)
 	operations = append(operations, httpErrorsOps...)
 
 	// Compare resolvers
-	resolversOps := c.compareResolvers(current, desired, &summary)
+	resolversOps := c.compareResolvers(current, desired)
 	operations = append(operations, resolversOps...)
 
 	// Compare mailers
-	mailersOps := c.compareMailers(current, desired, &summary)
+	mailersOps := c.compareMailers(current, desired)
 	operations = append(operations, mailersOps...)
 
 	// Compare peers
-	peersOps := c.comparePeers(current, desired, &summary)
+	peersOps := c.comparePeers(current, desired)
 	operations = append(operations, peersOps...)
 
 	// Compare caches
-	cachesOps := c.compareCaches(current, desired, &summary)
+	cachesOps := c.compareCaches(current, desired)
 	operations = append(operations, cachesOps...)
 
 	// Compare rings
-	ringsOps := c.compareRings(current, desired, &summary)
+	ringsOps := c.compareRings(current, desired)
 	operations = append(operations, ringsOps...)
 
 	// Compare userlists
-	userlistsOps := c.compareUserlists(current, desired, &summary)
+	userlistsOps := c.compareUserlists(current, desired)
 	operations = append(operations, userlistsOps...)
 
 	// Compare programs
-	programsOps := c.comparePrograms(current, desired, &summary)
+	programsOps := c.comparePrograms(current, desired)
 	operations = append(operations, programsOps...)
 
 	// Compare log-forwards
-	logForwardsOps := c.compareLogForwards(current, desired, &summary)
+	logForwardsOps := c.compareLogForwards(current, desired)
 	operations = append(operations, logForwardsOps...)
 
 	// Compare fcgi-apps
-	fcgiAppsOps := c.compareFCGIApps(current, desired, &summary)
+	fcgiAppsOps := c.compareFCGIApps(current, desired)
 	operations = append(operations, fcgiAppsOps...)
 
 	// Compare crt-stores
-	crtStoresOps := c.compareCrtStores(current, desired, &summary)
+	crtStoresOps := c.compareCrtStores(current, desired)
 	operations = append(operations, crtStoresOps...)
 
 	// Compare frontends
@@ -165,6 +179,8 @@ func (c *Comparator) Compare(current, desired *parser.StructuredConfig) (*Config
 //
 // This is a focused implementation that handles the most common use case:
 // backend and server management. It demonstrates the pattern for other sections.
+//
+//nolint:dupl // Similar pattern to compareFrontends but handles different type (Backend vs Frontend)
 func (c *Comparator) compareBackends(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
 	var operations []Operation
 
@@ -184,29 +200,8 @@ func (c *Comparator) compareBackends(current, desired *parser.StructuredConfig, 
 	}
 
 	// Find added backends
-	for name, backend := range desiredBackends {
-		if _, exists := currentBackends[name]; !exists {
-			operations = append(operations, sections.NewCreateBackendOperation(backend))
-			summary.BackendsAdded = append(summary.BackendsAdded, name)
-
-			// Also create servers for this new backend
-			// Compare against an empty backend to get all server create operations
-			emptyBackend := &models.Backend{}
-			emptyBackend.Name = name
-			emptyBackend.Servers = make(map[string]models.Server)
-			serverOps := c.compareServers(name, emptyBackend, backend, summary)
-			if len(serverOps) > 0 {
-				operations = append(operations, serverOps...)
-			}
-
-			// Also create server templates for this new backend
-			emptyBackend.ServerTemplates = make(map[string]models.ServerTemplate)
-			serverTemplateOps := c.compareServerTemplates(name, emptyBackend, backend, summary)
-			if len(serverTemplateOps) > 0 {
-				operations = append(operations, serverTemplateOps...)
-			}
-		}
-	}
+	addedOps := c.compareAddedBackends(desiredBackends, currentBackends, summary)
+	operations = append(operations, addedOps...)
 
 	// Find deleted backends
 	for name, backend := range currentBackends {
@@ -216,118 +211,121 @@ func (c *Comparator) compareBackends(current, desired *parser.StructuredConfig, 
 		}
 	}
 
-	// Find modified backends (compare servers, ACLs, rules, and attributes)
+	// Find modified backends
+	modifiedOps := c.compareModifiedBackends(desiredBackends, currentBackends, summary)
+	operations = append(operations, modifiedOps...)
+
+	return operations
+}
+
+// compareAddedBackends compares added backends and creates operations for them and their nested elements.
+func (c *Comparator) compareAddedBackends(desiredBackends, currentBackends map[string]*models.Backend, summary *DiffSummary) []Operation {
+	// Pre-allocate with estimated capacity (at least one operation per backend)
+	operations := make([]Operation, 0, len(desiredBackends))
+
+	for name, backend := range desiredBackends {
+		if _, exists := currentBackends[name]; exists {
+			continue
+		}
+		operations = append(operations, sections.NewCreateBackendOperation(backend))
+		summary.BackendsAdded = append(summary.BackendsAdded, name)
+
+		// Also create servers for this new backend
+		// Compare against an empty backend to get all server create operations
+		emptyBackend := &models.Backend{}
+		emptyBackend.Name = name
+		emptyBackend.Servers = make(map[string]models.Server)
+		serverOps := c.compareServers(name, emptyBackend, backend, summary)
+		if len(serverOps) > 0 {
+			operations = append(operations, serverOps...)
+		}
+
+		// Also create server templates for this new backend
+		emptyBackend.ServerTemplates = make(map[string]models.ServerTemplate)
+		serverTemplateOps := c.compareServerTemplates(name, emptyBackend, backend)
+		if len(serverTemplateOps) > 0 {
+			operations = append(operations, serverTemplateOps...)
+		}
+	}
+
+	return operations
+}
+
+// compareModifiedBackends compares modified backends and creates operations for changed nested elements.
+func (c *Comparator) compareModifiedBackends(desiredBackends, currentBackends map[string]*models.Backend, summary *DiffSummary) []Operation {
+	var operations []Operation
+
 	for name, desiredBackend := range desiredBackends {
-		if currentBackend, exists := currentBackends[name]; exists {
-			backendModified := false
+		currentBackend, exists := currentBackends[name]
+		if !exists {
+			continue
+		}
+		backendModified := false
 
-			// Compare servers within this backend
-			serverOps := c.compareServers(name, currentBackend, desiredBackend, summary)
-			if len(serverOps) > 0 {
-				operations = append(operations, serverOps...)
-				backendModified = true
-			}
+		// Compare servers within this backend
+		serverOps := c.compareServers(name, currentBackend, desiredBackend, summary)
+		appendOperationsIfNotEmpty(&operations, serverOps, &backendModified)
 
-			// Compare ACLs within this backend
-			aclOps := c.compareACLs("backend", name, currentBackend.ACLList, desiredBackend.ACLList, summary)
-			if len(aclOps) > 0 {
-				operations = append(operations, aclOps...)
-				backendModified = true
-			}
+		// Compare ACLs within this backend
+		aclOps := c.compareACLs("backend", name, currentBackend.ACLList, desiredBackend.ACLList, summary)
+		appendOperationsIfNotEmpty(&operations, aclOps, &backendModified)
 
-			// Compare HTTP request rules within this backend
-			requestRuleOps := c.compareHTTPRequestRules("backend", name, currentBackend.HTTPRequestRuleList, desiredBackend.HTTPRequestRuleList, summary)
-			if len(requestRuleOps) > 0 {
-				operations = append(operations, requestRuleOps...)
-				backendModified = true
-			}
+		// Compare HTTP request rules within this backend
+		requestRuleOps := c.compareHTTPRequestRules("backend", name, currentBackend.HTTPRequestRuleList, desiredBackend.HTTPRequestRuleList)
+		appendOperationsIfNotEmpty(&operations, requestRuleOps, &backendModified)
 
-			// Compare HTTP response rules within this backend
-			responseRuleOps := c.compareHTTPResponseRules("backend", name, currentBackend.HTTPResponseRuleList, desiredBackend.HTTPResponseRuleList, summary)
-			if len(responseRuleOps) > 0 {
-				operations = append(operations, responseRuleOps...)
-				backendModified = true
-			}
+		// Compare HTTP response rules within this backend
+		responseRuleOps := c.compareHTTPResponseRules("backend", name, currentBackend.HTTPResponseRuleList, desiredBackend.HTTPResponseRuleList)
+		appendOperationsIfNotEmpty(&operations, responseRuleOps, &backendModified)
 
-			// Compare TCP request rules within this backend
-			tcpRequestRuleOps := c.compareTCPRequestRules("backend", name, currentBackend.TCPRequestRuleList, desiredBackend.TCPRequestRuleList, summary)
-			if len(tcpRequestRuleOps) > 0 {
-				operations = append(operations, tcpRequestRuleOps...)
-				backendModified = true
-			}
+		// Compare TCP request rules within this backend
+		tcpRequestRuleOps := c.compareTCPRequestRules("backend", name, currentBackend.TCPRequestRuleList, desiredBackend.TCPRequestRuleList)
+		appendOperationsIfNotEmpty(&operations, tcpRequestRuleOps, &backendModified)
 
-			// Compare TCP response rules within this backend
-			tcpResponseRuleOps := c.compareTCPResponseRules(name, currentBackend.TCPResponseRuleList, desiredBackend.TCPResponseRuleList, summary)
-			if len(tcpResponseRuleOps) > 0 {
-				operations = append(operations, tcpResponseRuleOps...)
-				backendModified = true
-			}
+		// Compare TCP response rules within this backend
+		tcpResponseRuleOps := c.compareTCPResponseRules(name, currentBackend.TCPResponseRuleList, desiredBackend.TCPResponseRuleList)
+		appendOperationsIfNotEmpty(&operations, tcpResponseRuleOps, &backendModified)
 
-			// Compare log targets within this backend
-			logTargetOps := c.compareLogTargets("backend", name, currentBackend.LogTargetList, desiredBackend.LogTargetList, summary)
-			if len(logTargetOps) > 0 {
-				operations = append(operations, logTargetOps...)
-				backendModified = true
-			}
+		// Compare log targets within this backend
+		logTargetOps := c.compareLogTargets("backend", name, currentBackend.LogTargetList, desiredBackend.LogTargetList)
+		appendOperationsIfNotEmpty(&operations, logTargetOps, &backendModified)
 
-			// Compare stick rules within this backend
-			stickRuleOps := c.compareStickRules(name, currentBackend.StickRuleList, desiredBackend.StickRuleList, summary)
-			if len(stickRuleOps) > 0 {
-				operations = append(operations, stickRuleOps...)
-				backendModified = true
-			}
+		// Compare stick rules within this backend
+		stickRuleOps := c.compareStickRules(name, currentBackend.StickRuleList, desiredBackend.StickRuleList)
+		appendOperationsIfNotEmpty(&operations, stickRuleOps, &backendModified)
 
-			// Compare HTTP after response rules within this backend
-			httpAfterRuleOps := c.compareHTTPAfterResponseRules(name, currentBackend.HTTPAfterResponseRuleList, desiredBackend.HTTPAfterResponseRuleList, summary)
-			if len(httpAfterRuleOps) > 0 {
-				operations = append(operations, httpAfterRuleOps...)
-				backendModified = true
-			}
+		// Compare HTTP after response rules within this backend
+		httpAfterRuleOps := c.compareHTTPAfterResponseRules(name, currentBackend.HTTPAfterResponseRuleList, desiredBackend.HTTPAfterResponseRuleList)
+		appendOperationsIfNotEmpty(&operations, httpAfterRuleOps, &backendModified)
 
-			// Compare server switching rules within this backend
-			serverSwitchingRuleOps := c.compareServerSwitchingRules(name, currentBackend.ServerSwitchingRuleList, desiredBackend.ServerSwitchingRuleList, summary)
-			if len(serverSwitchingRuleOps) > 0 {
-				operations = append(operations, serverSwitchingRuleOps...)
-				backendModified = true
-			}
+		// Compare server switching rules within this backend
+		serverSwitchingRuleOps := c.compareServerSwitchingRules(name, currentBackend.ServerSwitchingRuleList, desiredBackend.ServerSwitchingRuleList)
+		appendOperationsIfNotEmpty(&operations, serverSwitchingRuleOps, &backendModified)
 
-			// Compare filters within this backend
-			filterOps := c.compareFilters("backend", name, currentBackend.FilterList, desiredBackend.FilterList, summary)
-			if len(filterOps) > 0 {
-				operations = append(operations, filterOps...)
-				backendModified = true
-			}
+		// Compare filters within this backend
+		filterOps := c.compareFilters("backend", name, currentBackend.FilterList, desiredBackend.FilterList)
+		appendOperationsIfNotEmpty(&operations, filterOps, &backendModified)
 
-			// Compare HTTP checks within this backend
-			httpCheckOps := c.compareHTTPChecks(name, currentBackend.HTTPCheckList, desiredBackend.HTTPCheckList, summary)
-			if len(httpCheckOps) > 0 {
-				operations = append(operations, httpCheckOps...)
-				backendModified = true
-			}
+		// Compare HTTP checks within this backend
+		httpCheckOps := c.compareHTTPChecks(name, currentBackend.HTTPCheckList, desiredBackend.HTTPCheckList)
+		appendOperationsIfNotEmpty(&operations, httpCheckOps, &backendModified)
 
-			// Compare TCP checks within this backend
-			tcpCheckOps := c.compareTCPChecks(name, currentBackend.TCPCheckRuleList, desiredBackend.TCPCheckRuleList, summary)
-			if len(tcpCheckOps) > 0 {
-				operations = append(operations, tcpCheckOps...)
-				backendModified = true
-			}
+		// Compare TCP checks within this backend
+		tcpCheckOps := c.compareTCPChecks(name, currentBackend.TCPCheckRuleList, desiredBackend.TCPCheckRuleList)
+		appendOperationsIfNotEmpty(&operations, tcpCheckOps, &backendModified)
 
-			// Compare server templates within this backend
-			serverTemplateOps := c.compareServerTemplates(name, currentBackend, desiredBackend, summary)
-			if len(serverTemplateOps) > 0 {
-				operations = append(operations, serverTemplateOps...)
-				backendModified = true
-			}
+		// Compare server templates within this backend
+		serverTemplateOps := c.compareServerTemplates(name, currentBackend, desiredBackend)
+		appendOperationsIfNotEmpty(&operations, serverTemplateOps, &backendModified)
 
-			// Compare backend attributes (excluding servers, ACLs, and rules which we already compared)
-			if !backendsEqualWithoutNestedCollections(currentBackend, desiredBackend) {
-				operations = append(operations, sections.NewUpdateBackendOperation(desiredBackend))
-				backendModified = true
-			}
+		// Compare backend attributes (excluding servers, ACLs, and rules which we already compared)
+		if !backendsEqualWithoutNestedCollections(currentBackend, desiredBackend) {
+			operations = append(operations, sections.NewUpdateBackendOperation(desiredBackend))
+			backendModified = true
+		}
 
-			if backendModified {
-				summary.BackendsModified = append(summary.BackendsModified, name)
-			}
+		if backendModified {
+			summary.BackendsModified = append(summary.BackendsModified, name)
 		}
 	}
 
@@ -343,10 +341,28 @@ func (c *Comparator) compareServers(backendName string, currentBackend, desiredB
 	desiredServers := desiredBackend.Servers
 
 	// Find added servers
-	for name, server := range desiredServers {
+	addedOps := c.compareAddedServers(backendName, currentServers, desiredServers, summary)
+	operations = append(operations, addedOps...)
+
+	// Find deleted servers
+	deletedOps := c.compareDeletedServers(backendName, currentServers, desiredServers, summary)
+	operations = append(operations, deletedOps...)
+
+	// Find modified servers
+	modifiedOps := c.compareModifiedServers(backendName, currentServers, desiredServers, summary)
+	operations = append(operations, modifiedOps...)
+
+	return operations
+}
+
+// compareAddedServers compares added servers and creates operations for them.
+func (c *Comparator) compareAddedServers(backendName string, currentServers, desiredServers map[string]models.Server, summary *DiffSummary) []Operation {
+	var operations []Operation
+
+	for name := range desiredServers {
 		if _, exists := currentServers[name]; !exists {
-			serverCopy := server // Make a copy since range variable is reused
-			operations = append(operations, sections.NewCreateServerOperation(backendName, &serverCopy))
+			server := desiredServers[name]
+			operations = append(operations, sections.NewCreateServerOperation(backendName, &server))
 			if summary.ServersAdded[backendName] == nil {
 				summary.ServersAdded[backendName] = []string{}
 			}
@@ -354,11 +370,17 @@ func (c *Comparator) compareServers(backendName string, currentBackend, desiredB
 		}
 	}
 
-	// Find deleted servers
-	for name, server := range currentServers {
+	return operations
+}
+
+// compareDeletedServers compares deleted servers and creates operations for them.
+func (c *Comparator) compareDeletedServers(backendName string, currentServers, desiredServers map[string]models.Server, summary *DiffSummary) []Operation {
+	var operations []Operation
+
+	for name := range currentServers {
 		if _, exists := desiredServers[name]; !exists {
-			serverCopy := server // Make a copy since range variable is reused
-			operations = append(operations, sections.NewDeleteServerOperation(backendName, &serverCopy))
+			server := currentServers[name]
+			operations = append(operations, sections.NewDeleteServerOperation(backendName, &server))
 			if summary.ServersDeleted[backendName] == nil {
 				summary.ServersDeleted[backendName] = []string{}
 			}
@@ -366,26 +388,29 @@ func (c *Comparator) compareServers(backendName string, currentBackend, desiredB
 		}
 	}
 
-	// Find modified servers
-	for name, desiredServer := range desiredServers {
-		if currentServer, exists := currentServers[name]; exists {
-			serverModified := false
+	return operations
+}
 
-			// Compare server attributes
-			// For now, we check if anything changed - future implementation
-			// will do fine-grained attribute comparison
-			if !serversEqual(&currentServer, &desiredServer) {
-				serverCopy := desiredServer // Make a copy since range variable is reused
-				operations = append(operations, sections.NewUpdateServerOperation(backendName, &serverCopy))
-				serverModified = true
-			}
+// compareModifiedServers compares modified servers and creates operations for them.
+func (c *Comparator) compareModifiedServers(backendName string, currentServers, desiredServers map[string]models.Server, summary *DiffSummary) []Operation {
+	var operations []Operation
 
-			if serverModified {
-				if summary.ServersModified[backendName] == nil {
-					summary.ServersModified[backendName] = []string{}
-				}
-				summary.ServersModified[backendName] = append(summary.ServersModified[backendName], name)
+	for name := range desiredServers {
+		currentServer, exists := currentServers[name]
+		if !exists {
+			continue
+		}
+		desiredServer := desiredServers[name]
+
+		// Compare server attributes
+		// For now, we check if anything changed - future implementation
+		// will do fine-grained attribute comparison
+		if !serversEqual(&currentServer, &desiredServer) {
+			operations = append(operations, sections.NewUpdateServerOperation(backendName, &desiredServer))
+			if summary.ServersModified[backendName] == nil {
+				summary.ServersModified[backendName] = []string{}
 			}
+			summary.ServersModified[backendName] = append(summary.ServersModified[backendName], name)
 		}
 	}
 
@@ -398,22 +423,6 @@ func (c *Comparator) compareServers(backendName string, currentBackend, desiredB
 // maintenance burden, since we sync the entire server line anyway.
 func serversEqual(s1, s2 *models.Server) bool {
 	return s1.Equal(*s2)
-}
-
-// backendsEqualWithoutServers checks if two backends are equal, excluding server lists.
-// Uses the HAProxy models' built-in Equal() method to compare ALL backend attributes
-// (mode, balance algorithm, timeouts, health checks, etc.) automatically.
-// This approach handles current and future backend parameters without maintenance burden.
-func backendsEqualWithoutServers(b1, b2 *models.Backend) bool {
-	// Create copies to avoid modifying originals
-	b1Copy := *b1
-	b2Copy := *b2
-
-	// Clear server maps so they don't affect comparison
-	b1Copy.Servers = nil
-	b2Copy.Servers = nil
-
-	return b1Copy.Equal(b2Copy)
 }
 
 // frontendsEqualWithoutNestedCollections checks if two frontends are equal, excluding ACLs, HTTP rules, and binds.
@@ -489,6 +498,8 @@ func backendsEqualWithoutNestedCollections(b1, b2 *models.Backend) bool {
 }
 
 // compareFrontends compares frontend configurations between current and desired.
+//
+//nolint:dupl // Similar pattern to compareBackends but handles different type (Frontend vs Backend)
 func (c *Comparator) compareFrontends(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
 	var operations []Operation
 
@@ -508,72 +519,8 @@ func (c *Comparator) compareFrontends(current, desired *parser.StructuredConfig,
 	}
 
 	// Find added frontends
-	for name, frontend := range desiredFrontends {
-		if _, exists := currentFrontends[name]; !exists {
-			operations = append(operations, sections.NewCreateFrontendOperation(frontend))
-			summary.FrontendsAdded = append(summary.FrontendsAdded, name)
-
-			// Also create operations for nested elements in this new frontend
-			// Compare against an empty frontend to get all nested element create operations
-			emptyFrontend := &models.Frontend{}
-			emptyFrontend.Name = name
-
-			// Compare ACLs
-			aclOps := c.compareACLs("frontend", name, emptyFrontend.ACLList, frontend.ACLList, summary)
-			if len(aclOps) > 0 {
-				operations = append(operations, aclOps...)
-			}
-
-			// Compare HTTP request rules
-			requestRuleOps := c.compareHTTPRequestRules("frontend", name, emptyFrontend.HTTPRequestRuleList, frontend.HTTPRequestRuleList, summary)
-			if len(requestRuleOps) > 0 {
-				operations = append(operations, requestRuleOps...)
-			}
-
-			// Compare HTTP response rules
-			responseRuleOps := c.compareHTTPResponseRules("frontend", name, emptyFrontend.HTTPResponseRuleList, frontend.HTTPResponseRuleList, summary)
-			if len(responseRuleOps) > 0 {
-				operations = append(operations, responseRuleOps...)
-			}
-
-			// Compare TCP request rules
-			tcpRequestRuleOps := c.compareTCPRequestRules("frontend", name, emptyFrontend.TCPRequestRuleList, frontend.TCPRequestRuleList, summary)
-			if len(tcpRequestRuleOps) > 0 {
-				operations = append(operations, tcpRequestRuleOps...)
-			}
-
-			// Compare backend switching rules
-			backendSwitchingRuleOps := c.compareBackendSwitchingRules(name, emptyFrontend.BackendSwitchingRuleList, frontend.BackendSwitchingRuleList, summary)
-			if len(backendSwitchingRuleOps) > 0 {
-				operations = append(operations, backendSwitchingRuleOps...)
-			}
-
-			// Compare filters
-			filterOps := c.compareFilters("frontend", name, emptyFrontend.FilterList, frontend.FilterList, summary)
-			if len(filterOps) > 0 {
-				operations = append(operations, filterOps...)
-			}
-
-			// Compare captures
-			captureOps := c.compareCaptures(name, emptyFrontend.CaptureList, frontend.CaptureList, summary)
-			if len(captureOps) > 0 {
-				operations = append(operations, captureOps...)
-			}
-
-			// Compare log targets
-			logTargetOps := c.compareLogTargets("frontend", name, emptyFrontend.LogTargetList, frontend.LogTargetList, summary)
-			if len(logTargetOps) > 0 {
-				operations = append(operations, logTargetOps...)
-			}
-
-			// Compare binds
-			emptyBinds := make(map[string]models.Bind)
-			bindOps := c.compareBinds(name, &emptyBinds, &frontend.Binds, summary)
-			if len(bindOps) > 0 {
-				operations = append(operations, bindOps...)
-			}
-		}
-	}
+	addedOps := c.compareAddedFrontends(desiredFrontends, currentFrontends, summary)
+	operations = append(operations, addedOps...)
 
 	// Find deleted frontends
 	for name, frontend := range currentFrontends {
@@ -584,83 +531,126 @@ func (c *Comparator) compareFrontends(current, desired *parser.StructuredConfig,
 	}
 
 	// Find modified frontends
+	modifiedOps := c.compareModifiedFrontends(desiredFrontends, currentFrontends, summary)
+	operations = append(operations, modifiedOps...)
+
+	return operations
+}
+
+// compareAddedFrontends compares added frontends and creates operations for them and their nested elements.
+func (c *Comparator) compareAddedFrontends(desiredFrontends, currentFrontends map[string]*models.Frontend, summary *DiffSummary) []Operation {
+	// Pre-allocate with estimated capacity (at least one operation per frontend)
+	operations := make([]Operation, 0, len(desiredFrontends))
+
+	for name, frontend := range desiredFrontends {
+		if _, exists := currentFrontends[name]; exists {
+			continue
+		}
+		operations = append(operations, sections.NewCreateFrontendOperation(frontend))
+		summary.FrontendsAdded = append(summary.FrontendsAdded, name)
+
+		// Also create operations for nested elements in this new frontend
+		// Compare against an empty frontend to get all nested element create operations
+		emptyFrontend := &models.Frontend{}
+		emptyFrontend.Name = name
+
+		// Compare ACLs
+		aclOps := c.compareACLs(parentTypeFrontend, name, emptyFrontend.ACLList, frontend.ACLList, summary)
+		operations = append(operations, aclOps...)
+
+		// Compare HTTP request rules
+		requestRuleOps := c.compareHTTPRequestRules(parentTypeFrontend, name, emptyFrontend.HTTPRequestRuleList, frontend.HTTPRequestRuleList)
+		operations = append(operations, requestRuleOps...)
+
+		// Compare HTTP response rules
+		responseRuleOps := c.compareHTTPResponseRules(parentTypeFrontend, name, emptyFrontend.HTTPResponseRuleList, frontend.HTTPResponseRuleList)
+		operations = append(operations, responseRuleOps...)
+
+		// Compare TCP request rules
+		tcpRequestRuleOps := c.compareTCPRequestRules(parentTypeFrontend, name, emptyFrontend.TCPRequestRuleList, frontend.TCPRequestRuleList)
+		operations = append(operations, tcpRequestRuleOps...)
+
+		// Compare backend switching rules
+		backendSwitchingRuleOps := c.compareBackendSwitchingRules(name, emptyFrontend.BackendSwitchingRuleList, frontend.BackendSwitchingRuleList)
+		operations = append(operations, backendSwitchingRuleOps...)
+
+		// Compare filters
+		filterOps := c.compareFilters(parentTypeFrontend, name, emptyFrontend.FilterList, frontend.FilterList)
+		operations = append(operations, filterOps...)
+
+		// Compare captures
+		captureOps := c.compareCaptures(name, emptyFrontend.CaptureList, frontend.CaptureList)
+		operations = append(operations, captureOps...)
+
+		// Compare log targets
+		logTargetOps := c.compareLogTargets(parentTypeFrontend, name, emptyFrontend.LogTargetList, frontend.LogTargetList)
+		operations = append(operations, logTargetOps...)
+
+		// Compare binds
+		emptyBinds := make(map[string]models.Bind)
+		bindOps := c.compareBinds(name, emptyBinds, frontend.Binds)
+		operations = append(operations, bindOps...)
+	}
+
+	return operations
+}
+
+// compareModifiedFrontends compares modified frontends and creates operations for changed nested elements.
+func (c *Comparator) compareModifiedFrontends(desiredFrontends, currentFrontends map[string]*models.Frontend, summary *DiffSummary) []Operation {
+	var operations []Operation
+
 	for name, desiredFrontend := range desiredFrontends {
-		if currentFrontend, exists := currentFrontends[name]; exists {
-			frontendModified := false
+		currentFrontend, exists := currentFrontends[name]
+		if !exists {
+			continue
+		}
+		frontendModified := false
 
-			// Compare ACLs within this frontend
-			aclOps := c.compareACLs("frontend", name, currentFrontend.ACLList, desiredFrontend.ACLList, summary)
-			if len(aclOps) > 0 {
-				operations = append(operations, aclOps...)
-				frontendModified = true
-			}
+		// Compare ACLs within this frontend
+		aclOps := c.compareACLs(parentTypeFrontend, name, currentFrontend.ACLList, desiredFrontend.ACLList, summary)
+		appendOperationsIfNotEmpty(&operations, aclOps, &frontendModified)
 
-			// Compare HTTP request rules within this frontend
-			requestRuleOps := c.compareHTTPRequestRules("frontend", name, currentFrontend.HTTPRequestRuleList, desiredFrontend.HTTPRequestRuleList, summary)
-			if len(requestRuleOps) > 0 {
-				operations = append(operations, requestRuleOps...)
-				frontendModified = true
-			}
+		// Compare HTTP request rules within this frontend
+		requestRuleOps := c.compareHTTPRequestRules(parentTypeFrontend, name, currentFrontend.HTTPRequestRuleList, desiredFrontend.HTTPRequestRuleList)
+		appendOperationsIfNotEmpty(&operations, requestRuleOps, &frontendModified)
 
-			// Compare HTTP response rules within this frontend
-			responseRuleOps := c.compareHTTPResponseRules("frontend", name, currentFrontend.HTTPResponseRuleList, desiredFrontend.HTTPResponseRuleList, summary)
-			if len(responseRuleOps) > 0 {
-				operations = append(operations, responseRuleOps...)
-				frontendModified = true
-			}
+		// Compare HTTP response rules within this frontend
+		responseRuleOps := c.compareHTTPResponseRules(parentTypeFrontend, name, currentFrontend.HTTPResponseRuleList, desiredFrontend.HTTPResponseRuleList)
+		appendOperationsIfNotEmpty(&operations, responseRuleOps, &frontendModified)
 
-			// Compare TCP request rules within this frontend
-			tcpRequestRuleOps := c.compareTCPRequestRules("frontend", name, currentFrontend.TCPRequestRuleList, desiredFrontend.TCPRequestRuleList, summary)
-			if len(tcpRequestRuleOps) > 0 {
-				operations = append(operations, tcpRequestRuleOps...)
-				frontendModified = true
-			}
+		// Compare TCP request rules within this frontend
+		tcpRequestRuleOps := c.compareTCPRequestRules(parentTypeFrontend, name, currentFrontend.TCPRequestRuleList, desiredFrontend.TCPRequestRuleList)
+		appendOperationsIfNotEmpty(&operations, tcpRequestRuleOps, &frontendModified)
 
-			// Compare backend switching rules within this frontend
-			backendSwitchingRuleOps := c.compareBackendSwitchingRules(name, currentFrontend.BackendSwitchingRuleList, desiredFrontend.BackendSwitchingRuleList, summary)
-			if len(backendSwitchingRuleOps) > 0 {
-				operations = append(operations, backendSwitchingRuleOps...)
-				frontendModified = true
-			}
+		// Compare backend switching rules within this frontend
+		backendSwitchingRuleOps := c.compareBackendSwitchingRules(name, currentFrontend.BackendSwitchingRuleList, desiredFrontend.BackendSwitchingRuleList)
+		appendOperationsIfNotEmpty(&operations, backendSwitchingRuleOps, &frontendModified)
 
-			// Compare filters within this frontend
-			filterOps := c.compareFilters("frontend", name, currentFrontend.FilterList, desiredFrontend.FilterList, summary)
-			if len(filterOps) > 0 {
-				operations = append(operations, filterOps...)
-				frontendModified = true
-			}
+		// Compare filters within this frontend
+		filterOps := c.compareFilters(parentTypeFrontend, name, currentFrontend.FilterList, desiredFrontend.FilterList)
+		appendOperationsIfNotEmpty(&operations, filterOps, &frontendModified)
 
-			// Compare captures within this frontend
-			captureOps := c.compareCaptures(name, currentFrontend.CaptureList, desiredFrontend.CaptureList, summary)
-			if len(captureOps) > 0 {
-				operations = append(operations, captureOps...)
-				frontendModified = true
-			}
+		// Compare captures within this frontend
+		captureOps := c.compareCaptures(name, currentFrontend.CaptureList, desiredFrontend.CaptureList)
+		appendOperationsIfNotEmpty(&operations, captureOps, &frontendModified)
 
-			// Compare log targets within this frontend
-			logTargetOps := c.compareLogTargets("frontend", name, currentFrontend.LogTargetList, desiredFrontend.LogTargetList, summary)
-			if len(logTargetOps) > 0 {
-				operations = append(operations, logTargetOps...)
-				frontendModified = true
-			}
+		// Compare log targets within this frontend
+		logTargetOps := c.compareLogTargets(parentTypeFrontend, name, currentFrontend.LogTargetList, desiredFrontend.LogTargetList)
+		appendOperationsIfNotEmpty(&operations, logTargetOps, &frontendModified)
 
-			// Compare binds within this frontend
-			bindOps := c.compareBinds(name, &currentFrontend.Binds, &desiredFrontend.Binds, summary)
-			if len(bindOps) > 0 {
-				operations = append(operations, bindOps...)
-				frontendModified = true
-			}
+		// Compare binds within this frontend
+		bindOps := c.compareBinds(name, currentFrontend.Binds, desiredFrontend.Binds)
+		appendOperationsIfNotEmpty(&operations, bindOps, &frontendModified)
 
-			// Compare frontend attributes (excluding ACLs, rules, and binds which we already compared)
-			// Create copies to compare without nested collections
-			if !frontendsEqualWithoutNestedCollections(currentFrontend, desiredFrontend) {
-				operations = append(operations, sections.NewUpdateFrontendOperation(desiredFrontend))
-				frontendModified = true
-			}
+		// Compare frontend attributes (excluding ACLs, rules, and binds which we already compared)
+		// Create copies to compare without nested collections
+		if !frontendsEqualWithoutNestedCollections(currentFrontend, desiredFrontend) {
+			operations = append(operations, sections.NewUpdateFrontendOperation(desiredFrontend))
+			frontendModified = true
+		}
 
-			if frontendModified {
-				summary.FrontendsModified = append(summary.FrontendsModified, name)
-			}
+		if frontendModified {
+			summary.FrontendsModified = append(summary.FrontendsModified, name)
 		}
 	}
 
@@ -741,6 +731,8 @@ func (c *Comparator) compareDefaults(current, desired *parser.StructuredConfig, 
 
 // compareACLs compares ACL configurations within a frontend or backend.
 // ACLs are identified by their name (ACLName field).
+//
+//nolint:unparam // summary parameter kept for consistency with other compare functions
 func (c *Comparator) compareACLs(parentType, parentName string, currentACLs, desiredACLs models.Acls, summary *DiffSummary) []Operation {
 	var operations []Operation
 
@@ -760,30 +752,60 @@ func (c *Comparator) compareACLs(parentType, parentName string, currentACLs, des
 	}
 
 	// Find added ACLs
+	addedOps := c.compareAddedACLs(parentType, parentName, desiredACLMap, currentACLMap, desiredACLs)
+	operations = append(operations, addedOps...)
+
+	// Find deleted ACLs
+	deletedOps := c.compareDeletedACLs(parentType, parentName, currentACLMap, desiredACLMap, currentACLs)
+	operations = append(operations, deletedOps...)
+
+	// Find modified ACLs
+	modifiedOps := c.compareModifiedACLs(parentType, parentName, desiredACLMap, currentACLMap, currentACLs, desiredACLs)
+	operations = append(operations, modifiedOps...)
+
+	return operations
+}
+
+// compareAddedACLs compares added ACLs and creates operations for them.
+func (c *Comparator) compareAddedACLs(parentType, parentName string, desiredACLMap, currentACLMap map[string]int, desiredACLs models.Acls) []Operation {
+	var operations []Operation
+
 	for name, idx := range desiredACLMap {
 		if _, exists := currentACLMap[name]; !exists {
 			acl := desiredACLs[idx]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewCreateAclFrontendOperation(parentName, acl, idx))
+			if parentType == parentTypeFrontend {
+				operations = append(operations, sections.NewCreateACLFrontendOperation(parentName, acl, idx))
 			} else {
-				operations = append(operations, sections.NewCreateAclBackendOperation(parentName, acl, idx))
+				operations = append(operations, sections.NewCreateACLBackendOperation(parentName, acl, idx))
 			}
 		}
 	}
 
-	// Find deleted ACLs
+	return operations
+}
+
+// compareDeletedACLs compares deleted ACLs and creates operations for them.
+func (c *Comparator) compareDeletedACLs(parentType, parentName string, currentACLMap, desiredACLMap map[string]int, currentACLs models.Acls) []Operation {
+	var operations []Operation
+
 	for name, idx := range currentACLMap {
 		if _, exists := desiredACLMap[name]; !exists {
 			acl := currentACLs[idx]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewDeleteAclFrontendOperation(parentName, acl, idx))
+			if parentType == parentTypeFrontend {
+				operations = append(operations, sections.NewDeleteACLFrontendOperation(parentName, acl, idx))
 			} else {
-				operations = append(operations, sections.NewDeleteAclBackendOperation(parentName, acl, idx))
+				operations = append(operations, sections.NewDeleteACLBackendOperation(parentName, acl, idx))
 			}
 		}
 	}
 
-	// Find modified ACLs
+	return operations
+}
+
+// compareModifiedACLs compares modified ACLs and creates operations for them.
+func (c *Comparator) compareModifiedACLs(parentType, parentName string, desiredACLMap, currentACLMap map[string]int, currentACLs, desiredACLs models.Acls) []Operation {
+	var operations []Operation
+
 	for name, desiredIdx := range desiredACLMap {
 		if currentIdx, exists := currentACLMap[name]; exists {
 			currentACL := currentACLs[currentIdx]
@@ -791,10 +813,10 @@ func (c *Comparator) compareACLs(parentType, parentName string, currentACLs, des
 
 			// Compare using built-in Equal() method
 			if !currentACL.Equal(*desiredACL) {
-				if parentType == "frontend" {
-					operations = append(operations, sections.NewUpdateAclFrontendOperation(parentName, desiredACL, desiredIdx))
+				if parentType == parentTypeFrontend {
+					operations = append(operations, sections.NewUpdateACLFrontendOperation(parentName, desiredACL, desiredIdx))
 				} else {
-					operations = append(operations, sections.NewUpdateAclBackendOperation(parentName, desiredACL, desiredIdx))
+					operations = append(operations, sections.NewUpdateACLBackendOperation(parentName, desiredACL, desiredIdx))
 				}
 			}
 		}
@@ -805,7 +827,7 @@ func (c *Comparator) compareACLs(parentType, parentName string, currentACLs, des
 
 // compareHTTPRequestRules compares HTTP request rule configurations within a frontend or backend.
 // Rules are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareHTTPRequestRules(parentType, parentName string, currentRules, desiredRules models.HTTPRequestRules, summary *DiffSummary) []Operation {
+func (c *Comparator) compareHTTPRequestRules(parentType, parentName string, currentRules, desiredRules models.HTTPRequestRules) []Operation {
 	var operations []Operation
 
 	// Compare rules by position
@@ -819,42 +841,47 @@ func (c *Comparator) compareHTTPRequestRules(parentType, parentName string, curr
 		hasDesiredRule := i < len(desiredRules)
 
 		if !hasCurrentRule && hasDesiredRule {
-			// Rule added at this position
-			rule := desiredRules[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewCreateHTTPRequestRuleFrontendOperation(parentName, rule, i))
-			} else {
-				operations = append(operations, sections.NewCreateHTTPRequestRuleBackendOperation(parentName, rule, i))
-			}
+			ops := c.createHTTPRequestRuleOperation(parentType, parentName, desiredRules[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentRule && !hasDesiredRule {
-			// Rule removed at this position
-			rule := currentRules[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewDeleteHTTPRequestRuleFrontendOperation(parentName, rule, i))
-			} else {
-				operations = append(operations, sections.NewDeleteHTTPRequestRuleBackendOperation(parentName, rule, i))
-			}
+			ops := c.deleteHTTPRequestRuleOperation(parentType, parentName, currentRules[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentRule && hasDesiredRule {
-			// Both exist - check if modified
-			currentRule := currentRules[i]
-			desiredRule := desiredRules[i]
-
-			if !currentRule.Equal(*desiredRule) {
-				if parentType == "frontend" {
-					operations = append(operations, sections.NewUpdateHTTPRequestRuleFrontendOperation(parentName, desiredRule, i))
-				} else {
-					operations = append(operations, sections.NewUpdateHTTPRequestRuleBackendOperation(parentName, desiredRule, i))
-				}
-			}
+			ops := c.updateHTTPRequestRuleOperation(parentType, parentName, currentRules[i], desiredRules[i], i)
+			operations = append(operations, ops...)
 		}
 	}
 
 	return operations
+}
+
+func (c *Comparator) createHTTPRequestRuleOperation(parentType, parentName string, rule *models.HTTPRequestRule, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewCreateHTTPRequestRuleFrontendOperation(parentName, rule, index)}
+	}
+	return []Operation{sections.NewCreateHTTPRequestRuleBackendOperation(parentName, rule, index)}
+}
+
+func (c *Comparator) deleteHTTPRequestRuleOperation(parentType, parentName string, rule *models.HTTPRequestRule, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewDeleteHTTPRequestRuleFrontendOperation(parentName, rule, index)}
+	}
+	return []Operation{sections.NewDeleteHTTPRequestRuleBackendOperation(parentName, rule, index)}
+}
+
+func (c *Comparator) updateHTTPRequestRuleOperation(parentType, parentName string, currentRule, desiredRule *models.HTTPRequestRule, index int) []Operation {
+	if !currentRule.Equal(*desiredRule) {
+		if parentType == parentTypeFrontend {
+			return []Operation{sections.NewUpdateHTTPRequestRuleFrontendOperation(parentName, desiredRule, index)}
+		}
+		return []Operation{sections.NewUpdateHTTPRequestRuleBackendOperation(parentName, desiredRule, index)}
+	}
+	return nil
 }
 
 // compareHTTPResponseRules compares HTTP response rule configurations within a frontend or backend.
 // Rules are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareHTTPResponseRules(parentType, parentName string, currentRules, desiredRules models.HTTPResponseRules, summary *DiffSummary) []Operation {
+func (c *Comparator) compareHTTPResponseRules(parentType, parentName string, currentRules, desiredRules models.HTTPResponseRules) []Operation {
 	var operations []Operation
 
 	// Compare rules by position
@@ -868,42 +895,47 @@ func (c *Comparator) compareHTTPResponseRules(parentType, parentName string, cur
 		hasDesiredRule := i < len(desiredRules)
 
 		if !hasCurrentRule && hasDesiredRule {
-			// Rule added at this position
-			rule := desiredRules[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewCreateHTTPResponseRuleFrontendOperation(parentName, rule, i))
-			} else {
-				operations = append(operations, sections.NewCreateHTTPResponseRuleBackendOperation(parentName, rule, i))
-			}
+			ops := c.createHTTPResponseRuleOperation(parentType, parentName, desiredRules[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentRule && !hasDesiredRule {
-			// Rule removed at this position
-			rule := currentRules[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewDeleteHTTPResponseRuleFrontendOperation(parentName, rule, i))
-			} else {
-				operations = append(operations, sections.NewDeleteHTTPResponseRuleBackendOperation(parentName, rule, i))
-			}
+			ops := c.deleteHTTPResponseRuleOperation(parentType, parentName, currentRules[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentRule && hasDesiredRule {
-			// Both exist - check if modified
-			currentRule := currentRules[i]
-			desiredRule := desiredRules[i]
-
-			if !currentRule.Equal(*desiredRule) {
-				if parentType == "frontend" {
-					operations = append(operations, sections.NewUpdateHTTPResponseRuleFrontendOperation(parentName, desiredRule, i))
-				} else {
-					operations = append(operations, sections.NewUpdateHTTPResponseRuleBackendOperation(parentName, desiredRule, i))
-				}
-			}
+			ops := c.updateHTTPResponseRuleOperation(parentType, parentName, currentRules[i], desiredRules[i], i)
+			operations = append(operations, ops...)
 		}
 	}
 
 	return operations
+}
+
+func (c *Comparator) createHTTPResponseRuleOperation(parentType, parentName string, rule *models.HTTPResponseRule, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewCreateHTTPResponseRuleFrontendOperation(parentName, rule, index)}
+	}
+	return []Operation{sections.NewCreateHTTPResponseRuleBackendOperation(parentName, rule, index)}
+}
+
+func (c *Comparator) deleteHTTPResponseRuleOperation(parentType, parentName string, rule *models.HTTPResponseRule, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewDeleteHTTPResponseRuleFrontendOperation(parentName, rule, index)}
+	}
+	return []Operation{sections.NewDeleteHTTPResponseRuleBackendOperation(parentName, rule, index)}
+}
+
+func (c *Comparator) updateHTTPResponseRuleOperation(parentType, parentName string, currentRule, desiredRule *models.HTTPResponseRule, index int) []Operation {
+	if !currentRule.Equal(*desiredRule) {
+		if parentType == parentTypeFrontend {
+			return []Operation{sections.NewUpdateHTTPResponseRuleFrontendOperation(parentName, desiredRule, index)}
+		}
+		return []Operation{sections.NewUpdateHTTPResponseRuleBackendOperation(parentName, desiredRule, index)}
+	}
+	return nil
 }
 
 // compareTCPRequestRules compares TCP request rule configurations within a frontend or backend.
 // Rules are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareTCPRequestRules(parentType, parentName string, currentRules, desiredRules models.TCPRequestRules, summary *DiffSummary) []Operation {
+func (c *Comparator) compareTCPRequestRules(parentType, parentName string, currentRules, desiredRules models.TCPRequestRules) []Operation {
 	var operations []Operation
 
 	// Compare rules by position
@@ -917,42 +949,49 @@ func (c *Comparator) compareTCPRequestRules(parentType, parentName string, curre
 		hasDesiredRule := i < len(desiredRules)
 
 		if !hasCurrentRule && hasDesiredRule {
-			// Rule added at this position
-			rule := desiredRules[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewCreateTCPRequestRuleFrontendOperation(parentName, rule, i))
-			} else {
-				operations = append(operations, sections.NewCreateTCPRequestRuleBackendOperation(parentName, rule, i))
-			}
+			ops := c.createTCPRequestRuleOperation(parentType, parentName, desiredRules[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentRule && !hasDesiredRule {
-			// Rule removed at this position
-			rule := currentRules[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewDeleteTCPRequestRuleFrontendOperation(parentName, rule, i))
-			} else {
-				operations = append(operations, sections.NewDeleteTCPRequestRuleBackendOperation(parentName, rule, i))
-			}
+			ops := c.deleteTCPRequestRuleOperation(parentType, parentName, currentRules[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentRule && hasDesiredRule {
-			// Both exist - check if modified
-			currentRule := currentRules[i]
-			desiredRule := desiredRules[i]
-
-			if !currentRule.Equal(*desiredRule) {
-				if parentType == "frontend" {
-					operations = append(operations, sections.NewUpdateTCPRequestRuleFrontendOperation(parentName, desiredRule, i))
-				} else {
-					operations = append(operations, sections.NewUpdateTCPRequestRuleBackendOperation(parentName, desiredRule, i))
-				}
-			}
+			ops := c.updateTCPRequestRuleOperation(parentType, parentName, currentRules[i], desiredRules[i], i)
+			operations = append(operations, ops...)
 		}
 	}
 
 	return operations
 }
 
+func (c *Comparator) createTCPRequestRuleOperation(parentType, parentName string, rule *models.TCPRequestRule, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewCreateTCPRequestRuleFrontendOperation(parentName, rule, index)}
+	}
+	return []Operation{sections.NewCreateTCPRequestRuleBackendOperation(parentName, rule, index)}
+}
+
+func (c *Comparator) deleteTCPRequestRuleOperation(parentType, parentName string, rule *models.TCPRequestRule, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewDeleteTCPRequestRuleFrontendOperation(parentName, rule, index)}
+	}
+	return []Operation{sections.NewDeleteTCPRequestRuleBackendOperation(parentName, rule, index)}
+}
+
+func (c *Comparator) updateTCPRequestRuleOperation(parentType, parentName string, currentRule, desiredRule *models.TCPRequestRule, index int) []Operation {
+	if !currentRule.Equal(*desiredRule) {
+		if parentType == parentTypeFrontend {
+			return []Operation{sections.NewUpdateTCPRequestRuleFrontendOperation(parentName, desiredRule, index)}
+		}
+		return []Operation{sections.NewUpdateTCPRequestRuleBackendOperation(parentName, desiredRule, index)}
+	}
+	return nil
+}
+
 // compareTCPResponseRules compares TCP response rule configurations within a backend.
 // Rules are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareTCPResponseRules(parentName string, currentRules, desiredRules models.TCPResponseRules, summary *DiffSummary) []Operation {
+//
+//nolint:dupl // Similar pattern to other backend-only rule comparison functions (StickRules, HTTPAfterResponseRules, etc.) - each handles different rule types
+func (c *Comparator) compareTCPResponseRules(parentName string, currentRules, desiredRules models.TCPResponseRules) []Operation {
 	var operations []Operation
 
 	// Compare rules by position
@@ -989,7 +1028,7 @@ func (c *Comparator) compareTCPResponseRules(parentName string, currentRules, de
 
 // compareLogTargets compares log target configurations within a frontend or backend.
 // Log targets are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareLogTargets(parentType, parentName string, currentLogs, desiredLogs models.LogTargets, summary *DiffSummary) []Operation {
+func (c *Comparator) compareLogTargets(parentType, parentName string, currentLogs, desiredLogs models.LogTargets) []Operation {
 	var operations []Operation
 
 	// Compare log targets by position
@@ -1003,43 +1042,51 @@ func (c *Comparator) compareLogTargets(parentType, parentName string, currentLog
 		hasDesiredLog := i < len(desiredLogs)
 
 		if !hasCurrentLog && hasDesiredLog {
-			// Log target added at this position
-			logTarget := desiredLogs[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewCreateLogTargetFrontendOperation(parentName, logTarget, i))
-			} else {
-				operations = append(operations, sections.NewCreateLogTargetBackendOperation(parentName, logTarget, i))
-			}
+			ops := c.createLogTargetOperation(parentType, parentName, desiredLogs[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentLog && !hasDesiredLog {
-			// Log target removed at this position
-			logTarget := currentLogs[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewDeleteLogTargetFrontendOperation(parentName, logTarget, i))
-			} else {
-				operations = append(operations, sections.NewDeleteLogTargetBackendOperation(parentName, logTarget, i))
-			}
+			ops := c.deleteLogTargetOperation(parentType, parentName, currentLogs[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentLog && hasDesiredLog {
-			// Both exist - check if modified
-			currentLog := currentLogs[i]
-			desiredLog := desiredLogs[i]
-
-			if !currentLog.Equal(*desiredLog) {
-				if parentType == "frontend" {
-					operations = append(operations, sections.NewUpdateLogTargetFrontendOperation(parentName, desiredLog, i))
-				} else {
-					operations = append(operations, sections.NewUpdateLogTargetBackendOperation(parentName, desiredLog, i))
-				}
-			}
+			ops := c.updateLogTargetOperation(parentType, parentName, currentLogs[i], desiredLogs[i], i)
+			operations = append(operations, ops...)
 		}
 	}
 
 	return operations
 }
 
+func (c *Comparator) createLogTargetOperation(parentType, parentName string, logTarget *models.LogTarget, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewCreateLogTargetFrontendOperation(parentName, logTarget, index)}
+	}
+	return []Operation{sections.NewCreateLogTargetBackendOperation(parentName, logTarget, index)}
+}
+
+func (c *Comparator) deleteLogTargetOperation(parentType, parentName string, logTarget *models.LogTarget, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewDeleteLogTargetFrontendOperation(parentName, logTarget, index)}
+	}
+	return []Operation{sections.NewDeleteLogTargetBackendOperation(parentName, logTarget, index)}
+}
+
+func (c *Comparator) updateLogTargetOperation(parentType, parentName string, currentLog, desiredLog *models.LogTarget, index int) []Operation {
+	if !currentLog.Equal(*desiredLog) {
+		if parentType == parentTypeFrontend {
+			return []Operation{sections.NewUpdateLogTargetFrontendOperation(parentName, desiredLog, index)}
+		}
+		return []Operation{sections.NewUpdateLogTargetBackendOperation(parentName, desiredLog, index)}
+	}
+	return nil
+}
+
 // compareStickRules compares stick rule configurations within a backend.
+
 // Stick rules are compared by position since they don't have unique identifiers.
 // Backend-only (frontends do not support stick rules).
-func (c *Comparator) compareStickRules(backendName string, currentRules, desiredRules models.StickRules, summary *DiffSummary) []Operation {
+//
+//nolint:dupl // Similar pattern to other backend-only rule comparison functions - each handles different rule types
+func (c *Comparator) compareStickRules(backendName string, currentRules, desiredRules models.StickRules) []Operation {
 	var operations []Operation
 
 	// Compare stick rules by position
@@ -1075,9 +1122,12 @@ func (c *Comparator) compareStickRules(backendName string, currentRules, desired
 }
 
 // compareHTTPAfterResponseRules compares HTTP after response rule configurations within a backend.
+
 // Rules are compared by position since they don't have unique identifiers.
 // Backend-only (frontends do not support HTTP after response rules).
-func (c *Comparator) compareHTTPAfterResponseRules(backendName string, currentRules, desiredRules models.HTTPAfterResponseRules, summary *DiffSummary) []Operation {
+//
+//nolint:dupl // Similar pattern to other backend-only rule comparison functions - each handles different rule types
+func (c *Comparator) compareHTTPAfterResponseRules(backendName string, currentRules, desiredRules models.HTTPAfterResponseRules) []Operation {
 	var operations []Operation
 
 	// Compare rules by position
@@ -1114,7 +1164,9 @@ func (c *Comparator) compareHTTPAfterResponseRules(backendName string, currentRu
 
 // compareBackendSwitchingRules compares backend switching rule configurations within a frontend.
 // Rules are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareBackendSwitchingRules(frontendName string, currentRules, desiredRules models.BackendSwitchingRules, summary *DiffSummary) []Operation {
+//
+//nolint:dupl // Similar pattern to other switching/check rule comparison functions - each handles different types
+func (c *Comparator) compareBackendSwitchingRules(frontendName string, currentRules, desiredRules models.BackendSwitchingRules) []Operation {
 	var operations []Operation
 
 	// Compare rules by position
@@ -1151,7 +1203,9 @@ func (c *Comparator) compareBackendSwitchingRules(frontendName string, currentRu
 
 // compareServerSwitchingRules compares server switching rule configurations within a backend.
 // Rules are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareServerSwitchingRules(backendName string, currentRules, desiredRules models.ServerSwitchingRules, summary *DiffSummary) []Operation {
+//
+//nolint:dupl // Similar pattern to other switching/check rule comparison functions - each handles different types
+func (c *Comparator) compareServerSwitchingRules(backendName string, currentRules, desiredRules models.ServerSwitchingRules) []Operation {
 	var operations []Operation
 
 	// Compare rules by position
@@ -1188,47 +1242,41 @@ func (c *Comparator) compareServerSwitchingRules(backendName string, currentRule
 
 // compareBinds compares bind configurations within a frontend.
 // Binds are identified by their name (Name field in the map key).
-func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBinds *map[string]models.Bind, summary *DiffSummary) []Operation {
+func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBinds map[string]models.Bind) []Operation {
 	var operations []Operation
 
-	// Handle nil maps
-	if currentBinds == nil {
-		currentBinds = &map[string]models.Bind{}
-	}
-	if desiredBinds == nil {
-		desiredBinds = &map[string]models.Bind{}
-	}
-
 	// Find added binds
-	for name, bind := range *desiredBinds {
-		if _, exists := (*currentBinds)[name]; !exists {
-			bindCopy := bind // Make a copy since range variable is reused
+	for name := range desiredBinds {
+		if _, exists := currentBinds[name]; !exists {
+			bind := desiredBinds[name]
 			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := convertToAPIBind(&bindCopy)
+			apiBind := convertToAPIBind(&bind)
 			operations = append(operations, sections.NewCreateBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
 
 	// Find deleted binds
-	for name, bind := range *currentBinds {
-		if _, exists := (*desiredBinds)[name]; !exists {
-			bindCopy := bind // Make a copy since range variable is reused
+	for name := range currentBinds {
+		if _, exists := desiredBinds[name]; !exists {
+			bind := currentBinds[name]
 			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := convertToAPIBind(&bindCopy)
+			apiBind := convertToAPIBind(&bind)
 			operations = append(operations, sections.NewDeleteBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
 
 	// Find modified binds
-	for name, desiredBind := range *desiredBinds {
-		if currentBind, exists := (*currentBinds)[name]; exists {
-			// Compare using built-in Equal() method
-			if !currentBind.Equal(desiredBind) {
-				bindCopy := desiredBind // Make a copy since range variable is reused
-				// Convert models.Bind to dataplaneapi.Bind
-				apiBind := convertToAPIBind(&bindCopy)
-				operations = append(operations, sections.NewUpdateBindFrontendOperation(frontendName, name, apiBind))
-			}
+	for name := range desiredBinds {
+		currentBind, exists := currentBinds[name]
+		if !exists {
+			continue
+		}
+		desiredBind := desiredBinds[name]
+		// Compare using built-in Equal() method
+		if !currentBind.Equal(desiredBind) {
+			// Convert models.Bind to dataplaneapi.Bind
+			apiBind := convertToAPIBind(&desiredBind)
+			operations = append(operations, sections.NewUpdateBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
 
@@ -1258,7 +1306,7 @@ func convertToAPIBind(modelBind *models.Bind) *dataplaneapi.Bind {
 
 // compareFilters compares filter configurations within a frontend or backend.
 // Filters are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareFilters(parentType, parentName string, currentFilters, desiredFilters models.Filters, summary *DiffSummary) []Operation {
+func (c *Comparator) compareFilters(parentType, parentName string, currentFilters, desiredFilters models.Filters) []Operation {
 	var operations []Operation
 
 	// Compare filters by position
@@ -1272,42 +1320,49 @@ func (c *Comparator) compareFilters(parentType, parentName string, currentFilter
 		hasDesiredFilter := i < len(desiredFilters)
 
 		if !hasCurrentFilter && hasDesiredFilter {
-			// Filter added at this position
-			filter := desiredFilters[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewCreateFilterFrontendOperation(parentName, filter, i))
-			} else {
-				operations = append(operations, sections.NewCreateFilterBackendOperation(parentName, filter, i))
-			}
+			ops := c.createFilterOperation(parentType, parentName, desiredFilters[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentFilter && !hasDesiredFilter {
-			// Filter removed at this position
-			filter := currentFilters[i]
-			if parentType == "frontend" {
-				operations = append(operations, sections.NewDeleteFilterFrontendOperation(parentName, filter, i))
-			} else {
-				operations = append(operations, sections.NewDeleteFilterBackendOperation(parentName, filter, i))
-			}
+			ops := c.deleteFilterOperation(parentType, parentName, currentFilters[i], i)
+			operations = append(operations, ops...)
 		} else if hasCurrentFilter && hasDesiredFilter {
-			// Both exist - check if modified
-			currentFilter := currentFilters[i]
-			desiredFilter := desiredFilters[i]
-
-			if !currentFilter.Equal(*desiredFilter) {
-				if parentType == "frontend" {
-					operations = append(operations, sections.NewUpdateFilterFrontendOperation(parentName, desiredFilter, i))
-				} else {
-					operations = append(operations, sections.NewUpdateFilterBackendOperation(parentName, desiredFilter, i))
-				}
-			}
+			ops := c.updateFilterOperation(parentType, parentName, currentFilters[i], desiredFilters[i], i)
+			operations = append(operations, ops...)
 		}
 	}
 
 	return operations
 }
 
+func (c *Comparator) createFilterOperation(parentType, parentName string, filter *models.Filter, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewCreateFilterFrontendOperation(parentName, filter, index)}
+	}
+	return []Operation{sections.NewCreateFilterBackendOperation(parentName, filter, index)}
+}
+
+func (c *Comparator) deleteFilterOperation(parentType, parentName string, filter *models.Filter, index int) []Operation {
+	if parentType == parentTypeFrontend {
+		return []Operation{sections.NewDeleteFilterFrontendOperation(parentName, filter, index)}
+	}
+	return []Operation{sections.NewDeleteFilterBackendOperation(parentName, filter, index)}
+}
+
+func (c *Comparator) updateFilterOperation(parentType, parentName string, currentFilter, desiredFilter *models.Filter, index int) []Operation {
+	if !currentFilter.Equal(*desiredFilter) {
+		if parentType == parentTypeFrontend {
+			return []Operation{sections.NewUpdateFilterFrontendOperation(parentName, desiredFilter, index)}
+		}
+		return []Operation{sections.NewUpdateFilterBackendOperation(parentName, desiredFilter, index)}
+	}
+	return nil
+}
+
 // compareHTTPChecks compares HTTP check configurations within a backend.
 // HTTP checks are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareHTTPChecks(backendName string, currentChecks, desiredChecks models.HTTPChecks, summary *DiffSummary) []Operation {
+//
+//nolint:dupl // Similar pattern to compareTCPChecks - both handle check configurations with same logic but different types
+func (c *Comparator) compareHTTPChecks(backendName string, currentChecks, desiredChecks models.HTTPChecks) []Operation {
 	var operations []Operation
 
 	// Compare checks by position
@@ -1344,7 +1399,9 @@ func (c *Comparator) compareHTTPChecks(backendName string, currentChecks, desire
 
 // compareTCPChecks compares TCP check configurations within a backend.
 // TCP checks are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareTCPChecks(backendName string, currentChecks, desiredChecks models.TCPChecks, summary *DiffSummary) []Operation {
+//
+//nolint:dupl // Similar pattern to compareHTTPChecks and compareCaptures - all handle positioned list comparisons with same logic but different types
+func (c *Comparator) compareTCPChecks(backendName string, currentChecks, desiredChecks models.TCPChecks) []Operation {
 	var operations []Operation
 
 	// Compare checks by position
@@ -1381,7 +1438,9 @@ func (c *Comparator) compareTCPChecks(backendName string, currentChecks, desired
 
 // compareCaptures compares capture configurations within a frontend.
 // Captures are compared by position since they don't have unique identifiers.
-func (c *Comparator) compareCaptures(frontendName string, currentCaptures, desiredCaptures models.Captures, summary *DiffSummary) []Operation {
+//
+//nolint:dupl // Similar pattern to HTTP/TCP checks and other positioned rule comparisons - each handles different types
+func (c *Comparator) compareCaptures(frontendName string, currentCaptures, desiredCaptures models.Captures) []Operation {
 	var operations []Operation
 
 	// Compare captures by position
@@ -1417,7 +1476,7 @@ func (c *Comparator) compareCaptures(frontendName string, currentCaptures, desir
 }
 
 // compareServerTemplates compares server template configurations within a backend.
-func (c *Comparator) compareServerTemplates(backendName string, currentBackend, desiredBackend *models.Backend, summary *DiffSummary) []Operation {
+func (c *Comparator) compareServerTemplates(backendName string, currentBackend, desiredBackend *models.Backend) []Operation {
 	var operations []Operation
 
 	// Backend.ServerTemplates is already a map[string]models.ServerTemplate
@@ -1425,29 +1484,31 @@ func (c *Comparator) compareServerTemplates(backendName string, currentBackend, 
 	desiredTemplates := desiredBackend.ServerTemplates
 
 	// Find added server templates
-	for prefix, template := range desiredTemplates {
+	for prefix := range desiredTemplates {
 		if _, exists := currentTemplates[prefix]; !exists {
-			templateCopy := template // Make a copy since range variable is reused
-			operations = append(operations, sections.NewCreateServerTemplateOperation(backendName, &templateCopy))
+			template := desiredTemplates[prefix]
+			operations = append(operations, sections.NewCreateServerTemplateOperation(backendName, &template))
 		}
 	}
 
 	// Find deleted server templates
-	for prefix, template := range currentTemplates {
+	for prefix := range currentTemplates {
 		if _, exists := desiredTemplates[prefix]; !exists {
-			templateCopy := template // Make a copy since range variable is reused
-			operations = append(operations, sections.NewDeleteServerTemplateOperation(backendName, &templateCopy))
+			template := currentTemplates[prefix]
+			operations = append(operations, sections.NewDeleteServerTemplateOperation(backendName, &template))
 		}
 	}
 
 	// Find modified server templates
-	for prefix, desiredTemplate := range desiredTemplates {
-		if currentTemplate, exists := currentTemplates[prefix]; exists {
-			// Compare server template attributes using Equal() method
-			if !serverTemplatesEqual(&currentTemplate, &desiredTemplate) {
-				templateCopy := desiredTemplate // Make a copy since range variable is reused
-				operations = append(operations, sections.NewUpdateServerTemplateOperation(backendName, &templateCopy))
-			}
+	for prefix := range desiredTemplates {
+		currentTemplate, exists := currentTemplates[prefix]
+		if !exists {
+			continue
+		}
+		desiredTemplate := desiredTemplates[prefix]
+		// Compare server template attributes using Equal() method
+		if !serverTemplatesEqual(&currentTemplate, &desiredTemplate) {
+			operations = append(operations, sections.NewUpdateServerTemplateOperation(backendName, &desiredTemplate))
 		}
 	}
 
@@ -1461,7 +1522,9 @@ func serverTemplatesEqual(t1, t2 *models.ServerTemplate) bool {
 }
 
 // compareHTTPErrors compares http-errors sections between current and desired configurations.
-func (c *Comparator) compareHTTPErrors(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (Resolvers, Mailers, Peers, etc.) - each handles different types
+func (c *Comparator) compareHTTPErrors(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1514,7 +1577,9 @@ func httpErrorsEqual(h1, h2 *models.HTTPErrorsSection) bool {
 }
 
 // compareResolvers compares resolver sections between current and desired configurations.
-func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Mailers, Peers, etc.) - each handles different types
+func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1566,7 +1631,9 @@ func resolverEqual(r1, r2 *models.Resolver) bool {
 }
 
 // compareMailers compares mailers sections between current and desired configurations.
-func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Peers, etc.) - each handles different types
+func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1618,7 +1685,9 @@ func mailersEqual(m1, m2 *models.MailersSection) bool {
 }
 
 // comparePeers compares peer sections between current and desired configurations.
-func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
+func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1672,7 +1741,7 @@ func peerEqual(p1, p2 *models.PeerSection) bool {
 }
 
 // compareCaches compares cache sections between current and desired configurations.
-func (c *Comparator) compareCaches(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+func (c *Comparator) compareCaches(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1724,7 +1793,9 @@ func cacheEqual(c1, c2 *models.Cache) bool {
 }
 
 // compareRings compares ring sections between current and desired configurations.
-func (c *Comparator) compareRings(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
+func (c *Comparator) compareRings(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1776,7 +1847,7 @@ func ringEqual(r1, r2 *models.Ring) bool {
 }
 
 // compareUserlists compares userlist sections between current and desired configurations.
-func (c *Comparator) compareUserlists(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+func (c *Comparator) compareUserlists(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1815,8 +1886,7 @@ func (c *Comparator) compareUserlists(current, desired *parser.StructuredConfig,
 	for name, desiredUserlist := range desiredMap {
 		if currentUserlist, exists := currentMap[name]; exists {
 			if !userlistEqual(currentUserlist, desiredUserlist) {
-				operations = append(operations, sections.NewDeleteUserlistOperation(currentUserlist))
-				operations = append(operations, sections.NewCreateUserlistOperation(desiredUserlist))
+				operations = append(operations, sections.NewDeleteUserlistOperation(currentUserlist), sections.NewCreateUserlistOperation(desiredUserlist))
 			}
 		}
 	}
@@ -1830,7 +1900,9 @@ func userlistEqual(u1, u2 *models.Userlist) bool {
 }
 
 // comparePrograms compares program sections between current and desired configurations.
-func (c *Comparator) comparePrograms(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
+func (c *Comparator) comparePrograms(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1882,7 +1954,9 @@ func programEqual(p1, p2 *models.Program) bool {
 }
 
 // compareLogForwards compares log-forward sections between current and desired configurations.
-func (c *Comparator) compareLogForwards(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
+func (c *Comparator) compareLogForwards(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1934,7 +2008,9 @@ func logForwardEqual(l1, l2 *models.LogForward) bool {
 }
 
 // compareFCGIApps compares fcgi-app sections between current and desired configurations.
-func (c *Comparator) compareFCGIApps(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
+func (c *Comparator) compareFCGIApps(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name
@@ -1986,7 +2062,9 @@ func fcgiAppEqual(f1, f2 *models.FCGIApp) bool {
 }
 
 // compareCrtStores compares crt-store sections between current and desired configurations.
-func (c *Comparator) compareCrtStores(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
+
+//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
+func (c *Comparator) compareCrtStores(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
 	// Convert slices to maps for easier comparison by Name

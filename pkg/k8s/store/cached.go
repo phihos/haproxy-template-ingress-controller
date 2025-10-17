@@ -62,7 +62,7 @@ type CachedStoreConfig struct {
 }
 
 // NewCachedStore creates a new API-backed store with caching.
-func NewCachedStore(cfg CachedStoreConfig) (*CachedStore, error) {
+func NewCachedStore(cfg *CachedStoreConfig) (*CachedStore, error) {
 	if cfg.NumKeys < 1 {
 		return nil, fmt.Errorf("numKeys must be at least 1")
 	}

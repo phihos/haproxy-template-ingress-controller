@@ -1,4 +1,7 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
+
+// Section operation files follow similar patterns - each implements type-specific HAProxy API wrappers
 
 import (
 	"context"
@@ -9,6 +12,10 @@ import (
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+)
+
+const (
+	sectionFrontend = "frontend"
 )
 
 // CreateFrontendOperation represents creating a new frontend.
@@ -30,7 +37,7 @@ func (op *CreateFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateFrontendOperation) Section() string {
-	return "frontend"
+	return sectionFrontend
 }
 
 // Priority implements Operation.Priority.
@@ -81,7 +88,7 @@ func (op *CreateFrontendOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateFrontendOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Frontend.Name != "" {
 		name = op.Frontend.Name
 	}
@@ -107,7 +114,7 @@ func (op *DeleteFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteFrontendOperation) Section() string {
-	return "frontend"
+	return sectionFrontend
 }
 
 // Priority implements Operation.Priority.
@@ -148,7 +155,7 @@ func (op *DeleteFrontendOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteFrontendOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Frontend.Name != "" {
 		name = op.Frontend.Name
 	}
@@ -174,7 +181,7 @@ func (op *UpdateFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateFrontendOperation) Section() string {
-	return "frontend"
+	return sectionFrontend
 }
 
 // Priority implements Operation.Priority.
@@ -225,7 +232,7 @@ func (op *UpdateFrontendOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateFrontendOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Frontend.Name != "" {
 		name = op.Frontend.Name
 	}

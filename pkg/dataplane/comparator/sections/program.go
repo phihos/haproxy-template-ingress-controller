@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -14,6 +15,10 @@ import (
 // PriorityProgram defines priority for program sections.
 // Programs should be created early as they might be referenced by other sections.
 const PriorityProgram = 10
+
+const (
+	sectionProgram = "program"
+)
 
 // CreateProgramOperation represents creating a new program section.
 type CreateProgramOperation struct {
@@ -34,7 +39,7 @@ func (op *CreateProgramOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateProgramOperation) Section() string {
-	return "program"
+	return sectionProgram
 }
 
 // Priority implements Operation.Priority.
@@ -93,7 +98,7 @@ func (op *CreateProgramOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateProgramOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Program.Name != "" {
 		name = op.Program.Name
 	}
@@ -119,7 +124,7 @@ func (op *DeleteProgramOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteProgramOperation) Section() string {
-	return "program"
+	return sectionProgram
 }
 
 // Priority implements Operation.Priority.
@@ -168,7 +173,7 @@ func (op *DeleteProgramOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteProgramOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Program.Name != "" {
 		name = op.Program.Name
 	}
@@ -194,7 +199,7 @@ func (op *UpdateProgramOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateProgramOperation) Section() string {
-	return "program"
+	return sectionProgram
 }
 
 // Priority implements Operation.Priority.
@@ -253,7 +258,7 @@ func (op *UpdateProgramOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateProgramOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Program.Name != "" {
 		name = op.Program.Name
 	}

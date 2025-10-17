@@ -98,7 +98,7 @@ func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *Syn
 			FallbackToRaw:     false,
 			Duration:          time.Since(startTime),
 			Retries:           0,
-			Details:           convertDiffSummary(diff.Summary),
+			Details:           convertDiffSummary(&diff.Summary),
 			Message:           "No configuration changes detected",
 		}, nil
 	}
@@ -131,167 +131,20 @@ func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *Syn
 // attemptFineGrainedSync attempts to sync using fine-grained operations with retry logic.
 func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *comparator.ConfigDiff, opts *SyncOptions, auxFiles *AuxiliaryFiles, startTime time.Time) (*SyncResult, error) {
 	// Phase 1: Compare and sync auxiliary files (pre-config)
-	var fileDiff *auxiliaryfiles.FileDiff
-	var sslDiff *auxiliaryfiles.SSLCertificateDiff
-	var mapDiff *auxiliaryfiles.MapFileDiff
-
-	// 1.1: General Files
-	if len(auxFiles.GeneralFiles) > 0 {
-		o.logger.Info("Comparing general files",
-			"desired_files", len(auxFiles.GeneralFiles))
-
-		var err error
-		fileDiff, err = auxiliaryfiles.CompareGeneralFiles(ctx, o.client, auxFiles.GeneralFiles)
-		if err != nil {
-			return nil, &SyncError{
-				Stage:   "compare_files",
-				Message: "failed to compare general files",
-				Cause:   err,
-				Hints: []string{
-					"Verify Dataplane API is accessible",
-					"Check file permissions on HAProxy storage",
-				},
-			}
-		}
-
-		// Check if there are file changes
-		hasFileChanges := len(fileDiff.ToCreate) > 0 || len(fileDiff.ToUpdate) > 0 || len(fileDiff.ToDelete) > 0
-		if hasFileChanges {
-			o.logger.Info("General file changes detected",
-				"creates", len(fileDiff.ToCreate),
-				"updates", len(fileDiff.ToUpdate),
-				"deletes", len(fileDiff.ToDelete))
-
-			// Sync creates and updates BEFORE config sync
-			preConfigDiff := &auxiliaryfiles.FileDiff{
-				ToCreate: fileDiff.ToCreate,
-				ToUpdate: fileDiff.ToUpdate,
-				ToDelete: nil, // Don't delete yet
-			}
-
-			if err := auxiliaryfiles.SyncGeneralFiles(ctx, o.client, preConfigDiff); err != nil {
-				return nil, &SyncError{
-					Stage:   "sync_files_pre",
-					Message: "failed to sync general files before config sync",
-					Cause:   err,
-					Hints: []string{
-						"Check HAProxy storage is writable",
-						"Verify file contents are valid",
-						"Review error message for specific file failures",
-					},
-				}
-			}
-
-			o.logger.Info("General files synced successfully (pre-config phase)")
-		} else {
-			o.logger.Info("No general file changes detected")
-		}
+	var err error
+	fileDiff, err := o.syncGeneralFilesPreConfig(ctx, auxFiles.GeneralFiles)
+	if err != nil {
+		return nil, err
 	}
 
-	// 1.2: SSL Certificates
-	if len(auxFiles.SSLCertificates) > 0 {
-		o.logger.Info("Comparing SSL certificates",
-			"desired_certs", len(auxFiles.SSLCertificates))
-
-		var err error
-		sslDiff, err = auxiliaryfiles.CompareSSLCertificates(ctx, o.client, auxFiles.SSLCertificates)
-		if err != nil {
-			return nil, &SyncError{
-				Stage:   "compare_ssl",
-				Message: "failed to compare SSL certificates",
-				Cause:   err,
-				Hints: []string{
-					"Verify Dataplane API is accessible",
-					"Check SSL storage permissions",
-				},
-			}
-		}
-
-		// Check if there are SSL changes
-		hasSSLChanges := len(sslDiff.ToCreate) > 0 || len(sslDiff.ToUpdate) > 0 || len(sslDiff.ToDelete) > 0
-		if hasSSLChanges {
-			o.logger.Info("SSL certificate changes detected",
-				"creates", len(sslDiff.ToCreate),
-				"updates", len(sslDiff.ToUpdate),
-				"deletes", len(sslDiff.ToDelete))
-
-			// Sync creates and updates BEFORE config sync
-			preConfigSSL := &auxiliaryfiles.SSLCertificateDiff{
-				ToCreate: sslDiff.ToCreate,
-				ToUpdate: sslDiff.ToUpdate,
-				ToDelete: nil, // Don't delete yet
-			}
-
-			if err := auxiliaryfiles.SyncSSLCertificates(ctx, o.client, preConfigSSL); err != nil {
-				return nil, &SyncError{
-					Stage:   "sync_ssl_pre",
-					Message: "failed to sync SSL certificates before config sync",
-					Cause:   err,
-					Hints: []string{
-						"Check SSL storage is writable",
-						"Verify certificate contents are valid PEM format",
-						"Review error message for specific certificate failures",
-					},
-				}
-			}
-
-			o.logger.Info("SSL certificates synced successfully (pre-config phase)")
-		} else {
-			o.logger.Info("No SSL certificate changes detected")
-		}
+	sslDiff, err := o.syncSSLCertificatesPreConfig(ctx, auxFiles.SSLCertificates)
+	if err != nil {
+		return nil, err
 	}
 
-	// 1.3: Map Files
-	if len(auxFiles.MapFiles) > 0 {
-		o.logger.Info("Comparing map files",
-			"desired_maps", len(auxFiles.MapFiles))
-
-		var err error
-		mapDiff, err = auxiliaryfiles.CompareMapFiles(ctx, o.client, auxFiles.MapFiles)
-		if err != nil {
-			return nil, &SyncError{
-				Stage:   "compare_maps",
-				Message: "failed to compare map files",
-				Cause:   err,
-				Hints: []string{
-					"Verify Dataplane API is accessible",
-					"Check map storage permissions",
-				},
-			}
-		}
-
-		// Check if there are map changes
-		hasMapChanges := len(mapDiff.ToCreate) > 0 || len(mapDiff.ToUpdate) > 0 || len(mapDiff.ToDelete) > 0
-		if hasMapChanges {
-			o.logger.Info("Map file changes detected",
-				"creates", len(mapDiff.ToCreate),
-				"updates", len(mapDiff.ToUpdate),
-				"deletes", len(mapDiff.ToDelete))
-
-			// Sync creates and updates BEFORE config sync
-			preConfigMap := &auxiliaryfiles.MapFileDiff{
-				ToCreate: mapDiff.ToCreate,
-				ToUpdate: mapDiff.ToUpdate,
-				ToDelete: nil, // Don't delete yet
-			}
-
-			if err := auxiliaryfiles.SyncMapFiles(ctx, o.client, preConfigMap); err != nil {
-				return nil, &SyncError{
-					Stage:   "sync_maps_pre",
-					Message: "failed to sync map files before config sync",
-					Cause:   err,
-					Hints: []string{
-						"Check map storage is writable",
-						"Verify map file contents are valid",
-						"Review error message for specific map file failures",
-					},
-				}
-			}
-
-			o.logger.Info("Map files synced successfully (pre-config phase)")
-		} else {
-			o.logger.Info("No map file changes detected")
-		}
+	mapDiff, err := o.syncMapFilesPreConfig(ctx, auxFiles.MapFiles)
+	if err != nil {
+		return nil, err
 	}
 
 	// Phase 2: Execute configuration sync with retry logic
@@ -303,7 +156,7 @@ func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *compara
 	var retries int
 
 	// Execute with automatic retry on 409 conflicts
-	err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
+	err = adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
 		retries++
 		o.logger.Info("Executing fine-grained sync",
 			"attempt", retries,
@@ -346,68 +199,7 @@ func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *compara
 	}
 
 	// Phase 3: Delete obsolete files AFTER successful config sync
-	// 3.1: General Files
-	if fileDiff != nil && len(fileDiff.ToDelete) > 0 {
-		o.logger.Info("Deleting obsolete general files",
-			"count", len(fileDiff.ToDelete))
-
-		postConfigDiff := &auxiliaryfiles.FileDiff{
-			ToCreate: nil,
-			ToUpdate: nil,
-			ToDelete: fileDiff.ToDelete,
-		}
-
-		if err := auxiliaryfiles.SyncGeneralFiles(ctx, o.client, postConfigDiff); err != nil {
-			// Log warning but don't fail the sync - config is already applied
-			o.logger.Warn("Failed to delete obsolete general files",
-				"error", err,
-				"files", fileDiff.ToDelete)
-		} else {
-			o.logger.Info("Obsolete general files deleted successfully")
-		}
-	}
-
-	// 3.2: SSL Certificates
-	if sslDiff != nil && len(sslDiff.ToDelete) > 0 {
-		o.logger.Info("Deleting obsolete SSL certificates",
-			"count", len(sslDiff.ToDelete))
-
-		postConfigSSL := &auxiliaryfiles.SSLCertificateDiff{
-			ToCreate: nil,
-			ToUpdate: nil,
-			ToDelete: sslDiff.ToDelete,
-		}
-
-		if err := auxiliaryfiles.SyncSSLCertificates(ctx, o.client, postConfigSSL); err != nil {
-			// Log warning but don't fail the sync - config is already applied
-			o.logger.Warn("Failed to delete obsolete SSL certificates",
-				"error", err,
-				"certificates", sslDiff.ToDelete)
-		} else {
-			o.logger.Info("Obsolete SSL certificates deleted successfully")
-		}
-	}
-
-	// 3.3: Map Files
-	if mapDiff != nil && len(mapDiff.ToDelete) > 0 {
-		o.logger.Info("Deleting obsolete map files",
-			"count", len(mapDiff.ToDelete))
-
-		postConfigMap := &auxiliaryfiles.MapFileDiff{
-			ToCreate: nil,
-			ToUpdate: nil,
-			ToDelete: mapDiff.ToDelete,
-		}
-
-		if err := auxiliaryfiles.SyncMapFiles(ctx, o.client, postConfigMap); err != nil {
-			// Log warning but don't fail the sync - config is already applied
-			o.logger.Warn("Failed to delete obsolete map files",
-				"error", err,
-				"maps", mapDiff.ToDelete)
-		} else {
-			o.logger.Info("Obsolete map files deleted successfully")
-		}
-	}
+	o.deleteObsoleteFilesPostConfig(ctx, fileDiff, sslDiff, mapDiff)
 
 	o.logger.Info("Fine-grained sync completed successfully",
 		"operations", len(appliedOps),
@@ -423,7 +215,7 @@ func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *compara
 		FallbackToRaw:     false,
 		Duration:          time.Since(startTime),
 		Retries:           retries - 1,
-		Details:           convertDiffSummary(diff.Summary),
+		Details:           convertDiffSummary(&diff.Summary),
 		Message:           fmt.Sprintf("Successfully applied %d configuration changes", len(appliedOps)),
 	}, nil
 }
@@ -462,7 +254,7 @@ func (o *orchestrator) attemptRawFallback(ctx context.Context, desiredConfig str
 		FallbackToRaw:     true,
 		Duration:          time.Since(startTime),
 		Retries:           0,
-		Details:           convertDiffSummary(diff.Summary),
+		Details:           convertDiffSummary(&diff.Summary),
 		Message:           "Successfully applied configuration via raw config push (fallback)",
 	}, nil
 }
@@ -511,7 +303,7 @@ func (o *orchestrator) diff(ctx context.Context, desiredConfig string) (*DiffRes
 	return &DiffResult{
 		HasChanges:        diff.Summary.HasChanges(),
 		PlannedOperations: plannedOps,
-		Details:           convertDiffSummary(diff.Summary),
+		Details:           convertDiffSummary(&diff.Summary),
 	}, nil
 }
 
@@ -574,7 +366,7 @@ func extractResourceName(op comparator.Operation) string {
 	return "unknown"
 }
 
-func convertDiffSummary(summary comparator.DiffSummary) DiffDetails {
+func convertDiffSummary(summary *comparator.DiffSummary) DiffDetails {
 	return DiffDetails{
 		TotalOperations:   summary.TotalOperations(),
 		Creates:           summary.TotalCreates,
@@ -597,5 +389,237 @@ func convertDiffSummary(summary comparator.DiffSummary) DiffDetails {
 		HTTPRulesAdded:    make(map[string]int),
 		HTTPRulesModified: make(map[string]int),
 		HTTPRulesDeleted:  make(map[string]int),
+	}
+}
+
+// syncGeneralFilesPreConfig handles general file comparison and pre-config sync.
+// It returns the file diff for later use in post-config deletion.
+//
+//nolint:dupl // Similar pattern to SSL and Map file sync - each handles different file types and APIs
+func (o *orchestrator) syncGeneralFilesPreConfig(ctx context.Context, generalFiles []auxiliaryfiles.GeneralFile) (*auxiliaryfiles.FileDiff, error) {
+	if len(generalFiles) == 0 {
+		return &auxiliaryfiles.FileDiff{}, nil
+	}
+
+	o.logger.Info("Comparing general files", "desired_files", len(generalFiles))
+
+	fileDiff, err := auxiliaryfiles.CompareGeneralFiles(ctx, o.client, generalFiles)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare_files",
+			Message: "failed to compare general files",
+			Cause:   err,
+			Hints: []string{
+				"Verify Dataplane API is accessible",
+				"Check file permissions on HAProxy storage",
+			},
+		}
+	}
+
+	hasChanges := len(fileDiff.ToCreate) > 0 || len(fileDiff.ToUpdate) > 0 || len(fileDiff.ToDelete) > 0
+	if !hasChanges {
+		o.logger.Info("No general file changes detected")
+		return fileDiff, nil
+	}
+
+	o.logger.Info("General file changes detected",
+		"creates", len(fileDiff.ToCreate),
+		"updates", len(fileDiff.ToUpdate),
+		"deletes", len(fileDiff.ToDelete))
+
+	// Sync creates and updates BEFORE config sync (don't delete yet)
+	preConfigDiff := &auxiliaryfiles.FileDiff{
+		ToCreate: fileDiff.ToCreate,
+		ToUpdate: fileDiff.ToUpdate,
+		ToDelete: nil,
+	}
+
+	if err := auxiliaryfiles.SyncGeneralFiles(ctx, o.client, preConfigDiff); err != nil {
+		return nil, &SyncError{
+			Stage:   "sync_files_pre",
+			Message: "failed to sync general files before config sync",
+			Cause:   err,
+			Hints: []string{
+				"Check HAProxy storage is writable",
+				"Verify file contents are valid",
+				"Review error message for specific file failures",
+			},
+		}
+	}
+
+	o.logger.Info("General files synced successfully (pre-config phase)")
+	return fileDiff, nil
+}
+
+// syncSSLCertificatesPreConfig handles SSL certificate comparison and pre-config sync.
+// It returns the SSL diff for later use in post-config deletion.
+//
+//nolint:dupl // Similar pattern to general file and Map sync - each handles different file types and APIs
+func (o *orchestrator) syncSSLCertificatesPreConfig(ctx context.Context, sslCertificates []auxiliaryfiles.SSLCertificate) (*auxiliaryfiles.SSLCertificateDiff, error) {
+	if len(sslCertificates) == 0 {
+		return &auxiliaryfiles.SSLCertificateDiff{}, nil
+	}
+
+	o.logger.Info("Comparing SSL certificates", "desired_certs", len(sslCertificates))
+
+	sslDiff, err := auxiliaryfiles.CompareSSLCertificates(ctx, o.client, sslCertificates)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare_ssl",
+			Message: "failed to compare SSL certificates",
+			Cause:   err,
+			Hints: []string{
+				"Verify Dataplane API is accessible",
+				"Check SSL storage permissions",
+			},
+		}
+	}
+
+	hasChanges := len(sslDiff.ToCreate) > 0 || len(sslDiff.ToUpdate) > 0 || len(sslDiff.ToDelete) > 0
+	if !hasChanges {
+		o.logger.Info("No SSL certificate changes detected")
+		return sslDiff, nil
+	}
+
+	o.logger.Info("SSL certificate changes detected",
+		"creates", len(sslDiff.ToCreate),
+		"updates", len(sslDiff.ToUpdate),
+		"deletes", len(sslDiff.ToDelete))
+
+	// Sync creates and updates BEFORE config sync (don't delete yet)
+	preConfigSSL := &auxiliaryfiles.SSLCertificateDiff{
+		ToCreate: sslDiff.ToCreate,
+		ToUpdate: sslDiff.ToUpdate,
+		ToDelete: nil,
+	}
+
+	if err := auxiliaryfiles.SyncSSLCertificates(ctx, o.client, preConfigSSL); err != nil {
+		return nil, &SyncError{
+			Stage:   "sync_ssl_pre",
+			Message: "failed to sync SSL certificates before config sync",
+			Cause:   err,
+			Hints: []string{
+				"Check SSL storage is writable",
+				"Verify certificate contents are valid PEM format",
+				"Review error message for specific certificate failures",
+			},
+		}
+	}
+
+	o.logger.Info("SSL certificates synced successfully (pre-config phase)")
+	return sslDiff, nil
+}
+
+// syncMapFilesPreConfig handles map file comparison and pre-config sync.
+// It returns the map diff for later use in post-config deletion.
+//
+//nolint:dupl // Similar pattern to general file and SSL sync - each handles different file types and APIs
+func (o *orchestrator) syncMapFilesPreConfig(ctx context.Context, mapFiles []auxiliaryfiles.MapFile) (*auxiliaryfiles.MapFileDiff, error) {
+	if len(mapFiles) == 0 {
+		return &auxiliaryfiles.MapFileDiff{}, nil
+	}
+
+	o.logger.Info("Comparing map files", "desired_maps", len(mapFiles))
+
+	mapDiff, err := auxiliaryfiles.CompareMapFiles(ctx, o.client, mapFiles)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare_maps",
+			Message: "failed to compare map files",
+			Cause:   err,
+			Hints: []string{
+				"Verify Dataplane API is accessible",
+				"Check map storage permissions",
+			},
+		}
+	}
+
+	hasChanges := len(mapDiff.ToCreate) > 0 || len(mapDiff.ToUpdate) > 0 || len(mapDiff.ToDelete) > 0
+	if !hasChanges {
+		o.logger.Info("No map file changes detected")
+		return mapDiff, nil
+	}
+
+	o.logger.Info("Map file changes detected",
+		"creates", len(mapDiff.ToCreate),
+		"updates", len(mapDiff.ToUpdate),
+		"deletes", len(mapDiff.ToDelete))
+
+	// Sync creates and updates BEFORE config sync (don't delete yet)
+	preConfigMap := &auxiliaryfiles.MapFileDiff{
+		ToCreate: mapDiff.ToCreate,
+		ToUpdate: mapDiff.ToUpdate,
+		ToDelete: nil,
+	}
+
+	if err := auxiliaryfiles.SyncMapFiles(ctx, o.client, preConfigMap); err != nil {
+		return nil, &SyncError{
+			Stage:   "sync_maps_pre",
+			Message: "failed to sync map files before config sync",
+			Cause:   err,
+			Hints: []string{
+				"Check map storage is writable",
+				"Verify map file contents are valid",
+				"Review error message for specific map file failures",
+			},
+		}
+	}
+
+	o.logger.Info("Map files synced successfully (pre-config phase)")
+	return mapDiff, nil
+}
+
+// deleteObsoleteFilesPostConfig deletes obsolete auxiliary files AFTER successful config sync.
+// Errors are logged as warnings but do not fail the sync since config is already applied.
+func (o *orchestrator) deleteObsoleteFilesPostConfig(ctx context.Context, fileDiff *auxiliaryfiles.FileDiff, sslDiff *auxiliaryfiles.SSLCertificateDiff, mapDiff *auxiliaryfiles.MapFileDiff) {
+	// Delete general files
+	if fileDiff != nil && len(fileDiff.ToDelete) > 0 {
+		o.logger.Info("Deleting obsolete general files", "count", len(fileDiff.ToDelete))
+
+		postConfigDiff := &auxiliaryfiles.FileDiff{
+			ToCreate: nil,
+			ToUpdate: nil,
+			ToDelete: fileDiff.ToDelete,
+		}
+
+		if err := auxiliaryfiles.SyncGeneralFiles(ctx, o.client, postConfigDiff); err != nil {
+			o.logger.Warn("Failed to delete obsolete general files", "error", err, "files", fileDiff.ToDelete)
+		} else {
+			o.logger.Info("Obsolete general files deleted successfully")
+		}
+	}
+
+	// Delete SSL certificates
+	if sslDiff != nil && len(sslDiff.ToDelete) > 0 {
+		o.logger.Info("Deleting obsolete SSL certificates", "count", len(sslDiff.ToDelete))
+
+		postConfigSSL := &auxiliaryfiles.SSLCertificateDiff{
+			ToCreate: nil,
+			ToUpdate: nil,
+			ToDelete: sslDiff.ToDelete,
+		}
+
+		if err := auxiliaryfiles.SyncSSLCertificates(ctx, o.client, postConfigSSL); err != nil {
+			o.logger.Warn("Failed to delete obsolete SSL certificates", "error", err, "certificates", sslDiff.ToDelete)
+		} else {
+			o.logger.Info("Obsolete SSL certificates deleted successfully")
+		}
+	}
+
+	// Delete map files
+	if mapDiff != nil && len(mapDiff.ToDelete) > 0 {
+		o.logger.Info("Deleting obsolete map files", "count", len(mapDiff.ToDelete))
+
+		postConfigMap := &auxiliaryfiles.MapFileDiff{
+			ToCreate: nil,
+			ToUpdate: nil,
+			ToDelete: mapDiff.ToDelete,
+		}
+
+		if err := auxiliaryfiles.SyncMapFiles(ctx, o.client, postConfigMap); err != nil {
+			o.logger.Warn("Failed to delete obsolete map files", "error", err, "maps", mapDiff.ToDelete)
+		} else {
+			o.logger.Info("Obsolete map files deleted successfully")
+		}
 	}
 }

@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -14,6 +15,10 @@ import (
 // PriorityRing defines priority for ring sections.
 // Rings should be created early as they might be referenced by backends.
 const PriorityRing = 15
+
+const (
+	sectionRing = "ring"
+)
 
 // CreateRingOperation represents creating a new ring section.
 type CreateRingOperation struct {
@@ -34,7 +39,7 @@ func (op *CreateRingOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateRingOperation) Section() string {
-	return "ring"
+	return sectionRing
 }
 
 // Priority implements Operation.Priority.
@@ -93,7 +98,7 @@ func (op *CreateRingOperation) Execute(ctx context.Context, c *client.DataplaneC
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateRingOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Ring.Name != "" {
 		name = op.Ring.Name
 	}
@@ -119,7 +124,7 @@ func (op *DeleteRingOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteRingOperation) Section() string {
-	return "ring"
+	return sectionRing
 }
 
 // Priority implements Operation.Priority.
@@ -168,7 +173,7 @@ func (op *DeleteRingOperation) Execute(ctx context.Context, c *client.DataplaneC
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteRingOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Ring.Name != "" {
 		name = op.Ring.Name
 	}
@@ -194,7 +199,7 @@ func (op *UpdateRingOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateRingOperation) Section() string {
-	return "ring"
+	return sectionRing
 }
 
 // Priority implements Operation.Priority.
@@ -253,7 +258,7 @@ func (op *UpdateRingOperation) Execute(ctx context.Context, c *client.DataplaneC
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateRingOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Ring.Name != "" {
 		name = op.Ring.Name
 	}

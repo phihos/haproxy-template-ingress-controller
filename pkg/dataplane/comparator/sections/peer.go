@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -14,6 +15,10 @@ import (
 // PriorityPeer defines priority for peer sections.
 // Peers should be created early as they might be referenced by backends.
 const PriorityPeer = 15
+
+const (
+	sectionPeer = "peer"
+)
 
 // CreatePeerOperation represents creating a new peer section.
 type CreatePeerOperation struct {
@@ -34,7 +39,7 @@ func (op *CreatePeerOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreatePeerOperation) Section() string {
-	return "peer"
+	return sectionPeer
 }
 
 // Priority implements Operation.Priority.
@@ -93,7 +98,7 @@ func (op *CreatePeerOperation) Execute(ctx context.Context, c *client.DataplaneC
 
 // Describe returns a human-readable description of this operation.
 func (op *CreatePeerOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Peer.Name != "" {
 		name = op.Peer.Name
 	}
@@ -119,7 +124,7 @@ func (op *DeletePeerOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeletePeerOperation) Section() string {
-	return "peer"
+	return sectionPeer
 }
 
 // Priority implements Operation.Priority.
@@ -168,7 +173,7 @@ func (op *DeletePeerOperation) Execute(ctx context.Context, c *client.DataplaneC
 
 // Describe returns a human-readable description of this operation.
 func (op *DeletePeerOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Peer.Name != "" {
 		name = op.Peer.Name
 	}
@@ -196,7 +201,7 @@ func (op *UpdatePeerOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdatePeerOperation) Section() string {
-	return "peer"
+	return sectionPeer
 }
 
 // Priority implements Operation.Priority.
@@ -214,7 +219,7 @@ func (op *UpdatePeerOperation) Execute(ctx context.Context, c *client.DataplaneC
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdatePeerOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Peer.Name != "" {
 		name = op.Peer.Name
 	}

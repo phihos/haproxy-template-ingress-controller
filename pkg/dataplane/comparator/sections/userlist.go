@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -14,6 +15,10 @@ import (
 // PriorityUserlist defines priority for userlist sections.
 // Userlists should be created early as they might be referenced by frontends/backends.
 const PriorityUserlist = 10
+
+const (
+	sectionUserlist = "userlist"
+)
 
 // CreateUserlistOperation represents creating a new userlist section.
 type CreateUserlistOperation struct {
@@ -34,7 +39,7 @@ func (op *CreateUserlistOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateUserlistOperation) Section() string {
-	return "userlist"
+	return sectionUserlist
 }
 
 // Priority implements Operation.Priority.
@@ -93,7 +98,7 @@ func (op *CreateUserlistOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateUserlistOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Userlist.Name != "" {
 		name = op.Userlist.Name
 	}
@@ -119,7 +124,7 @@ func (op *DeleteUserlistOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteUserlistOperation) Section() string {
-	return "userlist"
+	return sectionUserlist
 }
 
 // Priority implements Operation.Priority.
@@ -128,6 +133,8 @@ func (op *DeleteUserlistOperation) Priority() int {
 }
 
 // Execute deletes the userlist section via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other section operation Execute methods - each handles different API endpoints and contexts
 func (op *DeleteUserlistOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Userlist == nil {
 		return fmt.Errorf("userlist section is nil")
@@ -168,7 +175,7 @@ func (op *DeleteUserlistOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteUserlistOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Userlist.Name != "" {
 		name = op.Userlist.Name
 	}

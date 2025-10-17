@@ -68,7 +68,7 @@ func (c *ConfigLoaderComponent) Start(ctx context.Context) {
 			c.logger.Info("ConfigLoader component stopped")
 			return
 		case event := <-eventCh:
-			if configEvent, ok := event.(events.ConfigResourceChangedEvent); ok {
+			if configEvent, ok := event.(*events.ConfigResourceChangedEvent); ok {
 				c.processConfigChange(configEvent)
 			}
 		}
@@ -81,7 +81,7 @@ func (c *ConfigLoaderComponent) Stop() {
 }
 
 // processConfigChange handles a ConfigResourceChangedEvent by parsing the ConfigMap.
-func (c *ConfigLoaderComponent) processConfigChange(event events.ConfigResourceChangedEvent) {
+func (c *ConfigLoaderComponent) processConfigChange(event *events.ConfigResourceChangedEvent) {
 	// Extract unstructured resource
 	resource, ok := event.Resource.(*unstructured.Unstructured)
 	if !ok {

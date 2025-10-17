@@ -1,3 +1,4 @@
+//nolint:dupl // Intentional duplication - minimal boilerplate for different file types using generics
 package auxiliaryfiles
 
 import (

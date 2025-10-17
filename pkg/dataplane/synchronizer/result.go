@@ -60,13 +60,10 @@ func (r *SyncResult) String() string {
 	if !r.Success {
 		status = "FAILED"
 	}
-	parts = append(parts, fmt.Sprintf("Status: %s", status))
-
-	// Policy
-	parts = append(parts, fmt.Sprintf("Policy: %s", r.Policy))
-
-	// Duration and retries
-	parts = append(parts, fmt.Sprintf("Duration: %s (retries: %d)", r.Duration, r.Retries))
+	parts = append(parts,
+		fmt.Sprintf("Status: %s", status),
+		fmt.Sprintf("Policy: %s", r.Policy),
+		fmt.Sprintf("Duration: %s (retries: %d)", r.Duration, r.Retries))
 
 	// Changes summary
 	if r.Diff != nil {

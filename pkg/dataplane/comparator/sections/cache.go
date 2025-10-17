@@ -15,6 +15,10 @@ import (
 // Caches should be created early as they might be referenced by backends.
 const PriorityCache = 15
 
+const (
+	sectionCache = "cache"
+)
+
 // CreateCacheOperation represents creating a new cache section.
 type CreateCacheOperation struct {
 	Cache *models.Cache
@@ -34,7 +38,7 @@ func (op *CreateCacheOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateCacheOperation) Section() string {
-	return "cache"
+	return sectionCache
 }
 
 // Priority implements Operation.Priority.
@@ -93,7 +97,7 @@ func (op *CreateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateCacheOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Cache.Name != nil && *op.Cache.Name != "" {
 		name = *op.Cache.Name
 	}
@@ -119,7 +123,7 @@ func (op *DeleteCacheOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteCacheOperation) Section() string {
-	return "cache"
+	return sectionCache
 }
 
 // Priority implements Operation.Priority.
@@ -168,7 +172,7 @@ func (op *DeleteCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteCacheOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Cache.Name != nil && *op.Cache.Name != "" {
 		name = *op.Cache.Name
 	}
@@ -194,7 +198,7 @@ func (op *UpdateCacheOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateCacheOperation) Section() string {
-	return "cache"
+	return sectionCache
 }
 
 // Priority implements Operation.Priority.
@@ -253,7 +257,7 @@ func (op *UpdateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateCacheOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Cache.Name != nil && *op.Cache.Name != "" {
 		name = *op.Cache.Name
 	}

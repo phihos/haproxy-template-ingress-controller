@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -163,7 +164,7 @@ func TestLoggerFiltering(t *testing.T) {
 			logger := slog.New(handler)
 
 			// Log at the test level
-			logger.Log(nil, tc.logLevel, "test message")
+			logger.Log(context.Background(), tc.logLevel, "test message")
 
 			if tc.shouldLog {
 				assert.NotEmpty(t, buf.String(), "Expected log output for %s logger at %s level", tc.loggerLevel, tc.logLevel)

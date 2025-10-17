@@ -106,7 +106,7 @@ func New(cfg types.WatcherConfig, k8sClient *client.Client) (*Watcher, error) {
 			return nil, fmt.Errorf("cached store requires dynamic client")
 		}
 
-		cachedStore, err := store.NewCachedStore(store.CachedStoreConfig{
+		cachedStore, err := store.NewCachedStore(&store.CachedStoreConfig{
 			NumKeys:   len(cfg.IndexBy),
 			CacheTTL:  cfg.CacheTTL,
 			Client:    dynamicClient,

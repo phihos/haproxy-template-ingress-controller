@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -14,6 +15,10 @@ import (
 // PriorityResolver defines priority for resolver sections.
 // Resolvers should be created early as they might be referenced by backends.
 const PriorityResolver = 15
+
+const (
+	sectionResolver = "resolver"
+)
 
 // CreateResolverOperation represents creating a new resolver section.
 type CreateResolverOperation struct {
@@ -34,7 +39,7 @@ func (op *CreateResolverOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateResolverOperation) Section() string {
-	return "resolver"
+	return sectionResolver
 }
 
 // Priority implements Operation.Priority.
@@ -93,7 +98,7 @@ func (op *CreateResolverOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateResolverOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Resolver.Name != "" {
 		name = op.Resolver.Name
 	}
@@ -119,7 +124,7 @@ func (op *DeleteResolverOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteResolverOperation) Section() string {
-	return "resolver"
+	return sectionResolver
 }
 
 // Priority implements Operation.Priority.
@@ -168,7 +173,7 @@ func (op *DeleteResolverOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteResolverOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Resolver.Name != "" {
 		name = op.Resolver.Name
 	}
@@ -194,7 +199,7 @@ func (op *UpdateResolverOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateResolverOperation) Section() string {
-	return "resolver"
+	return sectionResolver
 }
 
 // Priority implements Operation.Priority.
@@ -253,7 +258,7 @@ func (op *UpdateResolverOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateResolverOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Resolver.Name != "" {
 		name = op.Resolver.Name
 	}

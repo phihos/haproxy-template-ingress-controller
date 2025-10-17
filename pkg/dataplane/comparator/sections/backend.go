@@ -34,6 +34,10 @@ const (
 	PriorityRule     = 60
 )
 
+const (
+	sectionBackend = "backend"
+)
+
 // CreateBackendOperation represents creating a new backend.
 type CreateBackendOperation struct {
 	Backend *models.Backend
@@ -53,7 +57,7 @@ func (op *CreateBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateBackendOperation) Section() string {
-	return "backend"
+	return sectionBackend
 }
 
 // Priority implements Operation.Priority.
@@ -105,7 +109,7 @@ func (op *CreateBackendOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateBackendOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Backend.Name != "" {
 		name = op.Backend.Name
 	}
@@ -131,7 +135,7 @@ func (op *DeleteBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteBackendOperation) Section() string {
-	return "backend"
+	return sectionBackend
 }
 
 // Priority implements Operation.Priority.
@@ -172,7 +176,7 @@ func (op *DeleteBackendOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteBackendOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Backend.Name != "" {
 		name = op.Backend.Name
 	}
@@ -198,7 +202,7 @@ func (op *UpdateBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateBackendOperation) Section() string {
-	return "backend"
+	return sectionBackend
 }
 
 // Priority implements Operation.Priority.
@@ -207,6 +211,8 @@ func (op *UpdateBackendOperation) Priority() int {
 }
 
 // Execute updates the backend via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to frontend/defaults operations - each handles different section types
 func (op *UpdateBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Backend == nil {
 		return fmt.Errorf("backend is nil")
@@ -249,7 +255,7 @@ func (op *UpdateBackendOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateBackendOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Backend.Name != "" {
 		name = op.Backend.Name
 	}

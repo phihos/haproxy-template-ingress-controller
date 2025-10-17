@@ -1,5 +1,7 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -15,6 +17,10 @@ import (
 
 // PriorityTCPCheck defines the priority for TCP check operations.
 const PriorityTCPCheck = 60
+
+const (
+	sectionTCPCheck = "tcp-check"
+)
 
 // CreateTCPCheckBackendOperation represents creating a new TCP check in a backend.
 type CreateTCPCheckBackendOperation struct {
@@ -39,7 +45,7 @@ func (op *CreateTCPCheckBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateTCPCheckBackendOperation) Section() string {
-	return "tcp-check"
+	return sectionTCPCheck
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +54,8 @@ func (op *CreateTCPCheckBackendOperation) Priority() int {
 }
 
 // Execute creates the TCP check via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateTCPCheckBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.TCPCheck == nil {
 		return fmt.Errorf("TCP check is nil")
@@ -87,7 +95,7 @@ func (op *CreateTCPCheckBackendOperation) Execute(ctx context.Context, c *client
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateTCPCheckBackendOperation) Describe() string {
-	action := "unknown"
+	action := unknownFallback
 	if op.TCPCheck != nil && op.TCPCheck.Action != "" {
 		action = op.TCPCheck.Action
 	}
@@ -117,7 +125,7 @@ func (op *DeleteTCPCheckBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteTCPCheckBackendOperation) Section() string {
-	return "tcp-check"
+	return sectionTCPCheck
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteTCPCheckBackendOperation) Execute(ctx context.Context, c *client
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteTCPCheckBackendOperation) Describe() string {
-	action := "unknown"
+	action := unknownFallback
 	if op.TCPCheck != nil && op.TCPCheck.Action != "" {
 		action = op.TCPCheck.Action
 	}
@@ -181,7 +189,7 @@ func (op *UpdateTCPCheckBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateTCPCheckBackendOperation) Section() string {
-	return "tcp-check"
+	return sectionTCPCheck
 }
 
 // Priority implements Operation.Priority.
@@ -229,7 +237,7 @@ func (op *UpdateTCPCheckBackendOperation) Execute(ctx context.Context, c *client
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateTCPCheckBackendOperation) Describe() string {
-	action := "unknown"
+	action := unknownFallback
 	if op.TCPCheck != nil && op.TCPCheck.Action != "" {
 		action = op.TCPCheck.Action
 	}

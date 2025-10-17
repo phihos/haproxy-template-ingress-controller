@@ -120,21 +120,21 @@ func validateWatchedResources(resources map[string]WatchedResource) error {
 // validateWatchedResource validates a single watched resource configuration.
 func validateWatchedResource(name string, resource *WatchedResource) error {
 	if resource.APIVersion == "" {
-		return fmt.Errorf("api_version cannot be empty")
+		return fmt.Errorf("resource %q: api_version cannot be empty", name)
 	}
 
 	if resource.Kind == "" {
-		return fmt.Errorf("kind cannot be empty")
+		return fmt.Errorf("resource %q: kind cannot be empty", name)
 	}
 
 	if len(resource.IndexBy) == 0 {
-		return fmt.Errorf("index_by must have at least one expression")
+		return fmt.Errorf("resource %q: index_by must have at least one expression", name)
 	}
 
 	// Validate that index_by expressions are not empty strings
 	for i, expr := range resource.IndexBy {
 		if expr == "" {
-			return fmt.Errorf("index_by[%d] cannot be empty", i)
+			return fmt.Errorf("resource %q: index_by[%d] cannot be empty", name, i)
 		}
 	}
 

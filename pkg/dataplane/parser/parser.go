@@ -113,112 +113,137 @@ func (p *Parser) ParseFromString(config string) (*StructuredConfig, error) {
 func (p *Parser) extractConfiguration() (*StructuredConfig, error) {
 	conf := &StructuredConfig{}
 
-	// Extract global section
+	// Extract core sections (global, defaults, frontends, backends)
+	if err := p.extractCoreSections(conf); err != nil {
+		return nil, err
+	}
+
+	// Extract peer and service discovery sections (peers, resolvers, mailers)
+	if err := p.extractPeerAndDiscoverySections(conf); err != nil {
+		return nil, err
+	}
+
+	// Extract service sections (caches, rings, http-errors, userlists)
+	if err := p.extractServiceSections(conf); err != nil {
+		return nil, err
+	}
+
+	// Extract program and application sections (programs, log-forwards, fcgi-apps, crt-stores)
+	if err := p.extractProgramSections(conf); err != nil {
+		return nil, err
+	}
+
+	return conf, nil
+}
+
+// extractCoreSections extracts core HAProxy sections (global, defaults, frontends, backends).
+func (p *Parser) extractCoreSections(conf *StructuredConfig) error {
 	global, err := p.extractGlobal()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract global section: %w", err)
+		return fmt.Errorf("failed to extract global section: %w", err)
 	}
 	conf.Global = global
 
-	// Extract defaults sections (HAProxy supports multiple defaults sections)
 	defaults, err := p.extractDefaults()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract defaults sections: %w", err)
+		return fmt.Errorf("failed to extract defaults sections: %w", err)
 	}
 	conf.Defaults = defaults
 
-	// Extract frontends
 	frontends, err := p.extractFrontends()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract frontends: %w", err)
+		return fmt.Errorf("failed to extract frontends: %w", err)
 	}
 	conf.Frontends = frontends
 
-	// Extract backends
 	backends, err := p.extractBackends()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract backends: %w", err)
+		return fmt.Errorf("failed to extract backends: %w", err)
 	}
 	conf.Backends = backends
 
-	// Extract peers
+	return nil
+}
+
+// extractPeerAndDiscoverySections extracts peer and service discovery sections.
+func (p *Parser) extractPeerAndDiscoverySections(conf *StructuredConfig) error {
 	peers, err := p.extractPeers()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract peers: %w", err)
+		return fmt.Errorf("failed to extract peers: %w", err)
 	}
 	conf.Peers = peers
 
-	// Extract resolvers
 	resolvers, err := p.extractResolvers()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract resolvers: %w", err)
+		return fmt.Errorf("failed to extract resolvers: %w", err)
 	}
 	conf.Resolvers = resolvers
 
-	// Extract mailers
 	mailers, err := p.extractMailers()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract mailers: %w", err)
+		return fmt.Errorf("failed to extract mailers: %w", err)
 	}
 	conf.Mailers = mailers
 
-	// Extract caches
+	return nil
+}
+
+// extractServiceSections extracts service sections (caches, rings, http-errors, userlists).
+func (p *Parser) extractServiceSections(conf *StructuredConfig) error {
 	caches, err := p.extractCaches()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract caches: %w", err)
+		return fmt.Errorf("failed to extract caches: %w", err)
 	}
 	conf.Caches = caches
 
-	// Extract rings
 	rings, err := p.extractRings()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract rings: %w", err)
+		return fmt.Errorf("failed to extract rings: %w", err)
 	}
 	conf.Rings = rings
 
-	// Extract http-errors sections
 	httpErrors, err := p.extractHTTPErrors()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract http-errors: %w", err)
+		return fmt.Errorf("failed to extract http-errors: %w", err)
 	}
 	conf.HTTPErrors = httpErrors
 
-	// Extract userlists
 	userlists, err := p.extractUserlists()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract userlists: %w", err)
+		return fmt.Errorf("failed to extract userlists: %w", err)
 	}
 	conf.Userlists = userlists
 
-	// Extract programs
+	return nil
+}
+
+// extractProgramSections extracts program and application sections.
+func (p *Parser) extractProgramSections(conf *StructuredConfig) error {
 	programs, err := p.extractPrograms()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract programs: %w", err)
+		return fmt.Errorf("failed to extract programs: %w", err)
 	}
 	conf.Programs = programs
 
-	// Extract log-forwards
 	logForwards, err := p.extractLogForwards()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract log-forwards: %w", err)
+		return fmt.Errorf("failed to extract log-forwards: %w", err)
 	}
 	conf.LogForwards = logForwards
 
-	// Extract fcgi-apps
 	fcgiApps, err := p.extractFCGIApps()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract fcgi-apps: %w", err)
+		return fmt.Errorf("failed to extract fcgi-apps: %w", err)
 	}
 	conf.FCGIApps = fcgiApps
 
-	// Extract crt-stores
 	crtStores, err := p.extractCrtStores()
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract crt-stores: %w", err)
+		return fmt.Errorf("failed to extract crt-stores: %w", err)
 	}
 	conf.CrtStores = crtStores
 
-	return conf, nil
+	return nil
 }
 
 // extractGlobal extracts the global section using client-native's ParseGlobalSection.
@@ -234,6 +259,13 @@ func (p *Parser) extractGlobal() (*models.Global, error) {
 		return nil, fmt.Errorf("failed to parse global section: %w", err)
 	}
 
+	// Parse log targets separately (nested structure)
+	// Global section has no name (empty string)
+	logTargets, err := configuration.ParseLogTargets(string(parser.Global), "", p.parser)
+	if err == nil {
+		global.LogTargetList = logTargets
+	}
+
 	return global, nil
 }
 
@@ -246,7 +278,7 @@ func (p *Parser) extractDefaults() ([]*models.Defaults, error) {
 	sections, err := p.parser.SectionsGet(parser.Defaults)
 	if err != nil {
 		// No defaults sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	defaults := make([]*models.Defaults, 0, len(sections))
@@ -280,7 +312,7 @@ func (p *Parser) extractFrontends() ([]*models.Frontend, error) {
 	sections, err := p.parser.SectionsGet(parser.Frontends)
 	if err != nil {
 		// No frontends is valid
-		return nil, nil
+		return nil, err
 	}
 
 	frontends := make([]*models.Frontend, 0, len(sections))
@@ -332,7 +364,7 @@ func (p *Parser) extractBackends() ([]*models.Backend, error) {
 	sections, err := p.parser.SectionsGet(parser.Backends)
 	if err != nil {
 		// No backends is valid
-		return nil, nil
+		return nil, err
 	}
 
 	backends := make([]*models.Backend, 0, len(sections))
@@ -347,43 +379,8 @@ func (p *Parser) extractBackends() ([]*models.Backend, error) {
 		}
 		be.Name = sectionName
 
-		// Parse nested structures using client-native's Parse* helpers
-		be.ACLList, _ = configuration.ParseACLs(parser.Backends, sectionName, p.parser)
-
-		// Convert Servers slice to map
-		servers, _ := configuration.ParseServers(string(parser.Backends), sectionName, p.parser)
-		if servers != nil {
-			be.Servers = make(map[string]models.Server)
-			for _, server := range servers {
-				if server != nil {
-					be.Servers[server.Name] = *server
-				}
-			}
-		}
-
-		be.HTTPRequestRuleList, _ = configuration.ParseHTTPRequestRules(string(parser.Backends), sectionName, p.parser)
-		be.HTTPResponseRuleList, _ = configuration.ParseHTTPResponseRules(string(parser.Backends), sectionName, p.parser)
-		be.TCPRequestRuleList, _ = configuration.ParseTCPRequestRules(string(parser.Backends), sectionName, p.parser)
-		be.TCPResponseRuleList, _ = configuration.ParseTCPResponseRules(string(parser.Backends), sectionName, p.parser)
-		be.FilterList, _ = configuration.ParseFilters(string(parser.Backends), sectionName, p.parser)
-		be.LogTargetList, _ = configuration.ParseLogTargets(string(parser.Backends), sectionName, p.parser)
-		be.HTTPAfterResponseRuleList, _ = configuration.ParseHTTPAfterRules(string(parser.Backends), sectionName, p.parser)
-		be.HTTPErrorRuleList, _ = configuration.ParseHTTPErrorRules(string(parser.Backends), sectionName, p.parser)
-		be.HTTPCheckList, _ = configuration.ParseHTTPChecks(string(parser.Backends), sectionName, p.parser)
-		be.TCPCheckRuleList, _ = configuration.ParseTCPChecks(string(parser.Backends), sectionName, p.parser)
-		be.StickRuleList, _ = configuration.ParseStickRules(sectionName, p.parser)
-		be.ServerSwitchingRuleList, _ = configuration.ParseServerSwitchingRules(sectionName, p.parser)
-
-		// Convert ServerTemplates slice to map
-		serverTemplates, _ := configuration.ParseServerTemplates(sectionName, p.parser)
-		if serverTemplates != nil {
-			be.ServerTemplates = make(map[string]models.ServerTemplate)
-			for _, template := range serverTemplates {
-				if template != nil {
-					be.ServerTemplates[template.Prefix] = *template
-				}
-			}
-		}
+		// Parse nested structures
+		p.parseBackendNestedStructures(sectionName, be)
 
 		backends = append(backends, be)
 	}
@@ -391,12 +388,73 @@ func (p *Parser) extractBackends() ([]*models.Backend, error) {
 	return backends, nil
 }
 
+// parseBackendNestedStructures parses all nested structures for a backend.
+func (p *Parser) parseBackendNestedStructures(sectionName string, be *models.Backend) {
+	// Parse ACLs and servers
+	be.ACLList, _ = configuration.ParseACLs(parser.Backends, sectionName, p.parser)
+	p.parseBackendServers(sectionName, be)
+
+	// Parse HTTP/TCP rules
+	p.parseBackendRules(sectionName, be)
+
+	// Parse filters, log targets, and checks
+	p.parseBackendFiltersAndChecks(sectionName, be)
+
+	// Parse server templates
+	p.parseBackendServerTemplates(sectionName, be)
+}
+
+// parseBackendServers parses and converts backend servers from slice to map.
+func (p *Parser) parseBackendServers(sectionName string, be *models.Backend) {
+	servers, _ := configuration.ParseServers(string(parser.Backends), sectionName, p.parser)
+	if servers != nil {
+		be.Servers = make(map[string]models.Server)
+		for _, server := range servers {
+			if server != nil {
+				be.Servers[server.Name] = *server
+			}
+		}
+	}
+}
+
+// parseBackendRules parses HTTP and TCP rules for a backend.
+func (p *Parser) parseBackendRules(sectionName string, be *models.Backend) {
+	be.HTTPRequestRuleList, _ = configuration.ParseHTTPRequestRules(string(parser.Backends), sectionName, p.parser)
+	be.HTTPResponseRuleList, _ = configuration.ParseHTTPResponseRules(string(parser.Backends), sectionName, p.parser)
+	be.TCPRequestRuleList, _ = configuration.ParseTCPRequestRules(string(parser.Backends), sectionName, p.parser)
+	be.TCPResponseRuleList, _ = configuration.ParseTCPResponseRules(string(parser.Backends), sectionName, p.parser)
+	be.HTTPAfterResponseRuleList, _ = configuration.ParseHTTPAfterRules(string(parser.Backends), sectionName, p.parser)
+	be.HTTPErrorRuleList, _ = configuration.ParseHTTPErrorRules(string(parser.Backends), sectionName, p.parser)
+	be.ServerSwitchingRuleList, _ = configuration.ParseServerSwitchingRules(sectionName, p.parser)
+	be.StickRuleList, _ = configuration.ParseStickRules(sectionName, p.parser)
+}
+
+// parseBackendFiltersAndChecks parses filters, log targets, and health checks for a backend.
+func (p *Parser) parseBackendFiltersAndChecks(sectionName string, be *models.Backend) {
+	be.FilterList, _ = configuration.ParseFilters(string(parser.Backends), sectionName, p.parser)
+	be.LogTargetList, _ = configuration.ParseLogTargets(string(parser.Backends), sectionName, p.parser)
+	be.HTTPCheckList, _ = configuration.ParseHTTPChecks(string(parser.Backends), sectionName, p.parser)
+	be.TCPCheckRuleList, _ = configuration.ParseTCPChecks(string(parser.Backends), sectionName, p.parser)
+}
+
+// parseBackendServerTemplates parses and converts backend server templates from slice to map.
+func (p *Parser) parseBackendServerTemplates(sectionName string, be *models.Backend) {
+	serverTemplates, _ := configuration.ParseServerTemplates(sectionName, p.parser)
+	if serverTemplates != nil {
+		be.ServerTemplates = make(map[string]models.ServerTemplate)
+		for _, template := range serverTemplates {
+			if template != nil {
+				be.ServerTemplates[template.Prefix] = *template
+			}
+		}
+	}
+}
+
 // extractPeers extracts all peers sections using client-native's Parse* functions.
 func (p *Parser) extractPeers() ([]*models.PeerSection, error) {
 	sections, err := p.parser.SectionsGet(parser.Peers)
 	if err != nil {
-		// No peers sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	peers := make([]*models.PeerSection, 0, len(sections))
@@ -428,11 +486,12 @@ func (p *Parser) extractPeers() ([]*models.PeerSection, error) {
 }
 
 // extractResolvers extracts all resolvers sections using client-native's ParseResolverSection.
+//
+//nolint:dupl // Similar pattern to extractMailers but handles different type (Resolver vs MailersSection)
 func (p *Parser) extractResolvers() ([]*models.Resolver, error) {
 	sections, err := p.parser.SectionsGet(parser.Resolvers)
 	if err != nil {
-		// No resolvers sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	resolvers := make([]*models.Resolver, 0, len(sections))
@@ -464,11 +523,12 @@ func (p *Parser) extractResolvers() ([]*models.Resolver, error) {
 }
 
 // extractMailers extracts all mailers sections using client-native's ParseMailersSection.
+//
+//nolint:dupl // Similar pattern to extractResolvers but handles different type (MailersSection vs Resolver)
 func (p *Parser) extractMailers() ([]*models.MailersSection, error) {
 	sections, err := p.parser.SectionsGet(parser.Mailers)
 	if err != nil {
-		// No mailers sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	mailers := make([]*models.MailersSection, 0, len(sections))
@@ -503,8 +563,7 @@ func (p *Parser) extractMailers() ([]*models.MailersSection, error) {
 func (p *Parser) extractCaches() ([]*models.Cache, error) {
 	sections, err := p.parser.SectionsGet(parser.Cache)
 	if err != nil {
-		// No cache sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	caches := make([]*models.Cache, 0, len(sections))
@@ -529,8 +588,7 @@ func (p *Parser) extractCaches() ([]*models.Cache, error) {
 func (p *Parser) extractRings() ([]*models.Ring, error) {
 	sections, err := p.parser.SectionsGet(parser.Ring)
 	if err != nil {
-		// No ring sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	rings := make([]*models.Ring, 0, len(sections))
@@ -554,8 +612,7 @@ func (p *Parser) extractRings() ([]*models.Ring, error) {
 func (p *Parser) extractHTTPErrors() ([]*models.HTTPErrorsSection, error) {
 	sections, err := p.parser.SectionsGet(parser.HTTPErrors)
 	if err != nil {
-		// No http-errors sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	httpErrors := make([]*models.HTTPErrorsSection, 0, len(sections))
@@ -578,8 +635,7 @@ func (p *Parser) extractHTTPErrors() ([]*models.HTTPErrorsSection, error) {
 func (p *Parser) extractUserlists() ([]*models.Userlist, error) {
 	sections, err := p.parser.SectionsGet(parser.UserList)
 	if err != nil {
-		// No userlist sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	userlists := make([]*models.Userlist, 0, len(sections))
@@ -592,27 +648,9 @@ func (p *Parser) extractUserlists() ([]*models.Userlist, error) {
 			continue
 		}
 
-		// Parse users within this userlist
-		users, err := configuration.ParseUsers(sectionName, p.parser)
-		if err == nil && users != nil {
-			userlist.Users = make(map[string]models.User)
-			for _, user := range users {
-				if user != nil && user.Username != "" {
-					userlist.Users[user.Username] = *user
-				}
-			}
-		}
-
-		// Parse groups within this userlist
-		groups, err := configuration.ParseGroups(sectionName, p.parser)
-		if err == nil && groups != nil {
-			userlist.Groups = make(map[string]models.Group)
-			for _, group := range groups {
-				if group != nil && group.Name != "" {
-					userlist.Groups[group.Name] = *group
-				}
-			}
-		}
+		// Parse users and groups
+		userlist.Users = p.parseUserlistUsers(sectionName)
+		userlist.Groups = p.parseUserlistGroups(sectionName)
 
 		userlists = append(userlists, userlist)
 	}
@@ -620,13 +658,44 @@ func (p *Parser) extractUserlists() ([]*models.Userlist, error) {
 	return userlists, nil
 }
 
+// parseUserlistUsers parses users for a userlist section.
+func (p *Parser) parseUserlistUsers(sectionName string) map[string]models.User {
+	users, err := configuration.ParseUsers(sectionName, p.parser)
+	if err != nil || users == nil {
+		return nil
+	}
+
+	userMap := make(map[string]models.User)
+	for _, user := range users {
+		if user != nil && user.Username != "" {
+			userMap[user.Username] = *user
+		}
+	}
+	return userMap
+}
+
+// parseUserlistGroups parses groups for a userlist section.
+func (p *Parser) parseUserlistGroups(sectionName string) map[string]models.Group {
+	groups, err := configuration.ParseGroups(sectionName, p.parser)
+	if err != nil || groups == nil {
+		return nil
+	}
+
+	groupMap := make(map[string]models.Group)
+	for _, group := range groups {
+		if group != nil && group.Name != "" {
+			groupMap[group.Name] = *group
+		}
+	}
+	return groupMap
+}
+
 // extractPrograms extracts all program sections using client-native's ParseProgram.
 // Programs are external processes managed by HAProxy.
 func (p *Parser) extractPrograms() ([]*models.Program, error) {
 	sections, err := p.parser.SectionsGet(parser.Program)
 	if err != nil {
-		// No program sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	programs := make([]*models.Program, 0, len(sections))
@@ -649,8 +718,7 @@ func (p *Parser) extractPrograms() ([]*models.Program, error) {
 func (p *Parser) extractLogForwards() ([]*models.LogForward, error) {
 	sections, err := p.parser.SectionsGet(parser.LogForward)
 	if err != nil {
-		// No log-forward sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	logForwards := make([]*models.LogForward, 0, len(sections))
@@ -675,8 +743,7 @@ func (p *Parser) extractLogForwards() ([]*models.LogForward, error) {
 func (p *Parser) extractFCGIApps() ([]*models.FCGIApp, error) {
 	sections, err := p.parser.SectionsGet(parser.FCGIApp)
 	if err != nil {
-		// No fcgi-app sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	fcgiApps := make([]*models.FCGIApp, 0, len(sections))
@@ -699,8 +766,7 @@ func (p *Parser) extractFCGIApps() ([]*models.FCGIApp, error) {
 func (p *Parser) extractCrtStores() ([]*models.CrtStore, error) {
 	sections, err := p.parser.SectionsGet(parser.CrtStore)
 	if err != nil {
-		// No crt-store sections is valid
-		return nil, nil
+		return nil, err
 	}
 
 	crtStores := make([]*models.CrtStore, 0, len(sections))

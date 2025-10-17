@@ -73,7 +73,7 @@ type SingleWatcher struct {
 //	        return nil
 //	    },
 //	}, k8sClient)
-func NewSingle(cfg types.SingleWatcherConfig, k8sClient *client.Client) (*SingleWatcher, error) {
+func NewSingle(cfg *types.SingleWatcherConfig, k8sClient *client.Client) (*SingleWatcher, error) {
 	// Set defaults
 	cfg.SetDefaults()
 
@@ -87,7 +87,7 @@ func NewSingle(cfg types.SingleWatcherConfig, k8sClient *client.Client) (*Single
 	}
 
 	w := &SingleWatcher{
-		config: cfg,
+		config: *cfg,
 		client: k8sClient,
 		stopCh: make(chan struct{}),
 		syncCh: make(chan struct{}),

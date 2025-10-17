@@ -93,7 +93,19 @@ func (s *DiffSummary) String() string {
 		parts = append(parts, "- Defaults modified")
 	}
 
-	// Frontend changes
+	// Append section-specific changes
+	parts = append(parts, s.formatFrontendChanges()...)
+	parts = append(parts, s.formatBackendChanges()...)
+	parts = append(parts, s.formatServerChanges()...)
+	parts = append(parts, s.formatOtherChanges()...)
+
+	return strings.Join(parts, "\n")
+}
+
+// formatFrontendChanges formats the frontend changes section.
+func (s *DiffSummary) formatFrontendChanges() []string {
+	var parts []string
+
 	if len(s.FrontendsAdded) > 0 {
 		parts = append(parts, fmt.Sprintf("- Frontends added: %s", strings.Join(s.FrontendsAdded, ", ")))
 	}
@@ -104,7 +116,13 @@ func (s *DiffSummary) String() string {
 		parts = append(parts, fmt.Sprintf("- Frontends deleted: %s", strings.Join(s.FrontendsDeleted, ", ")))
 	}
 
-	// Backend changes
+	return parts
+}
+
+// formatBackendChanges formats the backend changes section.
+func (s *DiffSummary) formatBackendChanges() []string {
+	var parts []string
+
 	if len(s.BackendsAdded) > 0 {
 		parts = append(parts, fmt.Sprintf("- Backends added: %s", strings.Join(s.BackendsAdded, ", ")))
 	}
@@ -115,33 +133,40 @@ func (s *DiffSummary) String() string {
 		parts = append(parts, fmt.Sprintf("- Backends deleted: %s", strings.Join(s.BackendsDeleted, ", ")))
 	}
 
-	// Server changes
+	return parts
+}
+
+// formatServerChanges formats the server changes section.
+func (s *DiffSummary) formatServerChanges() []string {
+	var parts []string
+
 	if len(s.ServersAdded) > 0 {
-		var serverChanges []string
-		for backend, servers := range s.ServersAdded {
-			serverChanges = append(serverChanges, fmt.Sprintf("%s: %d", backend, len(servers)))
-		}
-		sort.Strings(serverChanges)
-		parts = append(parts, fmt.Sprintf("- Servers added: %s", strings.Join(serverChanges, ", ")))
+		parts = append(parts, s.formatServerMapChanges(s.ServersAdded, "added"))
 	}
 	if len(s.ServersModified) > 0 {
-		var serverChanges []string
-		for backend, servers := range s.ServersModified {
-			serverChanges = append(serverChanges, fmt.Sprintf("%s: %d", backend, len(servers)))
-		}
-		sort.Strings(serverChanges)
-		parts = append(parts, fmt.Sprintf("- Servers modified: %s", strings.Join(serverChanges, ", ")))
+		parts = append(parts, s.formatServerMapChanges(s.ServersModified, "modified"))
 	}
 	if len(s.ServersDeleted) > 0 {
-		var serverChanges []string
-		for backend, servers := range s.ServersDeleted {
-			serverChanges = append(serverChanges, fmt.Sprintf("%s: %d", backend, len(servers)))
-		}
-		sort.Strings(serverChanges)
-		parts = append(parts, fmt.Sprintf("- Servers deleted: %s", strings.Join(serverChanges, ", ")))
+		parts = append(parts, s.formatServerMapChanges(s.ServersDeleted, "deleted"))
 	}
 
-	// Other changes
+	return parts
+}
+
+// formatServerMapChanges formats a server change map (backend -> server list).
+func (s *DiffSummary) formatServerMapChanges(serverMap map[string][]string, changeType string) string {
+	serverChanges := make([]string, 0, len(serverMap))
+	for backend, servers := range serverMap {
+		serverChanges = append(serverChanges, fmt.Sprintf("%s: %d", backend, len(servers)))
+	}
+	sort.Strings(serverChanges)
+	return fmt.Sprintf("- Servers %s: %s", changeType, strings.Join(serverChanges, ", "))
+}
+
+// formatOtherChanges formats the other changes section.
+func (s *DiffSummary) formatOtherChanges() []string {
+	var parts []string
+
 	if len(s.OtherChanges) > 0 {
 		var otherSections []string
 		for section, count := range s.OtherChanges {
@@ -151,7 +176,7 @@ func (s *DiffSummary) String() string {
 		parts = append(parts, fmt.Sprintf("- Other changes: %s", strings.Join(otherSections, ", ")))
 	}
 
-	return strings.Join(parts, "\n")
+	return parts
 }
 
 // 3. Updates (any order - resources already exist).

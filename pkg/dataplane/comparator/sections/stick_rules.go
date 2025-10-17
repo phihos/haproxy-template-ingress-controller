@@ -1,5 +1,7 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -15,6 +17,10 @@ import (
 
 // PriorityStickRule defines the priority for stick rule operations.
 const PriorityStickRule = 60
+
+const (
+	sectionStickRule = "stick-rule"
+)
 
 // CreateStickRuleBackendOperation represents creating a new stick rule in a backend.
 type CreateStickRuleBackendOperation struct {
@@ -39,7 +45,7 @@ func (op *CreateStickRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateStickRuleBackendOperation) Section() string {
-	return "stick-rule"
+	return sectionStickRule
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +54,8 @@ func (op *CreateStickRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the stick rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateStickRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.StickRule == nil {
 		return fmt.Errorf("stick rule is nil")
@@ -87,7 +95,7 @@ func (op *CreateStickRuleBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateStickRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.StickRule != nil && op.StickRule.Type != "" {
 		ruleType = op.StickRule.Type
 	}
@@ -117,7 +125,7 @@ func (op *DeleteStickRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteStickRuleBackendOperation) Section() string {
-	return "stick-rule"
+	return sectionStickRule
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteStickRuleBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteStickRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.StickRule != nil && op.StickRule.Type != "" {
 		ruleType = op.StickRule.Type
 	}
@@ -181,7 +189,7 @@ func (op *UpdateStickRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateStickRuleBackendOperation) Section() string {
-	return "stick-rule"
+	return sectionStickRule
 }
 
 // Priority implements Operation.Priority.
@@ -229,7 +237,7 @@ func (op *UpdateStickRuleBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateStickRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.StickRule != nil && op.StickRule.Type != "" {
 		ruleType = op.StickRule.Type
 	}

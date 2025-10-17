@@ -1,5 +1,7 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -14,6 +16,10 @@ import (
 )
 
 // PriorityBackendSwitchingRule defines the priority for backend switching rule operations.
+const (
+	sectionBackendSwitchingRule = "backend-switching-rule"
+)
+
 const PriorityBackendSwitchingRule = 60
 
 // CreateBackendSwitchingRuleFrontendOperation represents creating a new backend switching rule in a frontend.
@@ -39,7 +45,7 @@ func (op *CreateBackendSwitchingRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateBackendSwitchingRuleFrontendOperation) Section() string {
-	return "backend-switching-rule"
+	return sectionBackendSwitchingRule
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +54,8 @@ func (op *CreateBackendSwitchingRuleFrontendOperation) Priority() int {
 }
 
 // Execute creates the backend switching rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other backend switching rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateBackendSwitchingRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("backend switching rule is nil")
@@ -87,7 +95,7 @@ func (op *CreateBackendSwitchingRuleFrontendOperation) Execute(ctx context.Conte
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateBackendSwitchingRuleFrontendOperation) Describe() string {
-	backendName := "unknown"
+	backendName := unknownFallback
 	if op.Rule != nil && op.Rule.Name != "" {
 		backendName = op.Rule.Name
 	}
@@ -117,7 +125,7 @@ func (op *DeleteBackendSwitchingRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteBackendSwitchingRuleFrontendOperation) Section() string {
-	return "backend-switching-rule"
+	return sectionBackendSwitchingRule
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteBackendSwitchingRuleFrontendOperation) Execute(ctx context.Conte
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteBackendSwitchingRuleFrontendOperation) Describe() string {
-	backendName := "unknown"
+	backendName := unknownFallback
 	if op.Rule != nil && op.Rule.Name != "" {
 		backendName = op.Rule.Name
 	}
@@ -181,7 +189,7 @@ func (op *UpdateBackendSwitchingRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateBackendSwitchingRuleFrontendOperation) Section() string {
-	return "backend-switching-rule"
+	return sectionBackendSwitchingRule
 }
 
 // Priority implements Operation.Priority.
@@ -190,6 +198,8 @@ func (op *UpdateBackendSwitchingRuleFrontendOperation) Priority() int {
 }
 
 // Execute updates the backend switching rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other backend switching rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateBackendSwitchingRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("backend switching rule is nil")
@@ -229,7 +239,7 @@ func (op *UpdateBackendSwitchingRuleFrontendOperation) Execute(ctx context.Conte
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateBackendSwitchingRuleFrontendOperation) Describe() string {
-	backendName := "unknown"
+	backendName := unknownFallback
 	if op.Rule != nil && op.Rule.Name != "" {
 		backendName = op.Rule.Name
 	}

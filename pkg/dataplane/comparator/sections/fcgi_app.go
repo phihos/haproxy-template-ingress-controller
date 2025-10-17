@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -13,6 +14,10 @@ import (
 
 // PriorityFCGIApp defines priority for fcgi-app sections.
 const PriorityFCGIApp = 10
+
+const (
+	sectionFCGIApp = "fcgi-app"
+)
 
 // CreateFCGIAppOperation represents creating a new fcgi-app section.
 type CreateFCGIAppOperation struct {
@@ -33,7 +38,7 @@ func (op *CreateFCGIAppOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateFCGIAppOperation) Section() string {
-	return "fcgi-app"
+	return sectionFCGIApp
 }
 
 // Priority implements Operation.Priority.
@@ -92,7 +97,7 @@ func (op *CreateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateFCGIAppOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.FCGIApp.Name != "" {
 		name = op.FCGIApp.Name
 	}
@@ -118,7 +123,7 @@ func (op *DeleteFCGIAppOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteFCGIAppOperation) Section() string {
-	return "fcgi-app"
+	return sectionFCGIApp
 }
 
 // Priority implements Operation.Priority.
@@ -167,7 +172,7 @@ func (op *DeleteFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteFCGIAppOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.FCGIApp.Name != "" {
 		name = op.FCGIApp.Name
 	}
@@ -193,7 +198,7 @@ func (op *UpdateFCGIAppOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateFCGIAppOperation) Section() string {
-	return "fcgi-app"
+	return sectionFCGIApp
 }
 
 // Priority implements Operation.Priority.
@@ -252,7 +257,7 @@ func (op *UpdateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateFCGIAppOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.FCGIApp.Name != "" {
 		name = op.FCGIApp.Name
 	}

@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -13,6 +14,10 @@ import (
 
 // PriorityLogForward defines priority for log-forward sections.
 const PriorityLogForward = 10
+
+const (
+	sectionLogForward = "log-forward"
+)
 
 // CreateLogForwardOperation represents creating a new log-forward section.
 type CreateLogForwardOperation struct {
@@ -33,7 +38,7 @@ func (op *CreateLogForwardOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateLogForwardOperation) Section() string {
-	return "log-forward"
+	return sectionLogForward
 }
 
 // Priority implements Operation.Priority.
@@ -92,7 +97,7 @@ func (op *CreateLogForwardOperation) Execute(ctx context.Context, c *client.Data
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateLogForwardOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.LogForward.Name != "" {
 		name = op.LogForward.Name
 	}
@@ -118,7 +123,7 @@ func (op *DeleteLogForwardOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteLogForwardOperation) Section() string {
-	return "log-forward"
+	return sectionLogForward
 }
 
 // Priority implements Operation.Priority.
@@ -167,7 +172,7 @@ func (op *DeleteLogForwardOperation) Execute(ctx context.Context, c *client.Data
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteLogForwardOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.LogForward.Name != "" {
 		name = op.LogForward.Name
 	}
@@ -193,7 +198,7 @@ func (op *UpdateLogForwardOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateLogForwardOperation) Section() string {
-	return "log-forward"
+	return sectionLogForward
 }
 
 // Priority implements Operation.Priority.
@@ -252,7 +257,7 @@ func (op *UpdateLogForwardOperation) Execute(ctx context.Context, c *client.Data
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateLogForwardOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.LogForward.Name != "" {
 		name = op.LogForward.Name
 	}

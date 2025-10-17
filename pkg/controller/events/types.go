@@ -7,6 +7,32 @@ import (
 
 // This file contains all event type definitions for the haproxy-template-ic controller.
 //
+// # Event Immutability Contract
+//
+// Events in this system are intended to be immutable after creation. They represent
+// historical facts about what happened in the system and should not be modified after
+// being published to the EventBus.
+//
+// To support this immutability contract:
+//
+//  1. All event types use pointer receivers for their Event interface methods.
+//     This avoids copying large structs (200+ bytes) and follows Go best practices.
+//
+//  2. All event fields are exported to support JSON serialization and idiomatic Go access.
+//     This follows industry standards (Kubernetes, NATS) rather than enforcing immutability
+//     through unexported fields and getters.
+//
+//  3. Constructors perform defensive copying of slices and maps to prevent mutations
+//     from affecting the published event. Publishers cannot modify events after creation.
+//
+//  4. Consumers MUST NOT modify event fields. This immutability contract is enforced through:
+//     - A custom static analyzer (tools/linters/eventimmutability) that detects parameter mutations
+//     - Code review for cases not caught by the analyzer
+//     - Team discipline and documentation
+//
+// This approach balances performance, Go idioms, and practical immutability for an
+// internal project where all consumers are controlled.
+//
 // Events are organized into categories:
 // - Lifecycle Events: System startup and shutdown
 // - Configuration Events: ConfigMap/Secret changes and validation
@@ -89,7 +115,17 @@ type ControllerStartedEvent struct {
 	timestamp     time.Time
 }
 
-func (e ControllerStartedEvent) EventType() string { return EventTypeControllerStarted }
+// NewControllerStartedEvent creates a new ControllerStartedEvent.
+func NewControllerStartedEvent(configVersion, secretVersion string) *ControllerStartedEvent {
+	return &ControllerStartedEvent{
+		ConfigVersion: configVersion,
+		SecretVersion: secretVersion,
+		timestamp:     time.Now(),
+	}
+}
+
+func (e *ControllerStartedEvent) EventType() string    { return EventTypeControllerStarted }
+func (e *ControllerStartedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ControllerShutdownEvent is published when the controller is shutting down gracefully.
 type ControllerShutdownEvent struct {
@@ -97,7 +133,16 @@ type ControllerShutdownEvent struct {
 	timestamp time.Time
 }
 
-func (e ControllerShutdownEvent) EventType() string { return EventTypeControllerShutdown }
+// NewControllerShutdownEvent creates a new ControllerShutdownEvent.
+func NewControllerShutdownEvent(reason string) *ControllerShutdownEvent {
+	return &ControllerShutdownEvent{
+		Reason:    reason,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *ControllerShutdownEvent) EventType() string    { return EventTypeControllerShutdown }
+func (e *ControllerShutdownEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Configuration Events
@@ -123,7 +168,18 @@ type ConfigParsedEvent struct {
 	timestamp time.Time
 }
 
-func (e ConfigParsedEvent) EventType() string { return EventTypeConfigParsed }
+// NewConfigParsedEvent creates a new ConfigParsedEvent.
+func NewConfigParsedEvent(config interface{}, version, secretVersion string) *ConfigParsedEvent {
+	return &ConfigParsedEvent{
+		Config:        config,
+		Version:       version,
+		SecretVersion: secretVersion,
+		timestamp:     time.Now(),
+	}
+}
+
+func (e *ConfigParsedEvent) EventType() string    { return EventTypeConfigParsed }
+func (e *ConfigParsedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ConfigValidationRequest is published to request validation of a parsed config.
 //
@@ -141,8 +197,9 @@ type ConfigValidationRequest struct {
 	timestamp time.Time
 }
 
-func NewConfigValidationRequest(config interface{}, version string) ConfigValidationRequest {
-	return ConfigValidationRequest{
+// NewConfigValidationRequest creates a new ConfigValidationRequest.
+func NewConfigValidationRequest(config interface{}, version string) *ConfigValidationRequest {
+	return &ConfigValidationRequest{
 		reqID:     fmt.Sprintf("config-validation-%s-%d", version, time.Now().UnixNano()),
 		Config:    config,
 		Version:   version,
@@ -150,8 +207,9 @@ func NewConfigValidationRequest(config interface{}, version string) ConfigValida
 	}
 }
 
-func (e ConfigValidationRequest) EventType() string { return EventTypeConfigValidationRequest }
-func (e ConfigValidationRequest) RequestID() string { return e.reqID }
+func (e *ConfigValidationRequest) EventType() string    { return EventTypeConfigValidationRequest }
+func (e *ConfigValidationRequest) Timestamp() time.Time { return e.timestamp }
+func (e *ConfigValidationRequest) RequestID() string    { return e.reqID }
 
 // ConfigValidationResponse is sent by validators in response to ConfigValidationRequest.
 //
@@ -173,20 +231,30 @@ type ConfigValidationResponse struct {
 	timestamp time.Time
 }
 
-func NewConfigValidationResponse(requestID, validatorName string, valid bool, errors []string) ConfigValidationResponse {
-	return ConfigValidationResponse{
+// NewConfigValidationResponse creates a new ConfigValidationResponse.
+// Performs defensive copy of the errors slice.
+func NewConfigValidationResponse(requestID, validatorName string, valid bool, errors []string) *ConfigValidationResponse {
+	// Defensive copy of errors slice
+	var errorsCopy []string
+	if len(errors) > 0 {
+		errorsCopy = make([]string, len(errors))
+		copy(errorsCopy, errors)
+	}
+
+	return &ConfigValidationResponse{
 		reqID:         requestID,
 		responder:     validatorName,
 		ValidatorName: validatorName,
 		Valid:         valid,
-		Errors:        errors,
+		Errors:        errorsCopy,
 		timestamp:     time.Now(),
 	}
 }
 
-func (e ConfigValidationResponse) EventType() string { return EventTypeConfigValidationResponse }
-func (e ConfigValidationResponse) RequestID() string { return e.reqID }
-func (e ConfigValidationResponse) Responder() string { return e.responder }
+func (e *ConfigValidationResponse) EventType() string    { return EventTypeConfigValidationResponse }
+func (e *ConfigValidationResponse) Timestamp() time.Time { return e.timestamp }
+func (e *ConfigValidationResponse) RequestID() string    { return e.reqID }
+func (e *ConfigValidationResponse) Responder() string    { return e.responder }
 
 // ConfigValidatedEvent is published when all validators have confirmed the config is valid.
 //
@@ -199,7 +267,18 @@ type ConfigValidatedEvent struct {
 	timestamp     time.Time
 }
 
-func (e ConfigValidatedEvent) EventType() string { return EventTypeConfigValidated }
+// NewConfigValidatedEvent creates a new ConfigValidatedEvent.
+func NewConfigValidatedEvent(config interface{}, version, secretVersion string) *ConfigValidatedEvent {
+	return &ConfigValidatedEvent{
+		Config:        config,
+		Version:       version,
+		SecretVersion: secretVersion,
+		timestamp:     time.Now(),
+	}
+}
+
+func (e *ConfigValidatedEvent) EventType() string    { return EventTypeConfigValidated }
+func (e *ConfigValidatedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ConfigInvalidEvent is published when config validation fails.
 //
@@ -214,7 +293,30 @@ type ConfigInvalidEvent struct {
 	timestamp time.Time
 }
 
-func (e ConfigInvalidEvent) EventType() string { return EventTypeConfigInvalid }
+// NewConfigInvalidEvent creates a new ConfigInvalidEvent.
+// Performs defensive copy of the validation errors map and its slice values.
+func NewConfigInvalidEvent(version string, validationErrors map[string][]string) *ConfigInvalidEvent {
+	// Defensive copy of map with slice values
+	errorsCopy := make(map[string][]string, len(validationErrors))
+	for k, v := range validationErrors {
+		if len(v) > 0 {
+			vCopy := make([]string, len(v))
+			copy(vCopy, v)
+			errorsCopy[k] = vCopy
+		} else {
+			errorsCopy[k] = nil
+		}
+	}
+
+	return &ConfigInvalidEvent{
+		Version:          version,
+		ValidationErrors: errorsCopy,
+		timestamp:        time.Now(),
+	}
+}
+
+func (e *ConfigInvalidEvent) EventType() string    { return EventTypeConfigInvalid }
+func (e *ConfigInvalidEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Resource Events
@@ -235,7 +337,18 @@ type ResourceIndexUpdatedEvent struct {
 	timestamp time.Time
 }
 
-func (e ResourceIndexUpdatedEvent) EventType() string { return EventTypeResourceIndexUpdated }
+// NewResourceIndexUpdatedEvent creates a new ResourceIndexUpdatedEvent.
+func NewResourceIndexUpdatedEvent(resourceType string, count int, changeType string) *ResourceIndexUpdatedEvent {
+	return &ResourceIndexUpdatedEvent{
+		ResourceType: resourceType,
+		Count:        count,
+		ChangeType:   changeType,
+		timestamp:    time.Now(),
+	}
+}
+
+func (e *ResourceIndexUpdatedEvent) EventType() string    { return EventTypeResourceIndexUpdated }
+func (e *ResourceIndexUpdatedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ResourceSyncCompleteEvent is published when a resource watcher has completed
 // its initial sync with the Kubernetes API.
@@ -245,7 +358,17 @@ type ResourceSyncCompleteEvent struct {
 	timestamp    time.Time
 }
 
-func (e ResourceSyncCompleteEvent) EventType() string { return EventTypeResourceSyncComplete }
+// NewResourceSyncCompleteEvent creates a new ResourceSyncCompleteEvent.
+func NewResourceSyncCompleteEvent(resourceType string, initialCount int) *ResourceSyncCompleteEvent {
+	return &ResourceSyncCompleteEvent{
+		ResourceType: resourceType,
+		InitialCount: initialCount,
+		timestamp:    time.Now(),
+	}
+}
+
+func (e *ResourceSyncCompleteEvent) EventType() string    { return EventTypeResourceSyncComplete }
+func (e *ResourceSyncCompleteEvent) Timestamp() time.Time { return e.timestamp }
 
 // IndexSynchronizedEvent is published when all resource watchers have completed
 // their initial sync and the system has a complete view of all resources.
@@ -258,7 +381,23 @@ type IndexSynchronizedEvent struct {
 	timestamp      time.Time
 }
 
-func (e IndexSynchronizedEvent) EventType() string { return EventTypeIndexSynchronized }
+// NewIndexSynchronizedEvent creates a new IndexSynchronizedEvent.
+// Performs defensive copy of the resource counts map.
+func NewIndexSynchronizedEvent(resourceCounts map[string]int) *IndexSynchronizedEvent {
+	// Defensive copy of map
+	countsCopy := make(map[string]int, len(resourceCounts))
+	for k, v := range resourceCounts {
+		countsCopy[k] = v
+	}
+
+	return &IndexSynchronizedEvent{
+		ResourceCounts: countsCopy,
+		timestamp:      time.Now(),
+	}
+}
+
+func (e *IndexSynchronizedEvent) EventType() string    { return EventTypeIndexSynchronized }
+func (e *IndexSynchronizedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Reconciliation Events
@@ -275,7 +414,16 @@ type ReconciliationTriggeredEvent struct {
 	timestamp time.Time
 }
 
-func (e ReconciliationTriggeredEvent) EventType() string { return EventTypeReconciliationTriggered }
+// NewReconciliationTriggeredEvent creates a new ReconciliationTriggeredEvent.
+func NewReconciliationTriggeredEvent(reason string) *ReconciliationTriggeredEvent {
+	return &ReconciliationTriggeredEvent{
+		Reason:    reason,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *ReconciliationTriggeredEvent) EventType() string    { return EventTypeReconciliationTriggered }
+func (e *ReconciliationTriggeredEvent) Timestamp() time.Time { return e.timestamp }
 
 // ReconciliationStartedEvent is published when the Executor begins a reconciliation cycle.
 type ReconciliationStartedEvent struct {
@@ -284,7 +432,16 @@ type ReconciliationStartedEvent struct {
 	timestamp time.Time
 }
 
-func (e ReconciliationStartedEvent) EventType() string { return EventTypeReconciliationStarted }
+// NewReconciliationStartedEvent creates a new ReconciliationStartedEvent.
+func NewReconciliationStartedEvent(trigger string) *ReconciliationStartedEvent {
+	return &ReconciliationStartedEvent{
+		Trigger:   trigger,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *ReconciliationStartedEvent) EventType() string    { return EventTypeReconciliationStarted }
+func (e *ReconciliationStartedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ReconciliationCompletedEvent is published when a reconciliation cycle completes successfully.
 type ReconciliationCompletedEvent struct {
@@ -292,7 +449,16 @@ type ReconciliationCompletedEvent struct {
 	timestamp  time.Time
 }
 
-func (e ReconciliationCompletedEvent) EventType() string { return EventTypeReconciliationCompleted }
+// NewReconciliationCompletedEvent creates a new ReconciliationCompletedEvent.
+func NewReconciliationCompletedEvent(durationMs int64) *ReconciliationCompletedEvent {
+	return &ReconciliationCompletedEvent{
+		DurationMs: durationMs,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *ReconciliationCompletedEvent) EventType() string    { return EventTypeReconciliationCompleted }
+func (e *ReconciliationCompletedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ReconciliationFailedEvent is published when a reconciliation cycle fails.
 type ReconciliationFailedEvent struct {
@@ -301,7 +467,17 @@ type ReconciliationFailedEvent struct {
 	timestamp time.Time
 }
 
-func (e ReconciliationFailedEvent) EventType() string { return EventTypeReconciliationFailed }
+// NewReconciliationFailedEvent creates a new ReconciliationFailedEvent.
+func NewReconciliationFailedEvent(err, phase string) *ReconciliationFailedEvent {
+	return &ReconciliationFailedEvent{
+		Error:     err,
+		Phase:     phase,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *ReconciliationFailedEvent) EventType() string    { return EventTypeReconciliationFailed }
+func (e *ReconciliationFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Template Events
@@ -319,7 +495,18 @@ type TemplateRenderedEvent struct {
 	timestamp  time.Time
 }
 
-func (e TemplateRenderedEvent) EventType() string { return EventTypeTemplateRendered }
+// NewTemplateRenderedEvent creates a new TemplateRenderedEvent.
+func NewTemplateRenderedEvent(configBytes, auxiliaryFileCount int, durationMs int64) *TemplateRenderedEvent {
+	return &TemplateRenderedEvent{
+		ConfigBytes:        configBytes,
+		AuxiliaryFileCount: auxiliaryFileCount,
+		DurationMs:         durationMs,
+		timestamp:          time.Now(),
+	}
+}
+
+func (e *TemplateRenderedEvent) EventType() string    { return EventTypeTemplateRendered }
+func (e *TemplateRenderedEvent) Timestamp() time.Time { return e.timestamp }
 
 // TemplateRenderFailedEvent is published when template rendering fails.
 type TemplateRenderFailedEvent struct {
@@ -328,7 +515,17 @@ type TemplateRenderFailedEvent struct {
 	timestamp  time.Time
 }
 
-func (e TemplateRenderFailedEvent) EventType() string { return EventTypeTemplateRenderFailed }
+// NewTemplateRenderFailedEvent creates a new TemplateRenderFailedEvent.
+func NewTemplateRenderFailedEvent(err, stackTrace string) *TemplateRenderFailedEvent {
+	return &TemplateRenderFailedEvent{
+		Error:      err,
+		StackTrace: stackTrace,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *TemplateRenderFailedEvent) EventType() string    { return EventTypeTemplateRenderFailed }
+func (e *TemplateRenderFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Validation Events
@@ -342,7 +539,24 @@ type ValidationStartedEvent struct {
 	timestamp time.Time
 }
 
-func (e ValidationStartedEvent) EventType() string { return EventTypeValidationStarted }
+// NewValidationStartedEvent creates a new ValidationStartedEvent.
+// Performs defensive copy of the endpoints slice.
+func NewValidationStartedEvent(endpoints []interface{}) *ValidationStartedEvent {
+	// Defensive copy of slice
+	var endpointsCopy []interface{}
+	if len(endpoints) > 0 {
+		endpointsCopy = make([]interface{}, len(endpoints))
+		copy(endpointsCopy, endpoints)
+	}
+
+	return &ValidationStartedEvent{
+		Endpoints: endpointsCopy,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *ValidationStartedEvent) EventType() string    { return EventTypeValidationStarted }
+func (e *ValidationStartedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ValidationCompletedEvent is published when configuration validation succeeds.
 type ValidationCompletedEvent struct {
@@ -352,7 +566,33 @@ type ValidationCompletedEvent struct {
 	timestamp  time.Time
 }
 
-func (e ValidationCompletedEvent) EventType() string { return EventTypeValidationCompleted }
+// NewValidationCompletedEvent creates a new ValidationCompletedEvent.
+// Performs defensive copy of the endpoints and warnings slices.
+func NewValidationCompletedEvent(endpoints []interface{}, warnings []string, durationMs int64) *ValidationCompletedEvent {
+	// Defensive copy of endpoints slice
+	var endpointsCopy []interface{}
+	if len(endpoints) > 0 {
+		endpointsCopy = make([]interface{}, len(endpoints))
+		copy(endpointsCopy, endpoints)
+	}
+
+	// Defensive copy of warnings slice
+	var warningsCopy []string
+	if len(warnings) > 0 {
+		warningsCopy = make([]string, len(warnings))
+		copy(warningsCopy, warnings)
+	}
+
+	return &ValidationCompletedEvent{
+		Endpoints:  endpointsCopy,
+		Warnings:   warningsCopy,
+		DurationMs: durationMs,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *ValidationCompletedEvent) EventType() string    { return EventTypeValidationCompleted }
+func (e *ValidationCompletedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ValidationFailedEvent is published when configuration validation fails.
 type ValidationFailedEvent struct {
@@ -362,7 +602,33 @@ type ValidationFailedEvent struct {
 	timestamp  time.Time
 }
 
-func (e ValidationFailedEvent) EventType() string { return EventTypeValidationFailed }
+// NewValidationFailedEvent creates a new ValidationFailedEvent.
+// Performs defensive copy of the endpoints and errors slices.
+func NewValidationFailedEvent(endpoints []interface{}, errors []string, durationMs int64) *ValidationFailedEvent {
+	// Defensive copy of endpoints slice
+	var endpointsCopy []interface{}
+	if len(endpoints) > 0 {
+		endpointsCopy = make([]interface{}, len(endpoints))
+		copy(endpointsCopy, endpoints)
+	}
+
+	// Defensive copy of errors slice
+	var errorsCopy []string
+	if len(errors) > 0 {
+		errorsCopy = make([]string, len(errors))
+		copy(errorsCopy, errors)
+	}
+
+	return &ValidationFailedEvent{
+		Endpoints:  endpointsCopy,
+		Errors:     errorsCopy,
+		DurationMs: durationMs,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *ValidationFailedEvent) EventType() string    { return EventTypeValidationFailed }
+func (e *ValidationFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Deployment Events
@@ -374,7 +640,24 @@ type DeploymentStartedEvent struct {
 	timestamp time.Time
 }
 
-func (e DeploymentStartedEvent) EventType() string { return EventTypeDeploymentStarted }
+// NewDeploymentStartedEvent creates a new DeploymentStartedEvent.
+// Performs defensive copy of the endpoints slice.
+func NewDeploymentStartedEvent(endpoints []interface{}) *DeploymentStartedEvent {
+	// Defensive copy of slice
+	var endpointsCopy []interface{}
+	if len(endpoints) > 0 {
+		endpointsCopy = make([]interface{}, len(endpoints))
+		copy(endpointsCopy, endpoints)
+	}
+
+	return &DeploymentStartedEvent{
+		Endpoints: endpointsCopy,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *DeploymentStartedEvent) EventType() string    { return EventTypeDeploymentStarted }
+func (e *DeploymentStartedEvent) Timestamp() time.Time { return e.timestamp }
 
 // InstanceDeployedEvent is published when deployment to a single HAProxy instance succeeds.
 type InstanceDeployedEvent struct {
@@ -384,7 +667,18 @@ type InstanceDeployedEvent struct {
 	timestamp      time.Time
 }
 
-func (e InstanceDeployedEvent) EventType() string { return EventTypeInstanceDeployed }
+// NewInstanceDeployedEvent creates a new InstanceDeployedEvent.
+func NewInstanceDeployedEvent(endpoint interface{}, durationMs int64, reloadRequired bool) *InstanceDeployedEvent {
+	return &InstanceDeployedEvent{
+		Endpoint:       endpoint,
+		DurationMs:     durationMs,
+		ReloadRequired: reloadRequired,
+		timestamp:      time.Now(),
+	}
+}
+
+func (e *InstanceDeployedEvent) EventType() string    { return EventTypeInstanceDeployed }
+func (e *InstanceDeployedEvent) Timestamp() time.Time { return e.timestamp }
 
 // InstanceDeploymentFailedEvent is published when deployment to a single HAProxy instance fails.
 type InstanceDeploymentFailedEvent struct {
@@ -394,7 +688,18 @@ type InstanceDeploymentFailedEvent struct {
 	timestamp time.Time
 }
 
-func (e InstanceDeploymentFailedEvent) EventType() string { return EventTypeInstanceDeploymentFailed }
+// NewInstanceDeploymentFailedEvent creates a new InstanceDeploymentFailedEvent.
+func NewInstanceDeploymentFailedEvent(endpoint interface{}, err string, retryable bool) *InstanceDeploymentFailedEvent {
+	return &InstanceDeploymentFailedEvent{
+		Endpoint:  endpoint,
+		Error:     err,
+		Retryable: retryable,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *InstanceDeploymentFailedEvent) EventType() string    { return EventTypeInstanceDeploymentFailed }
+func (e *InstanceDeploymentFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // DeploymentCompletedEvent is published when deployment to all HAProxy instances completes.
 type DeploymentCompletedEvent struct {
@@ -405,7 +710,19 @@ type DeploymentCompletedEvent struct {
 	timestamp  time.Time
 }
 
-func (e DeploymentCompletedEvent) EventType() string { return EventTypeDeploymentCompleted }
+// NewDeploymentCompletedEvent creates a new DeploymentCompletedEvent.
+func NewDeploymentCompletedEvent(total, succeeded, failed int, durationMs int64) *DeploymentCompletedEvent {
+	return &DeploymentCompletedEvent{
+		Total:      total,
+		Succeeded:  succeeded,
+		Failed:     failed,
+		DurationMs: durationMs,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *DeploymentCompletedEvent) EventType() string    { return EventTypeDeploymentCompleted }
+func (e *DeploymentCompletedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Storage Events (Auxiliary Files)
@@ -419,7 +736,25 @@ type StorageSyncStartedEvent struct {
 	timestamp time.Time
 }
 
-func (e StorageSyncStartedEvent) EventType() string { return EventTypeStorageSyncStarted }
+// NewStorageSyncStartedEvent creates a new StorageSyncStartedEvent.
+// Performs defensive copy of the endpoints slice.
+func NewStorageSyncStartedEvent(phase string, endpoints []interface{}) *StorageSyncStartedEvent {
+	// Defensive copy of slice
+	var endpointsCopy []interface{}
+	if len(endpoints) > 0 {
+		endpointsCopy = make([]interface{}, len(endpoints))
+		copy(endpointsCopy, endpoints)
+	}
+
+	return &StorageSyncStartedEvent{
+		Phase:     phase,
+		Endpoints: endpointsCopy,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *StorageSyncStartedEvent) EventType() string    { return EventTypeStorageSyncStarted }
+func (e *StorageSyncStartedEvent) Timestamp() time.Time { return e.timestamp }
 
 // StorageSyncCompletedEvent is published when auxiliary file synchronization completes.
 type StorageSyncCompletedEvent struct {
@@ -433,7 +768,18 @@ type StorageSyncCompletedEvent struct {
 	timestamp  time.Time
 }
 
-func (e StorageSyncCompletedEvent) EventType() string { return EventTypeStorageSyncCompleted }
+// NewStorageSyncCompletedEvent creates a new StorageSyncCompletedEvent.
+func NewStorageSyncCompletedEvent(phase string, stats interface{}, durationMs int64) *StorageSyncCompletedEvent {
+	return &StorageSyncCompletedEvent{
+		Phase:      phase,
+		Stats:      stats,
+		DurationMs: durationMs,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *StorageSyncCompletedEvent) EventType() string    { return EventTypeStorageSyncCompleted }
+func (e *StorageSyncCompletedEvent) Timestamp() time.Time { return e.timestamp }
 
 // StorageSyncFailedEvent is published when auxiliary file synchronization fails.
 type StorageSyncFailedEvent struct {
@@ -442,7 +788,17 @@ type StorageSyncFailedEvent struct {
 	timestamp time.Time
 }
 
-func (e StorageSyncFailedEvent) EventType() string { return EventTypeStorageSyncFailed }
+// NewStorageSyncFailedEvent creates a new StorageSyncFailedEvent.
+func NewStorageSyncFailedEvent(phase, err string) *StorageSyncFailedEvent {
+	return &StorageSyncFailedEvent{
+		Phase:     phase,
+		Error:     err,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *StorageSyncFailedEvent) EventType() string    { return EventTypeStorageSyncFailed }
+func (e *StorageSyncFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // HAProxy Pod Events
@@ -456,7 +812,25 @@ type HAProxyPodsDiscoveredEvent struct {
 	timestamp time.Time
 }
 
-func (e HAProxyPodsDiscoveredEvent) EventType() string { return EventTypeHAProxyPodsDiscovered }
+// NewHAProxyPodsDiscoveredEvent creates a new HAProxyPodsDiscoveredEvent.
+// Performs defensive copy of the endpoints slice.
+func NewHAProxyPodsDiscoveredEvent(endpoints []interface{}, count int) *HAProxyPodsDiscoveredEvent {
+	// Defensive copy of slice
+	var endpointsCopy []interface{}
+	if len(endpoints) > 0 {
+		endpointsCopy = make([]interface{}, len(endpoints))
+		copy(endpointsCopy, endpoints)
+	}
+
+	return &HAProxyPodsDiscoveredEvent{
+		Endpoints: endpointsCopy,
+		Count:     count,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *HAProxyPodsDiscoveredEvent) EventType() string    { return EventTypeHAProxyPodsDiscovered }
+func (e *HAProxyPodsDiscoveredEvent) Timestamp() time.Time { return e.timestamp }
 
 // HAProxyPodAddedEvent is published when a new HAProxy pod is discovered.
 type HAProxyPodAddedEvent struct {
@@ -464,7 +838,16 @@ type HAProxyPodAddedEvent struct {
 	timestamp time.Time
 }
 
-func (e HAProxyPodAddedEvent) EventType() string { return EventTypeHAProxyPodAdded }
+// NewHAProxyPodAddedEvent creates a new HAProxyPodAddedEvent.
+func NewHAProxyPodAddedEvent(endpoint interface{}) *HAProxyPodAddedEvent {
+	return &HAProxyPodAddedEvent{
+		Endpoint:  endpoint,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *HAProxyPodAddedEvent) EventType() string    { return EventTypeHAProxyPodAdded }
+func (e *HAProxyPodAddedEvent) Timestamp() time.Time { return e.timestamp }
 
 // HAProxyPodRemovedEvent is published when an HAProxy pod is removed.
 type HAProxyPodRemovedEvent struct {
@@ -472,7 +855,16 @@ type HAProxyPodRemovedEvent struct {
 	timestamp time.Time
 }
 
-func (e HAProxyPodRemovedEvent) EventType() string { return EventTypeHAProxyPodRemoved }
+// NewHAProxyPodRemovedEvent creates a new HAProxyPodRemovedEvent.
+func NewHAProxyPodRemovedEvent(endpoint interface{}) *HAProxyPodRemovedEvent {
+	return &HAProxyPodRemovedEvent{
+		Endpoint:  endpoint,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *HAProxyPodRemovedEvent) EventType() string    { return EventTypeHAProxyPodRemoved }
+func (e *HAProxyPodRemovedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Configuration Resource Events
@@ -491,7 +883,16 @@ type ConfigResourceChangedEvent struct {
 	timestamp time.Time
 }
 
-func (e ConfigResourceChangedEvent) EventType() string { return EventTypeConfigResourceChanged }
+// NewConfigResourceChangedEvent creates a new ConfigResourceChangedEvent.
+func NewConfigResourceChangedEvent(resource interface{}) *ConfigResourceChangedEvent {
+	return &ConfigResourceChangedEvent{
+		Resource:  resource,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *ConfigResourceChangedEvent) EventType() string    { return EventTypeConfigResourceChanged }
+func (e *ConfigResourceChangedEvent) Timestamp() time.Time { return e.timestamp }
 
 // SecretResourceChangedEvent is published when the Secret resource is added, updated, or deleted.
 //
@@ -506,7 +907,16 @@ type SecretResourceChangedEvent struct {
 	timestamp time.Time
 }
 
-func (e SecretResourceChangedEvent) EventType() string { return EventTypeSecretResourceChanged }
+// NewSecretResourceChangedEvent creates a new SecretResourceChangedEvent.
+func NewSecretResourceChangedEvent(resource interface{}) *SecretResourceChangedEvent {
+	return &SecretResourceChangedEvent{
+		Resource:  resource,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *SecretResourceChangedEvent) EventType() string    { return EventTypeSecretResourceChanged }
+func (e *SecretResourceChangedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Credentials Events
@@ -526,7 +936,17 @@ type CredentialsUpdatedEvent struct {
 	timestamp time.Time
 }
 
-func (e CredentialsUpdatedEvent) EventType() string { return EventTypeCredentialsUpdated }
+// NewCredentialsUpdatedEvent creates a new CredentialsUpdatedEvent.
+func NewCredentialsUpdatedEvent(credentials interface{}, secretVersion string) *CredentialsUpdatedEvent {
+	return &CredentialsUpdatedEvent{
+		Credentials:   credentials,
+		SecretVersion: secretVersion,
+		timestamp:     time.Now(),
+	}
+}
+
+func (e *CredentialsUpdatedEvent) EventType() string    { return EventTypeCredentialsUpdated }
+func (e *CredentialsUpdatedEvent) Timestamp() time.Time { return e.timestamp }
 
 // CredentialsInvalidEvent is published when credential loading or validation fails.
 //
@@ -539,109 +959,14 @@ type CredentialsInvalidEvent struct {
 	timestamp time.Time
 }
 
-func (e CredentialsInvalidEvent) EventType() string { return EventTypeCredentialsInvalid }
-
-// -----------------------------------------------------------------------------
-// Constructor Functions
-// -----------------------------------------------------------------------------
-
-// NewConfigResourceChangedEvent creates a new ConfigResourceChangedEvent.
-func NewConfigResourceChangedEvent(resource interface{}) ConfigResourceChangedEvent {
-	return ConfigResourceChangedEvent{
-		Resource:  resource,
-		timestamp: time.Now(),
-	}
-}
-
-// NewSecretResourceChangedEvent creates a new SecretResourceChangedEvent.
-func NewSecretResourceChangedEvent(resource interface{}) SecretResourceChangedEvent {
-	return SecretResourceChangedEvent{
-		Resource:  resource,
-		timestamp: time.Now(),
-	}
-}
-
-// NewConfigParsedEvent creates a new ConfigParsedEvent.
-func NewConfigParsedEvent(config interface{}, version, secretVersion string) ConfigParsedEvent {
-	return ConfigParsedEvent{
-		Config:        config,
-		Version:       version,
-		SecretVersion: secretVersion,
-		timestamp:     time.Now(),
-	}
-}
-
-// NewConfigValidatedEvent creates a new ConfigValidatedEvent.
-func NewConfigValidatedEvent(config interface{}, version, secretVersion string) ConfigValidatedEvent {
-	return ConfigValidatedEvent{
-		Config:        config,
-		Version:       version,
-		SecretVersion: secretVersion,
-		timestamp:     time.Now(),
-	}
-}
-
-// NewConfigInvalidEvent creates a new ConfigInvalidEvent.
-func NewConfigInvalidEvent(version string, validationErrors map[string][]string) ConfigInvalidEvent {
-	return ConfigInvalidEvent{
-		Version:          version,
-		ValidationErrors: validationErrors,
-		timestamp:        time.Now(),
-	}
-}
-
-// NewCredentialsUpdatedEvent creates a new CredentialsUpdatedEvent.
-func NewCredentialsUpdatedEvent(credentials interface{}, secretVersion string) CredentialsUpdatedEvent {
-	return CredentialsUpdatedEvent{
-		Credentials:   credentials,
-		SecretVersion: secretVersion,
-		timestamp:     time.Now(),
-	}
-}
-
 // NewCredentialsInvalidEvent creates a new CredentialsInvalidEvent.
-func NewCredentialsInvalidEvent(secretVersion, errMsg string) CredentialsInvalidEvent {
-	return CredentialsInvalidEvent{
+func NewCredentialsInvalidEvent(secretVersion, errMsg string) *CredentialsInvalidEvent {
+	return &CredentialsInvalidEvent{
 		SecretVersion: secretVersion,
 		Error:         errMsg,
 		timestamp:     time.Now(),
 	}
 }
 
-// -----------------------------------------------------------------------------
-// Timestamp Methods (Event Interface Implementation)
-// -----------------------------------------------------------------------------
-
-func (e ControllerStartedEvent) Timestamp() time.Time        { return e.timestamp }
-func (e ControllerShutdownEvent) Timestamp() time.Time       { return e.timestamp }
-func (e ConfigParsedEvent) Timestamp() time.Time             { return e.timestamp }
-func (e ConfigValidationRequest) Timestamp() time.Time       { return e.timestamp }
-func (e ConfigValidationResponse) Timestamp() time.Time      { return e.timestamp }
-func (e ConfigValidatedEvent) Timestamp() time.Time          { return e.timestamp }
-func (e ConfigInvalidEvent) Timestamp() time.Time            { return e.timestamp }
-func (e ResourceIndexUpdatedEvent) Timestamp() time.Time     { return e.timestamp }
-func (e ResourceSyncCompleteEvent) Timestamp() time.Time     { return e.timestamp }
-func (e IndexSynchronizedEvent) Timestamp() time.Time        { return e.timestamp }
-func (e ReconciliationTriggeredEvent) Timestamp() time.Time  { return e.timestamp }
-func (e ReconciliationStartedEvent) Timestamp() time.Time    { return e.timestamp }
-func (e ReconciliationCompletedEvent) Timestamp() time.Time  { return e.timestamp }
-func (e ReconciliationFailedEvent) Timestamp() time.Time     { return e.timestamp }
-func (e TemplateRenderedEvent) Timestamp() time.Time         { return e.timestamp }
-func (e TemplateRenderFailedEvent) Timestamp() time.Time     { return e.timestamp }
-func (e ValidationStartedEvent) Timestamp() time.Time        { return e.timestamp }
-func (e ValidationCompletedEvent) Timestamp() time.Time      { return e.timestamp }
-func (e ValidationFailedEvent) Timestamp() time.Time         { return e.timestamp }
-func (e DeploymentStartedEvent) Timestamp() time.Time        { return e.timestamp }
-func (e InstanceDeployedEvent) Timestamp() time.Time         { return e.timestamp }
-func (e InstanceDeploymentFailedEvent) Timestamp() time.Time { return e.timestamp }
-func (e DeploymentCompletedEvent) Timestamp() time.Time      { return e.timestamp }
-func (e StorageSyncStartedEvent) Timestamp() time.Time       { return e.timestamp }
-func (e StorageSyncCompletedEvent) Timestamp() time.Time     { return e.timestamp }
-func (e StorageSyncFailedEvent) Timestamp() time.Time        { return e.timestamp }
-func (e HAProxyPodsDiscoveredEvent) Timestamp() time.Time    { return e.timestamp }
-func (e HAProxyPodAddedEvent) Timestamp() time.Time          { return e.timestamp }
-func (e HAProxyPodRemovedEvent) Timestamp() time.Time        { return e.timestamp }
-func (e ConfigResourceChangedEvent) Timestamp() time.Time    { return e.timestamp }
-func (e SecretResourceChangedEvent) Timestamp() time.Time    { return e.timestamp }
-func (e CredentialsUpdatedEvent) Timestamp() time.Time       { return e.timestamp }
-func (e CredentialsInvalidEvent) Timestamp() time.Time       { return e.timestamp }
+func (e *CredentialsInvalidEvent) EventType() string    { return EventTypeCredentialsInvalid }
+func (e *CredentialsInvalidEvent) Timestamp() time.Time { return e.timestamp }
