@@ -1,7 +1,7 @@
 # HAProxy Template Ingress Controller
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Build Status](https://github.com/phihos/haproxy-template-ic/actions/workflows/lint.yml/badge.svg)](https://github.com/phihos/haproxy-template-ic/actions/workflows/lint.yml)
+[![Build Status](https://github.com/phihos/haproxy-template-ic/actions/workflows/ci.yml/badge.svg)](https://github.com/phihos/haproxy-template-ic/actions/workflows/ci.yml)
 
 A Kubernetes ingress controller that manages HAProxy load balancer configurations through powerful template-driven approaches. Continuously monitors user-defined Kubernetes resources and translates them into optimized HAProxy configurations with zero-reload deployments.
 

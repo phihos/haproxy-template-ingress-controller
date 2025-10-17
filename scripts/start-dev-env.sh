@@ -413,11 +413,43 @@ build_and_load_local_image() {
         kind load docker-image "${image_with_sha}" --name "${CLUSTER_NAME}"
 
     # Verify the image was loaded successfully into the cluster
-    debug "Verifying image '${LOCAL_IMAGE%%:*}' in kind cluster..."
-    if docker exec "${CLUSTER_NAME}-control-plane" crictl images | grep -q "${LOCAL_IMAGE%%:*}"; then
-        ok "Image verified in cluster"
-    else
-        err "Image not found in cluster after loading"
+    # Use retry loop to handle timing issues with containerd image indexing
+    debug "Verifying image '${image_with_sha}' in kind cluster..."
+
+    local max_attempts=5
+    local attempt=1
+    local delay=1
+    local image_found=false
+
+    while [[ $attempt -le $max_attempts ]]; do
+        debug "Verification attempt $attempt/$max_attempts..."
+
+        # Check if crictl can see the image with the specific tag
+        # Handle potential registry prefixes (docker.io/library/, localhost/, etc.)
+        if docker exec "${CLUSTER_NAME}-control-plane" crictl images 2>/dev/null | grep -q "${LOCAL_IMAGE%%:*}.*${unique_tag}"; then
+            image_found=true
+            ok "Image verified in cluster"
+            break
+        fi
+
+        if [[ $attempt -lt $max_attempts ]]; then
+            debug "Image not found yet, waiting ${delay}s before retry..."
+            sleep "$delay"
+            delay=$((delay * 2))  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+        fi
+
+        ((attempt++)) || true
+    done
+
+    if [[ "$image_found" != "true" ]]; then
+        err "Image not found in cluster after loading and $max_attempts verification attempts"
+        warn "Troubleshooting information:"
+        echo "  Expected image: ${image_with_sha}"
+        echo "  Images currently in cluster:"
+        docker exec "${CLUSTER_NAME}-control-plane" crictl images 2>/dev/null | grep "${LOCAL_IMAGE%%:*}" || echo "    (no images matching '${LOCAL_IMAGE%%:*}' found)"
+        echo ""
+        echo "  Full crictl images output:"
+        docker exec "${CLUSTER_NAME}-control-plane" crictl images 2>/dev/null | head -n 20
         return 1
     fi
 

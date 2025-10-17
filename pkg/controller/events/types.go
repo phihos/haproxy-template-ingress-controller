@@ -3,6 +3,8 @@ package events
 import (
 	"fmt"
 	"time"
+
+	"haproxy-template-ic/pkg/k8s/types"
 )
 
 // This file contains all event type definitions for the haproxy-template-ic controller.
@@ -325,25 +327,23 @@ func (e *ConfigInvalidEvent) Timestamp() time.Time { return e.timestamp }
 // ResourceIndexUpdatedEvent is published when a watched Kubernetes resource
 // has been added, updated, or deleted in the local index.
 type ResourceIndexUpdatedEvent struct {
-	// ResourceType identifies the resource (e.g., "ingresses", "services").
-	ResourceType string
+	// ResourceTypeName identifies the resource type from config (e.g., "ingresses", "services").
+	ResourceTypeName string
 
-	// Count is the current total number of indexed resources of this type.
-	Count int
-
-	// ChangeType describes the operation: "added", "updated", "deleted".
-	ChangeType string
+	// ChangeStats provides detailed change statistics including Created, Modified, Deleted counts
+	// and whether this event occurred during initial sync.
+	ChangeStats types.ChangeStats
 
 	timestamp time.Time
 }
 
 // NewResourceIndexUpdatedEvent creates a new ResourceIndexUpdatedEvent.
-func NewResourceIndexUpdatedEvent(resourceType string, count int, changeType string) *ResourceIndexUpdatedEvent {
+// Performs a value copy of ChangeStats (it's a small struct with no pointers).
+func NewResourceIndexUpdatedEvent(resourceTypeName string, changeStats types.ChangeStats) *ResourceIndexUpdatedEvent {
 	return &ResourceIndexUpdatedEvent{
-		ResourceType: resourceType,
-		Count:        count,
-		ChangeType:   changeType,
-		timestamp:    time.Now(),
+		ResourceTypeName: resourceTypeName,
+		ChangeStats:      changeStats,
+		timestamp:        time.Now(),
 	}
 }
 
@@ -353,17 +353,21 @@ func (e *ResourceIndexUpdatedEvent) Timestamp() time.Time { return e.timestamp }
 // ResourceSyncCompleteEvent is published when a resource watcher has completed
 // its initial sync with the Kubernetes API.
 type ResourceSyncCompleteEvent struct {
-	ResourceType string
+	// ResourceTypeName identifies the resource type from config (e.g., "ingresses").
+	ResourceTypeName string
+
+	// InitialCount is the number of resources loaded during initial sync.
 	InitialCount int
-	timestamp    time.Time
+
+	timestamp time.Time
 }
 
 // NewResourceSyncCompleteEvent creates a new ResourceSyncCompleteEvent.
-func NewResourceSyncCompleteEvent(resourceType string, initialCount int) *ResourceSyncCompleteEvent {
+func NewResourceSyncCompleteEvent(resourceTypeName string, initialCount int) *ResourceSyncCompleteEvent {
 	return &ResourceSyncCompleteEvent{
-		ResourceType: resourceType,
-		InitialCount: initialCount,
-		timestamp:    time.Now(),
+		ResourceTypeName: resourceTypeName,
+		InitialCount:     initialCount,
+		timestamp:        time.Now(),
 	}
 }
 

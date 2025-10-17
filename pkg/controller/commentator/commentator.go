@@ -240,14 +240,30 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 
 	// Resource Events
 	case *events.ResourceIndexUpdatedEvent:
-		return fmt.Sprintf("Resource index updated: %s %s (now %d total)",
-				e.ChangeType, e.ResourceType, e.Count),
-			append(attrs, "resource_type", e.ResourceType, "change_type", e.ChangeType, "count", e.Count)
+		// Don't log during initial sync to reduce noise
+		if e.ChangeStats.IsInitialSync {
+			return fmt.Sprintf("Resource index loading: %s (created=%d, modified=%d, deleted=%d)",
+					e.ResourceTypeName, e.ChangeStats.Created, e.ChangeStats.Modified, e.ChangeStats.Deleted),
+				append(attrs,
+					"resource_type", e.ResourceTypeName,
+					"created", e.ChangeStats.Created,
+					"modified", e.ChangeStats.Modified,
+					"deleted", e.ChangeStats.Deleted,
+					"initial_sync", true)
+		}
+		return fmt.Sprintf("Resource index updated: %s (created=%d, modified=%d, deleted=%d)",
+				e.ResourceTypeName, e.ChangeStats.Created, e.ChangeStats.Modified, e.ChangeStats.Deleted),
+			append(attrs,
+				"resource_type", e.ResourceTypeName,
+				"created", e.ChangeStats.Created,
+				"modified", e.ChangeStats.Modified,
+				"deleted", e.ChangeStats.Deleted,
+				"initial_sync", false)
 
 	case *events.ResourceSyncCompleteEvent:
 		return fmt.Sprintf("Initial sync complete for %s (%d resources)",
-				e.ResourceType, e.InitialCount),
-			append(attrs, "resource_type", e.ResourceType, "initial_count", e.InitialCount)
+				e.ResourceTypeName, e.InitialCount),
+			append(attrs, "resource_type", e.ResourceTypeName, "initial_count", e.InitialCount)
 
 	case *events.IndexSynchronizedEvent:
 		totalResources := 0
