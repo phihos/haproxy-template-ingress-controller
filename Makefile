@@ -34,11 +34,15 @@ version: ## Display version information
 
 ## Linting targets
 
-lint: ## Run all linters (golangci-lint + arch-go)
+lint: ## Run all linters (golangci-lint + arch-go + eventimmutability)
 	@echo "Running golangci-lint..."
 	$(GOLANGCI_LINT) run
 	@echo "Running arch-go..."
 	$(ARCH_GO)
+	@echo "Running event immutability checker..."
+	@mkdir -p bin
+	@cd tools/linters/eventimmutability && $(GO) build -o ../../../bin/eventimmutability ./cmd/eventimmutability
+	@./bin/eventimmutability ./...
 
 lint-fix: ## Run golangci-lint with auto-fix
 	@echo "Running golangci-lint with auto-fix..."

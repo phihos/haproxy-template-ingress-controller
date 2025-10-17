@@ -25,8 +25,10 @@ import (
 //  3. Constructors perform defensive copying of slices and maps to prevent mutations
 //     from affecting the published event. Publishers cannot modify events after creation.
 //
-//  4. Consumers MUST NOT modify event fields. This is a team discipline enforced through
-//     code review, not compiler checks. Treat events as read-only.
+//  4. Consumers MUST NOT modify event fields. This immutability contract is enforced through:
+//     - A custom static analyzer (tools/linters/eventimmutability) that detects parameter mutations
+//     - Code review for cases not caught by the analyzer
+//     - Team discipline and documentation
 //
 // This approach balances performance, Go idioms, and practical immutability for an
 // internal project where all consumers are controlled.
