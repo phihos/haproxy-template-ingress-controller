@@ -51,6 +51,12 @@ pkg/controller/
 │   └── loader.go        # Loads Secret, validates credentials, publishes CredentialsUpdatedEvent
 ├── events/              # Domain-specific event type definitions
 │   └── types.go         # ~30+ event types covering controller lifecycle
+├── executor/            # Reconciliation orchestrator (Stage 5)
+│   ├── executor.go      # Orchestrates Renderer, Validator, Deployer
+│   └── executor_test.go # Event flow and orchestration tests
+├── reconciler/          # Reconciliation debouncer (Stage 5)
+│   ├── reconciler.go    # Debounces changes, triggers reconciliation
+│   └── reconciler_test.go
 ├── validator/           # Configuration validation components
 │   ├── basic.go         # Structural validation (ports, required fields)
 │   ├── template.go      # Template syntax validation using pkg/templating
@@ -142,6 +148,60 @@ for _, resp := range result.Responses {
 }
 ```
 
+### Reconciler
+
+Debounces resource changes and triggers reconciliation events (Stage 5, Component 1).
+
+**Responsibilities:**
+- Subscribes to ResourceIndexUpdatedEvent and ConfigValidatedEvent
+- Debounces resource changes with configurable interval (default 500ms)
+- Triggers immediate reconciliation for config changes (no debouncing)
+- Filters initial sync events to prevent premature reconciliation
+- Publishes ReconciliationTriggeredEvent when ready
+
+**Example:**
+```go
+import (
+    "haproxy-template-ic/pkg/controller/reconciler"
+    "haproxy-template-ic/pkg/events"
+)
+
+// Create with custom debounce interval
+reconcilerComponent := reconciler.New(eventBus, logger, 1*time.Second)
+go reconcilerComponent.Start(ctx)
+
+// Uses default 500ms interval if nil
+reconcilerComponent := reconciler.New(eventBus, logger, nil)
+go reconcilerComponent.Start(ctx)
+```
+
+### Executor
+
+Orchestrates reconciliation cycles by coordinating pure components (Stage 5, Component 2).
+
+**Responsibilities:**
+- Subscribes to ReconciliationTriggeredEvent
+- Publishes ReconciliationStartedEvent when reconciliation begins
+- Orchestrates Renderer, Validator, and Deployer pure components (future)
+- Publishes ReconciliationCompletedEvent with duration metrics
+- Publishes ReconciliationFailedEvent on errors
+
+**Current State:**
+- Minimal implementation establishing event flow
+- Measures reconciliation duration for observability
+- Future: Will call Renderer, Validator, Deployer components
+
+**Example:**
+```go
+import (
+    "haproxy-template-ic/pkg/controller/executor"
+    "haproxy-template-ic/pkg/events"
+)
+
+executorComponent := executor.New(eventBus, logger)
+go executorComponent.Start(ctx)
+```
+
 ## Startup Sequence
 
 The controller uses a multi-stage startup sequence coordinated via EventBus:
@@ -222,14 +282,19 @@ IndexReady:
 ### Stage 5: Reconciliation
 
 ```go
-reconciler := NewReconciliationComponent(eventBus)
-executor := NewReconciliationExecutor(eventBus, config, stores)
+// Start reconciliation components
+reconcilerComponent := reconciler.New(eventBus, logger, nil)
+executorComponent := executor.New(eventBus, logger)
 
-go reconciler.Run(ctx)
-go executor.Run(ctx)
+go reconcilerComponent.Start(ctx)
+go executorComponent.Start(ctx)
 
 log.Info("All components started")
 ```
+
+**Two-Component Design:**
+1. **Reconciler**: Debounces changes (500ms default), publishes ReconciliationTriggeredEvent
+2. **Executor**: Orchestrates Renderer, Validator, Deployer (currently stub implementation)
 
 ## Event-Driven Patterns
 

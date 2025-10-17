@@ -254,7 +254,9 @@ haproxy-template-ic/
 │   │   ├── configloader/    # Config parsing and loading
 │   │   ├── credentialsloader/ # Credentials parsing and loading
 │   │   ├── events/          # Domain-specific event types
+│   │   ├── executor/        # Reconciliation orchestrator
 │   │   ├── indextracker/    # Index synchronization tracking
+│   │   ├── reconciler/      # Reconciliation debouncer and trigger
 │   │   ├── resourcewatcher/ # Resource watcher lifecycle management
 │   │   ├── validator/       # Config validation (basic, template, jsonpath)
 │   │   └── controller.go    # Event coordination and startup orchestration
@@ -382,7 +384,9 @@ Both watchers use the event-driven architecture: changes publish events to Event
 - `pkg/controller/configloader`: Loads and parses controller configuration from ConfigMap resources, publishes ConfigParsedEvent
 - `pkg/controller/credentialsloader`: Loads and validates credentials from Secret resources, publishes CredentialsUpdatedEvent
 - `pkg/controller/configchange`: Handles configuration change events and coordinates reloading of resources
+- `pkg/controller/executor`: Orchestrates reconciliation cycles by coordinating pure components. Subscribes to ReconciliationTriggeredEvent and publishes ReconciliationStartedEvent, ReconciliationCompletedEvent, and ReconciliationFailedEvent. Second Stage 5 component that will orchestrate the Renderer, Validator, and Deployer pure components (currently stub implementation establishing event flow). Measures reconciliation duration for observability.
 - `pkg/controller/indextracker`: Tracks synchronization state across multiple resource types, publishes IndexSynchronizedEvent when all resources complete initial sync, enabling staged controller startup with clear initialization checkpoints
+- `pkg/controller/reconciler`: Debounces resource change events and triggers reconciliation cycles. Subscribes to ResourceIndexUpdatedEvent (applies debouncing with configurable interval, default 500ms) and ConfigValidatedEvent (triggers immediately without debouncing). Publishes ReconciliationTriggeredEvent when conditions are met. Filters initial sync events to prevent premature reconciliation. First Stage 5 component enabling controlled reconciliation trigger logic.
 - `pkg/controller/resourcewatcher`: Manages lifecycle of all Kubernetes resource watchers defined in configuration, provides centralized WaitForAllSync() method for coordinated initialization, publishes ResourceIndexUpdatedEvent with detailed change statistics
 - `pkg/controller/validator`: Contains validation components (basic structural validation, template syntax validation, JSONPath expression validation) that respond to ConfigValidationRequest events using scatter-gather pattern
 - `pkg/controller/events`: Domain-specific event type definitions (~30+ event types covering complete controller lifecycle)
