@@ -1,5 +1,7 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -15,6 +17,10 @@ import (
 
 // PriorityHTTPCheck defines the priority for HTTP check operations.
 const PriorityHTTPCheck = 60
+
+const (
+	sectionHTTPCheck = "http_check"
+)
 
 // CreateHTTPCheckBackendOperation represents creating a new HTTP check in a backend.
 type CreateHTTPCheckBackendOperation struct {
@@ -39,7 +45,7 @@ func (op *CreateHTTPCheckBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateHTTPCheckBackendOperation) Section() string {
-	return "http_check"
+	return sectionHTTPCheck
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +54,8 @@ func (op *CreateHTTPCheckBackendOperation) Priority() int {
 }
 
 // Execute creates the HTTP check via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPCheckBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.HTTPCheck == nil {
 		return fmt.Errorf("HTTP check is nil")
@@ -87,7 +95,7 @@ func (op *CreateHTTPCheckBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateHTTPCheckBackendOperation) Describe() string {
-	checkType := "unknown"
+	checkType := unknownFallback
 	if op.HTTPCheck != nil && op.HTTPCheck.Type != "" {
 		checkType = op.HTTPCheck.Type
 	}
@@ -117,7 +125,7 @@ func (op *DeleteHTTPCheckBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteHTTPCheckBackendOperation) Section() string {
-	return "http_check"
+	return sectionHTTPCheck
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteHTTPCheckBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteHTTPCheckBackendOperation) Describe() string {
-	checkType := "unknown"
+	checkType := unknownFallback
 	if op.HTTPCheck != nil && op.HTTPCheck.Type != "" {
 		checkType = op.HTTPCheck.Type
 	}
@@ -181,7 +189,7 @@ func (op *UpdateHTTPCheckBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateHTTPCheckBackendOperation) Section() string {
-	return "http_check"
+	return sectionHTTPCheck
 }
 
 // Priority implements Operation.Priority.
@@ -190,6 +198,8 @@ func (op *UpdateHTTPCheckBackendOperation) Priority() int {
 }
 
 // Execute updates the HTTP check via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPCheckBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.HTTPCheck == nil {
 		return fmt.Errorf("HTTP check is nil")
@@ -229,7 +239,7 @@ func (op *UpdateHTTPCheckBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateHTTPCheckBackendOperation) Describe() string {
-	checkType := "unknown"
+	checkType := unknownFallback
 	if op.HTTPCheck != nil && op.HTTPCheck.Type != "" {
 		checkType = op.HTTPCheck.Type
 	}

@@ -183,7 +183,7 @@ func NewConnectionError(endpoint string, cause error) *SyncError {
 }
 
 // NewParseError creates a ParseError.
-func NewParseError(configType string, configSnippet string, cause error) *SyncError {
+func NewParseError(configType, configSnippet string, cause error) *SyncError {
 	hints := []string{
 		"Check the HAProxy configuration syntax",
 		"Validate the configuration with: haproxy -c -f <config>",

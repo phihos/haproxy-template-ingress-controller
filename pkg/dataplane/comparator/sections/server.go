@@ -11,6 +11,10 @@ import (
 	"haproxy-template-ic/pkg/dataplane/client"
 )
 
+const (
+	sectionServer = "server"
+)
+
 // CreateServerOperation represents creating a new server in a backend.
 type CreateServerOperation struct {
 	BackendName string
@@ -32,7 +36,7 @@ func (op *CreateServerOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateServerOperation) Section() string {
-	return "server"
+	return sectionServer
 }
 
 // Priority implements Operation.Priority.
@@ -94,7 +98,7 @@ func (op *CreateServerOperation) Execute(ctx context.Context, c *client.Dataplan
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateServerOperation) Describe() string {
-	serverName := "unknown"
+	serverName := unknownFallback
 	if op.Server.Name != "" {
 		serverName = op.Server.Name
 	}
@@ -122,7 +126,7 @@ func (op *DeleteServerOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteServerOperation) Section() string {
-	return "server"
+	return sectionServer
 }
 
 // Priority implements Operation.Priority.
@@ -174,7 +178,7 @@ func (op *DeleteServerOperation) Execute(ctx context.Context, c *client.Dataplan
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteServerOperation) Describe() string {
-	serverName := "unknown"
+	serverName := unknownFallback
 	if op.Server.Name != "" {
 		serverName = op.Server.Name
 	}
@@ -202,7 +206,7 @@ func (op *UpdateServerOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateServerOperation) Section() string {
-	return "server"
+	return sectionServer
 }
 
 // Priority implements Operation.Priority.
@@ -267,7 +271,7 @@ func (op *UpdateServerOperation) Execute(ctx context.Context, c *client.Dataplan
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateServerOperation) Describe() string {
-	serverName := "unknown"
+	serverName := unknownFallback
 	if op.Server.Name != "" {
 		serverName = op.Server.Name
 	}

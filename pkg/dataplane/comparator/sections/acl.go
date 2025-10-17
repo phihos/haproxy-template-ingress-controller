@@ -13,16 +13,21 @@ import (
 	"haproxy-template-ic/pkg/dataplane/client"
 )
 
+const (
+	sectionACL      = "acl"
+	unknownFallback = "unknown"
+)
+
 // CreateAclFrontendOperation represents creating a new ACL in a frontend.
-type CreateAclFrontendOperation struct {
+type CreateACLFrontendOperation struct {
 	FrontendName string
 	ACL          *models.ACL
 	Index        int
 }
 
 // NewCreateAclFrontendOperation creates a new ACL creation operation for a frontend.
-func NewCreateAclFrontendOperation(frontendName string, acl *models.ACL, index int) *CreateAclFrontendOperation {
-	return &CreateAclFrontendOperation{
+func NewCreateACLFrontendOperation(frontendName string, acl *models.ACL, index int) *CreateACLFrontendOperation {
+	return &CreateACLFrontendOperation{
 		FrontendName: frontendName,
 		ACL:          acl,
 		Index:        index,
@@ -30,22 +35,24 @@ func NewCreateAclFrontendOperation(frontendName string, acl *models.ACL, index i
 }
 
 // Type implements Operation.Type.
-func (op *CreateAclFrontendOperation) Type() OperationType {
+func (op *CreateACLFrontendOperation) Type() OperationType {
 	return OperationCreate
 }
 
 // Section implements Operation.Section.
-func (op *CreateAclFrontendOperation) Section() string {
-	return "acl"
+func (op *CreateACLFrontendOperation) Section() string {
+	return sectionACL
 }
 
 // Priority implements Operation.Priority.
-func (op *CreateAclFrontendOperation) Priority() int {
+func (op *CreateACLFrontendOperation) Priority() int {
 	return PriorityACL
 }
 
 // Execute creates the ACL via the Dataplane API.
-func (op *CreateAclFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
+//
+//nolint:dupl // Similar pattern to other ACL operation Execute methods - each handles different API endpoints and contexts
+func (op *CreateACLFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.ACL == nil {
 		return fmt.Errorf("ACL is nil")
 	}
@@ -83,8 +90,8 @@ func (op *CreateAclFrontendOperation) Execute(ctx context.Context, c *client.Dat
 }
 
 // Describe returns a human-readable description of this operation.
-func (op *CreateAclFrontendOperation) Describe() string {
-	aclName := "unknown"
+func (op *CreateACLFrontendOperation) Describe() string {
+	aclName := unknownFallback
 	if op.ACL != nil && op.ACL.ACLName != "" {
 		aclName = op.ACL.ACLName
 	}
@@ -92,15 +99,15 @@ func (op *CreateAclFrontendOperation) Describe() string {
 }
 
 // DeleteAclFrontendOperation represents deleting an ACL from a frontend.
-type DeleteAclFrontendOperation struct {
+type DeleteACLFrontendOperation struct {
 	FrontendName string
 	ACL          *models.ACL
 	Index        int
 }
 
 // NewDeleteAclFrontendOperation creates a new ACL deletion operation for a frontend.
-func NewDeleteAclFrontendOperation(frontendName string, acl *models.ACL, index int) *DeleteAclFrontendOperation {
-	return &DeleteAclFrontendOperation{
+func NewDeleteACLFrontendOperation(frontendName string, acl *models.ACL, index int) *DeleteACLFrontendOperation {
+	return &DeleteACLFrontendOperation{
 		FrontendName: frontendName,
 		ACL:          acl,
 		Index:        index,
@@ -108,22 +115,22 @@ func NewDeleteAclFrontendOperation(frontendName string, acl *models.ACL, index i
 }
 
 // Type implements Operation.Type.
-func (op *DeleteAclFrontendOperation) Type() OperationType {
+func (op *DeleteACLFrontendOperation) Type() OperationType {
 	return OperationDelete
 }
 
 // Section implements Operation.Section.
-func (op *DeleteAclFrontendOperation) Section() string {
-	return "acl"
+func (op *DeleteACLFrontendOperation) Section() string {
+	return sectionACL
 }
 
 // Priority implements Operation.Priority.
-func (op *DeleteAclFrontendOperation) Priority() int {
+func (op *DeleteACLFrontendOperation) Priority() int {
 	return PriorityACL
 }
 
 // Execute deletes the ACL via the Dataplane API.
-func (op *DeleteAclFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
+func (op *DeleteACLFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	apiClient := c.Client()
 
 	// Prepare parameters with transaction ID
@@ -147,8 +154,8 @@ func (op *DeleteAclFrontendOperation) Execute(ctx context.Context, c *client.Dat
 }
 
 // Describe returns a human-readable description of this operation.
-func (op *DeleteAclFrontendOperation) Describe() string {
-	aclName := "unknown"
+func (op *DeleteACLFrontendOperation) Describe() string {
+	aclName := unknownFallback
 	if op.ACL != nil && op.ACL.ACLName != "" {
 		aclName = op.ACL.ACLName
 	}
@@ -156,15 +163,15 @@ func (op *DeleteAclFrontendOperation) Describe() string {
 }
 
 // UpdateAclFrontendOperation represents updating an ACL in a frontend.
-type UpdateAclFrontendOperation struct {
+type UpdateACLFrontendOperation struct {
 	FrontendName string
 	ACL          *models.ACL
 	Index        int
 }
 
 // NewUpdateAclFrontendOperation creates a new ACL update operation for a frontend.
-func NewUpdateAclFrontendOperation(frontendName string, acl *models.ACL, index int) *UpdateAclFrontendOperation {
-	return &UpdateAclFrontendOperation{
+func NewUpdateACLFrontendOperation(frontendName string, acl *models.ACL, index int) *UpdateACLFrontendOperation {
+	return &UpdateACLFrontendOperation{
 		FrontendName: frontendName,
 		ACL:          acl,
 		Index:        index,
@@ -172,22 +179,24 @@ func NewUpdateAclFrontendOperation(frontendName string, acl *models.ACL, index i
 }
 
 // Type implements Operation.Type.
-func (op *UpdateAclFrontendOperation) Type() OperationType {
+func (op *UpdateACLFrontendOperation) Type() OperationType {
 	return OperationUpdate
 }
 
 // Section implements Operation.Section.
-func (op *UpdateAclFrontendOperation) Section() string {
-	return "acl"
+func (op *UpdateACLFrontendOperation) Section() string {
+	return sectionACL
 }
 
 // Priority implements Operation.Priority.
-func (op *UpdateAclFrontendOperation) Priority() int {
+func (op *UpdateACLFrontendOperation) Priority() int {
 	return PriorityACL
 }
 
 // Execute updates the ACL via the Dataplane API.
-func (op *UpdateAclFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
+//
+//nolint:dupl // Similar pattern to other ACL operation Execute methods - each handles different API endpoints and contexts
+func (op *UpdateACLFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.ACL == nil {
 		return fmt.Errorf("ACL is nil")
 	}
@@ -225,8 +234,8 @@ func (op *UpdateAclFrontendOperation) Execute(ctx context.Context, c *client.Dat
 }
 
 // Describe returns a human-readable description of this operation.
-func (op *UpdateAclFrontendOperation) Describe() string {
-	aclName := "unknown"
+func (op *UpdateACLFrontendOperation) Describe() string {
+	aclName := unknownFallback
 	if op.ACL != nil && op.ACL.ACLName != "" {
 		aclName = op.ACL.ACLName
 	}
@@ -234,15 +243,15 @@ func (op *UpdateAclFrontendOperation) Describe() string {
 }
 
 // CreateAclBackendOperation represents creating a new ACL in a backend.
-type CreateAclBackendOperation struct {
+type CreateACLBackendOperation struct {
 	BackendName string
 	ACL         *models.ACL
 	Index       int
 }
 
 // NewCreateAclBackendOperation creates a new ACL creation operation for a backend.
-func NewCreateAclBackendOperation(backendName string, acl *models.ACL, index int) *CreateAclBackendOperation {
-	return &CreateAclBackendOperation{
+func NewCreateACLBackendOperation(backendName string, acl *models.ACL, index int) *CreateACLBackendOperation {
+	return &CreateACLBackendOperation{
 		BackendName: backendName,
 		ACL:         acl,
 		Index:       index,
@@ -250,22 +259,24 @@ func NewCreateAclBackendOperation(backendName string, acl *models.ACL, index int
 }
 
 // Type implements Operation.Type.
-func (op *CreateAclBackendOperation) Type() OperationType {
+func (op *CreateACLBackendOperation) Type() OperationType {
 	return OperationCreate
 }
 
 // Section implements Operation.Section.
-func (op *CreateAclBackendOperation) Section() string {
-	return "acl"
+func (op *CreateACLBackendOperation) Section() string {
+	return sectionACL
 }
 
 // Priority implements Operation.Priority.
-func (op *CreateAclBackendOperation) Priority() int {
+func (op *CreateACLBackendOperation) Priority() int {
 	return PriorityACL
 }
 
 // Execute creates the ACL via the Dataplane API.
-func (op *CreateAclBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
+//
+//nolint:dupl // Similar pattern to other ACL operation Execute methods - each handles different API endpoints and contexts
+func (op *CreateACLBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.ACL == nil {
 		return fmt.Errorf("ACL is nil")
 	}
@@ -303,8 +314,8 @@ func (op *CreateAclBackendOperation) Execute(ctx context.Context, c *client.Data
 }
 
 // Describe returns a human-readable description of this operation.
-func (op *CreateAclBackendOperation) Describe() string {
-	aclName := "unknown"
+func (op *CreateACLBackendOperation) Describe() string {
+	aclName := unknownFallback
 	if op.ACL != nil && op.ACL.ACLName != "" {
 		aclName = op.ACL.ACLName
 	}
@@ -312,15 +323,15 @@ func (op *CreateAclBackendOperation) Describe() string {
 }
 
 // DeleteAclBackendOperation represents deleting an ACL from a backend.
-type DeleteAclBackendOperation struct {
+type DeleteACLBackendOperation struct {
 	BackendName string
 	ACL         *models.ACL
 	Index       int
 }
 
 // NewDeleteAclBackendOperation creates a new ACL deletion operation for a backend.
-func NewDeleteAclBackendOperation(backendName string, acl *models.ACL, index int) *DeleteAclBackendOperation {
-	return &DeleteAclBackendOperation{
+func NewDeleteACLBackendOperation(backendName string, acl *models.ACL, index int) *DeleteACLBackendOperation {
+	return &DeleteACLBackendOperation{
 		BackendName: backendName,
 		ACL:         acl,
 		Index:       index,
@@ -328,22 +339,22 @@ func NewDeleteAclBackendOperation(backendName string, acl *models.ACL, index int
 }
 
 // Type implements Operation.Type.
-func (op *DeleteAclBackendOperation) Type() OperationType {
+func (op *DeleteACLBackendOperation) Type() OperationType {
 	return OperationDelete
 }
 
 // Section implements Operation.Section.
-func (op *DeleteAclBackendOperation) Section() string {
-	return "acl"
+func (op *DeleteACLBackendOperation) Section() string {
+	return sectionACL
 }
 
 // Priority implements Operation.Priority.
-func (op *DeleteAclBackendOperation) Priority() int {
+func (op *DeleteACLBackendOperation) Priority() int {
 	return PriorityACL
 }
 
 // Execute deletes the ACL via the Dataplane API.
-func (op *DeleteAclBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
+func (op *DeleteACLBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	apiClient := c.Client()
 
 	// Prepare parameters with transaction ID
@@ -367,8 +378,8 @@ func (op *DeleteAclBackendOperation) Execute(ctx context.Context, c *client.Data
 }
 
 // Describe returns a human-readable description of this operation.
-func (op *DeleteAclBackendOperation) Describe() string {
-	aclName := "unknown"
+func (op *DeleteACLBackendOperation) Describe() string {
+	aclName := unknownFallback
 	if op.ACL != nil && op.ACL.ACLName != "" {
 		aclName = op.ACL.ACLName
 	}
@@ -376,15 +387,15 @@ func (op *DeleteAclBackendOperation) Describe() string {
 }
 
 // UpdateAclBackendOperation represents updating an ACL in a backend.
-type UpdateAclBackendOperation struct {
+type UpdateACLBackendOperation struct {
 	BackendName string
 	ACL         *models.ACL
 	Index       int
 }
 
 // NewUpdateAclBackendOperation creates a new ACL update operation for a backend.
-func NewUpdateAclBackendOperation(backendName string, acl *models.ACL, index int) *UpdateAclBackendOperation {
-	return &UpdateAclBackendOperation{
+func NewUpdateACLBackendOperation(backendName string, acl *models.ACL, index int) *UpdateACLBackendOperation {
+	return &UpdateACLBackendOperation{
 		BackendName: backendName,
 		ACL:         acl,
 		Index:       index,
@@ -392,22 +403,24 @@ func NewUpdateAclBackendOperation(backendName string, acl *models.ACL, index int
 }
 
 // Type implements Operation.Type.
-func (op *UpdateAclBackendOperation) Type() OperationType {
+func (op *UpdateACLBackendOperation) Type() OperationType {
 	return OperationUpdate
 }
 
 // Section implements Operation.Section.
-func (op *UpdateAclBackendOperation) Section() string {
-	return "acl"
+func (op *UpdateACLBackendOperation) Section() string {
+	return sectionACL
 }
 
 // Priority implements Operation.Priority.
-func (op *UpdateAclBackendOperation) Priority() int {
+func (op *UpdateACLBackendOperation) Priority() int {
 	return PriorityACL
 }
 
 // Execute updates the ACL via the Dataplane API.
-func (op *UpdateAclBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
+//
+//nolint:dupl // Similar pattern to other ACL operation Execute methods - each handles different API endpoints and contexts
+func (op *UpdateACLBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.ACL == nil {
 		return fmt.Errorf("ACL is nil")
 	}
@@ -445,8 +458,8 @@ func (op *UpdateAclBackendOperation) Execute(ctx context.Context, c *client.Data
 }
 
 // Describe returns a human-readable description of this operation.
-func (op *UpdateAclBackendOperation) Describe() string {
-	aclName := "unknown"
+func (op *UpdateACLBackendOperation) Describe() string {
+	aclName := unknownFallback
 	if op.ACL != nil && op.ACL.ACLName != "" {
 		aclName = op.ACL.ACLName
 	}

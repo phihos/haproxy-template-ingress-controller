@@ -13,6 +13,11 @@ import (
 	"haproxy-template-ic/pkg/dataplane/client"
 )
 
+const (
+	sectionHTTPRequestRule  = "http_request_rule"
+	sectionHTTPResponseRule = "http_response_rule"
+)
+
 // CreateHTTPRequestRuleFrontendOperation represents creating a new HTTP request rule in a frontend.
 type CreateHTTPRequestRuleFrontendOperation struct {
 	FrontendName string
@@ -36,7 +41,7 @@ func (op *CreateHTTPRequestRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateHTTPRequestRuleFrontendOperation) Section() string {
-	return "http_request_rule"
+	return sectionHTTPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -45,6 +50,8 @@ func (op *CreateHTTPRequestRuleFrontendOperation) Priority() int {
 }
 
 // Execute creates the HTTP request rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP request rule is nil")
@@ -84,9 +91,9 @@ func (op *CreateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateHTTPRequestRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Create HTTP request rule (%s) in frontend '%s'", ruleType, op.FrontendName)
 }
@@ -114,7 +121,7 @@ func (op *DeleteHTTPRequestRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteHTTPRequestRuleFrontendOperation) Section() string {
-	return "http_request_rule"
+	return sectionHTTPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -148,9 +155,9 @@ func (op *DeleteHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteHTTPRequestRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Delete HTTP request rule (%s) from frontend '%s'", ruleType, op.FrontendName)
 }
@@ -178,7 +185,7 @@ func (op *UpdateHTTPRequestRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateHTTPRequestRuleFrontendOperation) Section() string {
-	return "http_request_rule"
+	return sectionHTTPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -187,6 +194,8 @@ func (op *UpdateHTTPRequestRuleFrontendOperation) Priority() int {
 }
 
 // Execute updates the HTTP request rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP request rule is nil")
@@ -226,9 +235,9 @@ func (op *UpdateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateHTTPRequestRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Update HTTP request rule (%s) in frontend '%s'", ruleType, op.FrontendName)
 }
@@ -256,7 +265,7 @@ func (op *CreateHTTPRequestRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateHTTPRequestRuleBackendOperation) Section() string {
-	return "http_request_rule"
+	return sectionHTTPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -265,6 +274,8 @@ func (op *CreateHTTPRequestRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the HTTP request rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP request rule is nil")
@@ -304,9 +315,9 @@ func (op *CreateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateHTTPRequestRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Create HTTP request rule (%s) in backend '%s'", ruleType, op.BackendName)
 }
@@ -334,7 +345,7 @@ func (op *DeleteHTTPRequestRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteHTTPRequestRuleBackendOperation) Section() string {
-	return "http_request_rule"
+	return sectionHTTPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -368,9 +379,9 @@ func (op *DeleteHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteHTTPRequestRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Delete HTTP request rule (%s) from backend '%s'", ruleType, op.BackendName)
 }
@@ -398,7 +409,7 @@ func (op *UpdateHTTPRequestRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateHTTPRequestRuleBackendOperation) Section() string {
-	return "http_request_rule"
+	return sectionHTTPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -407,6 +418,8 @@ func (op *UpdateHTTPRequestRuleBackendOperation) Priority() int {
 }
 
 // Execute updates the HTTP request rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP request rule is nil")
@@ -446,9 +459,9 @@ func (op *UpdateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateHTTPRequestRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Update HTTP request rule (%s) in backend '%s'", ruleType, op.BackendName)
 }
@@ -476,7 +489,7 @@ func (op *CreateHTTPResponseRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateHTTPResponseRuleFrontendOperation) Section() string {
-	return "http_response_rule"
+	return sectionHTTPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -485,6 +498,8 @@ func (op *CreateHTTPResponseRuleFrontendOperation) Priority() int {
 }
 
 // Execute creates the HTTP response rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP response rule is nil")
@@ -524,9 +539,9 @@ func (op *CreateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateHTTPResponseRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Create HTTP response rule (%s) in frontend '%s'", ruleType, op.FrontendName)
 }
@@ -554,7 +569,7 @@ func (op *DeleteHTTPResponseRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteHTTPResponseRuleFrontendOperation) Section() string {
-	return "http_response_rule"
+	return sectionHTTPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -588,9 +603,9 @@ func (op *DeleteHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteHTTPResponseRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Delete HTTP response rule (%s) from frontend '%s'", ruleType, op.FrontendName)
 }
@@ -618,7 +633,7 @@ func (op *UpdateHTTPResponseRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateHTTPResponseRuleFrontendOperation) Section() string {
-	return "http_response_rule"
+	return sectionHTTPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -627,6 +642,8 @@ func (op *UpdateHTTPResponseRuleFrontendOperation) Priority() int {
 }
 
 // Execute updates the HTTP response rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP response rule is nil")
@@ -666,9 +683,9 @@ func (op *UpdateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateHTTPResponseRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Update HTTP response rule (%s) in frontend '%s'", ruleType, op.FrontendName)
 }
@@ -696,7 +713,7 @@ func (op *CreateHTTPResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateHTTPResponseRuleBackendOperation) Section() string {
-	return "http_response_rule"
+	return sectionHTTPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -705,6 +722,8 @@ func (op *CreateHTTPResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the HTTP response rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP response rule is nil")
@@ -744,9 +763,9 @@ func (op *CreateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateHTTPResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Create HTTP response rule (%s) in backend '%s'", ruleType, op.BackendName)
 }
@@ -774,7 +793,7 @@ func (op *DeleteHTTPResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteHTTPResponseRuleBackendOperation) Section() string {
-	return "http_response_rule"
+	return sectionHTTPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -808,9 +827,9 @@ func (op *DeleteHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteHTTPResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Delete HTTP response rule (%s) from backend '%s'", ruleType, op.BackendName)
 }
@@ -838,7 +857,7 @@ func (op *UpdateHTTPResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateHTTPResponseRuleBackendOperation) Section() string {
-	return "http_response_rule"
+	return sectionHTTPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -847,6 +866,8 @@ func (op *UpdateHTTPResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute updates the HTTP response rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP response rule is nil")
@@ -886,9 +907,9 @@ func (op *UpdateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateHTTPResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
-		ruleType = string(op.Rule.Type)
+		ruleType = op.Rule.Type
 	}
 	return fmt.Sprintf("Update HTTP response rule (%s) in backend '%s'", ruleType, op.BackendName)
 }

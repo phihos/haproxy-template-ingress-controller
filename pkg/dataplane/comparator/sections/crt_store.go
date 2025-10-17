@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -13,6 +14,10 @@ import (
 
 // PriorityCrtStore defines priority for crt-store sections.
 const PriorityCrtStore = 10
+
+const (
+	sectionCRTStore = "crt-store"
+)
 
 // CreateCrtStoreOperation represents creating a new crt-store section.
 type CreateCrtStoreOperation struct {
@@ -33,7 +38,7 @@ func (op *CreateCrtStoreOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateCrtStoreOperation) Section() string {
-	return "crt-store"
+	return sectionCRTStore
 }
 
 // Priority implements Operation.Priority.
@@ -92,7 +97,7 @@ func (op *CreateCrtStoreOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateCrtStoreOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.CrtStore.Name != "" {
 		name = op.CrtStore.Name
 	}
@@ -118,7 +123,7 @@ func (op *DeleteCrtStoreOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteCrtStoreOperation) Section() string {
-	return "crt-store"
+	return sectionCRTStore
 }
 
 // Priority implements Operation.Priority.
@@ -167,7 +172,7 @@ func (op *DeleteCrtStoreOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteCrtStoreOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.CrtStore.Name != "" {
 		name = op.CrtStore.Name
 	}
@@ -193,7 +198,7 @@ func (op *UpdateCrtStoreOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateCrtStoreOperation) Section() string {
-	return "crt-store"
+	return sectionCRTStore
 }
 
 // Priority implements Operation.Priority.
@@ -252,7 +257,7 @@ func (op *UpdateCrtStoreOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateCrtStoreOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.CrtStore.Name != "" {
 		name = op.CrtStore.Name
 	}

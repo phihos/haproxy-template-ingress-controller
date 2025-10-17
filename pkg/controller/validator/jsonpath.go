@@ -48,7 +48,7 @@ func NewJSONPathValidator(bus *busevents.EventBus, logger *slog.Logger) *JSONPat
 
 // HandleRequest processes a ConfigValidationRequest by validating all JSONPath expressions.
 // This implements the ValidationHandler interface.
-func (v *JSONPathValidator) HandleRequest(req events.ConfigValidationRequest) {
+func (v *JSONPathValidator) HandleRequest(req *events.ConfigValidationRequest) {
 	start := time.Now()
 	v.logger.Debug("Validating JSONPath expressions", "version", req.Version)
 

@@ -1,3 +1,4 @@
+//nolint:dupl // Intentional duplication - multipart upload/update patterns for different storage types
 package client
 
 import (
@@ -92,7 +93,7 @@ func (c *DataplaneClient) CreateGeneralFile(ctx context.Context, path, content s
 
 	// Add file content as a form file field
 	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename="%s"`, path))
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename=%q`, path))
 	h.Set("Content-Type", "application/octet-stream")
 
 	part, err := writer.CreatePart(h)
@@ -142,7 +143,7 @@ func (c *DataplaneClient) UpdateGeneralFile(ctx context.Context, path, content s
 
 	// Add file content as a form file field
 	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename="%s"`, path))
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename=%q`, path))
 	h.Set("Content-Type", "application/octet-stream")
 
 	part, err := writer.CreatePart(h)

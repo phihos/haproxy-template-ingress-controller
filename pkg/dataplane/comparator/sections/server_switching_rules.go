@@ -1,5 +1,7 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -15,6 +17,10 @@ import (
 
 // PriorityServerSwitchingRule defines the priority for server switching rule operations.
 const PriorityServerSwitchingRule = 60
+
+const (
+	sectionServerSwitchingRule = "server-switching-rule"
+)
 
 // CreateServerSwitchingRuleBackendOperation represents creating a new server switching rule in a backend.
 type CreateServerSwitchingRuleBackendOperation struct {
@@ -39,7 +45,7 @@ func (op *CreateServerSwitchingRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateServerSwitchingRuleBackendOperation) Section() string {
-	return "server-switching-rule"
+	return sectionServerSwitchingRule
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +54,8 @@ func (op *CreateServerSwitchingRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the server switching rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateServerSwitchingRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("server switching rule is nil")
@@ -87,7 +95,7 @@ func (op *CreateServerSwitchingRuleBackendOperation) Execute(ctx context.Context
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateServerSwitchingRuleBackendOperation) Describe() string {
-	serverName := "unknown"
+	serverName := unknownFallback
 	if op.Rule != nil && op.Rule.TargetServer != "" {
 		serverName = op.Rule.TargetServer
 	}
@@ -117,7 +125,7 @@ func (op *DeleteServerSwitchingRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteServerSwitchingRuleBackendOperation) Section() string {
-	return "server-switching-rule"
+	return sectionServerSwitchingRule
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteServerSwitchingRuleBackendOperation) Execute(ctx context.Context
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteServerSwitchingRuleBackendOperation) Describe() string {
-	serverName := "unknown"
+	serverName := unknownFallback
 	if op.Rule != nil && op.Rule.TargetServer != "" {
 		serverName = op.Rule.TargetServer
 	}
@@ -181,7 +189,7 @@ func (op *UpdateServerSwitchingRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateServerSwitchingRuleBackendOperation) Section() string {
-	return "server-switching-rule"
+	return sectionServerSwitchingRule
 }
 
 // Priority implements Operation.Priority.
@@ -229,7 +237,7 @@ func (op *UpdateServerSwitchingRuleBackendOperation) Execute(ctx context.Context
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateServerSwitchingRuleBackendOperation) Describe() string {
-	serverName := "unknown"
+	serverName := unknownFallback
 	if op.Rule != nil && op.Rule.TargetServer != "" {
 		serverName = op.Rule.TargetServer
 	}

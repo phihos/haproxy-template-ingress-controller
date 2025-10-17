@@ -1,5 +1,7 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -15,6 +17,10 @@ import (
 
 // PriorityFilter defines the priority for filter operations.
 const PriorityFilter = 60
+
+const (
+	sectionFilter = "filter"
+)
 
 // CreateFilterFrontendOperation represents creating a new filter in a frontend.
 type CreateFilterFrontendOperation struct {
@@ -39,7 +45,7 @@ func (op *CreateFilterFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateFilterFrontendOperation) Section() string {
-	return "filter"
+	return sectionFilter
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +54,8 @@ func (op *CreateFilterFrontendOperation) Priority() int {
 }
 
 // Execute creates the filter via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other filter operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateFilterFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Filter == nil {
 		return fmt.Errorf("filter is nil")
@@ -87,7 +95,7 @@ func (op *CreateFilterFrontendOperation) Execute(ctx context.Context, c *client.
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateFilterFrontendOperation) Describe() string {
-	filterType := "unknown"
+	filterType := unknownFallback
 	if op.Filter != nil && op.Filter.Type != "" {
 		filterType = op.Filter.Type
 	}
@@ -117,7 +125,7 @@ func (op *DeleteFilterFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteFilterFrontendOperation) Section() string {
-	return "filter"
+	return sectionFilter
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteFilterFrontendOperation) Execute(ctx context.Context, c *client.
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteFilterFrontendOperation) Describe() string {
-	filterType := "unknown"
+	filterType := unknownFallback
 	if op.Filter != nil && op.Filter.Type != "" {
 		filterType = op.Filter.Type
 	}
@@ -181,7 +189,7 @@ func (op *UpdateFilterFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateFilterFrontendOperation) Section() string {
-	return "filter"
+	return sectionFilter
 }
 
 // Priority implements Operation.Priority.
@@ -190,6 +198,8 @@ func (op *UpdateFilterFrontendOperation) Priority() int {
 }
 
 // Execute updates the filter via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other filter operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateFilterFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Filter == nil {
 		return fmt.Errorf("filter is nil")
@@ -229,7 +239,7 @@ func (op *UpdateFilterFrontendOperation) Execute(ctx context.Context, c *client.
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateFilterFrontendOperation) Describe() string {
-	filterType := "unknown"
+	filterType := unknownFallback
 	if op.Filter != nil && op.Filter.Type != "" {
 		filterType = op.Filter.Type
 	}
@@ -259,7 +269,7 @@ func (op *CreateFilterBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateFilterBackendOperation) Section() string {
-	return "filter"
+	return sectionFilter
 }
 
 // Priority implements Operation.Priority.
@@ -268,6 +278,8 @@ func (op *CreateFilterBackendOperation) Priority() int {
 }
 
 // Execute creates the filter via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other filter operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateFilterBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Filter == nil {
 		return fmt.Errorf("filter is nil")
@@ -307,7 +319,7 @@ func (op *CreateFilterBackendOperation) Execute(ctx context.Context, c *client.D
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateFilterBackendOperation) Describe() string {
-	filterType := "unknown"
+	filterType := unknownFallback
 	if op.Filter != nil && op.Filter.Type != "" {
 		filterType = op.Filter.Type
 	}
@@ -337,7 +349,7 @@ func (op *DeleteFilterBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteFilterBackendOperation) Section() string {
-	return "filter"
+	return sectionFilter
 }
 
 // Priority implements Operation.Priority.
@@ -371,7 +383,7 @@ func (op *DeleteFilterBackendOperation) Execute(ctx context.Context, c *client.D
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteFilterBackendOperation) Describe() string {
-	filterType := "unknown"
+	filterType := unknownFallback
 	if op.Filter != nil && op.Filter.Type != "" {
 		filterType = op.Filter.Type
 	}
@@ -401,7 +413,7 @@ func (op *UpdateFilterBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateFilterBackendOperation) Section() string {
-	return "filter"
+	return sectionFilter
 }
 
 // Priority implements Operation.Priority.
@@ -410,6 +422,8 @@ func (op *UpdateFilterBackendOperation) Priority() int {
 }
 
 // Execute updates the filter via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other filter operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateFilterBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Filter == nil {
 		return fmt.Errorf("filter is nil")
@@ -449,7 +463,7 @@ func (op *UpdateFilterBackendOperation) Execute(ctx context.Context, c *client.D
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateFilterBackendOperation) Describe() string {
-	filterType := "unknown"
+	filterType := unknownFallback
 	if op.Filter != nil && op.Filter.Type != "" {
 		filterType = op.Filter.Type
 	}

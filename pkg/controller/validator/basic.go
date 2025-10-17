@@ -50,7 +50,7 @@ func NewBasicValidator(bus *busevents.EventBus, logger *slog.Logger) *BasicValid
 
 // HandleRequest processes a ConfigValidationRequest by validating basic structure.
 // This implements the ValidationHandler interface.
-func (v *BasicValidator) HandleRequest(req events.ConfigValidationRequest) {
+func (v *BasicValidator) HandleRequest(req *events.ConfigValidationRequest) {
 	start := time.Now()
 	v.logger.Debug("Validating basic structure", "version", req.Version)
 

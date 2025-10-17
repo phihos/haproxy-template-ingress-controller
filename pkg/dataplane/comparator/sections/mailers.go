@@ -1,3 +1,4 @@
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -14,6 +15,10 @@ import (
 // PriorityMailers defines priority for mailers sections.
 // Mailers should be created early as they might be referenced by other sections.
 const PriorityMailers = 15
+
+const (
+	sectionMailers = "mailers"
+)
 
 // CreateMailersOperation represents creating a new mailers section.
 type CreateMailersOperation struct {
@@ -34,7 +39,7 @@ func (op *CreateMailersOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateMailersOperation) Section() string {
-	return "mailers"
+	return sectionMailers
 }
 
 // Priority implements Operation.Priority.
@@ -93,7 +98,7 @@ func (op *CreateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateMailersOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Mailers.Name != "" {
 		name = op.Mailers.Name
 	}
@@ -119,7 +124,7 @@ func (op *DeleteMailersOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteMailersOperation) Section() string {
-	return "mailers"
+	return sectionMailers
 }
 
 // Priority implements Operation.Priority.
@@ -168,7 +173,7 @@ func (op *DeleteMailersOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteMailersOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Mailers.Name != "" {
 		name = op.Mailers.Name
 	}
@@ -194,7 +199,7 @@ func (op *UpdateMailersOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateMailersOperation) Section() string {
-	return "mailers"
+	return sectionMailers
 }
 
 // Priority implements Operation.Priority.
@@ -253,7 +258,7 @@ func (op *UpdateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateMailersOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Mailers.Name != "" {
 		name = op.Mailers.Name
 	}

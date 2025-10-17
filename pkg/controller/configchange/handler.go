@@ -82,9 +82,9 @@ func (h *ConfigChangeHandler) Start(ctx context.Context) {
 			return
 		case event := <-eventCh:
 			switch e := event.(type) {
-			case events.ConfigParsedEvent:
+			case *events.ConfigParsedEvent:
 				h.handleConfigParsed(ctx, e)
-			case events.ConfigValidatedEvent:
+			case *events.ConfigValidatedEvent:
 				h.handleConfigValidated(e)
 			}
 		}
@@ -97,7 +97,7 @@ func (h *ConfigChangeHandler) Stop() {
 }
 
 // handleConfigParsed coordinates validation for a parsed config using scatter-gather pattern.
-func (h *ConfigChangeHandler) handleConfigParsed(ctx context.Context, event events.ConfigParsedEvent) {
+func (h *ConfigChangeHandler) handleConfigParsed(ctx context.Context, event *events.ConfigParsedEvent) {
 	// If no validators are configured, skip validation and immediately publish validated event
 	if len(h.validators) == 0 {
 		h.logger.Debug("No validators configured, skipping validation", "version", event.Version)
@@ -143,7 +143,7 @@ func (h *ConfigChangeHandler) handleConfigParsed(ctx context.Context, event even
 	allValid := true
 
 	for _, resp := range result.Responses {
-		validationResp, ok := resp.(events.ConfigValidationResponse)
+		validationResp, ok := resp.(*events.ConfigValidationResponse)
 		if !ok {
 			h.logger.Warn("Received non-ConfigValidationResponse",
 				"type", fmt.Sprintf("%T", resp))
@@ -180,7 +180,7 @@ func (h *ConfigChangeHandler) handleConfigParsed(ctx context.Context, event even
 }
 
 // handleConfigValidated signals controller reinitialization when config is validated.
-func (h *ConfigChangeHandler) handleConfigValidated(event events.ConfigValidatedEvent) {
+func (h *ConfigChangeHandler) handleConfigValidated(event *events.ConfigValidatedEvent) {
 	h.logger.Info("Config validated, signaling controller reinitialization",
 		"version", event.Version)
 

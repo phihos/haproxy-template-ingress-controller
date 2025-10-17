@@ -18,7 +18,7 @@ type ValidationHandler interface {
 	// HandleRequest processes a ConfigValidationRequest and publishes a response.
 	// The implementation should validate the config and publish a ConfigValidationResponse
 	// event to the bus.
-	HandleRequest(req events.ConfigValidationRequest)
+	HandleRequest(req *events.ConfigValidationRequest)
 }
 
 // BaseValidator provides common event loop infrastructure for all validators.
@@ -97,32 +97,35 @@ func (v *BaseValidator) Start(ctx context.Context) {
 			v.logger.Info(fmt.Sprintf("%s component stopped", v.description))
 			return
 		case event := <-eventCh:
-			// Handle ConfigValidationRequest events using scatter-gather pattern
-			// Wrap in anonymous function to enable panic recovery
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						v.logger.Error(fmt.Sprintf("%s panicked during validation", v.name),
-							"panic", r,
-							"event_type", fmt.Sprintf("%T", event))
-
-						// Publish error response to prevent scatter-gather timeout
-						if req, ok := event.(events.ConfigValidationRequest); ok {
-							response := events.NewConfigValidationResponse(
-								req.RequestID(),
-								v.name,
-								false,
-								[]string{fmt.Sprintf("validator panicked: %v", r)},
-							)
-							v.bus.Publish(response)
-						}
-					}
-				}()
-				if req, ok := event.(events.ConfigValidationRequest); ok {
-					v.handler.HandleRequest(req)
-				}
-			}()
+			v.handleEvent(event)
 		}
+	}
+}
+
+// handleEvent processes a single event with panic recovery.
+// Filters for ConfigValidationRequest events and delegates to the ValidationHandler.
+func (v *BaseValidator) handleEvent(event busevents.Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			v.logger.Error(fmt.Sprintf("%s panicked during validation", v.name),
+				"panic", r,
+				"event_type", fmt.Sprintf("%T", event))
+
+			// Publish error response to prevent scatter-gather timeout
+			if req, ok := event.(*events.ConfigValidationRequest); ok {
+				response := events.NewConfigValidationResponse(
+					req.RequestID(),
+					v.name,
+					false,
+					[]string{fmt.Sprintf("validator panicked: %v", r)},
+				)
+				v.bus.Publish(response)
+			}
+		}
+	}()
+
+	if req, ok := event.(*events.ConfigValidationRequest); ok {
+		v.handler.HandleRequest(req)
 	}
 }
 

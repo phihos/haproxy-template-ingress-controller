@@ -1,6 +1,10 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
+
+// Section operation files follow similar patterns - each implements type-specific HAProxy API wrappers
 
 import (
 	"context"
@@ -11,6 +15,10 @@ import (
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+)
+
+const (
+	sectionDefaults = "defaults"
 )
 
 // CreateDefaultsOperation represents creating a new defaults section.
@@ -32,7 +40,7 @@ func (op *CreateDefaultsOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateDefaultsOperation) Section() string {
-	return "defaults"
+	return sectionDefaults
 }
 
 // Priority implements Operation.Priority.
@@ -84,7 +92,7 @@ func (op *CreateDefaultsOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateDefaultsOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Defaults.Name != "" {
 		name = op.Defaults.Name
 	}
@@ -110,7 +118,7 @@ func (op *DeleteDefaultsOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteDefaultsOperation) Section() string {
-	return "defaults"
+	return sectionDefaults
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteDefaultsOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteDefaultsOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Defaults.Name != "" {
 		name = op.Defaults.Name
 	}
@@ -177,7 +185,7 @@ func (op *UpdateDefaultsOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateDefaultsOperation) Section() string {
-	return "defaults"
+	return sectionDefaults
 }
 
 // Priority implements Operation.Priority.
@@ -228,7 +236,7 @@ func (op *UpdateDefaultsOperation) Execute(ctx context.Context, c *client.Datapl
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateDefaultsOperation) Describe() string {
-	name := "unknown"
+	name := unknownFallback
 	if op.Defaults.Name != "" {
 		name = op.Defaults.Name
 	}

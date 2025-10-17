@@ -13,6 +13,11 @@ import (
 	"haproxy-template-ic/pkg/dataplane/client"
 )
 
+const (
+	sectionTCPRequestRule  = "tcp-request-rule"
+	sectionTCPResponseRule = "tcp-response-rule"
+)
+
 // CreateTCPRequestRuleFrontendOperation represents creating a new TCP request rule in a frontend.
 type CreateTCPRequestRuleFrontendOperation struct {
 	FrontendName string
@@ -36,7 +41,7 @@ func (op *CreateTCPRequestRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateTCPRequestRuleFrontendOperation) Section() string {
-	return "tcp-request-rule"
+	return sectionTCPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -45,6 +50,8 @@ func (op *CreateTCPRequestRuleFrontendOperation) Priority() int {
 }
 
 // Execute creates the TCP request rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP request rule is nil")
@@ -84,7 +91,7 @@ func (op *CreateTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateTCPRequestRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -114,7 +121,7 @@ func (op *DeleteTCPRequestRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteTCPRequestRuleFrontendOperation) Section() string {
-	return "tcp-request-rule"
+	return sectionTCPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -148,7 +155,7 @@ func (op *DeleteTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteTCPRequestRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -178,7 +185,7 @@ func (op *UpdateTCPRequestRuleFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateTCPRequestRuleFrontendOperation) Section() string {
-	return "tcp-request-rule"
+	return sectionTCPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -187,6 +194,8 @@ func (op *UpdateTCPRequestRuleFrontendOperation) Priority() int {
 }
 
 // Execute updates the TCP request rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP request rule is nil")
@@ -226,7 +235,7 @@ func (op *UpdateTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateTCPRequestRuleFrontendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -256,7 +265,7 @@ func (op *CreateTCPRequestRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateTCPRequestRuleBackendOperation) Section() string {
-	return "tcp-request-rule"
+	return sectionTCPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -265,6 +274,8 @@ func (op *CreateTCPRequestRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the TCP request rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP request rule is nil")
@@ -304,7 +315,7 @@ func (op *CreateTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateTCPRequestRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -334,7 +345,7 @@ func (op *DeleteTCPRequestRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteTCPRequestRuleBackendOperation) Section() string {
-	return "tcp-request-rule"
+	return sectionTCPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -368,7 +379,7 @@ func (op *DeleteTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteTCPRequestRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -398,7 +409,7 @@ func (op *UpdateTCPRequestRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateTCPRequestRuleBackendOperation) Section() string {
-	return "tcp-request-rule"
+	return sectionTCPRequestRule
 }
 
 // Priority implements Operation.Priority.
@@ -407,6 +418,8 @@ func (op *UpdateTCPRequestRuleBackendOperation) Priority() int {
 }
 
 // Execute updates the TCP request rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP request rule is nil")
@@ -446,7 +459,7 @@ func (op *UpdateTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateTCPRequestRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -476,7 +489,7 @@ func (op *CreateTCPResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateTCPResponseRuleBackendOperation) Section() string {
-	return "tcp-response-rule"
+	return sectionTCPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -485,6 +498,8 @@ func (op *CreateTCPResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the TCP response rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateTCPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP response rule is nil")
@@ -524,7 +539,7 @@ func (op *CreateTCPResponseRuleBackendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateTCPResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -554,7 +569,7 @@ func (op *DeleteTCPResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteTCPResponseRuleBackendOperation) Section() string {
-	return "tcp-response-rule"
+	return sectionTCPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -588,7 +603,7 @@ func (op *DeleteTCPResponseRuleBackendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteTCPResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -618,7 +633,7 @@ func (op *UpdateTCPResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateTCPResponseRuleBackendOperation) Section() string {
-	return "tcp-response-rule"
+	return sectionTCPResponseRule
 }
 
 // Priority implements Operation.Priority.
@@ -627,6 +642,8 @@ func (op *UpdateTCPResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute updates the TCP response rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateTCPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP response rule is nil")
@@ -666,7 +683,7 @@ func (op *UpdateTCPResponseRuleBackendOperation) Execute(ctx context.Context, c 
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateTCPResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}

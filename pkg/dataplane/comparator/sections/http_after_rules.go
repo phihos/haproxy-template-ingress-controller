@@ -1,5 +1,7 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -15,6 +17,10 @@ import (
 
 // PriorityHTTPAfterRule defines the priority for HTTP after response rule operations.
 const PriorityHTTPAfterRule = 60
+
+const (
+	sectionHTTPAfterRule = "http-after-response-rule"
+)
 
 // CreateHTTPAfterResponseRuleBackendOperation represents creating a new HTTP after response rule in a backend.
 type CreateHTTPAfterResponseRuleBackendOperation struct {
@@ -39,7 +45,7 @@ func (op *CreateHTTPAfterResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateHTTPAfterResponseRuleBackendOperation) Section() string {
-	return "http-after-response-rule"
+	return sectionHTTPAfterRule
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +54,8 @@ func (op *CreateHTTPAfterResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the HTTP after response rule via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP after response rule is nil")
@@ -87,7 +95,7 @@ func (op *CreateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Conte
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateHTTPAfterResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -117,7 +125,7 @@ func (op *DeleteHTTPAfterResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteHTTPAfterResponseRuleBackendOperation) Section() string {
-	return "http-after-response-rule"
+	return sectionHTTPAfterRule
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Conte
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteHTTPAfterResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}
@@ -181,7 +189,7 @@ func (op *UpdateHTTPAfterResponseRuleBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateHTTPAfterResponseRuleBackendOperation) Section() string {
-	return "http-after-response-rule"
+	return sectionHTTPAfterRule
 }
 
 // Priority implements Operation.Priority.
@@ -229,7 +237,7 @@ func (op *UpdateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Conte
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateHTTPAfterResponseRuleBackendOperation) Describe() string {
-	ruleType := "unknown"
+	ruleType := unknownFallback
 	if op.Rule != nil && op.Rule.Type != "" {
 		ruleType = op.Rule.Type
 	}

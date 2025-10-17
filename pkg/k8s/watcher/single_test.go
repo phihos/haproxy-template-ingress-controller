@@ -130,7 +130,7 @@ func TestNewSingle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewSingle(tt.config, tt.client)
+			_, err := NewSingle(&tt.config, tt.client)
 			if tt.expectErr && err == nil {
 				t.Error("expected error but got nil")
 			}
@@ -171,7 +171,7 @@ func TestSingleWatcher_IsSynced(t *testing.T) {
 		},
 	}
 
-	w, err := NewSingle(cfg, k8sClient)
+	w, err := NewSingle(&cfg, k8sClient)
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestSingleWatcher_WaitForSyncTimeout(t *testing.T) {
 		},
 	}
 
-	w, err := NewSingle(cfg, k8sClient)
+	w, err := NewSingle(&cfg, k8sClient)
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestSingleWatcher_NoAddCallbacksDuringSync(t *testing.T) {
 		},
 	}
 
-	w, err := NewSingle(cfg, k8sClient)
+	w, err := NewSingle(&cfg, k8sClient)
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestSingleWatcher_NoUpdateCallbacksDuringSync(t *testing.T) {
 		},
 	}
 
-	w, err := NewSingle(cfg, k8sClient)
+	w, err := NewSingle(&cfg, k8sClient)
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
@@ -526,7 +526,7 @@ func TestSingleWatcher_NoDeleteCallbacksDuringSync(t *testing.T) {
 		},
 	}
 
-	w, err := NewSingle(cfg, k8sClient)
+	w, err := NewSingle(&cfg, k8sClient)
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
@@ -578,7 +578,7 @@ func TestSingleWatcher_StopIdempotency(t *testing.T) {
 		},
 	}
 
-	w, err := NewSingle(cfg, k8sClient)
+	w, err := NewSingle(&cfg, k8sClient)
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
@@ -625,7 +625,7 @@ func TestSingleWatcher_ConcurrentCallbacks(t *testing.T) {
 		},
 	}
 
-	w, err := NewSingle(cfg, k8sClient)
+	w, err := NewSingle(&cfg, k8sClient)
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
@@ -695,7 +695,7 @@ func TestSingleWatcher_StartIdempotency(t *testing.T) {
 		},
 	}
 
-	w, err := NewSingle(cfg, k8sClient)
+	w, err := NewSingle(&cfg, k8sClient)
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}

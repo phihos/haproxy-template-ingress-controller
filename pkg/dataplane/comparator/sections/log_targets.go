@@ -16,6 +16,10 @@ import (
 // PriorityLogTarget defines the priority for log target operations.
 const PriorityLogTarget = 60
 
+const (
+	sectionLogTarget = "log-target"
+)
+
 // CreateLogTargetFrontendOperation represents creating a new log target in a frontend.
 type CreateLogTargetFrontendOperation struct {
 	FrontendName string
@@ -39,7 +43,7 @@ func (op *CreateLogTargetFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateLogTargetFrontendOperation) Section() string {
-	return "log-target"
+	return sectionLogTarget
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +52,8 @@ func (op *CreateLogTargetFrontendOperation) Priority() int {
 }
 
 // Execute creates the log target via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other log target operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateLogTargetFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.LogTarget == nil {
 		return fmt.Errorf("log target is nil")
@@ -87,7 +93,7 @@ func (op *CreateLogTargetFrontendOperation) Execute(ctx context.Context, c *clie
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateLogTargetFrontendOperation) Describe() string {
-	address := "unknown"
+	address := unknownFallback
 	if op.LogTarget != nil && op.LogTarget.Address != "" {
 		address = op.LogTarget.Address
 	}
@@ -117,7 +123,7 @@ func (op *DeleteLogTargetFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteLogTargetFrontendOperation) Section() string {
-	return "log-target"
+	return sectionLogTarget
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +157,7 @@ func (op *DeleteLogTargetFrontendOperation) Execute(ctx context.Context, c *clie
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteLogTargetFrontendOperation) Describe() string {
-	address := "unknown"
+	address := unknownFallback
 	if op.LogTarget != nil && op.LogTarget.Address != "" {
 		address = op.LogTarget.Address
 	}
@@ -181,7 +187,7 @@ func (op *UpdateLogTargetFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateLogTargetFrontendOperation) Section() string {
-	return "log-target"
+	return sectionLogTarget
 }
 
 // Priority implements Operation.Priority.
@@ -190,6 +196,8 @@ func (op *UpdateLogTargetFrontendOperation) Priority() int {
 }
 
 // Execute updates the log target via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other log target operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateLogTargetFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.LogTarget == nil {
 		return fmt.Errorf("log target is nil")
@@ -229,7 +237,7 @@ func (op *UpdateLogTargetFrontendOperation) Execute(ctx context.Context, c *clie
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateLogTargetFrontendOperation) Describe() string {
-	address := "unknown"
+	address := unknownFallback
 	if op.LogTarget != nil && op.LogTarget.Address != "" {
 		address = op.LogTarget.Address
 	}
@@ -259,7 +267,7 @@ func (op *CreateLogTargetBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateLogTargetBackendOperation) Section() string {
-	return "log-target"
+	return sectionLogTarget
 }
 
 // Priority implements Operation.Priority.
@@ -268,6 +276,8 @@ func (op *CreateLogTargetBackendOperation) Priority() int {
 }
 
 // Execute creates the log target via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other log target operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateLogTargetBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.LogTarget == nil {
 		return fmt.Errorf("log target is nil")
@@ -307,7 +317,7 @@ func (op *CreateLogTargetBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateLogTargetBackendOperation) Describe() string {
-	address := "unknown"
+	address := unknownFallback
 	if op.LogTarget != nil && op.LogTarget.Address != "" {
 		address = op.LogTarget.Address
 	}
@@ -337,7 +347,7 @@ func (op *DeleteLogTargetBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteLogTargetBackendOperation) Section() string {
-	return "log-target"
+	return sectionLogTarget
 }
 
 // Priority implements Operation.Priority.
@@ -371,7 +381,7 @@ func (op *DeleteLogTargetBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteLogTargetBackendOperation) Describe() string {
-	address := "unknown"
+	address := unknownFallback
 	if op.LogTarget != nil && op.LogTarget.Address != "" {
 		address = op.LogTarget.Address
 	}
@@ -401,7 +411,7 @@ func (op *UpdateLogTargetBackendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateLogTargetBackendOperation) Section() string {
-	return "log-target"
+	return sectionLogTarget
 }
 
 // Priority implements Operation.Priority.
@@ -410,6 +420,8 @@ func (op *UpdateLogTargetBackendOperation) Priority() int {
 }
 
 // Execute updates the log target via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other log target operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateLogTargetBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.LogTarget == nil {
 		return fmt.Errorf("log target is nil")
@@ -449,7 +461,7 @@ func (op *UpdateLogTargetBackendOperation) Execute(ctx context.Context, c *clien
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateLogTargetBackendOperation) Describe() string {
-	address := "unknown"
+	address := unknownFallback
 	if op.LogTarget != nil && op.LogTarget.Address != "" {
 		address = op.LogTarget.Address
 	}

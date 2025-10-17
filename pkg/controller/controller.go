@@ -228,7 +228,7 @@ func runIteration(
 	// 7. Create watchers for ConfigMap and Secret
 	// Callbacks publish events to the EventBus
 
-	configMapWatcher, err := watcher.NewSingle(types.SingleWatcherConfig{
+	configMapWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
 		GVR:       configMapGVR,
 		Namespace: k8sClient.Namespace(),
 		Name:      configMapName,
@@ -241,7 +241,7 @@ func runIteration(
 		return fmt.Errorf("failed to create ConfigMap watcher: %w", err)
 	}
 
-	secretWatcher, err := watcher.NewSingle(types.SingleWatcherConfig{
+	secretWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
 		GVR:       secretGVR,
 		Namespace: k8sClient.Namespace(),
 		Name:      secretName,

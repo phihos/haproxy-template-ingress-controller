@@ -2,11 +2,15 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+)
+
+const (
+	sectionBind = "bind"
+	sslPrefix   = " ssl"
 )
 
 // ==================== CREATE BIND OPERATIONS ====================
@@ -18,7 +22,7 @@ type CreateBindFrontendOperation struct {
 	BindName     string
 }
 
-func NewCreateBindFrontendOperation(frontendName string, bindName string, bind *dataplaneapi.Bind) *CreateBindFrontendOperation {
+func NewCreateBindFrontendOperation(frontendName, bindName string, bind *dataplaneapi.Bind) *CreateBindFrontendOperation {
 	return &CreateBindFrontendOperation{
 		FrontendName: frontendName,
 		BindName:     bindName,
@@ -31,7 +35,7 @@ func (op *CreateBindFrontendOperation) Type() OperationType {
 }
 
 func (op *CreateBindFrontendOperation) Section() string {
-	return "bind"
+	return sectionBind
 }
 
 func (op *CreateBindFrontendOperation) Priority() int {
@@ -71,7 +75,7 @@ func (op *CreateBindFrontendOperation) Describe() string {
 
 	// Add SSL info if present
 	if op.Bind.Ssl != nil && *op.Bind.Ssl {
-		sslInfo := " ssl"
+		sslInfo := sslPrefix
 		if op.Bind.SslCertificate != nil {
 			sslInfo += fmt.Sprintf(" crt %s", *op.Bind.SslCertificate)
 		}
@@ -90,7 +94,7 @@ type DeleteBindFrontendOperation struct {
 	Bind         *dataplaneapi.Bind // Kept for description purposes
 }
 
-func NewDeleteBindFrontendOperation(frontendName string, bindName string, bind *dataplaneapi.Bind) *DeleteBindFrontendOperation {
+func NewDeleteBindFrontendOperation(frontendName, bindName string, bind *dataplaneapi.Bind) *DeleteBindFrontendOperation {
 	return &DeleteBindFrontendOperation{
 		FrontendName: frontendName,
 		BindName:     bindName,
@@ -103,7 +107,7 @@ func (op *DeleteBindFrontendOperation) Type() OperationType {
 }
 
 func (op *DeleteBindFrontendOperation) Section() string {
-	return "bind"
+	return sectionBind
 }
 
 func (op *DeleteBindFrontendOperation) Priority() int {
@@ -144,7 +148,7 @@ func (op *DeleteBindFrontendOperation) Describe() string {
 
 		// Add SSL info if present
 		if op.Bind.Ssl != nil && *op.Bind.Ssl {
-			sslInfo := " ssl"
+			sslInfo := sslPrefix
 			if op.Bind.SslCertificate != nil {
 				sslInfo += fmt.Sprintf(" crt %s", *op.Bind.SslCertificate)
 			}
@@ -166,7 +170,7 @@ type UpdateBindFrontendOperation struct {
 	Bind         *dataplaneapi.Bind
 }
 
-func NewUpdateBindFrontendOperation(frontendName string, bindName string, bind *dataplaneapi.Bind) *UpdateBindFrontendOperation {
+func NewUpdateBindFrontendOperation(frontendName, bindName string, bind *dataplaneapi.Bind) *UpdateBindFrontendOperation {
 	return &UpdateBindFrontendOperation{
 		FrontendName: frontendName,
 		BindName:     bindName,
@@ -179,7 +183,7 @@ func (op *UpdateBindFrontendOperation) Type() OperationType {
 }
 
 func (op *UpdateBindFrontendOperation) Section() string {
-	return "bind"
+	return sectionBind
 }
 
 func (op *UpdateBindFrontendOperation) Priority() int {
@@ -219,7 +223,7 @@ func (op *UpdateBindFrontendOperation) Describe() string {
 
 	// Add SSL info if present
 	if op.Bind.Ssl != nil && *op.Bind.Ssl {
-		sslInfo := " ssl"
+		sslInfo := sslPrefix
 		if op.Bind.SslCertificate != nil {
 			sslInfo += fmt.Sprintf(" crt %s", *op.Bind.SslCertificate)
 		}
@@ -230,47 +234,3 @@ func (op *UpdateBindFrontendOperation) Describe() string {
 }
 
 // ==================== HELPER FUNCTIONS ====================
-
-// bindToString creates a human-readable string representation of a bind configuration.
-func bindToString(bind *dataplaneapi.Bind) string {
-	if bind == nil {
-		return "unknown"
-	}
-
-	bindDesc := ""
-	if bind.Address != nil && bind.Port != nil {
-		bindDesc = fmt.Sprintf("%s:%d", *bind.Address, *bind.Port)
-	} else if bind.Port != nil {
-		bindDesc = fmt.Sprintf("*:%d", *bind.Port)
-	} else if bind.Name != nil {
-		bindDesc = *bind.Name
-	} else {
-		return "unknown"
-	}
-
-	// Add SSL info if present
-	if bind.Ssl != nil && *bind.Ssl {
-		sslInfo := " ssl"
-		if bind.SslCertificate != nil {
-			sslInfo += fmt.Sprintf(" crt %s", *bind.SslCertificate)
-		}
-		bindDesc += sslInfo
-	}
-
-	return bindDesc
-}
-
-// convertToAPIBind converts a models.Bind to dataplaneapi.Bind using JSON marshaling.
-func convertToAPIBind(modelBind interface{}) (*dataplaneapi.Bind, error) {
-	data, err := json.Marshal(modelBind)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal bind: %w", err)
-	}
-
-	var apiBind dataplaneapi.Bind
-	if err := json.Unmarshal(data, &apiBind); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal bind: %w", err)
-	}
-
-	return &apiBind, nil
-}

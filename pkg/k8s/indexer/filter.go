@@ -71,11 +71,12 @@ func (f *FieldFilter) removeField(rv reflect.Value, pattern string) error {
 	// Navigate to parent of target field
 	parent := rv
 	for i := 0; i < len(segments)-1; i++ {
-		var err error
-		parent, err = f.navigateToField(parent, segments[i])
-		if err != nil {
-			// Field doesn't exist, nothing to remove
-			return nil
+		var navigateErr error
+		parent, navigateErr = f.navigateToField(parent, segments[i])
+		if navigateErr != nil {
+			// Field doesn't exist, nothing to remove - this is not an error
+			// Intentionally return nil (not navigateErr) since missing fields are acceptable
+			return nil //nolint:nilerr // Missing fields are not errors during filtering
 		}
 	}
 

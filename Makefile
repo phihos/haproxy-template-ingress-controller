@@ -38,8 +38,7 @@ lint: ## Run all linters (golangci-lint + arch-go)
 	@echo "Running golangci-lint..."
 	$(GOLANGCI_LINT) run
 	@echo "Running arch-go..."
-	@command -v arch-go >/dev/null 2>&1 || $(GO) install github.com/arch-go/arch-go@latest
-	@arch-go
+	$(ARCH_GO)
 
 lint-fix: ## Run golangci-lint with auto-fix
 	@echo "Running golangci-lint with auto-fix..."

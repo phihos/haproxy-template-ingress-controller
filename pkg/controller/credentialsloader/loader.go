@@ -68,7 +68,7 @@ func (c *CredentialsLoaderComponent) Start(ctx context.Context) {
 			c.logger.Info("CredentialsLoader component stopped")
 			return
 		case event := <-eventCh:
-			if secretEvent, ok := event.(events.SecretResourceChangedEvent); ok {
+			if secretEvent, ok := event.(*events.SecretResourceChangedEvent); ok {
 				c.processSecretChange(secretEvent)
 			}
 		}
@@ -81,7 +81,7 @@ func (c *CredentialsLoaderComponent) Stop() {
 }
 
 // processSecretChange handles a SecretResourceChangedEvent by parsing the Secret.
-func (c *CredentialsLoaderComponent) processSecretChange(event events.SecretResourceChangedEvent) {
+func (c *CredentialsLoaderComponent) processSecretChange(event *events.SecretResourceChangedEvent) {
 	// Extract unstructured resource
 	resource, ok := event.Resource.(*unstructured.Unstructured)
 	if !ok {

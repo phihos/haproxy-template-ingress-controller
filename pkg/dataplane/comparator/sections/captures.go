@@ -1,5 +1,7 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
+//
+//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -15,6 +17,10 @@ import (
 
 // PriorityCapture defines the priority for capture operations.
 const PriorityCapture = 60
+
+const (
+	sectionCapture = "capture"
+)
 
 // CreateCaptureFrontendOperation represents creating a new capture in a frontend.
 type CreateCaptureFrontendOperation struct {
@@ -39,7 +45,7 @@ func (op *CreateCaptureFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateCaptureFrontendOperation) Section() string {
-	return "capture"
+	return sectionCapture
 }
 
 // Priority implements Operation.Priority.
@@ -48,6 +54,8 @@ func (op *CreateCaptureFrontendOperation) Priority() int {
 }
 
 // Execute creates the capture via the Dataplane API.
+//
+//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateCaptureFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Capture == nil {
 		return fmt.Errorf("capture is nil")
@@ -87,7 +95,7 @@ func (op *CreateCaptureFrontendOperation) Execute(ctx context.Context, c *client
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateCaptureFrontendOperation) Describe() string {
-	captureType := "unknown"
+	captureType := unknownFallback
 	if op.Capture != nil && op.Capture.Type != "" {
 		captureType = op.Capture.Type
 	}
@@ -117,7 +125,7 @@ func (op *DeleteCaptureFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteCaptureFrontendOperation) Section() string {
-	return "capture"
+	return sectionCapture
 }
 
 // Priority implements Operation.Priority.
@@ -151,7 +159,7 @@ func (op *DeleteCaptureFrontendOperation) Execute(ctx context.Context, c *client
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteCaptureFrontendOperation) Describe() string {
-	captureType := "unknown"
+	captureType := unknownFallback
 	if op.Capture != nil && op.Capture.Type != "" {
 		captureType = op.Capture.Type
 	}
@@ -181,7 +189,7 @@ func (op *UpdateCaptureFrontendOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateCaptureFrontendOperation) Section() string {
-	return "capture"
+	return sectionCapture
 }
 
 // Priority implements Operation.Priority.
@@ -229,7 +237,7 @@ func (op *UpdateCaptureFrontendOperation) Execute(ctx context.Context, c *client
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateCaptureFrontendOperation) Describe() string {
-	captureType := "unknown"
+	captureType := unknownFallback
 	if op.Capture != nil && op.Capture.Type != "" {
 		captureType = op.Capture.Type
 	}

@@ -11,6 +11,10 @@ import (
 	"haproxy-template-ic/pkg/dataplane/client"
 )
 
+const (
+	sectionServerTemplate = "server-template"
+)
+
 // CreateServerTemplateOperation represents creating a new server template in a backend.
 type CreateServerTemplateOperation struct {
 	BackendName    string
@@ -32,7 +36,7 @@ func (op *CreateServerTemplateOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *CreateServerTemplateOperation) Section() string {
-	return "server-template"
+	return sectionServerTemplate
 }
 
 // Priority implements Operation.Priority.
@@ -94,7 +98,7 @@ func (op *CreateServerTemplateOperation) Execute(ctx context.Context, c *client.
 
 // Describe returns a human-readable description of this operation.
 func (op *CreateServerTemplateOperation) Describe() string {
-	prefix := "unknown"
+	prefix := unknownFallback
 	if op.ServerTemplate.Prefix != "" {
 		prefix = op.ServerTemplate.Prefix
 	}
@@ -122,7 +126,7 @@ func (op *DeleteServerTemplateOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *DeleteServerTemplateOperation) Section() string {
-	return "server-template"
+	return sectionServerTemplate
 }
 
 // Priority implements Operation.Priority.
@@ -174,7 +178,7 @@ func (op *DeleteServerTemplateOperation) Execute(ctx context.Context, c *client.
 
 // Describe returns a human-readable description of this operation.
 func (op *DeleteServerTemplateOperation) Describe() string {
-	prefix := "unknown"
+	prefix := unknownFallback
 	if op.ServerTemplate.Prefix != "" {
 		prefix = op.ServerTemplate.Prefix
 	}
@@ -202,7 +206,7 @@ func (op *UpdateServerTemplateOperation) Type() OperationType {
 
 // Section implements Operation.Section.
 func (op *UpdateServerTemplateOperation) Section() string {
-	return "server-template"
+	return sectionServerTemplate
 }
 
 // Priority implements Operation.Priority.
@@ -264,7 +268,7 @@ func (op *UpdateServerTemplateOperation) Execute(ctx context.Context, c *client.
 
 // Describe returns a human-readable description of this operation.
 func (op *UpdateServerTemplateOperation) Describe() string {
-	prefix := "unknown"
+	prefix := unknownFallback
 	if op.ServerTemplate.Prefix != "" {
 		prefix = op.ServerTemplate.Prefix
 	}

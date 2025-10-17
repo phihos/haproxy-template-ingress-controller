@@ -15,33 +15,108 @@ import (
 // TestValidationScatterGather tests the full scatter-gather validation flow
 // with all three validators (basic, template, jsonpath) running concurrently.
 func TestValidationScatterGather(t *testing.T) {
-	// Create logger
+	ctx, bus := setupValidationTest(t)
+	cfg := createInvalidTestConfig()
+
+	// Send validation request using scatter-gather
+	req := events.NewConfigValidationRequest(cfg, "test-version")
+	result, err := bus.Request(ctx, req, busevents.RequestOptions{
+		Timeout:            2 * time.Second,
+		ExpectedResponders: AllValidatorNames(),
+	})
+
+	if err != nil {
+		t.Fatalf("Request() returned error: %v", err)
+	}
+
+	// Verify we got responses from all three validators
+	if len(result.Responses) != 3 {
+		t.Errorf("Expected 3 responses, got %d", len(result.Responses))
+	}
+
+	// Collect and verify responses
+	responses := collectValidationResponses(t, result.Responses)
+	verifyInvalidResponse(t, responses, ValidatorNameBasic, "empty match_labels")
+	verifyInvalidResponse(t, responses, ValidatorNameTemplate, "unclosed tag")
+	verifyInvalidResponse(t, responses, ValidatorNameJSONPath, "invalid[[JSONPath")
+
+	// Verify no missing responders
+	if len(result.Errors) > 0 {
+		t.Errorf("Expected no missing responders, got errors: %v", result.Errors)
+	}
+}
+
+// TestValidationScatterGather_ValidConfig tests scatter-gather with a valid config.
+func TestValidationScatterGather_ValidConfig(t *testing.T) {
+	ctx, bus := setupValidationTest(t)
+	cfg := createValidTestConfig()
+
+	// Send validation request
+	req := events.NewConfigValidationRequest(cfg, "test-version")
+	result, err := bus.Request(ctx, req, busevents.RequestOptions{
+		Timeout:            2 * time.Second,
+		ExpectedResponders: AllValidatorNames(),
+	})
+
+	if err != nil {
+		t.Fatalf("Request() returned error: %v", err)
+	}
+
+	// Verify we got responses from all three validators
+	if len(result.Responses) != 3 {
+		t.Errorf("Expected 3 responses, got %d", len(result.Responses))
+	}
+
+	// Verify all validators returned valid=true
+	for _, resp := range result.Responses {
+		validationResp, ok := resp.(*events.ConfigValidationResponse)
+		if !ok {
+			t.Errorf("Response is not ConfigValidationResponse: %T", resp)
+			continue
+		}
+
+		if !validationResp.Valid {
+			t.Errorf("Validator %q reported invalid config, errors: %v",
+				validationResp.ValidatorName, validationResp.Errors)
+		}
+
+		if len(validationResp.Errors) > 0 {
+			t.Errorf("Validator %q returned errors for valid config: %v",
+				validationResp.ValidatorName, validationResp.Errors)
+		}
+	}
+}
+
+// setupValidationTest creates and starts the test environment with all validators.
+func setupValidationTest(t *testing.T) (context.Context, *busevents.EventBus) {
+	t.Helper()
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelError, // Reduce noise in test output
+		Level: slog.LevelError,
 	}))
 
-	// Create EventBus
 	bus := busevents.NewEventBus(100)
 	bus.Start()
 
-	// Create validators
 	basicValidator := NewBasicValidator(bus, logger)
 	templateValidator := NewTemplateValidator(bus, logger)
 	jsonpathValidator := NewJSONPathValidator(bus, logger)
 
-	// Start validators
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	go basicValidator.Start(ctx)
 	go templateValidator.Start(ctx)
 	go jsonpathValidator.Start(ctx)
 
-	// Give validators time to subscribe
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) // Give validators time to subscribe
 
-	// Create an invalid config with errors in all three categories
-	cfg := &coreconfig.Config{
+	return ctx, bus
+}
+
+// createInvalidTestConfig creates a config with errors for all validators.
+func createInvalidTestConfig() *coreconfig.Config {
+	return &coreconfig.Config{
 		PodSelector: coreconfig.PodSelector{
 			MatchLabels: map[string]string{}, // Invalid: empty (basic validator should catch)
 		},
@@ -72,111 +147,11 @@ func TestValidationScatterGather(t *testing.T) {
 			Template: "{{ unclosed tag", // Invalid template (template validator should catch)
 		},
 	}
-
-	// Send validation request using scatter-gather
-	req := events.NewConfigValidationRequest(cfg, "test-version")
-	result, err := bus.Request(ctx, req, busevents.RequestOptions{
-		Timeout:            2 * time.Second,
-		ExpectedResponders: AllValidatorNames(),
-	})
-
-	if err != nil {
-		t.Fatalf("Request() returned error: %v", err)
-	}
-
-	// Verify we got responses from all three validators
-	if len(result.Responses) != 3 {
-		t.Errorf("Expected 3 responses, got %d", len(result.Responses))
-	}
-
-	// Collect responses by validator name
-	responses := make(map[string]events.ConfigValidationResponse)
-	for _, resp := range result.Responses {
-		validationResp, ok := resp.(events.ConfigValidationResponse)
-		if !ok {
-			t.Errorf("Response is not ConfigValidationResponse: %T", resp)
-			continue
-		}
-		responses[validationResp.ValidatorName] = validationResp
-	}
-
-	// Verify basic validator response
-	basicResp, ok := responses[ValidatorNameBasic]
-	if !ok {
-		t.Error("Missing response from basic validator")
-	} else {
-		if basicResp.Valid {
-			t.Error("Basic validator should have found errors (empty match_labels)")
-		}
-		if len(basicResp.Errors) == 0 {
-			t.Error("Basic validator should have returned errors")
-		}
-		t.Logf("Basic validator errors: %v", basicResp.Errors)
-	}
-
-	// Verify template validator response
-	templateResp, ok := responses[ValidatorNameTemplate]
-	if !ok {
-		t.Error("Missing response from template validator")
-	} else {
-		if templateResp.Valid {
-			t.Error("Template validator should have found errors (unclosed tag)")
-		}
-		if len(templateResp.Errors) == 0 {
-			t.Error("Template validator should have returned errors")
-		}
-		t.Logf("Template validator errors: %v", templateResp.Errors)
-	}
-
-	// Verify JSONPath validator response
-	jsonpathResp, ok := responses[ValidatorNameJSONPath]
-	if !ok {
-		t.Error("Missing response from jsonpath validator")
-	} else {
-		if jsonpathResp.Valid {
-			t.Error("JSONPath validator should have found errors (invalid[[JSONPath)")
-		}
-		if len(jsonpathResp.Errors) == 0 {
-			t.Error("JSONPath validator should have returned errors")
-		}
-		t.Logf("JSONPath validator errors: %v", jsonpathResp.Errors)
-	}
-
-	// Verify no missing responders
-	if len(result.Errors) > 0 {
-		t.Errorf("Expected no missing responders, got errors: %v", result.Errors)
-	}
 }
 
-// TestValidationScatterGather_ValidConfig tests scatter-gather with a valid config.
-func TestValidationScatterGather_ValidConfig(t *testing.T) {
-	// Create logger
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelError,
-	}))
-
-	// Create EventBus
-	bus := busevents.NewEventBus(100)
-	bus.Start()
-
-	// Create validators
-	basicValidator := NewBasicValidator(bus, logger)
-	templateValidator := NewTemplateValidator(bus, logger)
-	jsonpathValidator := NewJSONPathValidator(bus, logger)
-
-	// Start validators
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	go basicValidator.Start(ctx)
-	go templateValidator.Start(ctx)
-	go jsonpathValidator.Start(ctx)
-
-	// Give validators time to subscribe
-	time.Sleep(100 * time.Millisecond)
-
-	// Create a valid config
-	cfg := &coreconfig.Config{
+// createValidTestConfig creates a valid config.
+func createValidTestConfig() *coreconfig.Config {
+	return &coreconfig.Config{
 		PodSelector: coreconfig.PodSelector{
 			MatchLabels: map[string]string{
 				"app": "haproxy",
@@ -209,39 +184,39 @@ func TestValidationScatterGather_ValidConfig(t *testing.T) {
 			Template: "frontend http\n  bind *:80\n",
 		},
 	}
+}
 
-	// Send validation request
-	req := events.NewConfigValidationRequest(cfg, "test-version")
-	result, err := bus.Request(ctx, req, busevents.RequestOptions{
-		Timeout:            2 * time.Second,
-		ExpectedResponders: AllValidatorNames(),
-	})
+// collectValidationResponses collects and maps responses by validator name.
+func collectValidationResponses(t *testing.T, responses []busevents.Response) map[string]*events.ConfigValidationResponse {
+	t.Helper()
 
-	if err != nil {
-		t.Fatalf("Request() returned error: %v", err)
-	}
-
-	// Verify we got responses from all three validators
-	if len(result.Responses) != 3 {
-		t.Errorf("Expected 3 responses, got %d", len(result.Responses))
-	}
-
-	// Verify all validators returned valid=true
-	for _, resp := range result.Responses {
-		validationResp, ok := resp.(events.ConfigValidationResponse)
+	result := make(map[string]*events.ConfigValidationResponse)
+	for _, resp := range responses {
+		validationResp, ok := resp.(*events.ConfigValidationResponse)
 		if !ok {
 			t.Errorf("Response is not ConfigValidationResponse: %T", resp)
 			continue
 		}
-
-		if !validationResp.Valid {
-			t.Errorf("Validator %q reported invalid config, errors: %v",
-				validationResp.ValidatorName, validationResp.Errors)
-		}
-
-		if len(validationResp.Errors) > 0 {
-			t.Errorf("Validator %q returned errors for valid config: %v",
-				validationResp.ValidatorName, validationResp.Errors)
-		}
+		result[validationResp.ValidatorName] = validationResp
 	}
+	return result
+}
+
+// verifyInvalidResponse verifies that a validator found errors.
+func verifyInvalidResponse(t *testing.T, responses map[string]*events.ConfigValidationResponse, validatorName, errorContext string) {
+	t.Helper()
+
+	resp, ok := responses[validatorName]
+	if !ok {
+		t.Errorf("Missing response from %s validator", validatorName)
+		return
+	}
+
+	if resp.Valid {
+		t.Errorf("%s validator should have found errors (%s)", validatorName, errorContext)
+	}
+	if len(resp.Errors) == 0 {
+		t.Errorf("%s validator should have returned errors", validatorName)
+	}
+	t.Logf("%s validator errors: %v", validatorName, resp.Errors)
 }

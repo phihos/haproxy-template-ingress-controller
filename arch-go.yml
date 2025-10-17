@@ -65,3 +65,36 @@ dependenciesRules:
         - "**.pkg.dataplane.**"
         - "**.pkg.events.**"
         - "**.pkg.k8s.**"
+
+  # Rule 7: cmd packages can depend on all internal packages (composition root)
+  - package: "**.cmd.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.cmd.**"
+        - "**.pkg.**"
+        - "**.codegen.**"
+
+  # Rule 8: codegen packages should NOT depend on internal packages (generated code)
+  - package: "**.codegen.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.cmd.**"
+        - "**.pkg.**"
+        - "**.tests.**"
+
+  # Rule 9: tests packages can depend on all internal packages
+  - package: "**.tests.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.tests.**"
+        - "**.cmd.**"
+        - "**.pkg.**"
+        - "**.codegen.**"
+
+  # Rule 10: examples packages can depend on all internal packages (demonstration code)
+  - package: "**.examples.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.examples.**"
+        - "**.pkg.**"
+        - "**.codegen.**"

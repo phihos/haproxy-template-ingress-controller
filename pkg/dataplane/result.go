@@ -147,10 +147,9 @@ func (r *SyncResult) String() string {
 	if !r.Success {
 		status = "FAILED"
 	}
-	parts = append(parts, fmt.Sprintf("Status: %s", status))
-
-	// Duration and retries
-	parts = append(parts, fmt.Sprintf("Duration: %s (retries: %d)", r.Duration, r.Retries))
+	parts = append(parts,
+		fmt.Sprintf("Status: %s", status),
+		fmt.Sprintf("Duration: %s (retries: %d)", r.Duration, r.Retries))
 
 	// Fallback indicator
 	if r.FallbackToRaw {
@@ -172,9 +171,10 @@ func (r *SyncResult) String() string {
 
 	// Operations summary
 	if len(r.AppliedOperations) > 0 {
-		parts = append(parts, fmt.Sprintf("\nApplied: %d operations", len(r.AppliedOperations)))
-		parts = append(parts, fmt.Sprintf("  Creates: %d, Updates: %d, Deletes: %d",
-			r.Details.Creates, r.Details.Updates, r.Details.Deletes))
+		parts = append(parts,
+			fmt.Sprintf("\nApplied: %d operations", len(r.AppliedOperations)),
+			fmt.Sprintf("  Creates: %d, Updates: %d, Deletes: %d",
+				r.Details.Creates, r.Details.Updates, r.Details.Deletes))
 	}
 
 	// Details summary
@@ -206,101 +206,86 @@ func (d *DiffDetails) String() string {
 		parts = append(parts, "- Defaults modified")
 	}
 
-	// Frontend changes
-	if len(d.FrontendsAdded) > 0 {
-		parts = append(parts, fmt.Sprintf("- Frontends added: %s", strings.Join(d.FrontendsAdded, ", ")))
-	}
-	if len(d.FrontendsModified) > 0 {
-		parts = append(parts, fmt.Sprintf("- Frontends modified: %s", strings.Join(d.FrontendsModified, ", ")))
-	}
-	if len(d.FrontendsDeleted) > 0 {
-		parts = append(parts, fmt.Sprintf("- Frontends deleted: %s", strings.Join(d.FrontendsDeleted, ", ")))
-	}
+	// Resource changes (frontends, backends)
+	parts = d.appendResourceChanges(parts, d.FrontendsAdded, d.FrontendsModified, d.FrontendsDeleted, "Frontends")
+	parts = d.appendResourceChanges(parts, d.BackendsAdded, d.BackendsModified, d.BackendsDeleted, "Backends")
 
-	// Backend changes
-	if len(d.BackendsAdded) > 0 {
-		parts = append(parts, fmt.Sprintf("- Backends added: %s", strings.Join(d.BackendsAdded, ", ")))
-	}
-	if len(d.BackendsModified) > 0 {
-		parts = append(parts, fmt.Sprintf("- Backends modified: %s", strings.Join(d.BackendsModified, ", ")))
-	}
-	if len(d.BackendsDeleted) > 0 {
-		parts = append(parts, fmt.Sprintf("- Backends deleted: %s", strings.Join(d.BackendsDeleted, ", ")))
-	}
+	// Map-based changes (servers, ACLs)
+	parts = d.appendMapCountChanges(parts, d.ServersAdded, d.ServersModified, d.ServersDeleted, "Servers")
+	parts = d.appendMapCountChanges(parts, d.ACLsAdded, d.ACLsModified, d.ACLsDeleted, "ACLs")
 
-	// Server changes summary
-	totalServersAdded := 0
-	for _, servers := range d.ServersAdded {
-		totalServersAdded += len(servers)
-	}
-	totalServersModified := 0
-	for _, servers := range d.ServersModified {
-		totalServersModified += len(servers)
-	}
-	totalServersDeleted := 0
-	for _, servers := range d.ServersDeleted {
-		totalServersDeleted += len(servers)
-	}
-
-	if totalServersAdded > 0 {
-		parts = append(parts, fmt.Sprintf("- Servers added: %d", totalServersAdded))
-	}
-	if totalServersModified > 0 {
-		parts = append(parts, fmt.Sprintf("- Servers modified: %d", totalServersModified))
-	}
-	if totalServersDeleted > 0 {
-		parts = append(parts, fmt.Sprintf("- Servers deleted: %d", totalServersDeleted))
-	}
-
-	// ACL changes summary
-	totalACLsAdded := 0
-	for _, acls := range d.ACLsAdded {
-		totalACLsAdded += len(acls)
-	}
-	totalACLsModified := 0
-	for _, acls := range d.ACLsModified {
-		totalACLsModified += len(acls)
-	}
-	totalACLsDeleted := 0
-	for _, acls := range d.ACLsDeleted {
-		totalACLsDeleted += len(acls)
-	}
-
-	if totalACLsAdded > 0 {
-		parts = append(parts, fmt.Sprintf("- ACLs added: %d", totalACLsAdded))
-	}
-	if totalACLsModified > 0 {
-		parts = append(parts, fmt.Sprintf("- ACLs modified: %d", totalACLsModified))
-	}
-	if totalACLsDeleted > 0 {
-		parts = append(parts, fmt.Sprintf("- ACLs deleted: %d", totalACLsDeleted))
-	}
-
-	// HTTP rule changes summary
-	totalHTTPRulesAdded := 0
-	for _, count := range d.HTTPRulesAdded {
-		totalHTTPRulesAdded += count
-	}
-	totalHTTPRulesModified := 0
-	for _, count := range d.HTTPRulesModified {
-		totalHTTPRulesModified += count
-	}
-	totalHTTPRulesDeleted := 0
-	for _, count := range d.HTTPRulesDeleted {
-		totalHTTPRulesDeleted += count
-	}
-
-	if totalHTTPRulesAdded > 0 {
-		parts = append(parts, fmt.Sprintf("- HTTP rules added: %d", totalHTTPRulesAdded))
-	}
-	if totalHTTPRulesModified > 0 {
-		parts = append(parts, fmt.Sprintf("- HTTP rules modified: %d", totalHTTPRulesModified))
-	}
-	if totalHTTPRulesDeleted > 0 {
-		parts = append(parts, fmt.Sprintf("- HTTP rules deleted: %d", totalHTTPRulesDeleted))
-	}
+	// Int map changes (HTTP rules)
+	parts = d.appendIntMapCountChanges(parts, d.HTTPRulesAdded, d.HTTPRulesModified, d.HTTPRulesDeleted, "HTTP rules")
 
 	return strings.Join(parts, "\n")
+}
+
+// appendResourceChanges appends formatted resource change messages.
+func (d *DiffDetails) appendResourceChanges(parts, added, modified, deleted []string, resourceType string) []string {
+	if len(added) > 0 {
+		parts = append(parts, fmt.Sprintf("- %s added: %s", resourceType, strings.Join(added, ", ")))
+	}
+	if len(modified) > 0 {
+		parts = append(parts, fmt.Sprintf("- %s modified: %s", resourceType, strings.Join(modified, ", ")))
+	}
+	if len(deleted) > 0 {
+		parts = append(parts, fmt.Sprintf("- %s deleted: %s", resourceType, strings.Join(deleted, ", ")))
+	}
+	return parts
+}
+
+// appendMapCountChanges appends formatted counts from maps of slices.
+func (d *DiffDetails) appendMapCountChanges(parts []string, added, modified, deleted map[string][]string, resourceType string) []string {
+	totalAdded := 0
+	for _, items := range added {
+		totalAdded += len(items)
+	}
+	totalModified := 0
+	for _, items := range modified {
+		totalModified += len(items)
+	}
+	totalDeleted := 0
+	for _, items := range deleted {
+		totalDeleted += len(items)
+	}
+
+	if totalAdded > 0 {
+		parts = append(parts, fmt.Sprintf("- %s added: %d", resourceType, totalAdded))
+	}
+	if totalModified > 0 {
+		parts = append(parts, fmt.Sprintf("- %s modified: %d", resourceType, totalModified))
+	}
+	if totalDeleted > 0 {
+		parts = append(parts, fmt.Sprintf("- %s deleted: %d", resourceType, totalDeleted))
+	}
+	return parts
+}
+
+// appendIntMapCountChanges appends formatted counts from maps of ints.
+func (d *DiffDetails) appendIntMapCountChanges(parts []string, added, modified, deleted map[string]int, resourceType string) []string {
+	totalAdded := 0
+	for _, count := range added {
+		totalAdded += count
+	}
+	totalModified := 0
+	for _, count := range modified {
+		totalModified += count
+	}
+	totalDeleted := 0
+	for _, count := range deleted {
+		totalDeleted += count
+	}
+
+	if totalAdded > 0 {
+		parts = append(parts, fmt.Sprintf("- %s added: %d", resourceType, totalAdded))
+	}
+	if totalModified > 0 {
+		parts = append(parts, fmt.Sprintf("- %s modified: %d", resourceType, totalModified))
+	}
+	if totalDeleted > 0 {
+		parts = append(parts, fmt.Sprintf("- %s deleted: %d", resourceType, totalDeleted))
+	}
+	return parts
 }
 
 // String returns a human-readable summary of the diff result.
@@ -310,8 +295,9 @@ func (r *DiffResult) String() string {
 	}
 
 	var parts []string
-	parts = append(parts, fmt.Sprintf("Total operations: %d", len(r.PlannedOperations)))
-	parts = append(parts, fmt.Sprintf("\n%s", r.Details.String()))
+	parts = append(parts,
+		fmt.Sprintf("Total operations: %d", len(r.PlannedOperations)),
+		fmt.Sprintf("\n%s", r.Details.String()))
 
 	return strings.Join(parts, "\n")
 }
