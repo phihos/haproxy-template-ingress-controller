@@ -234,6 +234,13 @@ func (p *Parser) extractGlobal() (*models.Global, error) {
 		return nil, fmt.Errorf("failed to parse global section: %w", err)
 	}
 
+	// Parse log targets separately (nested structure)
+	// Global section has no name (empty string)
+	logTargets, err := configuration.ParseLogTargets(string(parser.Global), "", p.parser)
+	if err == nil {
+		global.LogTargetList = logTargets
+	}
+
 	return global, nil
 }
 
