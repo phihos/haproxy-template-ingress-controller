@@ -31,6 +31,14 @@ pkg/controller/
 ├── configloader/         # ConfigMap parsing and loading
 ├── credentialsloader/    # Secret parsing and loading
 ├── events/               # Domain event type catalog (~50 types)
+├── executor/             # Reconciliation orchestrator (Stage 5)
+│   ├── executor.go      # Orchestrates Renderer, Validator, Deployer
+│   └── executor_test.go # Event flow and orchestration tests
+├── indextracker/         # Index synchronization tracker
+├── reconciler/           # Reconciliation debouncer (Stage 5)
+│   ├── reconciler.go    # Debounces changes, triggers reconciliation
+│   └── reconciler_test.go
+├── resourcewatcher/      # Resource watcher lifecycle management
 ├── validator/            # Config validation components
 │   ├── basic.go         # Structural validation
 │   ├── template.go      # Template syntax validation
@@ -257,6 +265,113 @@ func (v *TemplateValidator) Run(ctx context.Context) error {
     }
 }
 ```
+
+### reconciler/ - Reconciliation Debouncer
+
+Debounces resource changes and triggers reconciliation events (Stage 5 component 1):
+
+```go
+// pkg/controller/reconciler/reconciler.go
+type Reconciler struct {
+    eventBus         *busevents.EventBus
+    logger           *slog.Logger
+    debounceInterval time.Duration
+    debounceTimer    *time.Timer
+}
+
+func (r *Reconciler) Start(ctx context.Context) error {
+    eventChan := r.eventBus.Subscribe(EventBufferSize)
+
+    for {
+        select {
+        case event := <-eventChan:
+            switch e := event.(type) {
+            case *events.ResourceIndexUpdatedEvent:
+                // Skip initial sync events
+                if e.ChangeStats.IsInitialSync {
+                    continue
+                }
+                // Reset debounce timer for resource changes
+                r.resetDebounceTimer()
+
+            case *events.ConfigValidatedEvent:
+                // Config changes trigger immediately (no debouncing)
+                r.stopDebounceTimer()
+                r.triggerReconciliation("config_change")
+            }
+
+        case <-r.getDebounceTimerChan():
+            // Debounce timer expired - trigger reconciliation
+            r.triggerReconciliation("debounce_timer")
+
+        case <-ctx.Done():
+            return ctx.Err()
+        }
+    }
+}
+```
+
+**Features:**
+- Debounces resource changes with configurable interval (default 500ms)
+- Triggers immediate reconciliation for config changes
+- Filters initial sync events to prevent premature reconciliation
+- Publishes ReconciliationTriggeredEvent
+
+### executor/ - Reconciliation Orchestrator
+
+Orchestrates reconciliation cycles by coordinating pure components (Stage 5 component 2):
+
+```go
+// pkg/controller/executor/executor.go
+type Executor struct {
+    eventBus *busevents.EventBus
+    logger   *slog.Logger
+}
+
+func (e *Executor) Start(ctx context.Context) error {
+    eventChan := e.eventBus.Subscribe(EventBufferSize)
+
+    for {
+        select {
+        case event := <-eventChan:
+            if ev, ok := event.(*events.ReconciliationTriggeredEvent); ok {
+                e.handleReconciliationTriggered(ev)
+            }
+
+        case <-ctx.Done():
+            return ctx.Err()
+        }
+    }
+}
+
+func (e *Executor) handleReconciliationTriggered(event *events.ReconciliationTriggeredEvent) {
+    startTime := time.Now()
+
+    // Publish started event
+    e.eventBus.Publish(events.NewReconciliationStartedEvent(event.Reason))
+
+    // TODO: Orchestrate pure components:
+    //   1. Renderer - Generate HAProxy config from templates
+    //   2. Validator - Validate generated configuration
+    //   3. Deployer - Deploy to HAProxy instances
+
+    // Publish completed event
+    durationMs := time.Since(startTime).Milliseconds()
+    e.eventBus.Publish(events.NewReconciliationCompletedEvent(durationMs))
+}
+```
+
+**Current State:**
+- Minimal stub implementation establishing event flow
+- Subscribes to ReconciliationTriggeredEvent
+- Publishes ReconciliationStartedEvent and ReconciliationCompletedEvent
+- Measures reconciliation duration for observability
+
+**Future Orchestration:**
+- Will call Renderer pure component for template rendering
+- Will call Validator pure component for configuration validation
+- Will call Deployer pure component for HAProxy deployment
+- Will publish events at each stage (TemplateRenderedEvent, ValidationCompletedEvent, DeploymentCompletedEvent)
 
 ## Staged Startup Pattern
 

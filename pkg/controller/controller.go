@@ -37,6 +37,7 @@ import (
 	"haproxy-template-ic/pkg/controller/configloader"
 	"haproxy-template-ic/pkg/controller/credentialsloader"
 	"haproxy-template-ic/pkg/controller/events"
+	"haproxy-template-ic/pkg/controller/executor"
 	"haproxy-template-ic/pkg/controller/indextracker"
 	"haproxy-template-ic/pkg/controller/reconciler"
 	"haproxy-template-ic/pkg/controller/resourcewatcher"
@@ -371,8 +372,11 @@ func setupConfigWatchers(
 // setupReconciliation creates and starts the reconciliation components (Stage 5).
 //
 // The Reconciler debounces resource changes and triggers reconciliation events.
-// It is started after initial resource synchronization to ensure we have a complete
-// view of the cluster state before beginning reconciliation cycles.
+// The Executor subscribes to reconciliation events and orchestrates pure components
+// (Renderer, Validator, Deployer) to perform the reconciliation workflow.
+//
+// Both components are started after initial resource synchronization to ensure we
+// have a complete view of the cluster state before beginning reconciliation cycles.
 func setupReconciliation(
 	iterCtx context.Context,
 	bus *busevents.EventBus,
@@ -382,10 +386,21 @@ func setupReconciliation(
 	// Create Reconciler with default configuration
 	reconcilerComponent := reconciler.New(bus, logger, nil)
 
+	// Create Executor
+	executorComponent := executor.New(bus, logger)
+
 	// Start reconciler in background
 	go func() {
 		if err := reconcilerComponent.Start(iterCtx); err != nil {
 			logger.Error("reconciler failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start executor in background
+	go func() {
+		if err := executorComponent.Start(iterCtx); err != nil {
+			logger.Error("executor failed", "error", err)
 			cancel()
 		}
 	}()
