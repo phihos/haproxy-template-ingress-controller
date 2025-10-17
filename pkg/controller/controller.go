@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -36,6 +37,8 @@ import (
 	"haproxy-template-ic/pkg/controller/configloader"
 	"haproxy-template-ic/pkg/controller/credentialsloader"
 	"haproxy-template-ic/pkg/controller/events"
+	"haproxy-template-ic/pkg/controller/indextracker"
+	"haproxy-template-ic/pkg/controller/resourcewatcher"
 	"haproxy-template-ic/pkg/controller/validator"
 	coreconfig "haproxy-template-ic/pkg/core/config"
 	busevents "haproxy-template-ic/pkg/events"
@@ -104,89 +107,92 @@ func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretNam
 	}
 }
 
-// runIteration runs a single controller iteration.
+// fetchAndValidateInitialConfig fetches, parses, and validates the initial ConfigMap and Secret.
 //
-// This function:
-//  1. Fetches and validates initial ConfigMap and Secret synchronously
-//  2. Creates the EventBus
-//  3. Creates and starts all event-driven components
-//  4. Creates and starts watchers for ConfigMap and Secret
-//  5. Starts the EventBus (releases buffered events)
-//  6. Waits for config change signal or context cancellation
-//  7. Cleans up all resources
-//
-// Returns:
-//   - Error if initialization fails (causes retry)
-//   - nil if context is cancelled or config change occurs (normal exit)
-//
-//nolint:revive // function-length: Initialization sequence is clear as a single function
-func runIteration(
+// Returns the validated configuration and credentials, or an error if any step fails.
+func fetchAndValidateInitialConfig(
 	ctx context.Context,
 	k8sClient *client.Client,
 	configMapName string,
 	secretName string,
+	configMapGVR schema.GroupVersionResource,
+	secretGVR schema.GroupVersionResource,
 	logger *slog.Logger,
-) error {
-	logger.Info("Starting controller iteration")
-
-	// Define GVRs for ConfigMap and Secret
-	configMapGVR := schema.GroupVersionResource{
-		Group:    "",
-		Version:  "v1",
-		Resource: "configmaps",
-	}
-
-	secretGVR := schema.GroupVersionResource{
-		Group:    "",
-		Version:  "v1",
-		Resource: "secrets",
-	}
-
-	// 1. Synchronously fetch initial ConfigMap and Secret
+) (*coreconfig.Config, *coreconfig.Credentials, error) {
 	logger.Info("Fetching initial configuration and credentials")
 
-	configMapResource, err := k8sClient.GetResource(ctx, configMapGVR, configMapName)
-	if err != nil {
-		return fmt.Errorf("failed to fetch ConfigMap %q: %w", configMapName, err)
+	var configMapResource *unstructured.Unstructured
+	var secretResource *unstructured.Unstructured
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// Fetch ConfigMap
+	g.Go(func() error {
+		var err error
+		configMapResource, err = k8sClient.GetResource(gCtx, configMapGVR, configMapName)
+		if err != nil {
+			return fmt.Errorf("failed to fetch ConfigMap %q: %w", configMapName, err)
+		}
+		return nil
+	})
+
+	// Fetch Secret
+	g.Go(func() error {
+		var err error
+		secretResource, err = k8sClient.GetResource(gCtx, secretGVR, secretName)
+		if err != nil {
+			return fmt.Errorf("failed to fetch Secret %q: %w", secretName, err)
+		}
+		return nil
+	})
+
+	// Wait for both fetches to complete
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
 	}
 
-	secretResource, err := k8sClient.GetResource(ctx, secretGVR, secretName)
-	if err != nil {
-		return fmt.Errorf("failed to fetch Secret %q: %w", secretName, err)
-	}
-
-	// 2. Parse initial configuration
+	// Parse initial configuration
 	logger.Info("Parsing initial configuration")
 
 	cfg, err := parseConfigMap(configMapResource)
 	if err != nil {
-		return fmt.Errorf("failed to parse initial ConfigMap: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse initial ConfigMap: %w", err)
 	}
 
 	creds, err := parseSecret(secretResource)
 	if err != nil {
-		return fmt.Errorf("failed to parse initial Secret: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse initial Secret: %w", err)
 	}
 
-	// 3. Validate initial configuration
+	// Validate initial configuration
 	logger.Info("Validating initial configuration")
 
 	if err := coreconfig.ValidateStructure(cfg); err != nil {
-		return fmt.Errorf("initial configuration validation failed: %w", err)
+		return nil, nil, fmt.Errorf("initial configuration validation failed: %w", err)
 	}
 
 	if err := coreconfig.ValidateCredentials(creds); err != nil {
-		return fmt.Errorf("initial credentials validation failed: %w", err)
+		return nil, nil, fmt.Errorf("initial credentials validation failed: %w", err)
 	}
 
 	logger.Info("Initial configuration validated successfully",
 		"config_version", configMapResource.GetResourceVersion(),
 		"secret_version", secretResource.GetResourceVersion())
 
-	// 4. Create EventBus with buffer for pre-start events
+	return cfg, creds, nil
+}
+
+// setupComponents creates and starts all event-driven components.
+//
+// Returns the EventBus, iteration context, cancel function, and config change channel.
+func setupComponents(
+	ctx context.Context,
+	logger *slog.Logger,
+) (*busevents.EventBus, context.Context, context.CancelFunc, chan *coreconfig.Config) {
+	// Create EventBus with buffer for pre-start events
 	bus := busevents.NewEventBus(100)
 
-	// 5. Create components
+	// Create components
 	eventCommentator := commentator.NewEventCommentator(bus, logger, 1000)
 	configLoaderComponent := configloader.NewConfigLoaderComponent(bus, logger)
 	credentialsLoaderComponent := credentialsloader.NewCredentialsLoaderComponent(bus, logger)
@@ -200,8 +206,6 @@ func runIteration(
 	configChangeCh := make(chan *coreconfig.Config, 1)
 
 	// Register validators for scatter-gather validation
-	// Using AllValidatorNames() ensures consistency between validator names
-	// and expected responders in the scatter-gather pattern
 	validators := validator.AllValidatorNames()
 
 	configChangeHandlerComponent := configchange.NewConfigChangeHandler(
@@ -211,9 +215,8 @@ func runIteration(
 		validators,
 	)
 
-	// 6. Start components in goroutines with iteration-specific context
+	// Start components in goroutines with iteration-specific context
 	iterCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	go eventCommentator.Start(iterCtx)
 	go configLoaderComponent.Start(iterCtx)
@@ -225,9 +228,75 @@ func runIteration(
 
 	logger.Debug("All components started")
 
-	// 7. Create watchers for ConfigMap and Secret
-	// Callbacks publish events to the EventBus
+	return bus, iterCtx, cancel, configChangeCh
+}
 
+// setupResourceWatchers creates and starts resource watchers and index tracker, then waits for sync.
+//
+// Returns an error if watcher creation or synchronization fails.
+func setupResourceWatchers(
+	iterCtx context.Context,
+	cfg *coreconfig.Config,
+	k8sClient *client.Client,
+	bus *busevents.EventBus,
+	logger *slog.Logger,
+	cancel context.CancelFunc,
+) error {
+	// Extract resource type names for IndexSynchronizationTracker
+	resourceNames := make([]string, 0, len(cfg.WatchedResources))
+	for name := range cfg.WatchedResources {
+		resourceNames = append(resourceNames, name)
+	}
+
+	// Create ResourceWatcherComponent
+	resourceWatcher, err := resourcewatcher.New(cfg, k8sClient, bus, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create resource watcher: %w", err)
+	}
+
+	// Create IndexSynchronizationTracker
+	indexTracker := indextracker.New(bus, logger, resourceNames)
+
+	// Start resource watcher and index tracker
+	go func() {
+		if err := resourceWatcher.Start(iterCtx); err != nil {
+			logger.Error("resource watcher failed", "error", err)
+			cancel()
+		}
+	}()
+
+	go func() {
+		if err := indexTracker.Start(iterCtx); err != nil {
+			logger.Error("index tracker failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Wait for all resource indices to sync
+	logger.Debug("Waiting for resource indices to sync")
+	if err := resourceWatcher.WaitForAllSync(iterCtx); err != nil {
+		return fmt.Errorf("resource watcher sync failed: %w", err)
+	}
+	logger.Info("All resource indices synced successfully")
+
+	return nil
+}
+
+// setupConfigWatchers creates and starts ConfigMap and Secret watchers, then waits for sync.
+//
+// Returns an error if watcher creation or synchronization fails.
+func setupConfigWatchers(
+	iterCtx context.Context,
+	k8sClient *client.Client,
+	configMapName string,
+	secretName string,
+	configMapGVR schema.GroupVersionResource,
+	secretGVR schema.GroupVersionResource,
+	bus *busevents.EventBus,
+	logger *slog.Logger,
+	cancel context.CancelFunc,
+) error {
+	// Create watchers for ConfigMap and Secret
 	configMapWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
 		GVR:       configMapGVR,
 		Namespace: k8sClient.Namespace(),
@@ -254,11 +323,10 @@ func runIteration(
 		return fmt.Errorf("failed to create Secret watcher: %w", err)
 	}
 
-	// 8. Start watchers in goroutines
+	// Start watchers in goroutines
 	go func() {
 		if err := configMapWatcher.Start(iterCtx); err != nil {
 			logger.Error("ConfigMap watcher failed", "error", err)
-			// Cancel iteration to trigger retry
 			cancel()
 		}
 	}()
@@ -266,30 +334,106 @@ func runIteration(
 	go func() {
 		if err := secretWatcher.Start(iterCtx); err != nil {
 			logger.Error("Secret watcher failed", "error", err)
-			// Cancel iteration to trigger retry
 			cancel()
 		}
 	}()
 
 	logger.Debug("Watchers started, waiting for initial sync")
 
-	// 9. Wait for watchers to complete initial sync
-	// This prevents initial state from triggering spurious config change events
-	if err := configMapWatcher.WaitForSync(iterCtx); err != nil {
-		return fmt.Errorf("ConfigMap watcher sync failed: %w", err)
-	}
-	if err := secretWatcher.WaitForSync(iterCtx); err != nil {
-		return fmt.Errorf("Secret watcher sync failed: %w", err)
+	// Wait for watchers to complete initial sync in parallel
+	watcherGroup, watcherCtx := errgroup.WithContext(iterCtx)
+
+	watcherGroup.Go(func() error {
+		if err := configMapWatcher.WaitForSync(watcherCtx); err != nil {
+			return fmt.Errorf("ConfigMap watcher sync failed: %w", err)
+		}
+		return nil
+	})
+
+	watcherGroup.Go(func() error {
+		if err := secretWatcher.WaitForSync(watcherCtx); err != nil {
+			return fmt.Errorf("Secret watcher sync failed: %w", err)
+		}
+		return nil
+	})
+
+	// Wait for both watchers to sync
+	if err := watcherGroup.Wait(); err != nil {
+		return err
 	}
 
 	logger.Info("Watchers synced successfully")
 
-	// 10. Start the EventBus (releases buffered events and begins normal operation)
+	return nil
+}
+
+// runIteration runs a single controller iteration.
+//
+// This function orchestrates the initialization sequence:
+//  1. Fetches and validates initial ConfigMap and Secret
+//  2. Creates and starts all event-driven components
+//  3. Creates and starts resource watchers, waits for sync
+//  4. Creates and starts ConfigMap/Secret watchers, waits for sync
+//  5. Starts the EventBus (releases buffered events)
+//  6. Waits for config change signal or context cancellation
+//
+// Returns:
+//   - Error if initialization fails (causes retry)
+//   - nil if context is cancelled or config change occurs (normal exit)
+func runIteration(
+	ctx context.Context,
+	k8sClient *client.Client,
+	configMapName string,
+	secretName string,
+	logger *slog.Logger,
+) error {
+	logger.Info("Starting controller iteration")
+
+	// Define GVRs for ConfigMap and Secret
+	configMapGVR := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "configmaps",
+	}
+
+	secretGVR := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "secrets",
+	}
+
+	// 1. Fetch and validate initial configuration
+	cfg, _, err := fetchAndValidateInitialConfig(
+		ctx, k8sClient, configMapName, secretName,
+		configMapGVR, secretGVR, logger,
+	)
+	if err != nil {
+		return err
+	}
+
+	// 2. Setup components
+	bus, iterCtx, cancel, configChangeCh := setupComponents(ctx, logger)
+	defer cancel()
+
+	// 3. Setup resource watchers
+	if err := setupResourceWatchers(iterCtx, cfg, k8sClient, bus, logger, cancel); err != nil {
+		return err
+	}
+
+	// 4. Setup config watchers
+	if err := setupConfigWatchers(
+		iterCtx, k8sClient, configMapName, secretName,
+		configMapGVR, secretGVR, bus, logger, cancel,
+	); err != nil {
+		return err
+	}
+
+	// 5. Start the EventBus (releases buffered events and begins normal operation)
 	bus.Start()
 
 	logger.Info("Controller iteration initialized successfully - entering event loop")
 
-	// 11. Wait for config change signal or context cancellation
+	// 6. Wait for config change signal or context cancellation
 	select {
 	case <-iterCtx.Done():
 		logger.Info("Controller iteration cancelled", "reason", iterCtx.Err())

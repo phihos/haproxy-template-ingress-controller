@@ -3,6 +3,8 @@ package auxiliaryfiles
 import (
 	"context"
 	"fmt"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // FileItem represents any auxiliary file type (GeneralFile, SSLCertificate, MapFile).
@@ -85,14 +87,28 @@ func Compare[T FileItem](
 		return nil, fmt.Errorf("failed to fetch current files: %w", err)
 	}
 
-	// Download content for all current files
-	currentFiles := make([]T, 0, len(currentIDs))
-	for _, id := range currentIDs {
-		content, err := ops.GetContent(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get content for file '%s': %w", id, err)
-		}
-		currentFiles = append(currentFiles, newFile(id, content))
+	// Download content for all current files in parallel
+	currentFiles := make([]T, len(currentIDs))
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for i, id := range currentIDs {
+		g.Go(func() error {
+			content, err := ops.GetContent(gCtx, id)
+			if err != nil {
+				return fmt.Errorf("failed to get content for file '%s': %w", id, err)
+			}
+
+			// Safe to write directly - each goroutine has unique index
+			currentFiles[i] = newFile(id, content)
+
+			return nil
+		})
+	}
+
+	// Wait for all file content fetches to complete
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	// Build maps for easier comparison

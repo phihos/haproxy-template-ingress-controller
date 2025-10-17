@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
 	"haproxy-template-ic/pkg/dataplane/client"
 	"haproxy-template-ic/pkg/dataplane/comparator"
@@ -130,20 +132,36 @@ func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *Syn
 
 // attemptFineGrainedSync attempts to sync using fine-grained operations with retry logic.
 func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *comparator.ConfigDiff, opts *SyncOptions, auxFiles *AuxiliaryFiles, startTime time.Time) (*SyncResult, error) {
-	// Phase 1: Compare and sync auxiliary files (pre-config)
-	var err error
-	fileDiff, err := o.syncGeneralFilesPreConfig(ctx, auxFiles.GeneralFiles)
-	if err != nil {
-		return nil, err
-	}
+	// Phase 1: Compare and sync auxiliary files (pre-config) in parallel
+	var fileDiff *auxiliaryfiles.FileDiff
+	var sslDiff *auxiliaryfiles.SSLCertificateDiff
+	var mapDiff *auxiliaryfiles.MapFileDiff
 
-	sslDiff, err := o.syncSSLCertificatesPreConfig(ctx, auxFiles.SSLCertificates)
-	if err != nil {
-		return nil, err
-	}
+	g, gCtx := errgroup.WithContext(ctx)
 
-	mapDiff, err := o.syncMapFilesPreConfig(ctx, auxFiles.MapFiles)
-	if err != nil {
+	// Sync general files
+	g.Go(func() error {
+		var err error
+		fileDiff, err = o.syncGeneralFilesPreConfig(gCtx, auxFiles.GeneralFiles)
+		return err
+	})
+
+	// Sync SSL certificates
+	g.Go(func() error {
+		var err error
+		sslDiff, err = o.syncSSLCertificatesPreConfig(gCtx, auxFiles.SSLCertificates)
+		return err
+	})
+
+	// Sync map files
+	g.Go(func() error {
+		var err error
+		mapDiff, err = o.syncMapFilesPreConfig(gCtx, auxFiles.MapFiles)
+		return err
+	})
+
+	// Wait for all auxiliary file syncs to complete
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
@@ -156,7 +174,7 @@ func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *compara
 	var retries int
 
 	// Execute with automatic retry on 409 conflicts
-	err = adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
+	err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
 		retries++
 		o.logger.Info("Executing fine-grained sync",
 			"attempt", retries,

@@ -6,7 +6,7 @@ Usage: `/pr`
 
 ## What this does
 
-1. Commits and pushes the current branch to the remote repository
+1. Commits and pushes ALL changes in the current branch to the remote repository
 2. Checks if a PR already exists for the current branch
 3. If PR exists:
    - Updates the existing PR with any new commits

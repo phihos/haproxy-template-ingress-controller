@@ -262,8 +262,14 @@ haproxy-template-ic/
 │       ├── errors.go        # Custom error types
 │       ├── engine_test.go   # Unit tests
 │       └── README.md        # Usage documentation
-└── internal/                # Internal packages
-    └── signals/             # Signal handling
+├── internal/                # Internal packages
+│   └── signals/             # Signal handling
+└── tools/                   # Development tools
+    └── linters/             # Custom linters
+        └── eventimmutability/  # Event pointer receiver linter
+            ├── analyzer.go  # Custom golangci-lint analyzer
+            ├── analyzer_test.go
+            └── README.md
 ```
 
 ##### Package Responsibilities
@@ -385,6 +391,15 @@ Both watchers use the event-driven architecture: changes publish events to Event
   - Provides TemplateEngine with Render(templateName, context) API
   - Custom error types for compilation, rendering, and template-not-found scenarios
   - Future: Custom filters (b64decode, get_path) will be integrated into higher-level controller rendering components
+
+**Development Tools:**
+
+- `tools/linters/eventimmutability`: Custom golangci-lint analyzer that enforces event immutability contract
+  - Checks that all Event interface method implementations use pointer receivers
+  - Prevents accidental struct copying (events often exceed 200 bytes)
+  - Integrated into `make lint` and CI pipeline via golangci-lint
+  - Provides clear error messages with file locations when violations detected
+  - See `tools/linters/eventimmutability/README.md` for details
 
 ##### Key Interfaces
 
@@ -928,6 +943,29 @@ func (v *ConfigValidator) Validate(config string) error {
 }
 ```
 
+**Parser Improvements**:
+
+The config parser (`pkg/dataplane/parser`) has been enhanced to correctly handle all HAProxy global directives:
+
+1. **Fixed Log Target Parsing**: Previously, the parser incorrectly treated `log-send-hostname` as a log target
+   - Now correctly identifies log targets: lines starting with "log" followed by an address
+   - Properly classifies `log-send-hostname` as a general global directive (not a log target)
+   - Example valid config now parses correctly:
+     ```
+     global
+         log stdout local0
+         log-send-hostname
+     ```
+
+2. **Improved Directive Classification**: Enhanced logic to distinguish between:
+   - Log targets: `log <address> <facility> [level]`
+   - Log options: `log-send-hostname`, `log-tag`, etc.
+   - Other global directives
+
+3. **Better Error Messages**: Parser now provides clearer error messages when encountering unsupported directives
+
+This fix resolves issues where valid HAProxy configurations were rejected during the parsing phase of validation.
+
 ##### Template Engine Selection
 
 **Decision**: Use a Jinja2-like template engine for Go with rich feature set.
@@ -1131,9 +1169,20 @@ package events
 
 import "sync"
 
-// Event interface for type safety
+// Event interface for type safety and immutability
+//
+// All event types MUST use pointer receivers for Event interface methods.
+// This avoids copying large structs (200+ bytes) and follows Go best practices.
+//
+// All event types MUST implement both methods:
+//   - EventType() returns the unique event type string
+//   - Timestamp() returns when the event was created
+//
+// Events are immutable after creation. Constructor functions perform defensive
+// copying of slices and maps to prevent post-publication mutation.
 type Event interface {
     EventType() string
+    Timestamp() time.Time
 }
 
 // EventBus provides pub/sub coordination with startup coordination.
@@ -1268,138 +1317,254 @@ func (b *EventBus) Start() {
 package events
 
 // Event categories covering complete controller lifecycle
+//
+// All events use pointer receivers and include private timestamp fields.
+// Constructor functions (New*Event) perform defensive copying of slices/maps.
 
 // Lifecycle Events
 type ControllerStartedEvent struct {
     ConfigVersion  string
     SecretVersion  string
+    timestamp      time.Time
 }
-func (e ControllerStartedEvent) EventType() string { return "controller.started" }
 
-type ControllerShutdownEvent struct{}
-func (e ControllerShutdownEvent) EventType() string { return "controller.shutdown" }
+func NewControllerStartedEvent(configVersion, secretVersion string) *ControllerStartedEvent {
+    return &ControllerStartedEvent{
+        ConfigVersion: configVersion,
+        SecretVersion: secretVersion,
+        timestamp:     time.Now(),
+    }
+}
+
+func (e *ControllerStartedEvent) EventType() string    { return "controller.started" }
+func (e *ControllerStartedEvent) Timestamp() time.Time { return e.timestamp }
+
+type ControllerShutdownEvent struct {
+    Reason    string
+    timestamp time.Time
+}
+
+func NewControllerShutdownEvent(reason string) *ControllerShutdownEvent {
+    return &ControllerShutdownEvent{
+        Reason:    reason,
+        timestamp: time.Now(),
+    }
+}
+
+func (e *ControllerShutdownEvent) EventType() string    { return "controller.shutdown" }
+func (e *ControllerShutdownEvent) Timestamp() time.Time { return e.timestamp }
 
 // Configuration Events
 type ConfigParsedEvent struct {
-    Config  Config
-    Version string
+    Config        interface{}
+    Version       string
+    SecretVersion string
+    timestamp     time.Time
 }
-func (e ConfigParsedEvent) EventType() string { return "config.parsed" }
+
+func NewConfigParsedEvent(config interface{}, version, secretVersion string) *ConfigParsedEvent {
+    return &ConfigParsedEvent{
+        Config:        config,
+        Version:       version,
+        SecretVersion: secretVersion,
+        timestamp:     time.Now(),
+    }
+}
+
+func (e *ConfigParsedEvent) EventType() string    { return "config.parsed" }
+func (e *ConfigParsedEvent) Timestamp() time.Time { return e.timestamp }
 
 type ConfigValidatedEvent struct {
-    Config  Config
-    Version string
+    Config        interface{}
+    Version       string
+    SecretVersion string
+    timestamp     time.Time
 }
-func (e ConfigValidatedEvent) EventType() string { return "config.validated" }
+
+func NewConfigValidatedEvent(config interface{}, version, secretVersion string) *ConfigValidatedEvent {
+    return &ConfigValidatedEvent{
+        Config:        config,
+        Version:       version,
+        SecretVersion: secretVersion,
+        timestamp:     time.Now(),
+    }
+}
+
+func (e *ConfigValidatedEvent) EventType() string    { return "config.validated" }
+func (e *ConfigValidatedEvent) Timestamp() time.Time { return e.timestamp }
 
 type ConfigInvalidEvent struct {
-    Version string
-    Error   string
+    Version          string
+    ValidationErrors map[string][]string // validator name -> errors
+    timestamp        time.Time
 }
-func (e ConfigInvalidEvent) EventType() string { return "config.invalid" }
+
+// NewConfigInvalidEvent creates a new ConfigInvalidEvent with defensive copying
+func NewConfigInvalidEvent(version string, validationErrors map[string][]string) *ConfigInvalidEvent {
+    // Defensive copy of map with slice values
+    errorsCopy := make(map[string][]string, len(validationErrors))
+    for k, v := range validationErrors {
+        if len(v) > 0 {
+            vCopy := make([]string, len(v))
+            copy(vCopy, v)
+            errorsCopy[k] = vCopy
+        }
+    }
+
+    return &ConfigInvalidEvent{
+        Version:          version,
+        ValidationErrors: errorsCopy,
+        timestamp:        time.Now(),
+    }
+}
+
+func (e *ConfigInvalidEvent) EventType() string    { return "config.invalid" }
+func (e *ConfigInvalidEvent) Timestamp() time.Time { return e.timestamp }
 
 // Resource Events
 type ResourceIndexUpdatedEvent struct {
     ResourceType string
     Count        int
+    ChangeType   string
+    timestamp    time.Time
 }
-func (e ResourceIndexUpdatedEvent) EventType() string { return "resource.index.updated" }
+
+func NewResourceIndexUpdatedEvent(resourceType string, count int, changeType string) *ResourceIndexUpdatedEvent {
+    return &ResourceIndexUpdatedEvent{
+        ResourceType: resourceType,
+        Count:        count,
+        ChangeType:   changeType,
+        timestamp:    time.Now(),
+    }
+}
+
+func (e *ResourceIndexUpdatedEvent) EventType() string    { return "resource.index.updated" }
+func (e *ResourceIndexUpdatedEvent) Timestamp() time.Time { return e.timestamp }
 
 type ResourceSyncCompleteEvent struct {
     ResourceType string
+    InitialCount int
+    timestamp    time.Time
 }
-func (e ResourceSyncCompleteEvent) EventType() string { return "resource.sync.complete" }
+
+func NewResourceSyncCompleteEvent(resourceType string, initialCount int) *ResourceSyncCompleteEvent {
+    return &ResourceSyncCompleteEvent{
+        ResourceType: resourceType,
+        InitialCount: initialCount,
+        timestamp:    time.Now(),
+    }
+}
+
+func (e *ResourceSyncCompleteEvent) EventType() string    { return "resource.sync.complete" }
+func (e *ResourceSyncCompleteEvent) Timestamp() time.Time { return e.timestamp }
 
 // Reconciliation Events
 type ReconciliationTriggeredEvent struct {
-    Reason string
+    Reason    string
+    timestamp time.Time
 }
-func (e ReconciliationTriggeredEvent) EventType() string { return "reconciliation.triggered" }
+
+func NewReconciliationTriggeredEvent(reason string) *ReconciliationTriggeredEvent {
+    return &ReconciliationTriggeredEvent{
+        Reason:    reason,
+        timestamp: time.Now(),
+    }
+}
+
+func (e *ReconciliationTriggeredEvent) EventType() string    { return "reconciliation.triggered" }
+func (e *ReconciliationTriggeredEvent) Timestamp() time.Time { return e.timestamp }
 
 type ReconciliationStartedEvent struct {
-    Trigger string
+    Trigger   string
+    timestamp time.Time
 }
-func (e ReconciliationStartedEvent) EventType() string { return "reconciliation.started" }
+
+func NewReconciliationStartedEvent(trigger string) *ReconciliationStartedEvent {
+    return &ReconciliationStartedEvent{
+        Trigger:   trigger,
+        timestamp: time.Now(),
+    }
+}
+
+func (e *ReconciliationStartedEvent) EventType() string    { return "reconciliation.started" }
+func (e *ReconciliationStartedEvent) Timestamp() time.Time { return e.timestamp }
 
 type ReconciliationCompletedEvent struct {
     DurationMs int64
+    timestamp  time.Time
 }
-func (e ReconciliationCompletedEvent) EventType() string { return "reconciliation.completed" }
+
+func NewReconciliationCompletedEvent(durationMs int64) *ReconciliationCompletedEvent {
+    return &ReconciliationCompletedEvent{
+        DurationMs: durationMs,
+        timestamp:  time.Now(),
+    }
+}
+
+func (e *ReconciliationCompletedEvent) EventType() string    { return "reconciliation.completed" }
+func (e *ReconciliationCompletedEvent) Timestamp() time.Time { return e.timestamp }
 
 type ReconciliationFailedEvent struct {
-    Error string
-}
-func (e ReconciliationFailedEvent) EventType() string { return "reconciliation.failed" }
-
-// Template Events
-type TemplateRenderedEvent struct {
-    ConfigBytes int
-}
-func (e TemplateRenderedEvent) EventType() string { return "template.rendered" }
-
-// Validation Events
-type ValidationStartedEvent struct {
-    Endpoints []DataplaneEndpoint
-}
-func (e ValidationStartedEvent) EventType() string { return "validation.started" }
-
-type ValidationCompletedEvent struct {
-    Endpoints []DataplaneEndpoint
-    Warnings  []string
-}
-func (e ValidationCompletedEvent) EventType() string { return "validation.completed" }
-
-type ValidationFailedEvent struct {
-    Endpoints []DataplaneEndpoint
-    Errors    []string
-}
-func (e ValidationFailedEvent) EventType() string { return "validation.failed" }
-
-// Deployment Events
-type DeploymentStartedEvent struct {
-    Endpoints []DataplaneEndpoint
-}
-func (e DeploymentStartedEvent) EventType() string { return "deployment.started" }
-
-type InstanceDeployedEvent struct {
-    Endpoint   DataplaneEndpoint
-    DurationMs int64
-}
-func (e InstanceDeployedEvent) EventType() string { return "instance.deployed" }
-
-type InstanceDeploymentFailedEvent struct {
-    Endpoint  DataplaneEndpoint
     Error     string
-    Retryable bool
+    timestamp time.Time
 }
-func (e InstanceDeploymentFailedEvent) EventType() string { return "instance.deployment.failed" }
 
-type DeploymentCompletedEvent struct {
-    Total     int
-    Succeeded int
-    Failed    int
+func NewReconciliationFailedEvent(err string) *ReconciliationFailedEvent {
+    return &ReconciliationFailedEvent{
+        Error:     err,
+        timestamp: time.Now(),
+    }
 }
-func (e DeploymentCompletedEvent) EventType() string { return "deployment.completed" }
 
-// Storage Events
-type StorageSyncStartedEvent struct {
-    Phase     string
-    Endpoints []DataplaneEndpoint
-}
-func (e StorageSyncStartedEvent) EventType() string { return "storage.sync.started" }
+func (e *ReconciliationFailedEvent) EventType() string    { return "reconciliation.failed" }
+func (e *ReconciliationFailedEvent) Timestamp() time.Time { return e.timestamp }
 
-type StorageSyncCompletedEvent struct {
-    Phase string
-    Stats SyncStats
-}
-func (e StorageSyncCompletedEvent) EventType() string { return "storage.sync.completed" }
-
-// HAProxy Pod Events
-type HAProxyPodsDiscoveredEvent struct {
-    Endpoints []DataplaneEndpoint
-}
-func (e HAProxyPodsDiscoveredEvent) EventType() string { return "haproxy.pods.discovered" }
+// Note: All ~50 event types follow the same pattern:
+// - Pointer receivers for EventType() and Timestamp() methods
+// - Private timestamp field set in constructor
+// - Constructor function (New*Event) that performs defensive copying
+// - Exported fields for event data
+//
+// Additional event categories (not shown for brevity):
+// - Template Events (TemplateRenderedEvent, TemplateRenderFailedEvent)
+// - Validation Events (ValidationStartedEvent, ValidationCompletedEvent, ValidationFailedEvent)
+// - Deployment Events (DeploymentStartedEvent, InstanceDeployedEvent, DeploymentCompletedEvent)
+// - Storage Events (StorageSyncStartedEvent, StorageSyncCompletedEvent)
+// - HAProxy Discovery Events (HAProxyPodsDiscoveredEvent)
+//
+// See pkg/controller/events/types.go for complete event catalog.
 ```
+
+**Event Immutability Contract**:
+
+Events in the system are designed to be immutable after creation, representing historical facts about what happened. The implementation balances practical immutability with Go idioms and performance:
+
+1. **Pointer Receivers**: All Event interface methods use pointer receivers
+   - Avoids copying large structs (many events exceed 200 bytes)
+   - Follows Go best practices for methods on types with mutable fields
+   - Enforced by custom `eventimmutability` linter in `tools/linters/`
+
+2. **Exported Fields**: Event fields are exported for idiomatic Go access
+   - Follows industry standards (Kubernetes, NATS)
+   - Enables JSON serialization without reflection tricks
+   - Relies on team discipline rather than compiler enforcement
+
+3. **Defensive Copying**: Constructors perform defensive copies of slices and maps
+   - Publishers cannot modify events after creation
+   - Example: `NewConfigInvalidEvent` deep-copies the validation errors map
+   - Prevents accidental mutation from affecting published events
+
+4. **Read-Only Discipline**: Consumers must treat events as read-only
+   - Enforced through code review and team practices
+   - This is an internal project where all consumers are controlled
+   - Alternative (unexported fields + getters) would be less idiomatic Go
+
+5. **Custom Linter**: The `eventimmutability` analyzer enforces pointer receivers
+   - Integrated into `make lint` and CI pipeline
+   - Prevents value receivers that would cause struct copying
+   - Located in `tools/linters/eventimmutability/`
+
+This approach provides practical immutability while maintaining clean, idiomatic Go code without the overhead of getters or complex accessor patterns.
 
 **Component with Event Adapter Pattern**:
 
@@ -1904,6 +2069,40 @@ func (v *ValidationCoordinator) Run(ctx context.Context) error {
         }
     }
 }
+```
+
+**Validator Logging Improvements**:
+
+The validation coordinator implements enhanced logging to provide visibility into the scatter-gather validation process:
+
+1. **Structured Logging**: Uses `log/slog` with structured fields for queryability
+   - Validator names, response counts, validation error counts
+   - Duration tracking for performance monitoring
+   - Clear distinction between validation failure (expected) and system errors
+
+2. **Appropriate Log Levels**:
+   - `warn` level for validation failures (not `error`) - invalid config is an expected condition
+   - `info` level for successful validation with validator details
+   - `error` level reserved for actual system failures (timeouts, missing validators)
+
+3. **Detailed Error Aggregation**:
+   - Groups validation errors by validator name
+   - Shows which validators responded and their individual results
+   - Provides actionable error messages for config authors
+
+4. **Observability**: Full visibility into validation workflow
+   - Which validators participated in validation
+   - How long validation took
+   - Exactly which aspects of config failed validation
+
+Example log output for validation failure:
+```
+level=warn msg="configuration validation failed"
+  version="abc123"
+  validators_responded=["basic","template","jsonpath"]
+  validators_failed=["template","jsonpath"]
+  error_count=3
+  validation_errors={"template":["syntax error at line 5"],"jsonpath":["invalid expression: .foo[bar"]}
 ```
 
 **Benefits**:
