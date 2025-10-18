@@ -374,6 +374,7 @@ func setupConfigWatchers(
 //
 // The Reconciler debounces resource changes and triggers reconciliation events.
 // The Renderer subscribes to reconciliation events and renders HAProxy configuration.
+// The HAProxyValidator validates rendered configurations using syntax and semantic checks.
 // The Executor subscribes to reconciliation events and orchestrates pure components
 // (Renderer, Validator, Deployer) to perform the reconciliation workflow.
 //
@@ -397,6 +398,9 @@ func setupReconciliation(
 		return fmt.Errorf("failed to create renderer: %w", err)
 	}
 
+	// Create HAProxy Validator
+	haproxyValidatorComponent := validator.NewHAProxyValidator(bus, logger)
+
 	// Create Executor
 	executorComponent := executor.New(bus, logger)
 
@@ -416,6 +420,14 @@ func setupReconciliation(
 		}
 	}()
 
+	// Start HAProxy validator in background
+	go func() {
+		if err := haproxyValidatorComponent.Start(iterCtx); err != nil {
+			logger.Error("HAProxy validator failed", "error", err)
+			cancel()
+		}
+	}()
+
 	// Start executor in background
 	go func() {
 		if err := executorComponent.Start(iterCtx); err != nil {
@@ -424,7 +436,7 @@ func setupReconciliation(
 		}
 	}()
 
-	logger.Info("Reconciliation components started (Reconciler, Renderer, Executor)")
+	logger.Info("Reconciliation components started (Reconciler, Renderer, HAProxyValidator, Executor)")
 	return nil
 }
 
