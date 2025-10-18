@@ -316,8 +316,8 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 			append(attrs, "config_bytes", e.ConfigBytes, "aux_files", e.AuxiliaryFileCount, "duration_ms", e.DurationMs)
 
 	case *events.TemplateRenderFailedEvent:
-		return fmt.Sprintf("Template rendering failed: %s", e.Error),
-			append(attrs, "error", e.Error)
+		return fmt.Sprintf("Template rendering failed for '%s': %s", e.TemplateName, e.Error),
+			append(attrs, "template", e.TemplateName, "error", e.Error)
 
 	// Validation Events
 	case *events.ValidationStartedEvent:

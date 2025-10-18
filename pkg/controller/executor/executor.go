@@ -104,8 +104,13 @@ func (e *Executor) Start(ctx context.Context) error {
 
 // handleEvent processes events from the EventBus.
 func (e *Executor) handleEvent(event busevents.Event) {
-	if ev, ok := event.(*events.ReconciliationTriggeredEvent); ok {
+	switch ev := event.(type) {
+	case *events.ReconciliationTriggeredEvent:
 		e.handleReconciliationTriggered(ev)
+	case *events.TemplateRenderedEvent:
+		e.handleTemplateRendered(ev)
+	case *events.TemplateRenderFailedEvent:
+		e.handleTemplateRenderFailed(ev)
 	}
 }
 
@@ -140,4 +145,36 @@ func (e *Executor) handleReconciliationTriggered(event *events.ReconciliationTri
 
 	e.logger.Info("Reconciliation completed",
 		"duration_ms", durationMs)
+}
+
+// handleTemplateRendered handles successful template rendering.
+//
+// This is called when the Renderer component completes template rendering.
+// The executor will proceed to the next phase: validation.
+func (e *Executor) handleTemplateRendered(event *events.TemplateRenderedEvent) {
+	e.logger.Info("Template rendering completed",
+		"config_bytes", event.ConfigBytes,
+		"auxiliary_files", event.AuxiliaryFileCount,
+		"duration_ms", event.DurationMs)
+
+	// TODO: Implement validation phase
+	//   1. Call Validator pure component with rendered config
+	//   2. Publish ValidationCompletedEvent or ValidationFailedEvent
+	e.logger.Debug("Validation phase not yet implemented")
+}
+
+// handleTemplateRenderFailed handles template rendering failures.
+//
+// This is called when the Renderer component fails to render templates.
+// The reconciliation cycle is aborted and a failure event is published.
+func (e *Executor) handleTemplateRenderFailed(event *events.TemplateRenderFailedEvent) {
+	e.logger.Error("Template rendering failed",
+		"template", event.TemplateName,
+		"error", event.Error)
+
+	// Publish reconciliation failed event
+	e.eventBus.Publish(events.NewReconciliationFailedEvent(
+		event.Error,
+		"render",
+	))
 }

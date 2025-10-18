@@ -40,6 +40,7 @@ import (
 	"haproxy-template-ic/pkg/controller/executor"
 	"haproxy-template-ic/pkg/controller/indextracker"
 	"haproxy-template-ic/pkg/controller/reconciler"
+	"haproxy-template-ic/pkg/controller/renderer"
 	"haproxy-template-ic/pkg/controller/resourcewatcher"
 	"haproxy-template-ic/pkg/controller/validator"
 	coreconfig "haproxy-template-ic/pkg/core/config"
@@ -235,7 +236,7 @@ func setupComponents(
 
 // setupResourceWatchers creates and starts resource watchers and index tracker, then waits for sync.
 //
-// Returns an error if watcher creation or synchronization fails.
+// Returns the ResourceWatcherComponent and an error if watcher creation or synchronization fails.
 func setupResourceWatchers(
 	iterCtx context.Context,
 	cfg *coreconfig.Config,
@@ -243,7 +244,7 @@ func setupResourceWatchers(
 	bus *busevents.EventBus,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
-) error {
+) (*resourcewatcher.ResourceWatcherComponent, error) {
 	// Extract resource type names for IndexSynchronizationTracker
 	resourceNames := make([]string, 0, len(cfg.WatchedResources))
 	for name := range cfg.WatchedResources {
@@ -253,7 +254,7 @@ func setupResourceWatchers(
 	// Create ResourceWatcherComponent
 	resourceWatcher, err := resourcewatcher.New(cfg, k8sClient, bus, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create resource watcher: %w", err)
+		return nil, fmt.Errorf("failed to create resource watcher: %w", err)
 	}
 
 	// Create IndexSynchronizationTracker
@@ -277,11 +278,11 @@ func setupResourceWatchers(
 	// Wait for all resource indices to sync
 	logger.Debug("Waiting for resource indices to sync")
 	if err := resourceWatcher.WaitForAllSync(iterCtx); err != nil {
-		return fmt.Errorf("resource watcher sync failed: %w", err)
+		return nil, fmt.Errorf("resource watcher sync failed: %w", err)
 	}
 	logger.Info("All resource indices synced successfully")
 
-	return nil
+	return resourceWatcher, nil
 }
 
 // setupConfigWatchers creates and starts ConfigMap and Secret watchers, then waits for sync.
@@ -372,19 +373,29 @@ func setupConfigWatchers(
 // setupReconciliation creates and starts the reconciliation components (Stage 5).
 //
 // The Reconciler debounces resource changes and triggers reconciliation events.
+// The Renderer subscribes to reconciliation events and renders HAProxy configuration.
 // The Executor subscribes to reconciliation events and orchestrates pure components
 // (Renderer, Validator, Deployer) to perform the reconciliation workflow.
 //
-// Both components are started after initial resource synchronization to ensure we
+// All components are started after initial resource synchronization to ensure we
 // have a complete view of the cluster state before beginning reconciliation cycles.
 func setupReconciliation(
 	iterCtx context.Context,
+	cfg *coreconfig.Config,
+	resourceWatcher *resourcewatcher.ResourceWatcherComponent,
 	bus *busevents.EventBus,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
-) {
+) error {
 	// Create Reconciler with default configuration
 	reconcilerComponent := reconciler.New(bus, logger, nil)
+
+	// Create Renderer with stores from ResourceWatcher
+	stores := resourceWatcher.GetAllStores()
+	rendererComponent, err := renderer.New(bus, cfg, stores, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create renderer: %w", err)
+	}
 
 	// Create Executor
 	executorComponent := executor.New(bus, logger)
@@ -397,6 +408,14 @@ func setupReconciliation(
 		}
 	}()
 
+	// Start renderer in background
+	go func() {
+		if err := rendererComponent.Start(iterCtx); err != nil {
+			logger.Error("renderer failed", "error", err)
+			cancel()
+		}
+	}()
+
 	// Start executor in background
 	go func() {
 		if err := executorComponent.Start(iterCtx); err != nil {
@@ -405,7 +424,8 @@ func setupReconciliation(
 		}
 	}()
 
-	logger.Info("Reconciliation components started")
+	logger.Info("Reconciliation components started (Reconciler, Renderer, Executor)")
+	return nil
 }
 
 // runIteration runs a single controller iteration.
@@ -458,7 +478,8 @@ func runIteration(
 	defer cancel()
 
 	// 3. Setup resource watchers
-	if err := setupResourceWatchers(iterCtx, cfg, k8sClient, bus, logger, cancel); err != nil {
+	resourceWatcher, err := setupResourceWatchers(iterCtx, cfg, k8sClient, bus, logger, cancel)
+	if err != nil {
 		return err
 	}
 
@@ -475,7 +496,9 @@ func runIteration(
 
 	// 6. Start reconciliation components (Stage 5)
 	logger.Info("Stage 5: Starting reconciliation components")
-	setupReconciliation(iterCtx, bus, logger, cancel)
+	if err := setupReconciliation(iterCtx, cfg, resourceWatcher, bus, logger, cancel); err != nil {
+		return err
+	}
 
 	logger.Info("Controller iteration initialized successfully - entering event loop")
 
