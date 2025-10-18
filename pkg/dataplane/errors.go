@@ -85,21 +85,27 @@ func (e *ParseError) Unwrap() error {
 
 // ValidationError represents semantic validation failure from HAProxy.
 type ValidationError struct {
-	// Message is the validation error message from HAProxy
+	// Phase indicates which validation phase failed: "syntax" or "semantic"
+	Phase string
+
+	// Message is the validation error message
 	Message string
 
-	// Cause is the underlying error
-	Cause error
+	// Err is the underlying error
+	Err error
 }
 
 // Error implements the error interface.
 func (e *ValidationError) Error() string {
-	return fmt.Sprintf("HAProxy validation failed: %s: %v", e.Message, e.Cause)
+	if e.Phase != "" {
+		return fmt.Sprintf("%s validation failed: %s: %v", e.Phase, e.Message, e.Err)
+	}
+	return fmt.Sprintf("HAProxy validation failed: %s: %v", e.Message, e.Err)
 }
 
-// Unwrap returns the underlying cause for error unwrapping.
+// Unwrap returns the underlying error for error unwrapping.
 func (e *ValidationError) Unwrap() error {
-	return e.Cause
+	return e.Err
 }
 
 // ConflictError represents unresolved version conflicts after exhausting retries.
@@ -208,7 +214,7 @@ func NewValidationError(message string, cause error) *SyncError {
 	return &SyncError{
 		Stage:   "apply",
 		Message: "HAProxy rejected the configuration",
-		Cause:   &ValidationError{Message: message, Cause: cause},
+		Cause:   &ValidationError{Phase: "semantic", Message: message, Err: cause},
 		Hints: []string{
 			"Review the validation error message from HAProxy",
 			"Check for references to non-existent backends or servers",

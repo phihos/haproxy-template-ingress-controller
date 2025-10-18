@@ -6,6 +6,7 @@ A powerful, easy-to-use Go library for synchronizing HAProxy configurations via 
 
 - **Simple API**: Just provide an endpoint and desired config string
 - **Connection Reuse**: Client-based API for efficient connection management
+- **Two-Phase Validation**: Syntax validation (client-native parser) + semantic validation (haproxy binary)
 - **Intelligent Sync**: Uses fine-grained operations (create/update/delete servers, backends, ACLs, etc.)
 - **Automatic Fallback**: Falls back to raw config push if fine-grained sync fails
 - **Conflict Resolution**: Automatically retries on version conflicts (409 errors)
@@ -276,6 +277,72 @@ opts := &dataplane.SyncOptions{
 }
 result, err := client.Sync(ctx, desiredConfig, nil, opts)
 ```
+
+### Configuration Validation
+
+Validate HAProxy configurations before deployment with two-phase validation:
+
+```go
+import (
+    "haproxy-template-ic/pkg/dataplane"
+)
+
+func main() {
+    // Main HAProxy configuration
+    mainConfig := `
+global
+    daemon
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend http-in
+    bind :80
+    http-request set-header X-Backend %[base,map(maps/hosts.map,default)]
+    default_backend servers
+
+backend servers
+    server s1 127.0.0.1:8080
+`
+
+    // Auxiliary files (maps, certificates, error pages)
+    auxFiles := &dataplane.AuxiliaryFiles{
+        MapFiles: []dataplane.MapFile{
+            {
+                Path:    "maps/hosts.map",
+                Content: "example.com backend1\ntest.com backend2\n",
+            },
+        },
+    }
+
+    // Validate configuration
+    err := dataplane.ValidateConfiguration(mainConfig, auxFiles)
+    if err != nil {
+        var valErr *dataplane.ValidationError
+        if errors.As(err, &valErr) {
+            fmt.Printf("Validation failed in %s phase: %s\n", valErr.Phase, valErr.Message)
+        }
+        return
+    }
+
+    fmt.Println("Configuration is valid!")
+}
+```
+
+**Two-Phase Validation:**
+
+1. **Phase 1 - Syntax Validation**: Uses client-native parser to validate configuration structure and syntax
+2. **Phase 2 - Semantic Validation**: Runs `haproxy -c -f config` to perform full semantic validation
+
+The validator creates a temporary directory structure mirroring production to validate file references (maps, certificates, error pages).
+
+**ValidationError Fields:**
+- `Phase`: Either "syntax" or "semantic" indicating which phase failed
+- `Message`: Human-readable error description
+- `Err`: Wrapped underlying error for detailed inspection
 
 ## How It Works
 

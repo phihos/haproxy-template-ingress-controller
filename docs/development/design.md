@@ -292,6 +292,7 @@ haproxy-template-ic/
 - `pkg/dataplane`: Public API providing Client interface and convenience functions (Sync, DryRun, Diff)
 - `pkg/dataplane/orchestrator`: Coordinates complete sync workflow (parse → compare → sync → auxiliary files)
 - `pkg/dataplane/parser`: Wraps haproxytech/client-native for syntax validation and structured config parsing
+- `pkg/dataplane/validator`: Pure validation functions implementing two-phase HAProxy configuration validation: Phase 1 (syntax validation using client-native parser) and Phase 2 (semantic validation using haproxy binary with -c flag). Creates temporary directory structure mirroring production to validate file references (maps, certificates, error pages). Provides ValidateConfiguration(mainConfig, auxFiles) as pure function with no event dependencies.
 - `pkg/dataplane/comparator`: Performs fine-grained section-by-section comparison to generate minimal change operations
 - `pkg/dataplane/comparator/sections`: Section-specific comparison logic for all HAProxy config sections (global, defaults, frontends, backends, servers, ACLs, rules, binds, filters, checks, etc.)
 - `pkg/dataplane/synchronizer`: Executes operations with transaction management and retry logic
@@ -384,12 +385,14 @@ Both watchers use the event-driven architecture: changes publish events to Event
 - `pkg/controller/configloader`: Loads and parses controller configuration from ConfigMap resources, publishes ConfigParsedEvent
 - `pkg/controller/credentialsloader`: Loads and validates credentials from Secret resources, publishes CredentialsUpdatedEvent
 - `pkg/controller/configchange`: Handles configuration change events and coordinates reloading of resources
-- `pkg/controller/executor`: Orchestrates reconciliation cycles by coordinating pure components. Subscribes to ReconciliationTriggeredEvent and publishes ReconciliationStartedEvent, ReconciliationCompletedEvent, and ReconciliationFailedEvent. Second Stage 5 component that will orchestrate the Renderer, Validator, and Deployer pure components (currently stub implementation establishing event flow). Measures reconciliation duration for observability.
+- `pkg/controller/executor`: Orchestrates reconciliation cycles by handling events from pure components. Subscribes to ReconciliationTriggeredEvent, TemplateRenderedEvent, TemplateRenderFailedEvent, ValidationCompletedEvent, and ValidationFailedEvent. Publishes ReconciliationStartedEvent, ReconciliationCompletedEvent, and ReconciliationFailedEvent. Coordinates the event-driven flow: Renderer → Validator → Deployer (deployment pending implementation). Measures reconciliation duration for observability and handles validation failures by publishing ReconciliationFailedEvent.
 - `pkg/controller/indextracker`: Tracks synchronization state across multiple resource types, publishes IndexSynchronizedEvent when all resources complete initial sync, enabling staged controller startup with clear initialization checkpoints
 - `pkg/controller/reconciler`: Debounces resource change events and triggers reconciliation cycles. Subscribes to ResourceIndexUpdatedEvent (applies debouncing with configurable interval, default 500ms) and ConfigValidatedEvent (triggers immediately without debouncing). Publishes ReconciliationTriggeredEvent when conditions are met. Filters initial sync events to prevent premature reconciliation. First Stage 5 component enabling controlled reconciliation trigger logic.
 - `pkg/controller/resourcewatcher`: Manages lifecycle of all Kubernetes resource watchers defined in configuration, provides centralized WaitForAllSync() method for coordinated initialization, publishes ResourceIndexUpdatedEvent with detailed change statistics
-- `pkg/controller/validator`: Contains validation components (basic structural validation, template syntax validation, JSONPath expression validation) that respond to ConfigValidationRequest events using scatter-gather pattern
-- `pkg/controller/events`: Domain-specific event type definitions (~30+ event types covering complete controller lifecycle)
+- `pkg/controller/validator`: Contains validation components for controller configuration validation (basic structural validation, template syntax validation, JSONPath expression validation) that respond to ConfigValidationRequest events using scatter-gather pattern
+- `pkg/controller/validator/haproxy_validator.go`: HAProxy configuration validator component (Stage 5). Subscribes to TemplateRenderedEvent and validates rendered HAProxy configurations using two-phase validation: syntax validation with client-native parser and semantic validation with haproxy binary. Publishes ValidationCompletedEvent on success or ValidationFailedEvent with detailed error messages on failure. Integrates pkg/dataplane validation logic into the event-driven architecture.
+- `pkg/controller/renderer`: Template rendering component (Stage 5). Subscribes to ReconciliationTriggeredEvent and renders HAProxy configuration and auxiliary files from templates using the templating engine. Publishes TemplateRenderedEvent with rendered configuration and auxiliary files, or TemplateRenderFailedEvent on rendering errors.
+- `pkg/controller/events`: Domain-specific event type definitions (~50 event types covering complete controller lifecycle including validation events)
 
 **Template Engine:**
 
@@ -486,6 +489,8 @@ sequenceDiagram
     participant ResourceWatcher as Resource<br/>Watcher
     participant IndexTracker as Index Sync<br/>Tracker
     participant Reconciler
+    participant Renderer
+    participant Validator as HAProxy<br/>Validator
     participant Executor
 
     Main->>EventBus: Create EventBus(1000)
@@ -518,8 +523,12 @@ sequenceDiagram
 
     Note over Main,Executor: Stage 5: Reconciliation Components
     Main->>Reconciler: NewReconciliationComponent(eventBus)
-    Main->>Executor: NewReconciliationExecutor(eventBus, config, stores)
+    Main->>Renderer: NewRendererComponent(eventBus, config, stores)
+    Main->>Validator: NewHAProxyValidator(eventBus)
+    Main->>Executor: NewReconciliationExecutor(eventBus)
     Reconciler->>Reconciler: go Run(ctx)
+    Renderer->>Renderer: go Start(ctx)
+    Validator->>Validator: go Start(ctx)
     Executor->>Executor: go Run(ctx)
 
     Main-->>Main: All components running
@@ -531,7 +540,7 @@ sequenceDiagram
 2. **Stage 2 - Wait for Valid Config**: Main subscribes to EventBus and blocks until ConfigValidatedEvent is received
 3. **Stage 3 - Resource Watchers**: Start ResourceWatcher and IndexSynchronizationTracker to monitor Kubernetes resources
 4. **Stage 4 - Wait for Index Sync**: Block until IndexSynchronizedEvent confirms all resource indices are populated
-5. **Stage 5 - Reconciliation**: Start Reconciler and Executor to handle template rendering and deployment
+5. **Stage 5 - Reconciliation**: Start Reconciler (debouncer), Renderer (template rendering), HAProxyValidator (configuration validation), and Executor (orchestration) to handle the complete reconciliation workflow
 
 The EventBus.Start() call after Stage 1 ensures all initial components have subscribed before events flow, preventing race conditions during initialization. All coordination happens via EventBus pub/sub - components communicate through events, not direct calls.
 
@@ -560,22 +569,20 @@ sequenceDiagram
     Note over Reconciler: Wait for quiet period
 
     Reconciler->>EventBus: Publish(ReconciliationTriggeredEvent)
-    EventBus->>Executor: ReconciliationTriggeredEvent
 
+    EventBus->>Executor: ReconciliationTriggeredEvent
     Executor->>EventBus: Publish(ReconciliationStartedEvent)
 
-    Executor->>Renderer: Render(templates, resources)
+    EventBus->>Renderer: ReconciliationTriggeredEvent
     Renderer->>Indexer: Query indexed resources
     Indexer-->>Renderer: Resource data
-    Renderer-->>Executor: Rendered config
+    Renderer->>EventBus: Publish(TemplateRenderedEvent)
 
-    Executor->>EventBus: Publish(TemplateRenderedEvent)
+    EventBus->>Validator: TemplateRenderedEvent
+    Note over Validator: Phase 1: Syntax (parser)<br/>Phase 2: Semantics (haproxy -c)
+    Validator->>EventBus: Publish(ValidationCompletedEvent)
 
-    Executor->>Validator: ValidateSyntax(config)
-    Executor->>Validator: ValidateSemantics(config)
-    Validator-->>Executor: Valid
-
-    Executor->>EventBus: Publish(ValidationCompletedEvent)
+    EventBus->>Executor: ValidationCompletedEvent
 
     Executor->>Deployer: Deploy(config, endpoints)
     Deployer->>HAProxy: Deploy via Dataplane API
@@ -591,13 +598,14 @@ sequenceDiagram
 1. **Resource Change**: ResourceWatcher receives Kubernetes event, updates local index, publishes ResourceIndexUpdatedEvent
 2. **Debouncing**: Reconciler subscribes to index events, starts debounce timer to batch rapid changes
 3. **Reconciliation Trigger**: After quiet period, Reconciler publishes ReconciliationTriggeredEvent
-4. **Orchestration**: Executor subscribes to reconciliation events and orchestrates pure components
-5. **Template Rendering**: Executor calls Renderer (pure component) which queries Indexer for resource data
-6. **Validation**: Executor calls Validator for syntax and semantic validation
-7. **Deployment**: Executor calls Deployer to push validated config to HAProxy instances
-8. **Event Propagation**: Executor publishes events at each stage for observability and further coordination
+4. **Orchestration Start**: Executor subscribes to ReconciliationTriggeredEvent and publishes ReconciliationStartedEvent
+5. **Template Rendering**: Renderer component subscribes to ReconciliationTriggeredEvent, queries Indexer for resource data, and publishes TemplateRenderedEvent with rendered configuration and auxiliary files
+6. **Validation**: HAProxyValidator component subscribes to TemplateRenderedEvent, performs two-phase validation (syntax with client-native parser, semantics with haproxy binary), and publishes ValidationCompletedEvent or ValidationFailedEvent
+7. **Validation Handling**: Executor subscribes to validation events and proceeds with deployment on success or publishes ReconciliationFailedEvent on failure
+8. **Deployment**: Executor will call Deployer to push validated config to HAProxy instances (pending implementation)
+9. **Completion**: Executor publishes ReconciliationCompletedEvent with duration metrics
 
-All coordination happens via EventBus pub/sub - pure components have no event dependencies.
+All coordination happens via EventBus pub/sub. The Renderer and HAProxyValidator are event-driven components that wrap pure validation logic from pkg/dataplane and pkg/templating.
 
 ##### Configuration Validation Process
 
