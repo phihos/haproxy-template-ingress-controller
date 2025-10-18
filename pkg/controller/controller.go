@@ -437,6 +437,16 @@ func setupReconciliation(
 	}()
 
 	logger.Info("Reconciliation components started (Reconciler, Renderer, HAProxyValidator, Executor)")
+
+	// Give components a brief moment to subscribe to the EventBus
+	// before publishing the initial reconciliation trigger
+	time.Sleep(100 * time.Millisecond)
+
+	// Trigger initial reconciliation to bootstrap the pipeline
+	// This ensures at least one reconciliation cycle runs even with 0 resources
+	bus.Publish(events.NewReconciliationTriggeredEvent("initial_sync_complete"))
+	logger.Debug("Published initial reconciliation trigger")
+
 	return nil
 }
 
