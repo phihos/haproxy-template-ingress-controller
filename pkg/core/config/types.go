@@ -62,6 +62,11 @@ type Config struct {
 	// These generate auxiliary files like custom error pages.
 	Files map[string]GeneralFile `yaml:"files"`
 
+	// SSLCertificates maps certificate names to their template definitions.
+	//
+	// These generate SSL certificate files for HAProxy.
+	SSLCertificates map[string]SSLCertificate `yaml:"ssl_certificates"`
+
 	// HAProxyConfig contains the main HAProxy configuration template.
 	HAProxyConfig HAProxyConfig `yaml:"haproxy_config"`
 }
@@ -145,6 +150,12 @@ type MapFile struct {
 // GeneralFile is a general-purpose auxiliary file template.
 type GeneralFile struct {
 	// Template is the template content that generates the file.
+	Template string `yaml:"template"`
+}
+
+// SSLCertificate is an SSL certificate file template.
+type SSLCertificate struct {
+	// Template is the template content that generates the certificate file.
 	Template string `yaml:"template"`
 }
 

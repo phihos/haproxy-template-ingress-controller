@@ -488,22 +488,37 @@ func (e *ReconciliationFailedEvent) Timestamp() time.Time { return e.timestamp }
 // -----------------------------------------------------------------------------
 
 // TemplateRenderedEvent is published when template rendering completes successfully.
+//
+// This event carries the rendered HAProxy configuration and all auxiliary files
+// for the next phase (validation/deployment).
 type TemplateRenderedEvent struct {
-	// ConfigBytes is the size of the rendered haproxy.cfg.
-	ConfigBytes int
+	// HAProxyConfig is the rendered main HAProxy configuration.
+	HAProxyConfig string
 
-	// AuxiliaryFileCount is the number of auxiliary files rendered (maps, certs, error pages).
-	AuxiliaryFileCount int
+	// AuxiliaryFiles contains all rendered auxiliary files (maps, certificates, general files).
+	// Type: interface{} to avoid circular dependencies with pkg/dataplane.
+	// Consumers should type-assert to *dataplane.AuxiliaryFiles.
+	AuxiliaryFiles interface{}
 
-	DurationMs int64
-	timestamp  time.Time
+	// Metrics for observability
+	ConfigBytes        int   // Size of HAProxyConfig
+	AuxiliaryFileCount int   // Number of auxiliary files
+	DurationMs         int64 // Rendering duration
+
+	timestamp time.Time
 }
 
 // NewTemplateRenderedEvent creates a new TemplateRenderedEvent.
-func NewTemplateRenderedEvent(configBytes, auxiliaryFileCount int, durationMs int64) *TemplateRenderedEvent {
+// Performs defensive copy of the haproxyConfig string.
+func NewTemplateRenderedEvent(haproxyConfig string, auxiliaryFiles interface{}, auxFileCount int, durationMs int64) *TemplateRenderedEvent {
+	// Calculate config size
+	configBytes := len(haproxyConfig)
+
 	return &TemplateRenderedEvent{
+		HAProxyConfig:      haproxyConfig,
+		AuxiliaryFiles:     auxiliaryFiles,
 		ConfigBytes:        configBytes,
-		AuxiliaryFileCount: auxiliaryFileCount,
+		AuxiliaryFileCount: auxFileCount,
 		DurationMs:         durationMs,
 		timestamp:          time.Now(),
 	}
@@ -514,17 +529,25 @@ func (e *TemplateRenderedEvent) Timestamp() time.Time { return e.timestamp }
 
 // TemplateRenderFailedEvent is published when template rendering fails.
 type TemplateRenderFailedEvent struct {
-	Error      string
+	// TemplateName is the name of the template that failed to render.
+	TemplateName string
+
+	// Error is the error message.
+	Error string
+
+	// StackTrace provides additional debugging context.
 	StackTrace string
-	timestamp  time.Time
+
+	timestamp time.Time
 }
 
 // NewTemplateRenderFailedEvent creates a new TemplateRenderFailedEvent.
-func NewTemplateRenderFailedEvent(err, stackTrace string) *TemplateRenderFailedEvent {
+func NewTemplateRenderFailedEvent(templateName, err, stackTrace string) *TemplateRenderFailedEvent {
 	return &TemplateRenderFailedEvent{
-		Error:      err,
-		StackTrace: stackTrace,
-		timestamp:  time.Now(),
+		TemplateName: templateName,
+		Error:        err,
+		StackTrace:   stackTrace,
+		timestamp:    time.Now(),
 	}
 }
 
