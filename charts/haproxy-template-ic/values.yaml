@@ -73,8 +73,8 @@ controller:
     maps:
       host.map:
         template: |
-          {% for _, ingress in resources.get('ingresses', {}).items() %}
-          {% for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
+          {% for ingress in resources.ingresses %}
+          {% for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
           {% set host_without_asterisk = rule.host | replace('*', '', 1) %}
           {{ host_without_asterisk }} {{ host_without_asterisk }}
           {% endfor %}

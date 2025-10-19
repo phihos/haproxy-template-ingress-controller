@@ -111,6 +111,10 @@ func (e *Executor) handleEvent(event busevents.Event) {
 		e.handleTemplateRendered(ev)
 	case *events.TemplateRenderFailedEvent:
 		e.handleTemplateRenderFailed(ev)
+	case *events.ValidationCompletedEvent:
+		e.handleValidationCompleted(ev)
+	case *events.ValidationFailedEvent:
+		e.handleValidationFailed(ev)
 	}
 }
 
@@ -150,17 +154,16 @@ func (e *Executor) handleReconciliationTriggered(event *events.ReconciliationTri
 // handleTemplateRendered handles successful template rendering.
 //
 // This is called when the Renderer component completes template rendering.
-// The executor will proceed to the next phase: validation.
+// The HAProxyValidatorComponent will automatically validate the configuration
+// by subscribing to TemplateRenderedEvent and publishing validation result events.
 func (e *Executor) handleTemplateRendered(event *events.TemplateRenderedEvent) {
 	e.logger.Info("Template rendering completed",
 		"config_bytes", event.ConfigBytes,
 		"auxiliary_files", event.AuxiliaryFileCount,
 		"duration_ms", event.DurationMs)
 
-	// TODO: Implement validation phase
-	//   1. Call Validator pure component with rendered config
-	//   2. Publish ValidationCompletedEvent or ValidationFailedEvent
-	e.logger.Debug("Validation phase not yet implemented")
+	// Validation is performed by the HAProxyValidatorComponent (event-driven)
+	e.logger.Debug("Waiting for validation to complete")
 }
 
 // handleTemplateRenderFailed handles template rendering failures.
@@ -168,13 +171,54 @@ func (e *Executor) handleTemplateRendered(event *events.TemplateRenderedEvent) {
 // This is called when the Renderer component fails to render templates.
 // The reconciliation cycle is aborted and a failure event is published.
 func (e *Executor) handleTemplateRenderFailed(event *events.TemplateRenderFailedEvent) {
-	e.logger.Error("Template rendering failed",
-		"template", event.TemplateName,
-		"error", event.Error)
+	// Error is already formatted by renderer component
+	e.logger.Error("Template rendering failed\n"+event.Error,
+		"template", event.TemplateName)
 
 	// Publish reconciliation failed event
 	e.eventBus.Publish(events.NewReconciliationFailedEvent(
 		event.Error,
 		"render",
+	))
+}
+
+// handleValidationCompleted handles successful configuration validation.
+//
+// This is called when the Validator component completes configuration validation.
+// The executor will proceed to the next phase: deployment.
+func (e *Executor) handleValidationCompleted(event *events.ValidationCompletedEvent) {
+	e.logger.Info("Configuration validation completed",
+		"duration_ms", event.DurationMs,
+		"warnings", len(event.Warnings))
+
+	// Log any warnings
+	for _, warning := range event.Warnings {
+		e.logger.Warn("Validation warning", "warning", warning)
+	}
+
+	// TODO: Implement deployment phase
+	//   1. Call Deployer pure component with validated config
+	//   2. Publish DeploymentCompletedEvent or DeploymentFailedEvent
+	e.logger.Debug("Deployment phase not yet implemented")
+}
+
+// handleValidationFailed handles configuration validation failures.
+//
+// This is called when the Validator component fails to validate the configuration.
+// The reconciliation cycle is aborted and a failure event is published.
+func (e *Executor) handleValidationFailed(event *events.ValidationFailedEvent) {
+	e.logger.Error("Configuration validation failed",
+		"errors", event.Errors,
+		"duration_ms", event.DurationMs)
+
+	// Publish reconciliation failed event with first error
+	errorMsg := "validation failed"
+	if len(event.Errors) > 0 {
+		errorMsg = event.Errors[0]
+	}
+
+	e.eventBus.Publish(events.NewReconciliationFailedEvent(
+		errorMsg,
+		"validate",
 	))
 }

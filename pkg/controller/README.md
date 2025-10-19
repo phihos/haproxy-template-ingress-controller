@@ -50,17 +50,22 @@ pkg/controller/
 ├── credentialsloader/   # Credentials loading and validation
 │   └── loader.go        # Loads Secret, validates credentials, publishes CredentialsUpdatedEvent
 ├── events/              # Domain-specific event type definitions
-│   └── types.go         # ~30+ event types covering controller lifecycle
+│   └── types.go         # ~50 event types covering controller lifecycle
 ├── executor/            # Reconciliation orchestrator (Stage 5)
-│   ├── executor.go      # Orchestrates Renderer, Validator, Deployer
+│   ├── executor.go      # Handles events from Renderer, Validator components
 │   └── executor_test.go # Event flow and orchestration tests
 ├── reconciler/          # Reconciliation debouncer (Stage 5)
 │   ├── reconciler.go    # Debounces changes, triggers reconciliation
 │   └── reconciler_test.go
-├── validator/           # Configuration validation components
+├── renderer/            # Template rendering component (Stage 5)
+│   └── renderer.go      # Renders HAProxy config from templates
+├── validator/           # Validation components
 │   ├── basic.go         # Structural validation (ports, required fields)
 │   ├── template.go      # Template syntax validation using pkg/templating
-│   └── jsonpath.go      # JSONPath expression validation
+│   ├── jsonpath.go      # JSONPath expression validation
+│   ├── haproxy_validator.go      # HAProxy config validator (Stage 5)
+│   ├── haproxy_validator_test.go # Integration tests
+│   └── integration_test.go       # Scatter-gather validation tests
 └── controller.go        # Main controller with startup orchestration
 ```
 
@@ -175,21 +180,71 @@ reconcilerComponent := reconciler.New(eventBus, logger, nil)
 go reconcilerComponent.Start(ctx)
 ```
 
-### Executor
+### Renderer
 
-Orchestrates reconciliation cycles by coordinating pure components (Stage 5, Component 2).
+Renders HAProxy configuration and auxiliary files from templates (Stage 5, Component 3).
 
 **Responsibilities:**
 - Subscribes to ReconciliationTriggeredEvent
+- Queries indexed resources from stores
+- Renders HAProxy configuration using templating engine
+- Renders auxiliary files (maps, certificates, error pages)
+- Publishes TemplateRenderedEvent with rendered configuration
+- Publishes TemplateRenderFailedEvent on rendering errors
+
+**Example:**
+```go
+import (
+    "haproxy-template-ic/pkg/controller/renderer"
+    "haproxy-template-ic/pkg/events"
+)
+
+rendererComponent := renderer.New(eventBus, config, stores, logger)
+go rendererComponent.Start(ctx)
+```
+
+### HAProxyValidator
+
+Validates rendered HAProxy configurations using two-phase validation (Stage 5, Component 4).
+
+**Responsibilities:**
+- Subscribes to TemplateRenderedEvent
+- Validates configuration syntax using client-native parser
+- Validates configuration semantics using haproxy binary (`haproxy -c`)
+- Creates temporary directory structure for file reference validation
+- Publishes ValidationCompletedEvent on success
+- Publishes ValidationFailedEvent with detailed error messages on failure
+
+**Two-Phase Validation:**
+1. **Phase 1 - Syntax**: Client-native parser validates configuration structure
+2. **Phase 2 - Semantics**: HAProxy binary performs full semantic validation
+
+**Example:**
+```go
+import (
+    "haproxy-template-ic/pkg/controller/validator"
+    "haproxy-template-ic/pkg/events"
+)
+
+haproxyValidator := validator.NewHAProxyValidator(eventBus, logger)
+go haproxyValidator.Start(ctx)
+```
+
+### Executor
+
+Orchestrates reconciliation cycles by handling events from pure components (Stage 5, Component 2).
+
+**Responsibilities:**
+- Subscribes to ReconciliationTriggeredEvent, TemplateRenderedEvent, TemplateRenderFailedEvent, ValidationCompletedEvent, ValidationFailedEvent
 - Publishes ReconciliationStartedEvent when reconciliation begins
-- Orchestrates Renderer, Validator, and Deployer pure components (future)
+- Handles validation success/failure events
 - Publishes ReconciliationCompletedEvent with duration metrics
 - Publishes ReconciliationFailedEvent on errors
 
-**Current State:**
-- Minimal implementation establishing event flow
-- Measures reconciliation duration for observability
-- Future: Will call Renderer, Validator, Deployer components
+**Event-Driven Flow:**
+- Renderer publishes TemplateRenderedEvent → HAProxyValidator validates → Executor handles validation result
+- On ValidationCompletedEvent: Proceeds to deployment (pending implementation)
+- On ValidationFailedEvent: Publishes ReconciliationFailedEvent
 
 **Example:**
 ```go
@@ -284,17 +339,23 @@ IndexReady:
 ```go
 // Start reconciliation components
 reconcilerComponent := reconciler.New(eventBus, logger, nil)
+rendererComponent := renderer.New(eventBus, config, stores, logger)
+haproxyValidator := validator.NewHAProxyValidator(eventBus, logger)
 executorComponent := executor.New(eventBus, logger)
 
 go reconcilerComponent.Start(ctx)
+go rendererComponent.Start(ctx)
+go haproxyValidator.Start(ctx)
 go executorComponent.Start(ctx)
 
-log.Info("All components started")
+log.Info("All components started - Reconciliation pipeline ready")
 ```
 
-**Two-Component Design:**
+**Four-Component Design:**
 1. **Reconciler**: Debounces changes (500ms default), publishes ReconciliationTriggeredEvent
-2. **Executor**: Orchestrates Renderer, Validator, Deployer (currently stub implementation)
+2. **Renderer**: Renders templates, publishes TemplateRenderedEvent
+3. **HAProxyValidator**: Validates configurations, publishes ValidationCompletedEvent or ValidationFailedEvent
+4. **Executor**: Handles events, coordinates flow, measures duration
 
 ## Event-Driven Patterns
 
@@ -349,7 +410,7 @@ for event := range eventChan {
 
 ## Event Types
 
-The `pkg/controller/events` package defines ~30+ event types organized into categories:
+The `pkg/controller/events` package defines ~50 event types organized into categories:
 
 **Lifecycle Events:**
 - ControllerStartedEvent

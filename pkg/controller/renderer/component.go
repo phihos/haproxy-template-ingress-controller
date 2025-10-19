@@ -224,13 +224,21 @@ func (c *Component) renderAuxiliaryFiles(context map[string]interface{}) (*datap
 
 // publishRenderFailure publishes a template render failure event.
 func (c *Component) publishRenderFailure(templateName string, err error) {
-	c.logger.Error("Template rendering failed",
-		"template", templateName,
-		"error", err)
+	// Get template content for context in error message
+	templateContent, _ := c.engine.GetRawTemplate(templateName)
 
+	// Format error for human readability
+	formattedError := templating.FormatRenderError(err, templateName, templateContent)
+
+	// Log formatted error (multi-line for readability)
+	c.logger.Error("Template rendering failed\n"+formattedError,
+		"template", templateName,
+		"error_raw", err.Error()) // Keep raw error for programmatic access
+
+	// Publish event with formatted error
 	c.eventBus.Publish(events.NewTemplateRenderFailedEvent(
 		templateName,
-		err.Error(),
+		formattedError,
 		"", // Stack trace could be added here if needed
 	))
 }
