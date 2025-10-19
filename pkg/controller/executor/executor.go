@@ -171,9 +171,9 @@ func (e *Executor) handleTemplateRendered(event *events.TemplateRenderedEvent) {
 // This is called when the Renderer component fails to render templates.
 // The reconciliation cycle is aborted and a failure event is published.
 func (e *Executor) handleTemplateRenderFailed(event *events.TemplateRenderFailedEvent) {
-	e.logger.Error("Template rendering failed",
-		"template", event.TemplateName,
-		"error", event.Error)
+	// Error is already formatted by renderer component
+	e.logger.Error("Template rendering failed\n"+event.Error,
+		"template", event.TemplateName)
 
 	// Publish reconciliation failed event
 	e.eventBus.Publish(events.NewReconciliationFailedEvent(
