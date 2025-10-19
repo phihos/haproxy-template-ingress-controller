@@ -32,6 +32,9 @@ type Config struct {
 	// Validation configures the validation HAProxy sidecar.
 	Validation ValidationConfig `yaml:"validation"`
 
+	// Dataplane configures the Dataplane API for production HAProxy instances.
+	Dataplane DataplaneConfig `yaml:"dataplane"`
+
 	// WatchedResourcesIgnoreFields specifies JSONPath expressions for fields
 	// to remove from all watched resources to reduce memory usage.
 	//
@@ -110,6 +113,13 @@ type ValidationConfig struct {
 	DataplanePort int `yaml:"dataplane_port"`
 }
 
+// DataplaneConfig configures the Dataplane API for production HAProxy instances.
+type DataplaneConfig struct {
+	// Port is the Dataplane API port for production HAProxy pods.
+	// Default: 5555
+	Port int `yaml:"port"`
+}
+
 // WatchedResource configures watching for a specific Kubernetes resource type.
 type WatchedResource struct {
 	// APIVersion is the Kubernetes API version (e.g., "networking.k8s.io/v1").
@@ -130,6 +140,13 @@ type WatchedResource struct {
 	//   ["metadata.namespace", "metadata.name"]
 	//   ["metadata.labels['kubernetes.io/service-name']"]
 	IndexBy []string `yaml:"index_by"`
+
+	// LabelSelector filters resources by labels (server-side filtering).
+	//
+	// Example:
+	//   app: haproxy
+	//   component: loadbalancer
+	LabelSelector map[string]string `yaml:"label_selector,omitempty"`
 }
 
 // TemplateSnippet is a reusable template fragment.

@@ -31,6 +31,7 @@ import (
 	"sync"
 
 	"golang.org/x/sync/errgroup"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"haproxy-template-ic/pkg/controller/events"
@@ -92,8 +93,31 @@ func New(
 		synced:    make(map[string]bool),
 	}
 
-	// Create a watcher for each configured resource type
-	for resourceTypeName, watchedResource := range cfg.WatchedResources {
+	// Auto-inject HAProxy pods watcher based on PodSelector
+	// This watcher is always created regardless of WatchedResources configuration
+	resourcesWithHAProxyPods := make(map[string]coreconfig.WatchedResource)
+
+	// Copy user-configured resources
+	for k, v := range cfg.WatchedResources {
+		resourcesWithHAProxyPods[k] = v
+	}
+
+	// Add haproxy-pods watcher (or override if user configured it)
+	resourcesWithHAProxyPods["haproxy-pods"] = coreconfig.WatchedResource{
+		APIVersion:    "v1",
+		Kind:          "Pod",
+		LabelSelector: cfg.PodSelector.MatchLabels,
+		IndexBy: []string{
+			"metadata.namespace",
+			"metadata.name",
+		},
+	}
+
+	logger.Debug("auto-injected haproxy-pods watcher",
+		"label_selector", cfg.PodSelector.MatchLabels)
+
+	// Create a watcher for each resource type (including auto-injected haproxy-pods)
+	for resourceTypeName, watchedResource := range resourcesWithHAProxyPods {
 		// Convert APIVersion/Kind to GVR
 		gvr, err := toGVR(watchedResource)
 		if err != nil {
@@ -103,11 +127,19 @@ func New(
 		// Merge global and per-resource ignore fields
 		ignoreFields := mergeIgnoreFields(cfg.WatchedResourcesIgnoreFields, nil)
 
+		// Convert label selector map to metav1.LabelSelector
+		var labelSelector *metav1.LabelSelector
+		if len(watchedResource.LabelSelector) > 0 {
+			labelSelector = &metav1.LabelSelector{
+				MatchLabels: watchedResource.LabelSelector,
+			}
+		}
+
 		// Create watcher configuration
 		watcherConfig := &types.WatcherConfig{
 			GVR:              gvr,
-			Namespace:        "", // Watch all namespaces
-			LabelSelector:    nil,
+			Namespace:        determineNamespace(resourceTypeName, k8sClient),
+			LabelSelector:    labelSelector,
 			IndexBy:          watchedResource.IndexBy,
 			IgnoreFields:     ignoreFields,
 			StoreType:        types.StoreTypeMemory,
@@ -267,6 +299,16 @@ func (r *ResourceWatcherComponent) AllSynced() bool {
 // -----------------------------------------------------------------------------
 // Helper Functions
 // -----------------------------------------------------------------------------
+
+// determineNamespace returns the appropriate namespace for a resource watcher.
+// HAProxy pods ("haproxy-pods") are scoped to the controller namespace for security.
+// All other resources are watched cluster-wide.
+func determineNamespace(resourceTypeName string, k8sClient *client.Client) string {
+	if resourceTypeName == "haproxy-pods" {
+		return k8sClient.Namespace()
+	}
+	return "" // Cluster-wide for other resources
+}
 
 // toGVR converts a WatchedResource configuration to a GroupVersionResource.
 func toGVR(wr coreconfig.WatchedResource) (schema.GroupVersionResource, error) {

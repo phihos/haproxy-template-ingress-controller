@@ -558,26 +558,17 @@ func (e *TemplateRenderFailedEvent) Timestamp() time.Time { return e.timestamp }
 // Validation Events
 // -----------------------------------------------------------------------------
 
-// ValidationStartedEvent is published when configuration validation begins.
+// ValidationStartedEvent is published when local configuration validation begins.
+//
+// Validation is performed locally using the HAProxy binary to check configuration syntax.
+// It does not involve HAProxy endpoints - those are only used later for deployment.
 type ValidationStartedEvent struct {
-	// Endpoints is the list of HAProxy instances that will be validated against.
-	// Type: []interface{} to avoid circular dependencies.
-	Endpoints []interface{}
 	timestamp time.Time
 }
 
 // NewValidationStartedEvent creates a new ValidationStartedEvent.
-// Performs defensive copy of the endpoints slice.
-func NewValidationStartedEvent(endpoints []interface{}) *ValidationStartedEvent {
-	// Defensive copy of slice
-	var endpointsCopy []interface{}
-	if len(endpoints) > 0 {
-		endpointsCopy = make([]interface{}, len(endpoints))
-		copy(endpointsCopy, endpoints)
-	}
-
+func NewValidationStartedEvent() *ValidationStartedEvent {
 	return &ValidationStartedEvent{
-		Endpoints: endpointsCopy,
 		timestamp: time.Now(),
 	}
 }
@@ -585,24 +576,18 @@ func NewValidationStartedEvent(endpoints []interface{}) *ValidationStartedEvent 
 func (e *ValidationStartedEvent) EventType() string    { return EventTypeValidationStarted }
 func (e *ValidationStartedEvent) Timestamp() time.Time { return e.timestamp }
 
-// ValidationCompletedEvent is published when configuration validation succeeds.
+// ValidationCompletedEvent is published when local configuration validation succeeds.
+//
+// Validation is performed locally using the HAProxy binary. Endpoints are not involved.
 type ValidationCompletedEvent struct {
-	Endpoints  []interface{}
-	Warnings   []string // Non-fatal warnings
+	Warnings   []string // Non-fatal warnings from HAProxy validation
 	DurationMs int64
 	timestamp  time.Time
 }
 
 // NewValidationCompletedEvent creates a new ValidationCompletedEvent.
-// Performs defensive copy of the endpoints and warnings slices.
-func NewValidationCompletedEvent(endpoints []interface{}, warnings []string, durationMs int64) *ValidationCompletedEvent {
-	// Defensive copy of endpoints slice
-	var endpointsCopy []interface{}
-	if len(endpoints) > 0 {
-		endpointsCopy = make([]interface{}, len(endpoints))
-		copy(endpointsCopy, endpoints)
-	}
-
+// Performs defensive copy of the warnings slice.
+func NewValidationCompletedEvent(warnings []string, durationMs int64) *ValidationCompletedEvent {
 	// Defensive copy of warnings slice
 	var warningsCopy []string
 	if len(warnings) > 0 {
@@ -611,7 +596,6 @@ func NewValidationCompletedEvent(endpoints []interface{}, warnings []string, dur
 	}
 
 	return &ValidationCompletedEvent{
-		Endpoints:  endpointsCopy,
 		Warnings:   warningsCopy,
 		DurationMs: durationMs,
 		timestamp:  time.Now(),
@@ -621,24 +605,18 @@ func NewValidationCompletedEvent(endpoints []interface{}, warnings []string, dur
 func (e *ValidationCompletedEvent) EventType() string    { return EventTypeValidationCompleted }
 func (e *ValidationCompletedEvent) Timestamp() time.Time { return e.timestamp }
 
-// ValidationFailedEvent is published when configuration validation fails.
+// ValidationFailedEvent is published when local configuration validation fails.
+//
+// Validation is performed locally using the HAProxy binary. Endpoints are not involved.
 type ValidationFailedEvent struct {
-	Endpoints  []interface{}
-	Errors     []string // Validation errors
+	Errors     []string // Validation errors from HAProxy
 	DurationMs int64
 	timestamp  time.Time
 }
 
 // NewValidationFailedEvent creates a new ValidationFailedEvent.
-// Performs defensive copy of the endpoints and errors slices.
-func NewValidationFailedEvent(endpoints []interface{}, errors []string, durationMs int64) *ValidationFailedEvent {
-	// Defensive copy of endpoints slice
-	var endpointsCopy []interface{}
-	if len(endpoints) > 0 {
-		endpointsCopy = make([]interface{}, len(endpoints))
-		copy(endpointsCopy, endpoints)
-	}
-
+// Performs defensive copy of the errors slice.
+func NewValidationFailedEvent(errors []string, durationMs int64) *ValidationFailedEvent {
 	// Defensive copy of errors slice
 	var errorsCopy []string
 	if len(errors) > 0 {
@@ -647,7 +625,6 @@ func NewValidationFailedEvent(endpoints []interface{}, errors []string, duration
 	}
 
 	return &ValidationFailedEvent{
-		Endpoints:  endpointsCopy,
 		Errors:     errorsCopy,
 		DurationMs: durationMs,
 		timestamp:  time.Now(),

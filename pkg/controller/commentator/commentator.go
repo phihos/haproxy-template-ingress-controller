@@ -322,8 +322,8 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 
 	// Validation Events
 	case *events.ValidationStartedEvent:
-		return fmt.Sprintf("Configuration validation started against %d endpoints", len(e.Endpoints)),
-			append(attrs, "endpoint_count", len(e.Endpoints))
+		return "Configuration validation started",
+			attrs
 
 	case *events.ValidationCompletedEvent:
 		warningInfo := ""
@@ -331,12 +331,12 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 			warningInfo = fmt.Sprintf(" with %d warnings", len(e.Warnings))
 		}
 		return fmt.Sprintf("Configuration validation succeeded%s (%dms)", warningInfo, e.DurationMs),
-			append(attrs, "endpoint_count", len(e.Endpoints), "warnings", len(e.Warnings), "duration_ms", e.DurationMs)
+			append(attrs, "warnings", len(e.Warnings), "duration_ms", e.DurationMs)
 
 	case *events.ValidationFailedEvent:
 		return fmt.Sprintf("Configuration validation failed with %d errors (%dms)",
 				len(e.Errors), e.DurationMs),
-			append(attrs, "endpoint_count", len(e.Endpoints), "error_count", len(e.Errors), "duration_ms", e.DurationMs)
+			append(attrs, "error_count", len(e.Errors), "duration_ms", e.DurationMs)
 
 	// Deployment Events
 	case *events.DeploymentStartedEvent:

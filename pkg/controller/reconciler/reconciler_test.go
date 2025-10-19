@@ -427,3 +427,104 @@ func TestReconciler_ZeroDebounceUsesDefault(t *testing.T) {
 	assert.Equal(t, DefaultDebounceInterval, reconciler.debounceInterval,
 		"Should use default debounce interval when config value is zero")
 }
+
+// TestReconciler_SkipHAProxyPodChanges tests that HAProxy pod changes are filtered out.
+//
+// HAProxy pods are deployment targets, not configuration sources. Changes to HAProxy pods
+// should trigger deployment-only reconciliation via HAProxyPodsDiscoveredEvent → Deployer component,
+// not full reconciliation (render + validate + deploy).
+func TestReconciler_SkipHAProxyPodChanges(t *testing.T) {
+	bus := busevents.NewEventBus(100)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	config := &Config{
+		DebounceInterval: 100 * time.Millisecond,
+	}
+
+	reconciler := New(bus, logger, config)
+
+	eventChan := bus.Subscribe(50)
+	bus.Start()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go reconciler.Start(ctx)
+
+	// Give the reconciler time to start listening
+	time.Sleep(50 * time.Millisecond)
+
+	// Publish haproxy-pods resource change
+	bus.Publish(events.NewResourceIndexUpdatedEvent("haproxy-pods", types.ChangeStats{
+		Created:       1,
+		Modified:      0,
+		Deleted:       0,
+		IsInitialSync: false,
+	}))
+
+	// Wait longer than debounce interval
+	time.Sleep(300 * time.Millisecond)
+
+	// Should NOT receive any reconciliation triggered events
+	select {
+	case event := <-eventChan:
+		if _, ok := event.(*events.ReconciliationTriggeredEvent); ok {
+			t.Fatal("Should not trigger reconciliation for haproxy-pods changes (deployment target, not config source)")
+		}
+	default:
+		// Expected - no events
+	}
+}
+
+// TestReconciler_NonHAProxyPodChangesStillTrigger tests that non-HAProxy pod resource changes still trigger reconciliation.
+//
+// This ensures the haproxy-pods filter doesn't break reconciliation for actual configuration sources.
+func TestReconciler_NonHAProxyPodChangesStillTrigger(t *testing.T) {
+	bus := busevents.NewEventBus(100)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	config := &Config{
+		DebounceInterval: 100 * time.Millisecond,
+	}
+
+	reconciler := New(bus, logger, config)
+
+	eventChan := bus.Subscribe(50)
+	bus.Start()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go reconciler.Start(ctx)
+
+	// Give the reconciler time to start listening
+	time.Sleep(50 * time.Millisecond)
+
+	// Publish ingress resource change (not haproxy-pods)
+	bus.Publish(events.NewResourceIndexUpdatedEvent("ingresses", types.ChangeStats{
+		Created:       1,
+		Modified:      0,
+		Deleted:       0,
+		IsInitialSync: false,
+	}))
+
+	// Wait for debounce timer to expire and reconciliation to trigger
+	timeout := time.After(500 * time.Millisecond)
+	var receivedEvent *events.ReconciliationTriggeredEvent
+
+	for {
+		select {
+		case event := <-eventChan:
+			if e, ok := event.(*events.ReconciliationTriggeredEvent); ok {
+				receivedEvent = e
+				goto Done
+			}
+		case <-timeout:
+			t.Fatal("Timeout waiting for ReconciliationTriggeredEvent")
+		}
+	}
+
+Done:
+	require.NotNil(t, receivedEvent, "Should receive ReconciliationTriggeredEvent for non-HAProxy pod resources")
+	assert.Equal(t, "debounce_timer", receivedEvent.Reason)
+}

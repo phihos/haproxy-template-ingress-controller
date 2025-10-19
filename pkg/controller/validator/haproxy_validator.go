@@ -114,9 +114,7 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 		"auxiliary_files", event.AuxiliaryFileCount)
 
 	// Publish validation started event
-	// Note: Endpoints are not available at validation time (they come from pod discovery)
-	// For now, use empty endpoints slice
-	v.eventBus.Publish(events.NewValidationStartedEvent([]interface{}{}))
+	v.eventBus.Publish(events.NewValidationStartedEvent())
 
 	// Extract auxiliary files from event
 	// Type-assert from interface{} to *dataplane.AuxiliaryFiles
@@ -149,8 +147,7 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 		"duration_ms", durationMs)
 
 	v.eventBus.Publish(events.NewValidationCompletedEvent(
-		[]interface{}{}, // Endpoints not available at validation time
-		[]string{},      // No warnings
+		[]string{}, // No warnings
 		durationMs,
 	))
 }
@@ -158,7 +155,6 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 // publishValidationFailure publishes a validation failure event.
 func (v *HAProxyValidatorComponent) publishValidationFailure(errors []string, durationMs int64) {
 	v.eventBus.Publish(events.NewValidationFailedEvent(
-		[]interface{}{}, // Endpoints not available at validation time
 		errors,
 		durationMs,
 	))
