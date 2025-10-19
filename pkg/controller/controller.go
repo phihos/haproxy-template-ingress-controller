@@ -36,6 +36,8 @@ import (
 	"haproxy-template-ic/pkg/controller/configchange"
 	"haproxy-template-ic/pkg/controller/configloader"
 	"haproxy-template-ic/pkg/controller/credentialsloader"
+	"haproxy-template-ic/pkg/controller/deployer"
+	"haproxy-template-ic/pkg/controller/discovery"
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/controller/executor"
 	"haproxy-template-ic/pkg/controller/indextracker"
@@ -246,10 +248,13 @@ func setupResourceWatchers(
 	cancel context.CancelFunc,
 ) (*resourcewatcher.ResourceWatcherComponent, error) {
 	// Extract resource type names for IndexSynchronizationTracker
-	resourceNames := make([]string, 0, len(cfg.WatchedResources))
+	// Include haproxy-pods which is auto-injected by ResourceWatcherComponent
+	resourceNames := make([]string, 0, len(cfg.WatchedResources)+1)
 	for name := range cfg.WatchedResources {
 		resourceNames = append(resourceNames, name)
 	}
+	// Add haproxy-pods (auto-injected)
+	resourceNames = append(resourceNames, "haproxy-pods")
 
 	// Create ResourceWatcherComponent
 	resourceWatcher, err := resourcewatcher.New(cfg, k8sClient, bus, logger)
@@ -404,6 +409,17 @@ func setupReconciliation(
 	// Create Executor
 	executorComponent := executor.New(bus, logger)
 
+	// Create Deployer
+	deployerComponent := deployer.New(bus, logger)
+
+	// Create Discovery component and set pod store
+	discoveryComponent := discovery.New(bus, logger)
+	podStore := resourceWatcher.GetStore("haproxy-pods")
+	if podStore == nil {
+		return fmt.Errorf("haproxy-pods store not found (should be auto-injected)")
+	}
+	discoveryComponent.SetPodStore(podStore)
+
 	// Start reconciler in background
 	go func() {
 		if err := reconcilerComponent.Start(iterCtx); err != nil {
@@ -436,7 +452,23 @@ func setupReconciliation(
 		}
 	}()
 
-	logger.Info("Reconciliation components started (Reconciler, Renderer, HAProxyValidator, Executor)")
+	// Start discovery in background
+	go func() {
+		if err := discoveryComponent.Start(iterCtx); err != nil {
+			logger.Error("discovery failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start deployer in background
+	go func() {
+		if err := deployerComponent.Start(iterCtx); err != nil {
+			logger.Error("deployer failed", "error", err)
+			cancel()
+		}
+	}()
+
+	logger.Info("Reconciliation components started (Reconciler, Renderer, HAProxyValidator, Executor, Discovery, Deployer)")
 
 	// Give components a brief moment to subscribe to the EventBus
 	// before publishing the initial reconciliation trigger

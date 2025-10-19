@@ -17,6 +17,9 @@ const (
 	// DefaultValidationDataplanePort is the default validation dataplane port.
 	DefaultValidationDataplanePort = 5555
 
+	// DefaultDataplanePort is the default Dataplane API port for production HAProxy pods.
+	DefaultDataplanePort = 5555
+
 	// DefaultEnableValidationWebhook is the default webhook setting for resources.
 	DefaultEnableValidationWebhook = false
 )
@@ -42,6 +45,11 @@ func SetDefaults(cfg *Config) {
 	}
 	if cfg.Validation.DataplanePort == 0 {
 		cfg.Validation.DataplanePort = DefaultValidationDataplanePort
+	}
+
+	// Dataplane defaults
+	if cfg.Dataplane.Port == 0 {
+		cfg.Dataplane.Port = DefaultDataplanePort
 	}
 
 	// Watched resources defaults

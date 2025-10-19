@@ -148,12 +148,25 @@ func (r *Reconciler) handleEvent(event busevents.Event) {
 // Resource changes are debounced to batch rapid successive changes.
 // The debounce timer is reset on each change, and reconciliation is
 // only triggered after a quiet period.
+//
+// HAProxy pods are filtered out since they are deployment targets, not configuration sources.
+// Changes to HAProxy pods trigger deployment-only reconciliation via the Deployer component.
 func (r *Reconciler) handleResourceChange(event *events.ResourceIndexUpdatedEvent) {
 	// Skip initial sync events - we don't want to trigger reconciliation
 	// until the initial sync is complete
 	if event.ChangeStats.IsInitialSync {
 		r.logger.Debug("Skipping initial sync event",
 			"resource_type", event.ResourceTypeName,
+			"created", event.ChangeStats.Created,
+			"modified", event.ChangeStats.Modified,
+			"deleted", event.ChangeStats.Deleted)
+		return
+	}
+
+	// Skip HAProxy pod changes - they are deployment targets, not configuration sources
+	// Pod changes trigger deployment via HAProxyPodsDiscoveredEvent → Deployer component
+	if event.ResourceTypeName == "haproxy-pods" {
+		r.logger.Debug("Skipping HAProxy pod change (deployment target, not config source)",
 			"created", event.ChangeStats.Created,
 			"modified", event.ChangeStats.Modified,
 			"deleted", event.ChangeStats.Deleted)
