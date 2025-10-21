@@ -67,7 +67,7 @@ test: ## Run tests
 
 test-integration: ## Run integration tests (requires kind cluster)
 	@echo "Running integration tests..."
-	$(GO) test -v -race -timeout 10m ./tests/integration/...
+	$(GO) test -tags=integration -v -race -timeout 10m ./tests/integration/...
 
 test-acceptance: docker-build-test ## Run acceptance tests (builds image, creates kind cluster)
 	@echo "Running acceptance tests..."
