@@ -20,10 +20,6 @@ controller:
 logging:
   verbose: 1
 
-validation:
-  dataplane_host: localhost
-  dataplane_port: 5555
-
 watched_resources:
   ingresses:
     api_version: networking.k8s.io/v1
@@ -36,18 +32,17 @@ haproxy_config:
       log stdout
 `
 
-	cfg, err := ParseConfig(yamlConfig)
+	cfg, err := parseConfig(yamlConfig)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, "haproxy", cfg.PodSelector.MatchLabels["app"])
 	assert.Equal(t, 8080, cfg.Controller.HealthzPort)
-	assert.Equal(t, "localhost", cfg.Validation.DataplaneHost)
 	assert.Contains(t, cfg.HAProxyConfig.Template, "global")
 }
 
 func TestParseConfig_EmptyString(t *testing.T) {
-	cfg, err := ParseConfig("")
+	cfg, err := parseConfig("")
 	assert.Error(t, err)
 	assert.Nil(t, cfg)
 	assert.Contains(t, err.Error(), "config YAML is empty")
@@ -61,7 +56,7 @@ pod_selector:
   invalid_indentation
 `
 
-	cfg, err := ParseConfig(yamlConfig)
+	cfg, err := parseConfig(yamlConfig)
 	assert.Error(t, err)
 	assert.Nil(t, cfg)
 	assert.Contains(t, err.Error(), "failed to unmarshal YAML")
@@ -85,7 +80,7 @@ haproxy_config:
   template: "global"
 `
 
-	cfg, err := ParseConfig(yamlConfig)
+	cfg, err := parseConfig(yamlConfig)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
@@ -120,7 +115,7 @@ haproxy_config:
   template: "global"
 `
 
-	cfg, err := ParseConfig(yamlConfig)
+	cfg, err := parseConfig(yamlConfig)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
@@ -140,10 +135,8 @@ haproxy_config:
 
 func TestLoadCredentials_Success(t *testing.T) {
 	secretData := map[string][]byte{
-		"dataplane_username":  []byte("admin"),
-		"dataplane_password":  []byte("adminpass"),
-		"validation_username": []byte("validator"),
-		"validation_password": []byte("validatorpass"),
+		"dataplane_username": []byte("admin"),
+		"dataplane_password": []byte("adminpass"),
 	}
 
 	creds, err := LoadCredentials(secretData)
@@ -152,8 +145,6 @@ func TestLoadCredentials_Success(t *testing.T) {
 
 	assert.Equal(t, "admin", creds.DataplaneUsername)
 	assert.Equal(t, "adminpass", creds.DataplanePassword)
-	assert.Equal(t, "validator", creds.ValidationUsername)
-	assert.Equal(t, "validatorpass", creds.ValidationPassword)
 }
 
 func TestLoadCredentials_NilData(t *testing.T) {
@@ -165,9 +156,7 @@ func TestLoadCredentials_NilData(t *testing.T) {
 
 func TestLoadCredentials_MissingDataplaneUsername(t *testing.T) {
 	secretData := map[string][]byte{
-		"dataplane_password":  []byte("adminpass"),
-		"validation_username": []byte("validator"),
-		"validation_password": []byte("validatorpass"),
+		"dataplane_password": []byte("adminpass"),
 	}
 
 	creds, err := LoadCredentials(secretData)
@@ -178,41 +167,13 @@ func TestLoadCredentials_MissingDataplaneUsername(t *testing.T) {
 
 func TestLoadCredentials_MissingDataplanePassword(t *testing.T) {
 	secretData := map[string][]byte{
-		"dataplane_username":  []byte("admin"),
-		"validation_username": []byte("validator"),
-		"validation_password": []byte("validatorpass"),
+		"dataplane_username": []byte("admin"),
 	}
 
 	creds, err := LoadCredentials(secretData)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "dataplane_password")
-}
-
-func TestLoadCredentials_MissingValidationUsername(t *testing.T) {
-	secretData := map[string][]byte{
-		"dataplane_username":  []byte("admin"),
-		"dataplane_password":  []byte("adminpass"),
-		"validation_password": []byte("validatorpass"),
-	}
-
-	creds, err := LoadCredentials(secretData)
-	assert.Error(t, err)
-	assert.Nil(t, creds)
-	assert.Contains(t, err.Error(), "validation_username")
-}
-
-func TestLoadCredentials_MissingValidationPassword(t *testing.T) {
-	secretData := map[string][]byte{
-		"dataplane_username":  []byte("admin"),
-		"dataplane_password":  []byte("adminpass"),
-		"validation_username": []byte("validator"),
-	}
-
-	creds, err := LoadCredentials(secretData)
-	assert.Error(t, err)
-	assert.Nil(t, creds)
-	assert.Contains(t, err.Error(), "validation_password")
 }
 
 func TestLoadCredentials_EmptyValues(t *testing.T) {
@@ -224,42 +185,18 @@ func TestLoadCredentials_EmptyValues(t *testing.T) {
 		{
 			name: "empty dataplane_username",
 			data: map[string][]byte{
-				"dataplane_username":  []byte(""),
-				"dataplane_password":  []byte("adminpass"),
-				"validation_username": []byte("validator"),
-				"validation_password": []byte("validatorpass"),
+				"dataplane_username": []byte(""),
+				"dataplane_password": []byte("adminpass"),
 			},
 			errField: "dataplane_username",
 		},
 		{
 			name: "empty dataplane_password",
 			data: map[string][]byte{
-				"dataplane_username":  []byte("admin"),
-				"dataplane_password":  []byte(""),
-				"validation_username": []byte("validator"),
-				"validation_password": []byte("validatorpass"),
+				"dataplane_username": []byte("admin"),
+				"dataplane_password": []byte(""),
 			},
 			errField: "dataplane_password",
-		},
-		{
-			name: "empty validation_username",
-			data: map[string][]byte{
-				"dataplane_username":  []byte("admin"),
-				"dataplane_password":  []byte("adminpass"),
-				"validation_username": []byte(""),
-				"validation_password": []byte("validatorpass"),
-			},
-			errField: "validation_username",
-		},
-		{
-			name: "empty validation_password",
-			data: map[string][]byte{
-				"dataplane_username":  []byte("admin"),
-				"dataplane_password":  []byte("adminpass"),
-				"validation_username": []byte("validator"),
-				"validation_password": []byte(""),
-			},
-			errField: "validation_password",
 		},
 	}
 
@@ -285,10 +222,6 @@ controller:
 
 logging:
   verbose: 2
-
-validation:
-  dataplane_host: 127.0.0.1
-  dataplane_port: 5556
 
 watched_resources_ignore_fields:
   - metadata.managedFields
@@ -317,7 +250,7 @@ haproxy_config:
   template: "global"
 `
 
-	cfg, err := ParseConfig(yamlConfig)
+	cfg, err := parseConfig(yamlConfig)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
@@ -325,7 +258,6 @@ haproxy_config:
 	assert.Equal(t, "haproxy", cfg.PodSelector.MatchLabels["app"])
 	assert.Equal(t, 8080, cfg.Controller.HealthzPort)
 	assert.Equal(t, 2, cfg.Logging.Verbose)
-	assert.Equal(t, "127.0.0.1", cfg.Validation.DataplaneHost)
 	assert.Len(t, cfg.WatchedResourcesIgnoreFields, 2)
 	assert.Len(t, cfg.WatchedResources, 1)
 	assert.Len(t, cfg.TemplateSnippets, 1)

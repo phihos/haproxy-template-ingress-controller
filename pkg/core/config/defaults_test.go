@@ -13,15 +13,14 @@ func TestSetDefaults_AllUnset(t *testing.T) {
 		},
 	}
 
-	SetDefaults(cfg)
+	setDefaults(cfg)
 
 	// Controller defaults
 	assert.Equal(t, DefaultHealthzPort, cfg.Controller.HealthzPort)
 	assert.Equal(t, DefaultMetricsPort, cfg.Controller.MetricsPort)
 
-	// Validation defaults
-	assert.Equal(t, DefaultValidationDataplaneHost, cfg.Validation.DataplaneHost)
-	assert.Equal(t, DefaultValidationDataplanePort, cfg.Validation.DataplanePort)
+	// Dataplane defaults
+	assert.Equal(t, DefaultDataplanePort, cfg.Dataplane.Port)
 }
 
 func TestSetDefaults_AllSet(t *testing.T) {
@@ -30,19 +29,17 @@ func TestSetDefaults_AllSet(t *testing.T) {
 			HealthzPort: 8081,
 			MetricsPort: 9091,
 		},
-		Validation: ValidationConfig{
-			DataplaneHost: "custom-host",
-			DataplanePort: 5556,
+		Dataplane: DataplaneConfig{
+			Port: 5556,
 		},
 	}
 
-	SetDefaults(cfg)
+	setDefaults(cfg)
 
 	// Verify existing values are not overwritten
 	assert.Equal(t, 8081, cfg.Controller.HealthzPort)
 	assert.Equal(t, 9091, cfg.Controller.MetricsPort)
-	assert.Equal(t, "custom-host", cfg.Validation.DataplaneHost)
-	assert.Equal(t, 5556, cfg.Validation.DataplanePort)
+	assert.Equal(t, 5556, cfg.Dataplane.Port)
 }
 
 func TestSetDefaults_PartiallySet(t *testing.T) {
@@ -51,21 +48,19 @@ func TestSetDefaults_PartiallySet(t *testing.T) {
 			HealthzPort: 8081, // Set
 			// MetricsPort: 0 (unset)
 		},
-		Validation: ValidationConfig{
-			DataplaneHost: "custom-host", // Set
-			// DataplanePort: 0 (unset)
+		Dataplane: DataplaneConfig{
+			// Port: 0 (unset)
 		},
 	}
 
-	SetDefaults(cfg)
+	setDefaults(cfg)
 
 	// Set values should remain
 	assert.Equal(t, 8081, cfg.Controller.HealthzPort)
-	assert.Equal(t, "custom-host", cfg.Validation.DataplaneHost)
 
 	// Unset values should get defaults
 	assert.Equal(t, DefaultMetricsPort, cfg.Controller.MetricsPort)
-	assert.Equal(t, DefaultValidationDataplanePort, cfg.Validation.DataplanePort)
+	assert.Equal(t, DefaultDataplanePort, cfg.Dataplane.Port)
 }
 
 func TestSetDefaults_OperatorConfig(t *testing.T) {
@@ -73,21 +68,10 @@ func TestSetDefaults_OperatorConfig(t *testing.T) {
 		Controller: ControllerConfig{},
 	}
 
-	SetDefaults(cfg)
+	setDefaults(cfg)
 
 	assert.Equal(t, DefaultHealthzPort, cfg.Controller.HealthzPort)
 	assert.Equal(t, DefaultMetricsPort, cfg.Controller.MetricsPort)
-}
-
-func TestSetDefaults_ValidationConfig(t *testing.T) {
-	cfg := &Config{
-		Validation: ValidationConfig{},
-	}
-
-	SetDefaults(cfg)
-
-	assert.Equal(t, DefaultValidationDataplaneHost, cfg.Validation.DataplaneHost)
-	assert.Equal(t, DefaultValidationDataplanePort, cfg.Validation.DataplanePort)
 }
 
 func TestSetDefaults_LoggingConfig(t *testing.T) {
@@ -97,7 +81,7 @@ func TestSetDefaults_LoggingConfig(t *testing.T) {
 		Logging: LoggingConfig{},
 	}
 
-	SetDefaults(cfg)
+	setDefaults(cfg)
 
 	// Zero value should remain (it is valid)
 	assert.Equal(t, 0, cfg.Logging.Verbose)
@@ -108,8 +92,7 @@ func TestSetDefaults_Constants(t *testing.T) {
 	assert.Equal(t, 8080, DefaultHealthzPort)
 	assert.Equal(t, 9090, DefaultMetricsPort)
 	assert.Equal(t, 1, DefaultVerbose)
-	assert.Equal(t, "localhost", DefaultValidationDataplaneHost)
-	assert.Equal(t, 5555, DefaultValidationDataplanePort)
+	assert.Equal(t, 5555, DefaultDataplanePort)
 	assert.False(t, DefaultEnableValidationWebhook)
 }
 
@@ -130,14 +113,14 @@ haproxy_config:
   template: "global"
 `
 
-	cfg, err := ParseConfig(yamlConfig)
+	cfg, err := parseConfig(yamlConfig)
 	assert.NoError(t, err)
 
 	// Before SetDefaults, ports should be 0
 	assert.Equal(t, 0, cfg.Controller.HealthzPort)
 	assert.Equal(t, 0, cfg.Controller.MetricsPort)
 
-	SetDefaults(cfg)
+	setDefaults(cfg)
 
 	// After SetDefaults, ports should have default values
 	assert.Equal(t, DefaultHealthzPort, cfg.Controller.HealthzPort)
@@ -154,11 +137,11 @@ func TestSetDefaults_Idempotent(t *testing.T) {
 	}
 
 	// Apply defaults twice
-	SetDefaults(cfg)
+	setDefaults(cfg)
 	firstHealthz := cfg.Controller.HealthzPort
 	firstMetrics := cfg.Controller.MetricsPort
 
-	SetDefaults(cfg)
+	setDefaults(cfg)
 	secondHealthz := cfg.Controller.HealthzPort
 	secondMetrics := cfg.Controller.MetricsPort
 

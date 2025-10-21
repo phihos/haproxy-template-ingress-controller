@@ -1,5 +1,5 @@
 .PHONY: help version lint lint-fix audit check-all \
-        test test-integration build-integration-test test-coverage \
+        test test-integration test-acceptance build-integration-test test-coverage \
         build docker-build docker-build-multiarch docker-build-multiarch-push docker-load-kind docker-push docker-clean \
         tidy verify generate clean fmt vet install-tools dev
 
@@ -13,9 +13,9 @@ ARCH_GO := $(GO) run github.com/arch-go/arch-go
 OAPI_CODEGEN := $(GO) run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
 # Docker variables
-IMAGE_NAME ?= haproxy-template-ic  # Container image name (override: IMAGE_NAME=my-image)
-IMAGE_TAG ?= dev                   # Image tag (override: IMAGE_TAG=v1.0.0)
-REGISTRY ?=                        # Container registry (e.g., ghcr.io/myorg)
+IMAGE_NAME ?= haproxy-template-ic# Container image name (override: IMAGE_NAME=my-image)
+IMAGE_TAG ?= dev# Image tag (override: IMAGE_TAG=v1.0.0)
+REGISTRY ?=# Container registry (e.g., ghcr.io/myorg)
 FULL_IMAGE := $(if $(REGISTRY),$(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG),$(IMAGE_NAME):$(IMAGE_TAG))
 KIND_CLUSTER ?= haproxy-template-ic-dev  # Kind cluster name for local testing
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -69,6 +69,11 @@ test-integration: ## Run integration tests (requires kind cluster)
 	@echo "Running integration tests..."
 	$(GO) test -v -race -timeout 10m ./tests/integration/...
 
+test-acceptance: docker-build-test ## Run acceptance tests (builds image, creates kind cluster)
+	@echo "Running acceptance tests..."
+	@echo "Note: This will create a kind cluster and may take several minutes"
+	$(GO) test -tags=acceptance -v -timeout 15m ./tests/acceptance/...
+
 build-integration-test: ## Build integration test binary (without running)
 	@echo "Building integration test binary..."
 	@mkdir -p bin
@@ -104,6 +109,9 @@ docker-build: ## Build Docker image
 		-t $(FULL_IMAGE) \
 		.
 	@echo "✓ Image built: $(FULL_IMAGE)"
+
+docker-build-test: ## Build Docker image with test tag for acceptance tests
+	IMAGE_TAG=test $(MAKE) docker-build
 
 docker-build-multiarch: ## Build multi-platform Docker image for local testing (linux/amd64 only)
 	@echo "Building multi-platform Docker image: $(FULL_IMAGE)"

@@ -206,6 +206,7 @@ func NewClient(ctx context.Context, endpoint Endpoint) (*Client, error) {
 		URL:      endpoint.URL,
 		Username: endpoint.Username,
 		Password: endpoint.Password,
+		PodName:  endpoint.PodName,
 	})
 	if err != nil {
 		return nil, NewConnectionError(endpoint.URL, err)

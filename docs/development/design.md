@@ -209,7 +209,7 @@ graph TD
 The two-phase validation eliminates the need for a separate validation sidecar container:
 
 1. **Phase 1 - Syntax Parsing**: client-native library parses configuration structure and validates against HAProxy config grammar
-2. **Phase 2 - Semantic Validation**: haproxy binary (`haproxy -c -f config`) performs full semantic validation including resource availability checks
+2. **Phase 2 - Semantic Validation**: haproxy binary (`haproxy -c -f config`) performs full semantic validation including resource availability checks. Writes auxiliary files to actual HAProxy directories (with mutex locking) to match Dataplane API validation behavior exactly.
 
 This approach provides the same validation guarantees as running a full HAProxy instance while being more lightweight and faster.
 
@@ -231,6 +231,7 @@ haproxy-template-ic/
 │   │   ├── client/          # API client with transactions and retries
 │   │   ├── comparator/      # Fine-grained config comparison
 │   │   │   └── sections/    # Section-specific comparators (30+ files)
+│   │   ├── discovery/       # HAProxy endpoint discovery
 │   │   ├── parser/          # Config parser using client-native
 │   │   ├── synchronizer/    # Operation execution logic
 │   │   ├── types/           # Public types (Endpoint, SyncOptions, etc.)
@@ -253,6 +254,8 @@ haproxy-template-ic/
 │   │   ├── configchange/    # Configuration change handler
 │   │   ├── configloader/    # Config parsing and loading
 │   │   ├── credentialsloader/ # Credentials parsing and loading
+│   │   ├── deployer/        # Deployment orchestration (scheduler, executor, drift monitor)
+│   │   ├── discovery/       # HAProxy pod discovery and endpoint management
 │   │   ├── events/          # Domain-specific event types
 │   │   ├── executor/        # Reconciliation orchestrator
 │   │   ├── indextracker/    # Index synchronization tracking
@@ -266,8 +269,6 @@ haproxy-template-ic/
 │       ├── errors.go        # Custom error types
 │       ├── engine_test.go   # Unit tests
 │       └── README.md        # Usage documentation
-├── internal/                # Internal packages
-│   └── signals/             # Signal handling
 └── tools/                   # Development tools
     └── linters/             # Custom linters
         └── eventimmutability/  # Event pointer receiver linter
@@ -292,9 +293,10 @@ haproxy-template-ic/
 - `pkg/dataplane`: Public API providing Client interface and convenience functions (Sync, DryRun, Diff)
 - `pkg/dataplane/orchestrator`: Coordinates complete sync workflow (parse → compare → sync → auxiliary files)
 - `pkg/dataplane/parser`: Wraps haproxytech/client-native for syntax validation and structured config parsing
-- `pkg/dataplane/validator`: Pure validation functions implementing two-phase HAProxy configuration validation: Phase 1 (syntax validation using client-native parser) and Phase 2 (semantic validation using haproxy binary with -c flag). Creates temporary directory structure mirroring production to validate file references (maps, certificates, error pages). Provides ValidateConfiguration(mainConfig, auxFiles) as pure function with no event dependencies.
+- `pkg/dataplane` (validator.go): Pure validation functions implementing two-phase HAProxy configuration validation: Phase 1 (syntax validation using client-native parser) and Phase 2 (semantic validation using haproxy binary with -c flag). Writes auxiliary files to actual HAProxy directories (with mutex locking to prevent concurrent writes) to validate file references exactly as the Dataplane API does. Requires ValidationPaths parameter matching Dataplane API resource configuration. Provides ValidateConfiguration(mainConfig, auxFiles, paths) as pure function with no event dependencies.
 - `pkg/dataplane/comparator`: Performs fine-grained section-by-section comparison to generate minimal change operations
 - `pkg/dataplane/comparator/sections`: Section-specific comparison logic for all HAProxy config sections (global, defaults, frontends, backends, servers, ACLs, rules, binds, filters, checks, etc.)
+- `pkg/dataplane/discovery`: HAProxy endpoint discovery utilities for identifying dataplane API endpoints
 - `pkg/dataplane/synchronizer`: Executes operations with transaction management and retry logic
 - `pkg/dataplane/auxiliaryfiles`: Manages auxiliary files (general files, SSL certificates, map files) with 3-phase sync: pre-config (create/update), config sync, post-config (delete)
 - `pkg/dataplane/client`: HTTP client wrapper for Dataplane API with version conflict handling, transaction lifecycle, and storage API integration
@@ -380,12 +382,17 @@ Both watchers use the event-driven architecture: changes publish events to Event
 
 **Controller Logic:**
 
-- `pkg/controller`: Main controller package coordinating startup orchestration and component lifecycle via EventBus
+- `pkg/controller`: Main controller package implementing reinitialization loop pattern. Coordinates startup orchestration and component lifecycle via EventBus, responds to configuration changes by cleanly restarting iterations with new settings
 - `pkg/controller/commentator`: Event commentator that subscribes to all events and produces domain-aware log messages with contextual insights using ring buffer for event correlation
 - `pkg/controller/configloader`: Loads and parses controller configuration from ConfigMap resources, publishes ConfigParsedEvent
 - `pkg/controller/credentialsloader`: Loads and validates credentials from Secret resources, publishes CredentialsUpdatedEvent
 - `pkg/controller/configchange`: Handles configuration change events and coordinates reloading of resources
-- `pkg/controller/executor`: Orchestrates reconciliation cycles by handling events from pure components. Subscribes to ReconciliationTriggeredEvent, TemplateRenderedEvent, TemplateRenderFailedEvent, ValidationCompletedEvent, and ValidationFailedEvent. Publishes ReconciliationStartedEvent, ReconciliationCompletedEvent, and ReconciliationFailedEvent. Coordinates the event-driven flow: Renderer → Validator → Deployer (deployment pending implementation). Measures reconciliation duration for observability and handles validation failures by publishing ReconciliationFailedEvent.
+- `pkg/controller/deployer`: Deployment orchestration package (Stage 5) implementing three-component architecture:
+  - **DeploymentScheduler**: Coordinates WHEN deployments happen. Maintains state (last validated config, current endpoints), enforces minimum deployment interval (default 2s) for rate limiting, implements "latest wins" queueing for concurrent changes. Subscribes to TemplateRenderedEvent, ValidationCompletedEvent, HAProxyPodsDiscoveredEvent, DriftPreventionTriggeredEvent, DeploymentCompletedEvent. Publishes DeploymentScheduledEvent.
+  - **Deployer**: Stateless executor that performs deployments. Subscribes to DeploymentScheduledEvent, executes parallel deployments to multiple HAProxy endpoints. Publishes DeploymentStartedEvent, InstanceDeployedEvent, InstanceDeploymentFailedEvent, DeploymentCompletedEvent.
+  - **DriftPreventionMonitor**: Prevents configuration drift from external changes. Monitors deployment activity and triggers periodic deployments (default 60s) when system is idle. Subscribes to DeploymentCompletedEvent. Publishes DriftPreventionTriggeredEvent.
+- `pkg/controller/discovery`: HAProxy pod discovery component (Stage 5). Discovers HAProxy pods in the cluster and provides endpoint information to the Deployer. Publishes HAProxyPodsDiscoveredEvent with discovered endpoints.
+- `pkg/controller/executor`: Orchestrates reconciliation cycles by handling events from pure components. Subscribes to ReconciliationTriggeredEvent, TemplateRenderedEvent, TemplateRenderFailedEvent, ValidationCompletedEvent, and ValidationFailedEvent. Publishes ReconciliationStartedEvent, ReconciliationCompletedEvent, and ReconciliationFailedEvent. Coordinates the event-driven flow: Renderer → Validator → Deployer. Measures reconciliation duration for observability and handles validation failures by publishing ReconciliationFailedEvent.
 - `pkg/controller/indextracker`: Tracks synchronization state across multiple resource types, publishes IndexSynchronizedEvent when all resources complete initial sync, enabling staged controller startup with clear initialization checkpoints
 - `pkg/controller/reconciler`: Debounces resource change events and triggers reconciliation cycles. Subscribes to ResourceIndexUpdatedEvent (applies debouncing with configurable interval, default 500ms) and ConfigValidatedEvent (triggers immediately without debouncing). Publishes ReconciliationTriggeredEvent when conditions are met. Filters initial sync events to prevent premature reconciliation. First Stage 5 component enabling controlled reconciliation trigger logic.
 - `pkg/controller/resourcewatcher`: Manages lifecycle of all Kubernetes resource watchers defined in configuration, provides centralized WaitForAllSync() method for coordinated initialization, publishes ResourceIndexUpdatedEvent with detailed change statistics
@@ -480,69 +487,73 @@ type ConfigSynchronizer interface {
 
 ##### Startup and Initialization
 
+The controller uses a **reinitialization loop** pattern where it responds to configuration changes by restarting with the new configuration. Each iteration follows these initialization steps:
+
 ```mermaid
 sequenceDiagram
     participant Main
+    participant Iteration as runIteration()
     participant EventBus
-    participant ConfigWatcher as Config<br/>Watcher
-    participant ConfigValidator as Config<br/>Validator
+    participant Components
     participant ResourceWatcher as Resource<br/>Watcher
-    participant IndexTracker as Index Sync<br/>Tracker
+    participant ConfigWatcher as Config<br/>Watcher
     participant Reconciler
-    participant Renderer
-    participant Validator as HAProxy<br/>Validator
-    participant Executor
 
-    Main->>EventBus: Create EventBus(1000)
+    Main->>Main: Reinitialization Loop
 
-    Note over Main,ConfigValidator: Stage 1: Config Management Components
-    Main->>ConfigWatcher: NewConfigWatcher(client, eventBus)
-    Main->>ConfigValidator: NewConfigValidator(eventBus)
-    ConfigWatcher->>ConfigWatcher: go Run(ctx)
-    ConfigValidator->>ConfigValidator: go Run(ctx)
-    Main->>EventBus: Start()
+    loop Until Context Cancelled
+        Main->>Iteration: Run iteration
 
-    Note over Main,EventBus: Stage 2: Wait for Valid Config
-    Main->>EventBus: Subscribe(100)
-    ConfigWatcher->>EventBus: Publish(ConfigParsedEvent)
-    ConfigValidator->>EventBus: Publish(ConfigValidatedEvent)
-    EventBus-->>Main: ConfigValidatedEvent
-    Main->>EventBus: Publish(ControllerStartedEvent)
+        Note over Iteration: 1. Fetch & Validate Initial Config
+        Iteration->>Iteration: Fetch ConfigMap & Secret
+        Iteration->>Iteration: Parse & Validate
 
-    Note over Main,IndexTracker: Stage 3: Resource Watchers
-    Main->>ResourceWatcher: NewResourceWatcher(client, eventBus, stores)
-    Main->>IndexTracker: NewIndexSynchronizationTracker(eventBus)
-    ResourceWatcher->>ResourceWatcher: go Run(ctx)
-    IndexTracker->>IndexTracker: go Run(ctx)
+        Note over Iteration,EventBus: 2. Setup Components
+        Iteration->>EventBus: Create EventBus(100)
+        Iteration->>Components: Start validators, loaders, commentator
 
-    ResourceWatcher->>EventBus: Publish(ResourceIndexUpdatedEvent)
+        Note over Iteration,ResourceWatcher: 3. Setup Resource Watchers
+        Iteration->>ResourceWatcher: Create & Start
+        Iteration->>ResourceWatcher: WaitForAllSync()
 
-    Note over Main,EventBus: Stage 4: Wait for Index Sync
-    IndexTracker->>EventBus: Publish(IndexSynchronizedEvent)
-    EventBus-->>Main: IndexSynchronizedEvent
+        Note over Iteration,ConfigWatcher: 4. Setup Config/Secret Watchers
+        Iteration->>ConfigWatcher: Create & Start
+        Iteration->>ConfigWatcher: WaitForSync()
 
-    Note over Main,Executor: Stage 5: Reconciliation Components
-    Main->>Reconciler: NewReconciliationComponent(eventBus)
-    Main->>Renderer: NewRendererComponent(eventBus, config, stores)
-    Main->>Validator: NewHAProxyValidator(eventBus)
-    Main->>Executor: NewReconciliationExecutor(eventBus)
-    Reconciler->>Reconciler: go Run(ctx)
-    Renderer->>Renderer: go Start(ctx)
-    Validator->>Validator: go Start(ctx)
-    Executor->>Executor: go Run(ctx)
+        Note over Iteration,EventBus: 5. Start EventBus
+        Iteration->>EventBus: Start() (replay buffered events)
 
-    Main-->>Main: All components running
+        Note over Iteration,Reconciler: Stage 5: Reconciliation Components
+        Iteration->>Reconciler: Start Reconciler, Renderer, Validator, Executor, Deployer, Discovery
+        Iteration->>EventBus: Publish initial ReconciliationTriggeredEvent
+
+        Note over Iteration: 6. Event Loop
+        Iteration->>Iteration: Wait for config change or cancellation
+
+        alt Config Change Detected
+            ConfigWatcher->>EventBus: ConfigValidatedEvent (new config)
+            Iteration->>Iteration: Cancel iteration context
+            Iteration-->>Main: Return nil (reinitialize)
+        else Context Cancelled
+            Iteration-->>Main: Return nil (shutdown)
+        end
+    end
 ```
 
-**Event-Driven Startup Flow:**
+**Reinitialization Loop Pattern:**
 
-1. **Stage 1 - Config Management**: Start ConfigWatcher and ConfigValidator as goroutines (they subscribe to EventBus), then call EventBus.Start() to replay any buffered events and enter normal operation mode
-2. **Stage 2 - Wait for Valid Config**: Main subscribes to EventBus and blocks until ConfigValidatedEvent is received
-3. **Stage 3 - Resource Watchers**: Start ResourceWatcher and IndexSynchronizationTracker to monitor Kubernetes resources
-4. **Stage 4 - Wait for Index Sync**: Block until IndexSynchronizedEvent confirms all resource indices are populated
-5. **Stage 5 - Reconciliation**: Start Reconciler (debouncer), Renderer (template rendering), HAProxyValidator (configuration validation), and Executor (orchestration) to handle the complete reconciliation workflow
+The controller runs iterations that respond to configuration changes:
 
-The EventBus.Start() call after Stage 1 ensures all initial components have subscribed before events flow, preventing race conditions during initialization. All coordination happens via EventBus pub/sub - components communicate through events, not direct calls.
+1. **Initial Config Fetch**: Fetch and validate ConfigMap and Secret synchronously before starting components
+2. **Component Setup**: Create EventBus and start config management components (validators, loaders, commentator)
+3. **Resource Watchers**: Create watchers for configured resources and wait for initial sync
+4. **Config Watchers**: Create watchers for ConfigMap and Secret, wait for sync
+5. **EventBus Start**: Call EventBus.Start() to replay buffered events and begin normal operation
+6. **Stage 5 - Reconciliation**: Start reconciliation components (Reconciler, Renderer, Validator, Executor, Deployer, Discovery)
+7. **Event Loop**: Wait for configuration changes or context cancellation
+8. **Reinitialization**: When config changes, cancel iteration context to stop all components, then restart with new config
+
+This pattern ensures the controller always operates with validated configuration and handles configuration updates by cleanly restarting with the new settings. The Stage 5 label is explicitly used in code for reconciliation components; earlier stages are implicit in the initialization sequence.
 
 ##### Resource Change Handling
 
@@ -643,13 +654,20 @@ sequenceDiagram
 
 **Validation Steps:**
 
-1. **Syntax Validation**: client-native library parses config structure
+1. **Mutex Acquisition**: Acquire validation mutex to ensure single-threaded validation
+   - Prevents concurrent writes to HAProxy directories
+   - Ensures consistent validation state
+
+2. **Syntax Validation**: client-native library parses config structure
    - Checks grammar and syntax rules
    - Validates section structure
    - Returns parsing errors if invalid
 
-2. **Semantic Validation**: haproxy binary performs full validation
-   - Checks resource availability
+3. **Semantic Validation**: haproxy binary performs full validation
+   - Writes auxiliary files to configured HAProxy directories (maps, certs, general files)
+   - Writes main configuration to configured path
+   - Executes `haproxy -c -f /etc/haproxy/haproxy.cfg`
+   - Checks resource availability (files referenced in config must exist)
    - Validates directive combinations
    - Verifies configuration coherence
    - Returns detailed error messages if invalid
@@ -935,29 +953,50 @@ graph LR
 
 **Implementation**:
 ```go
-// Validation is implemented in pkg/dataplane/parser (client-native integration)
-// and by invoking haproxy binary for semantic validation
-type ConfigValidator struct {
-    parser *clientnative.Parser
-    haproxyBinary string
+// Validation is implemented in pkg/dataplane/validator.go
+// Uses real HAProxy directories with mutex locking to match Dataplane API behavior
+
+// ValidationPaths holds filesystem paths for validation
+type ValidationPaths struct {
+    MapsDir           string  // e.g., /etc/haproxy/maps
+    SSLCertsDir       string  // e.g., /etc/haproxy/certs
+    GeneralStorageDir string  // e.g., /etc/haproxy/general
+    ConfigFile        string  // e.g., /etc/haproxy/haproxy.cfg
 }
 
-func (v *ConfigValidator) Validate(config string) error {
-    // Phase 1: Syntax validation with client-native
-    if err := v.parser.ParseConfiguration(config); err != nil {
-        return fmt.Errorf("syntax error: %w", err)
+func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+    // Acquire mutex to ensure only one validation at a time
+    validationMutex.Lock()
+    defer validationMutex.Unlock()
+
+    // Phase 1: Syntax validation with client-native parser
+    if err := validateSyntax(mainConfig); err != nil {
+        return &ValidationError{Phase: "syntax", Err: err}
     }
 
     // Phase 2: Semantic validation with haproxy binary
-    cmd := exec.Command(v.haproxyBinary, "-c", "-f", "-")
-    cmd.Stdin = strings.NewReader(config)
-    if err := cmd.Run(); err != nil {
-        return fmt.Errorf("semantic error: %w", err)
+    // Writes files to real HAProxy directories, then runs haproxy -c
+    if err := validateSemantics(mainConfig, auxFiles, paths); err != nil {
+        return &ValidationError{Phase: "semantic", Err: err}
     }
 
     return nil
 }
 ```
+
+**Validation Paths Configuration**:
+
+The validation paths must match the HAProxy Dataplane API server's resource configuration. These are configured via the controller's ConfigMap:
+
+```yaml
+validation:
+  maps_dir: /etc/haproxy/maps
+  ssl_certs_dir: /etc/haproxy/certs
+  general_storage_dir: /etc/haproxy/general
+  config_file: /etc/haproxy/haproxy.cfg
+```
+
+The validator uses mutex locking to ensure only one validation runs at a time, preventing concurrent writes to the HAProxy directories. This approach exactly matches how the Dataplane API performs validation.
 
 **Parser Improvements**:
 

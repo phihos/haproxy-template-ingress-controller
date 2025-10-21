@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -68,21 +69,23 @@ func (op *CreateServerOperation) Execute(ctx context.Context, c *client.Dataplan
 		return fmt.Errorf("failed to unmarshal server: %w", err)
 	}
 
-	// Prepare parameters with transaction ID or version
+	// Prepare parameters and execute with transaction ID or version
 	params := &dataplaneapi.CreateServerBackendParams{}
+
+	var resp *http.Response
+
 	if transactionID != "" {
+		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
+		resp, err = apiClient.CreateServerBackend(ctx, op.BackendName, params, apiServer)
 	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
+		// Runtime API path: use version with automatic retry on conflicts
+		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
+			params.Version = &version
+			return apiClient.CreateServerBackend(ctx, op.BackendName, params, apiServer)
+		})
 	}
 
-	// Call the CreateServerBackend API
-	resp, err := apiClient.CreateServerBackend(ctx, op.BackendName, params, apiServer)
 	if err != nil {
 		return fmt.Errorf("failed to create server '%s' in backend '%s': %w", op.Server.Name, op.BackendName, err)
 	}
@@ -148,21 +151,24 @@ func (op *DeleteServerOperation) Execute(ctx context.Context, c *client.Dataplan
 
 	apiClient := c.Client()
 
-	// Prepare parameters with transaction ID or version
+	// Prepare parameters and execute with transaction ID or version
 	params := &dataplaneapi.DeleteServerBackendParams{}
+
+	var resp *http.Response
+	var err error
+
 	if transactionID != "" {
+		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
+		resp, err = apiClient.DeleteServerBackend(ctx, op.BackendName, op.Server.Name, params)
 	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
+		// Runtime API path: use version with automatic retry on conflicts
+		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
+			params.Version = &version
+			return apiClient.DeleteServerBackend(ctx, op.BackendName, op.Server.Name, params)
+		})
 	}
 
-	// Call the DeleteServerBackend API
-	resp, err := apiClient.DeleteServerBackend(ctx, op.BackendName, op.Server.Name, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete server '%s' from backend '%s': %w", op.Server.Name, op.BackendName, err)
 	}
@@ -238,24 +244,25 @@ func (op *UpdateServerOperation) Execute(ctx context.Context, c *client.Dataplan
 		return fmt.Errorf("failed to unmarshal server: %w", err)
 	}
 
-	// Prepare parameters with transaction ID or version
+	// Prepare parameters and execute with transaction ID or version
 	// When transactionID is empty, use version for runtime API (no reload)
 	// When transactionID is set, use transaction for config change (reload)
 	params := &dataplaneapi.ReplaceServerBackendParams{}
+
+	var resp *http.Response
+
 	if transactionID != "" {
+		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
+		resp, err = apiClient.ReplaceServerBackend(ctx, op.BackendName, op.Server.Name, params, apiServer)
 	} else {
-		// Get current version for runtime API
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
+		// Runtime API path: use version with automatic retry on conflicts
+		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
+			params.Version = &version
+			return apiClient.ReplaceServerBackend(ctx, op.BackendName, op.Server.Name, params, apiServer)
+		})
 	}
 
-	// Call the ReplaceServerBackend API
-	resp, err := apiClient.ReplaceServerBackend(ctx, op.BackendName, op.Server.Name, params, apiServer)
 	if err != nil {
 		return fmt.Errorf("failed to update server '%s' in backend '%s': %w", op.Server.Name, op.BackendName, err)
 	}

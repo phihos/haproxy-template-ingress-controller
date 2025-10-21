@@ -3,6 +3,8 @@ package client
 import (
 	"context"
 	"errors"
+	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -259,6 +261,191 @@ func TestIsVersionConflict(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.expected, condition(tc.err))
+		})
+	}
+}
+
+func TestIsConnectionError(t *testing.T) {
+	condition := IsConnectionError()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name: "connection refused - net.OpError",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: syscall.ECONNREFUSED,
+			},
+			expected: true,
+		},
+		{
+			name: "connection reset - net.OpError",
+			err: &net.OpError{
+				Op:  "read",
+				Net: "tcp",
+				Err: syscall.ECONNRESET,
+			},
+			expected: true,
+		},
+		{
+			name:     "connection refused - error message",
+			err:      errors.New("dial tcp 10.0.0.1:5555: connect: connection refused"),
+			expected: true,
+		},
+		{
+			name:     "connection reset - error message",
+			err:      errors.New("read tcp 10.0.0.1:5555: connection reset by peer"),
+			expected: true,
+		},
+		{
+			name:     "no such host - error message",
+			err:      errors.New("dial tcp: lookup invalid.host: no such host"),
+			expected: true,
+		},
+		{
+			name:     "generic dial error - error message",
+			err:      errors.New("dial tcp 10.0.0.1:5555: i/o timeout"),
+			expected: true,
+		},
+		{
+			name:     "http error - should not retry",
+			err:      errors.New("HTTP 404 Not Found"),
+			expected: false,
+		},
+		{
+			name:     "authentication error - should not retry",
+			err:      errors.New("authentication failed"),
+			expected: false,
+		},
+		{
+			name:     "parsing error - should not retry",
+			err:      errors.New("failed to parse configuration"),
+			expected: false,
+		},
+		{
+			name:     "context canceled - should not retry",
+			err:      context.Canceled,
+			expected: false,
+		},
+		{
+			name:     "generic error - should not retry",
+			err:      errors.New("some other error"),
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := condition(tc.err)
+			assert.Equal(t, tc.expected, actual,
+				"IsConnectionError(%v) = %v, want %v", tc.err, actual, tc.expected)
+		})
+	}
+}
+
+func TestWithRetry_RetriesOnConnectionError(t *testing.T) {
+	config := RetryConfig{
+		MaxAttempts: 3,
+		RetryIf:     IsConnectionError(),
+		Backoff:     BackoffNone,
+	}
+
+	attempts := 0
+	result, err := WithRetry(context.Background(), config, func(attempt int) (string, error) {
+		attempts++
+		if attempt < 3 {
+			// Simulate connection refused on first two attempts
+			return "", &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: syscall.ECONNREFUSED,
+			}
+		}
+		return "success", nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "success", result)
+	assert.Equal(t, 3, attempts, "should retry twice before succeeding")
+}
+
+func TestWithRetry_NoRetryOnNonConnectionError(t *testing.T) {
+	config := RetryConfig{
+		MaxAttempts: 3,
+		RetryIf:     IsConnectionError(),
+		Backoff:     BackoffNone,
+	}
+
+	attempts := 0
+	result, err := WithRetry(context.Background(), config, func(attempt int) (string, error) {
+		attempts++
+		return "", errors.New("HTTP 500 Internal Server Error")
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, "", result)
+	assert.Equal(t, 1, attempts, "should not retry on non-connection error")
+	assert.Equal(t, "HTTP 500 Internal Server Error", err.Error())
+}
+
+func TestContainsAny(t *testing.T) {
+	tests := []struct {
+		name       string
+		s          string
+		substrings []string
+		expected   bool
+	}{
+		{
+			name:       "contains first substring",
+			s:          "connection refused",
+			substrings: []string{"connection refused", "connection reset"},
+			expected:   true,
+		},
+		{
+			name:       "contains second substring",
+			s:          "connection reset by peer",
+			substrings: []string{"connection refused", "connection reset"},
+			expected:   true,
+		},
+		{
+			name:       "substring in middle",
+			s:          "dial tcp 10.0.0.1:5555: connection refused",
+			substrings: []string{"connection refused"},
+			expected:   true,
+		},
+		{
+			name:       "does not contain any substring",
+			s:          "some other error",
+			substrings: []string{"connection refused", "connection reset"},
+			expected:   false,
+		},
+		{
+			name:       "empty string",
+			s:          "",
+			substrings: []string{"connection refused"},
+			expected:   false,
+		},
+		{
+			name:       "empty substrings",
+			s:          "connection refused",
+			substrings: []string{},
+			expected:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := containsAny(tc.s, tc.substrings...)
+			assert.Equal(t, tc.expected, actual)
 		})
 	}
 }

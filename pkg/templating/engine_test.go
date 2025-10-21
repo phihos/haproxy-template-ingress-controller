@@ -249,7 +249,7 @@ func TestTemplateNotFoundError_ErrorMessage(t *testing.T) {
 
 func TestGonja_ComplexFeatures(t *testing.T) {
 	templates := map[string]string{
-		"with_loop":   `{% for item in items %}{{ item }}{% if not loop.last %}, {% endif %}{% endfor %}`,
+		"with_loop":   `{%+ for item in items +%}{{ item }}{%+ if not loop.last +%}, {%+ endif +%}{%+ endfor +%}`,
 		"with_if":     `{% if count > 5 %}Many{% else %}Few{% endif %}`,
 		"with_filter": `{{ text | upper }}`,
 	}
@@ -288,4 +288,79 @@ func TestNew_EmptyTemplates(t *testing.T) {
 
 	assert.Equal(t, 0, engine.TemplateCount())
 	assert.Empty(t, engine.TemplateNames())
+}
+
+func TestTemplateIncludes(t *testing.T) {
+	tests := []struct {
+		name      string
+		templates map[string]string
+		render    string
+		context   map[string]interface{}
+		want      string
+		wantErr   bool
+	}{
+		{
+			name: "simple include",
+			templates: map[string]string{
+				"header": "Header: {{ title }}",
+				"footer": "Footer text",
+				"main":   `{%+ include "header" +%}` + "\nBody\n" + `{%+ include "footer" +%}`,
+			},
+			render:  "main",
+			context: map[string]interface{}{"title": "Test"},
+			want:    "Header: Test\nBody\nFooter text",
+		},
+		{
+			name: "nested includes",
+			templates: map[string]string{
+				"base":   "{{ content }}",
+				"middle": `Start-{% include "base" %}-End`,
+				"top":    `Outer({% include "middle" %})`,
+			},
+			render:  "top",
+			context: map[string]interface{}{"content": "INNER"},
+			want:    "Outer(Start-INNER-End)",
+		},
+		{
+			name: "include with loop",
+			templates: map[string]string{
+				"item": "- {{ name }}\n",
+				"list": `Items:` + "\n" + `{% for i in items %}{% set name = i.name %}{% include "item" %}{% endfor %}`,
+			},
+			render: "list",
+			context: map[string]interface{}{
+				"items": []map[string]interface{}{
+					{"name": "First"},
+					{"name": "Second"},
+				},
+			},
+			want: "Items:\n- First\n- Second\n",
+		},
+		{
+			name: "include non-existent template",
+			templates: map[string]string{
+				"main": `{% include "missing" %}`,
+			},
+			render:  "main",
+			context: map[string]interface{}{},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, err := New(EngineTypeGonja, tt.templates)
+			require.NoError(t, err)
+
+			output, err := engine.Render(tt.render, tt.context)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, output)
+		})
+	}
 }

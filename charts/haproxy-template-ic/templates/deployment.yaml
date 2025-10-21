@@ -51,6 +51,11 @@ spec:
             - name: metrics
               containerPort: {{ .Values.controller.config.controller.metrics_port }}
               protocol: TCP
+            {{- if gt (.Values.controller.debugPort | int) 0 }}
+            - name: debug
+              containerPort: {{ .Values.controller.debugPort }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: CONFIGMAP_NAME
               value: {{ .Values.controller.configmapName | quote }}
@@ -58,6 +63,10 @@ spec:
               value: {{ include "haproxy-template-ic.fullname" . }}-credentials
             - name: VERBOSE
               value: {{ .Values.controller.config.logging.verbose | quote }}
+            {{- if gt (.Values.controller.debugPort | int) 0 }}
+            - name: DEBUG_PORT
+              value: {{ .Values.controller.debugPort | quote }}
+            {{- end }}
           {{- with .Values.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
@@ -70,120 +79,6 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if .Values.validation.enabled }}
-          volumeMounts:
-            - name: validation-config
-              mountPath: /etc/haproxy/validation
-          {{- end }}
-        {{- if .Values.validation.enabled }}
-        - name: validation-haproxy
-          image: "{{ .Values.haproxyImage.repository }}:{{ .Values.haproxyImage.tag }}"
-          imagePullPolicy: {{ .Values.haproxyImage.pullPolicy }}
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              # Create default minimal haproxy.cfg
-              cat > /etc/haproxy/haproxy.cfg <<'EOF'
-              global
-                  stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
-                  log stdout local0
-
-              defaults
-                  mode http
-                  timeout connect 1s
-                  timeout client 1s
-                  timeout server 1s
-
-              frontend status
-                  bind *:{{ .Values.validation.haproxy.port }}
-                  http-request return status 200 content-type text/plain string "OK" if { path /healthz }
-              EOF
-
-              # Ensure directories exist
-              mkdir -p /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors
-              chown -R haproxy:haproxy /etc/haproxy
-
-              # Start HAProxy in master-worker mode
-              exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
-          ports:
-            - name: validation
-              containerPort: {{ .Values.validation.haproxy.port }}
-              protocol: TCP
-          volumeMounts:
-            - name: validation-config
-              mountPath: /etc/haproxy
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: {{ .Values.validation.haproxy.port }}
-            initialDelaySeconds: 10
-            periodSeconds: 10
-        - name: validation-dataplane
-          image: "{{ .Values.haproxyImage.repository }}:{{ .Values.haproxyImage.tag }}"
-          imagePullPolicy: {{ .Values.haproxyImage.pullPolicy }}
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              # Create Dataplane API config
-              cat > /etc/haproxy/dataplaneapi.yaml <<'EOF'
-              config_version: 2
-              name: haproxy-dataplaneapi
-              dataplaneapi:
-                host: 0.0.0.0
-                port: {{ .Values.controller.config.validation.dataplane_port }}
-                user:
-                  - name: {{ .Values.credentials.validation.username | quote }}
-                    password: {{ .Values.credentials.validation.password | quote }}
-                    insecure: true
-                transaction:
-                  transaction_dir: /var/lib/dataplaneapi/transactions
-                  backups_number: 10
-                  backups_dir: /var/lib/dataplaneapi/backups
-                resources:
-                  maps_dir: /etc/haproxy/maps
-                  ssl_certs_dir: /etc/haproxy/certs
-                  general_storage_dir: /etc/haproxy/general
-              haproxy:
-                config_file: /etc/haproxy/haproxy.cfg
-                haproxy_bin: /usr/local/sbin/haproxy
-                reload:
-                  reload_delay: 1
-                  reload_cmd: /bin/sh -c "echo reload | nc local:/etc/haproxy/haproxy-master.sock"
-                  restart_cmd: /bin/sh -c "echo reload | nc local:/etc/haproxy/haproxy-master.sock"
-                  reload_strategy: custom
-              log_targets:
-                - log_to: stdout
-                  log_level: info
-              EOF
-
-              # Ensure directories exist
-              mkdir -p /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
-              chown -R haproxy:haproxy /var/lib/dataplaneapi /etc/haproxy
-
-              # Start Dataplane API
-              exec dataplaneapi --config-file=/etc/haproxy/dataplaneapi.yaml
-          ports:
-            - name: validation-api
-              containerPort: {{ .Values.controller.config.validation.dataplane_port }}
-              protocol: TCP
-          volumeMounts:
-            - name: validation-config
-              mountPath: /etc/haproxy
-          livenessProbe:
-            httpGet:
-              path: /v3/info
-              port: {{ .Values.controller.config.validation.dataplane_port }}
-              httpHeaders:
-                - name: Authorization
-                  value: "Basic {{ printf "%s:%s" .Values.credentials.validation.username .Values.credentials.validation.password | b64enc }}"
-            initialDelaySeconds: 15
-            periodSeconds: 10
-        {{- end }}
-      {{- if .Values.validation.enabled }}
-      volumes:
-        - name: validation-config
-          emptyDir: {}
-      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

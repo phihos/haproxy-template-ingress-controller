@@ -7,10 +7,38 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ParseConfig parses YAML configuration into a Config struct.
+// LoadConfig parses YAML configuration and applies default values.
+// This is the recommended function for loading configuration.
+//
+// It performs two operations atomically:
+//  1. Parses YAML into Config struct
+//  2. Applies default values to unset fields
+//
+// Example:
+//
+//	cfg, err := config.LoadConfig(yamlString)
+//	if err != nil {
+//	    return err
+//	}
+//	// cfg now has defaults applied and is ready for validation
+func LoadConfig(configYAML string) (*Config, error) {
+	cfg, err := parseConfig(configYAML)
+	if err != nil {
+		return nil, err
+	}
+
+	setDefaults(cfg)
+
+	return cfg, nil
+}
+
+// parseConfig parses YAML configuration into a Config struct.
 // This is a pure function that only parses YAML - it does not load from
 // Kubernetes, apply defaults, or perform validation.
-func ParseConfig(configYAML string) (*Config, error) {
+//
+// Most callers should use LoadConfig() instead. This function is primarily
+// useful for testing parse behavior independently from default application.
+func parseConfig(configYAML string) (*Config, error) {
 	if configYAML == "" {
 		return nil, fmt.Errorf("config YAML is empty")
 	}
@@ -27,8 +55,7 @@ func ParseConfig(configYAML string) (*Config, error) {
 // This is a pure function that extracts credentials from Secret data.
 // It does not load from Kubernetes or perform validation.
 //
-// Expected Secret keys: dataplane_username, dataplane_password,
-// validation_username, validation_password.
+// Expected Secret keys: dataplane_username, dataplane_password.
 func LoadCredentials(secretData map[string][]byte) (*Credentials, error) {
 	if secretData == nil {
 		return nil, fmt.Errorf("secret data is nil")
@@ -45,20 +72,8 @@ func LoadCredentials(secretData map[string][]byte) (*Credentials, error) {
 		return nil, fmt.Errorf("missing required secret key: dataplane_password")
 	}
 
-	validationUsername, ok := secretData["validation_username"]
-	if !ok || len(validationUsername) == 0 {
-		return nil, fmt.Errorf("missing required secret key: validation_username")
-	}
-
-	validationPassword, ok := secretData["validation_password"]
-	if !ok || len(validationPassword) == 0 {
-		return nil, fmt.Errorf("missing required secret key: validation_password")
-	}
-
 	return &Credentials{
-		DataplaneUsername:  string(dataplaneUsername),
-		DataplanePassword:  string(dataplanePassword),
-		ValidationUsername: string(validationUsername),
-		ValidationPassword: string(validationPassword),
+		DataplaneUsername: string(dataplaneUsername),
+		DataplanePassword: string(dataplanePassword),
 	}, nil
 }

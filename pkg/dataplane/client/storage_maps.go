@@ -1,4 +1,4 @@
-//nolint:dupl // Intentional duplication - multipart upload/update patterns for different storage types
+//nolint:dupl // Intentional duplication - multipart upload patterns for different storage types
 package client
 
 import (
@@ -64,6 +64,19 @@ func (c *DataplaneClient) GetMapFileContent(ctx context.Context, name string) (s
 		return "", fmt.Errorf("get map file '%s' failed with status %d", name, resp.StatusCode)
 	}
 
+	// Read entire response body first to handle empty responses
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body for map file '%s': %w", name, err)
+	}
+
+	// Trim whitespace and check if body is effectively empty (can happen for empty map files)
+	trimmedBody := bytes.TrimSpace(bodyBytes)
+	if len(trimmedBody) == 0 {
+		// Empty response (or only whitespace) - treat as empty map file content
+		return "", nil
+	}
+
 	// Parse response body
 	var apiMap struct {
 		StorageName *string `json:"storage_name"`
@@ -71,8 +84,13 @@ func (c *DataplaneClient) GetMapFileContent(ctx context.Context, name string) (s
 		Description *string `json:"description"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiMap); err != nil {
-		return "", fmt.Errorf("failed to decode map file response: %w", err)
+	if err := json.Unmarshal(bodyBytes, &apiMap); err != nil {
+		// Include response body in error for debugging
+		bodySnippet := string(bodyBytes)
+		if len(bodySnippet) > 200 {
+			bodySnippet = bodySnippet[:200] + "..."
+		}
+		return "", fmt.Errorf("failed to decode map file response (body: %s): %w", bodySnippet, err)
 	}
 
 	if apiMap.File == nil {
@@ -127,33 +145,14 @@ func (c *DataplaneClient) CreateMapFile(ctx context.Context, name, content strin
 	return nil
 }
 
-// UpdateMapFile updates an existing map file using multipart form-data.
+// UpdateMapFile updates an existing map file using text/plain content-type.
+// Note: The Dataplane API requires text/plain or application/json for UPDATE operations,
+// while CREATE operations accept multipart/form-data.
 func (c *DataplaneClient) UpdateMapFile(ctx context.Context, name, content string) error {
-	// Create multipart form-data
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
+	// Use text/plain content-type for UPDATE (API v3 requirement)
+	body := bytes.NewReader([]byte(content))
 
-	// Add map file content as a form file field
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename=%q`, name))
-	h.Set("Content-Type", "application/octet-stream")
-
-	part, err := writer.CreatePart(h)
-	if err != nil {
-		return fmt.Errorf("failed to create multipart part: %w", err)
-	}
-
-	if _, err := part.Write([]byte(content)); err != nil {
-		return fmt.Errorf("failed to write map file content: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", err)
-	}
-
-	// Send request
-	contentType := writer.FormDataContentType()
-	resp, err := c.client.ReplaceStorageMapFileWithBody(ctx, name, nil, contentType, body)
+	resp, err := c.client.ReplaceStorageMapFileWithBody(ctx, name, nil, "text/plain", body)
 	if err != nil {
 		return fmt.Errorf("failed to update map file '%s': %w", name, err)
 	}

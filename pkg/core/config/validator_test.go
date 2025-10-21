@@ -18,10 +18,6 @@ func TestValidateStructure_Success(t *testing.T) {
 		Logging: LoggingConfig{
 			Verbose: 1,
 		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
-		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
@@ -100,10 +96,6 @@ func TestValidateOperatorConfig_InvalidHealthzPort(t *testing.T) {
 					HealthzPort: tt.port,
 					MetricsPort: 9090,
 				},
-				Validation: ValidationConfig{
-					DataplaneHost: "localhost",
-					DataplanePort: 5555,
-				},
 				WatchedResources: map[string]WatchedResource{
 					"ingresses": {
 						APIVersion: "networking.k8s.io/v1",
@@ -132,10 +124,6 @@ func TestValidateOperatorConfig_InvalidMetricsPort(t *testing.T) {
 			HealthzPort: 8080,
 			MetricsPort: 0,
 		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
-		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
@@ -161,10 +149,6 @@ func TestValidateOperatorConfig_SamePort(t *testing.T) {
 		Controller: ControllerConfig{
 			HealthzPort: 8080,
 			MetricsPort: 8080,
-		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
 		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
@@ -205,10 +189,6 @@ func TestValidateLoggingConfig_InvalidVerbose(t *testing.T) {
 				Logging: LoggingConfig{
 					Verbose: tt.verbose,
 				},
-				Validation: ValidationConfig{
-					DataplaneHost: "localhost",
-					DataplanePort: 5555,
-				},
 				WatchedResources: map[string]WatchedResource{
 					"ingresses": {
 						APIVersion: "networking.k8s.io/v1",
@@ -228,66 +208,6 @@ func TestValidateLoggingConfig_InvalidVerbose(t *testing.T) {
 	}
 }
 
-func TestValidateValidationConfig_EmptyHost(t *testing.T) {
-	cfg := &Config{
-		PodSelector: PodSelector{
-			MatchLabels: map[string]string{"app": "haproxy"},
-		},
-		Controller: ControllerConfig{
-			HealthzPort: 8080,
-			MetricsPort: 9090,
-		},
-		Validation: ValidationConfig{
-			DataplaneHost: "",
-			DataplanePort: 5555,
-		},
-		WatchedResources: map[string]WatchedResource{
-			"ingresses": {
-				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
-				IndexBy:    []string{"metadata.namespace"},
-			},
-		},
-		HAProxyConfig: HAProxyConfig{
-			Template: "global",
-		},
-	}
-
-	err := ValidateStructure(cfg)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "dataplane_host")
-}
-
-func TestValidateValidationConfig_InvalidPort(t *testing.T) {
-	cfg := &Config{
-		PodSelector: PodSelector{
-			MatchLabels: map[string]string{"app": "haproxy"},
-		},
-		Controller: ControllerConfig{
-			HealthzPort: 8080,
-			MetricsPort: 9090,
-		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 0,
-		},
-		WatchedResources: map[string]WatchedResource{
-			"ingresses": {
-				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
-				IndexBy:    []string{"metadata.namespace"},
-			},
-		},
-		HAProxyConfig: HAProxyConfig{
-			Template: "global",
-		},
-	}
-
-	err := ValidateStructure(cfg)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "dataplane_port")
-}
-
 func TestValidateWatchedResources_Empty(t *testing.T) {
 	cfg := &Config{
 		PodSelector: PodSelector{
@@ -296,10 +216,6 @@ func TestValidateWatchedResources_Empty(t *testing.T) {
 		Controller: ControllerConfig{
 			HealthzPort: 8080,
 			MetricsPort: 9090,
-		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
 		},
 		WatchedResources: map[string]WatchedResource{},
 		HAProxyConfig: HAProxyConfig{
@@ -320,10 +236,6 @@ func TestValidateWatchedResource_MissingAPIVersion(t *testing.T) {
 		Controller: ControllerConfig{
 			HealthzPort: 8080,
 			MetricsPort: 9090,
-		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
 		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
@@ -351,10 +263,6 @@ func TestValidateWatchedResource_MissingKind(t *testing.T) {
 			HealthzPort: 8080,
 			MetricsPort: 9090,
 		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
-		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
@@ -380,10 +288,6 @@ func TestValidateWatchedResource_EmptyIndexBy(t *testing.T) {
 		Controller: ControllerConfig{
 			HealthzPort: 8080,
 			MetricsPort: 9090,
-		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
 		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
@@ -411,10 +315,6 @@ func TestValidateWatchedResource_EmptyIndexByElement(t *testing.T) {
 			HealthzPort: 8080,
 			MetricsPort: 9090,
 		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
-		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
@@ -441,10 +341,6 @@ func TestValidateHAProxyConfig_EmptyTemplate(t *testing.T) {
 			HealthzPort: 8080,
 			MetricsPort: 9090,
 		},
-		Validation: ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
-		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
@@ -464,10 +360,8 @@ func TestValidateHAProxyConfig_EmptyTemplate(t *testing.T) {
 
 func TestValidateCredentials_Success(t *testing.T) {
 	creds := &Credentials{
-		DataplaneUsername:  "admin",
-		DataplanePassword:  "pass",
-		ValidationUsername: "validator",
-		ValidationPassword: "validpass",
+		DataplaneUsername: "admin",
+		DataplanePassword: "pass",
 	}
 
 	err := ValidateCredentials(creds)
@@ -489,42 +383,18 @@ func TestValidateCredentials_MissingFields(t *testing.T) {
 		{
 			name: "missing dataplane_username",
 			creds: &Credentials{
-				DataplaneUsername:  "",
-				DataplanePassword:  "pass",
-				ValidationUsername: "validator",
-				ValidationPassword: "validpass",
+				DataplaneUsername: "",
+				DataplanePassword: "pass",
 			},
 			errField: "dataplane_username",
 		},
 		{
 			name: "missing dataplane_password",
 			creds: &Credentials{
-				DataplaneUsername:  "admin",
-				DataplanePassword:  "",
-				ValidationUsername: "validator",
-				ValidationPassword: "validpass",
+				DataplaneUsername: "admin",
+				DataplanePassword: "",
 			},
 			errField: "dataplane_password",
-		},
-		{
-			name: "missing validation_username",
-			creds: &Credentials{
-				DataplaneUsername:  "admin",
-				DataplanePassword:  "pass",
-				ValidationUsername: "",
-				ValidationPassword: "validpass",
-			},
-			errField: "validation_username",
-		},
-		{
-			name: "missing validation_password",
-			creds: &Credentials{
-				DataplaneUsername:  "admin",
-				DataplanePassword:  "pass",
-				ValidationUsername: "validator",
-				ValidationPassword: "",
-			},
-			errField: "validation_password",
 		},
 	}
 

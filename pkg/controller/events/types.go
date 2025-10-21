@@ -15,7 +15,7 @@ import (
 // historical facts about what happened in the system and should not be modified after
 // being published to the EventBus.
 //
-// To support this immutability contract:
+// To support this immutability contract:.
 //
 //  1. All event types use pointer receivers for their Event interface methods.
 //     This avoids copying large structs (200+ bytes) and follows Go best practices.
@@ -32,10 +32,10 @@ import (
 //     - Code review for cases not caught by the analyzer
 //     - Team discipline and documentation
 //
-// This approach balances performance, Go idioms, and practical immutability for an
+// This approach balances performance, Go idioms, and practical immutability for an.
 // internal project where all consumers are controlled.
 //
-// Events are organized into categories:
+// Events are organized into categories:.
 // - Lifecycle Events: System startup and shutdown
 // - Configuration Events: ConfigMap/Secret changes and validation
 // - Resource Events: Kubernetes resource indexing and synchronization
@@ -47,7 +47,7 @@ import (
 // - HAProxy Pod Events: HAProxy pod discovery
 
 // -----------------------------------------------------------------------------
-// Event Type Constants
+// Event Type Constants.
 // -----------------------------------------------------------------------------
 
 const (
@@ -84,10 +84,12 @@ const (
 	EventTypeValidationFailed    = "validation.failed"
 
 	// Deployment event types.
+	EventTypeDeploymentScheduled      = "deployment.scheduled"
 	EventTypeDeploymentStarted        = "deployment.started"
 	EventTypeInstanceDeployed         = "instance.deployed"
 	EventTypeInstanceDeploymentFailed = "instance.deployment.failed"
 	EventTypeDeploymentCompleted      = "deployment.completed"
+	EventTypeDriftPreventionTriggered = "drift.prevention.triggered"
 
 	// Storage event types.
 	EventTypeStorageSyncStarted   = "storage.sync.started"
@@ -106,10 +108,10 @@ const (
 )
 
 // -----------------------------------------------------------------------------
-// Lifecycle Events
+// Lifecycle Events.
 // -----------------------------------------------------------------------------
 
-// ControllerStartedEvent is published when the controller has completed startup
+// ControllerStartedEvent is published when the controller has completed startup.
 // and all components are ready to process events.
 type ControllerStartedEvent struct {
 	ConfigVersion string
@@ -147,10 +149,10 @@ func (e *ControllerShutdownEvent) EventType() string    { return EventTypeContro
 func (e *ControllerShutdownEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Configuration Events
+// Configuration Events.
 // -----------------------------------------------------------------------------
 
-// ConfigParsedEvent is published when the configuration ConfigMap/Secret has been
+// ConfigParsedEvent is published when the configuration ConfigMap/Secret has been.
 // successfully parsed into a Config structure.
 //
 // This event does not mean the config is valid - only that it could be parsed.
@@ -260,7 +262,7 @@ func (e *ConfigValidationResponse) Responder() string    { return e.responder }
 
 // ConfigValidatedEvent is published when all validators have confirmed the config is valid.
 //
-// After receiving this event, the controller proceeds to start resource watchers
+// After receiving this event, the controller proceeds to start resource watchers.
 // with the validated configuration.
 type ConfigValidatedEvent struct {
 	Config        interface{}
@@ -284,7 +286,7 @@ func (e *ConfigValidatedEvent) Timestamp() time.Time { return e.timestamp }
 
 // ConfigInvalidEvent is published when config validation fails.
 //
-// The controller will continue running with the previous valid config and wait
+// The controller will continue running with the previous valid config and wait.
 // for the next ConfigMap update.
 type ConfigInvalidEvent struct {
 	Version string
@@ -321,10 +323,10 @@ func (e *ConfigInvalidEvent) EventType() string    { return EventTypeConfigInval
 func (e *ConfigInvalidEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Resource Events
+// Resource Events.
 // -----------------------------------------------------------------------------
 
-// ResourceIndexUpdatedEvent is published when a watched Kubernetes resource
+// ResourceIndexUpdatedEvent is published when a watched Kubernetes resource.
 // has been added, updated, or deleted in the local index.
 type ResourceIndexUpdatedEvent struct {
 	// ResourceTypeName identifies the resource type from config (e.g., "ingresses", "services").
@@ -350,7 +352,7 @@ func NewResourceIndexUpdatedEvent(resourceTypeName string, changeStats types.Cha
 func (e *ResourceIndexUpdatedEvent) EventType() string    { return EventTypeResourceIndexUpdated }
 func (e *ResourceIndexUpdatedEvent) Timestamp() time.Time { return e.timestamp }
 
-// ResourceSyncCompleteEvent is published when a resource watcher has completed
+// ResourceSyncCompleteEvent is published when a resource watcher has completed.
 // its initial sync with the Kubernetes API.
 type ResourceSyncCompleteEvent struct {
 	// ResourceTypeName identifies the resource type from config (e.g., "ingresses").
@@ -374,10 +376,10 @@ func NewResourceSyncCompleteEvent(resourceTypeName string, initialCount int) *Re
 func (e *ResourceSyncCompleteEvent) EventType() string    { return EventTypeResourceSyncComplete }
 func (e *ResourceSyncCompleteEvent) Timestamp() time.Time { return e.timestamp }
 
-// IndexSynchronizedEvent is published when all resource watchers have completed
+// IndexSynchronizedEvent is published when all resource watchers have completed.
 // their initial sync and the system has a complete view of all resources.
 //
-// This is a critical milestone - the controller waits for this event before
+// This is a critical milestone - the controller waits for this event before.
 // starting reconciliation to ensure it has complete data.
 type IndexSynchronizedEvent struct {
 	// ResourceCounts maps resource types to their counts.
@@ -404,12 +406,12 @@ func (e *IndexSynchronizedEvent) EventType() string    { return EventTypeIndexSy
 func (e *IndexSynchronizedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Reconciliation Events
+// Reconciliation Events.
 // -----------------------------------------------------------------------------
 
 // ReconciliationTriggeredEvent is published when a reconciliation cycle should start.
 //
-// This event is typically published by the Reconciler after the debounce timer
+// This event is typically published by the Reconciler after the debounce timer.
 // expires, or immediately for config changes.
 type ReconciliationTriggeredEvent struct {
 	// Reason describes why reconciliation was triggered.
@@ -484,12 +486,12 @@ func (e *ReconciliationFailedEvent) EventType() string    { return EventTypeReco
 func (e *ReconciliationFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Template Events
+// Template Events.
 // -----------------------------------------------------------------------------
 
 // TemplateRenderedEvent is published when template rendering completes successfully.
 //
-// This event carries the rendered HAProxy configuration and all auxiliary files
+// This event carries the rendered HAProxy configuration and all auxiliary files.
 // for the next phase (validation/deployment).
 type TemplateRenderedEvent struct {
 	// HAProxyConfig is the rendered main HAProxy configuration.
@@ -555,7 +557,7 @@ func (e *TemplateRenderFailedEvent) EventType() string    { return EventTypeTemp
 func (e *TemplateRenderFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Validation Events
+// Validation Events.
 // -----------------------------------------------------------------------------
 
 // ValidationStartedEvent is published when local configuration validation begins.
@@ -635,7 +637,7 @@ func (e *ValidationFailedEvent) EventType() string    { return EventTypeValidati
 func (e *ValidationFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Deployment Events
+// Deployment Events.
 // -----------------------------------------------------------------------------
 
 // DeploymentStartedEvent is published when deployment to HAProxy instances begins.
@@ -728,8 +730,79 @@ func NewDeploymentCompletedEvent(total, succeeded, failed int, durationMs int64)
 func (e *DeploymentCompletedEvent) EventType() string    { return EventTypeDeploymentCompleted }
 func (e *DeploymentCompletedEvent) Timestamp() time.Time { return e.timestamp }
 
+// DeploymentScheduledEvent is published when the deployment scheduler has decided.
+// to execute a deployment. This event contains all necessary data for the deployer
+// to execute the deployment without maintaining state.
+//
+// Published by: DeploymentScheduler.
+// Consumed by: Deployer component.
+type DeploymentScheduledEvent struct {
+	// Config is the rendered HAProxy configuration to deploy.
+	Config string
+
+	// AuxiliaryFiles contains all rendered auxiliary files.
+	// Type: interface{} to avoid circular dependencies with pkg/dataplane.
+	// Consumers should type-assert to *dataplane.AuxiliaryFiles.
+	AuxiliaryFiles interface{}
+
+	// Endpoints is the list of HAProxy endpoints to deploy to.
+	Endpoints []interface{}
+
+	// Reason describes why this deployment was scheduled.
+	// Examples: "config_validation", "pod_discovery", "drift_prevention"
+	Reason string
+
+	timestamp time.Time
+}
+
+// NewDeploymentScheduledEvent creates a new DeploymentScheduledEvent.
+// Performs defensive copy of endpoints slice.
+func NewDeploymentScheduledEvent(config string, auxFiles interface{}, endpoints []interface{}, reason string) *DeploymentScheduledEvent {
+	// Defensive copy of endpoints slice
+	var endpointsCopy []interface{}
+	if len(endpoints) > 0 {
+		endpointsCopy = make([]interface{}, len(endpoints))
+		copy(endpointsCopy, endpoints)
+	}
+
+	return &DeploymentScheduledEvent{
+		Config:         config,
+		AuxiliaryFiles: auxFiles,
+		Endpoints:      endpointsCopy,
+		Reason:         reason,
+		timestamp:      time.Now(),
+	}
+}
+
+func (e *DeploymentScheduledEvent) EventType() string    { return EventTypeDeploymentScheduled }
+func (e *DeploymentScheduledEvent) Timestamp() time.Time { return e.timestamp }
+
+// DriftPreventionTriggeredEvent is published when the drift prevention monitor.
+// detects that no deployment has occurred within the configured interval and
+// triggers a deployment to prevent configuration drift.
+//
+// Published by: DriftPreventionMonitor.
+// Consumed by: DeploymentScheduler (which then schedules a deployment).
+type DriftPreventionTriggeredEvent struct {
+	// TimeSinceLastDeployment is the duration since the last deployment completed.
+	TimeSinceLastDeployment time.Duration
+
+	timestamp time.Time
+}
+
+// NewDriftPreventionTriggeredEvent creates a new DriftPreventionTriggeredEvent.
+func NewDriftPreventionTriggeredEvent(timeSinceLast time.Duration) *DriftPreventionTriggeredEvent {
+	return &DriftPreventionTriggeredEvent{
+		TimeSinceLastDeployment: timeSinceLast,
+		timestamp:               time.Now(),
+	}
+}
+
+func (e *DriftPreventionTriggeredEvent) EventType() string    { return EventTypeDriftPreventionTriggered }
+func (e *DriftPreventionTriggeredEvent) Timestamp() time.Time { return e.timestamp }
+
 // -----------------------------------------------------------------------------
-// Storage Events (Auxiliary Files)
+// Storage Events (Auxiliary Files).
 // -----------------------------------------------------------------------------
 
 // StorageSyncStartedEvent is published when auxiliary file synchronization begins.
@@ -805,7 +878,7 @@ func (e *StorageSyncFailedEvent) EventType() string    { return EventTypeStorage
 func (e *StorageSyncFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// HAProxy Pod Events
+// HAProxy Pod Events.
 // -----------------------------------------------------------------------------
 
 // HAProxyPodsDiscoveredEvent is published when HAProxy pods are discovered or updated.
@@ -871,7 +944,7 @@ func (e *HAProxyPodRemovedEvent) EventType() string    { return EventTypeHAProxy
 func (e *HAProxyPodRemovedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Configuration Resource Events
+// Configuration Resource Events.
 // -----------------------------------------------------------------------------
 
 // ConfigResourceChangedEvent is published when the ConfigMap resource is added, updated, or deleted.
@@ -923,10 +996,10 @@ func (e *SecretResourceChangedEvent) EventType() string    { return EventTypeSec
 func (e *SecretResourceChangedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Credentials Events
+// Credentials Events.
 // -----------------------------------------------------------------------------
 
-// CredentialsUpdatedEvent is published when credentials have been successfully
+// CredentialsUpdatedEvent is published when credentials have been successfully.
 // loaded and validated from the Secret.
 type CredentialsUpdatedEvent struct {
 	// Credentials contains the validated credentials.
@@ -954,7 +1027,7 @@ func (e *CredentialsUpdatedEvent) Timestamp() time.Time { return e.timestamp }
 
 // CredentialsInvalidEvent is published when credential loading or validation fails.
 //
-// The controller will continue running with the previous valid credentials and wait
+// The controller will continue running with the previous valid credentials and wait.
 // for the next Secret update.
 type CredentialsInvalidEvent struct {
 	SecretVersion string

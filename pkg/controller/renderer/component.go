@@ -73,6 +73,14 @@ func New(
 	stores map[string]types.Store,
 	logger *slog.Logger,
 ) (*Component, error) {
+	// Log stores received during initialization
+	logger.Info("creating renderer component",
+		"store_count", len(stores))
+	for resourceTypeName := range stores {
+		logger.Info("renderer received store",
+			"resource_type", resourceTypeName)
+	}
+
 	// Extract all templates from config
 	templates := extractTemplates(config)
 
@@ -137,9 +145,11 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 	c.logger.Info("Template rendering triggered", "reason", event.Reason)
 
 	// Build rendering context from all resource stores
+	c.logger.Info("building rendering context")
 	context := c.buildRenderingContext()
 
 	// Render main HAProxy configuration
+	c.logger.Info("rendering main template")
 	haproxyConfig, err := c.engine.Render("haproxy.cfg", context)
 	if err != nil {
 		c.publishRenderFailure("haproxy.cfg", err)

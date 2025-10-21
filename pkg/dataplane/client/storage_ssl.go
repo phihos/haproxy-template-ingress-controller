@@ -64,6 +64,18 @@ func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name str
 		return "", fmt.Errorf("get SSL certificate '%s' failed with status %d", name, resp.StatusCode)
 	}
 
+	// Read entire response body first to handle empty responses
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body for SSL certificate '%s': %w", name, err)
+	}
+
+	// Check if body is empty (can happen for empty certificates)
+	if len(bodyBytes) == 0 {
+		// Empty response - treat as empty certificate content
+		return "", nil
+	}
+
 	// Parse response body
 	var apiCert struct {
 		StorageName *string `json:"storage_name"`
@@ -71,8 +83,13 @@ func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name str
 		Description *string `json:"description"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiCert); err != nil {
-		return "", fmt.Errorf("failed to decode SSL certificate response: %w", err)
+	if err := json.Unmarshal(bodyBytes, &apiCert); err != nil {
+		// Include response body in error for debugging
+		bodySnippet := string(bodyBytes)
+		if len(bodySnippet) > 200 {
+			bodySnippet = bodySnippet[:200] + "..."
+		}
+		return "", fmt.Errorf("failed to decode SSL certificate response (body: %s): %w", bodySnippet, err)
 	}
 
 	if apiCert.File == nil {

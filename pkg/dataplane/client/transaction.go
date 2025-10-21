@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"sync"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 )
@@ -20,10 +22,19 @@ import (
 //  2. Execute operations within transaction (passing transaction ID)
 //  3. Commit transaction to apply all changes
 //  4. OR Abort transaction to discard all changes
+//
+// Thread-safety: Transaction methods are safe for concurrent use.
+// The transaction tracks its state to prevent double commits/aborts.
 type Transaction struct {
 	ID      string
 	Version int64
 	client  *DataplaneClient
+
+	// State tracking (thread-safe with mutex)
+	mu           sync.Mutex
+	committed    bool
+	aborted      bool
+	commitResult *CommitResult // Cached result for idempotent Commit()
 }
 
 // TransactionResponse represents the response when creating a transaction.
@@ -122,11 +133,33 @@ type CommitResult struct {
 // are applied atomically to the HAProxy configuration. If commit fails,
 // no changes are applied.
 //
-// The transaction is invalidated after commit (whether successful or not)
-// and should not be reused.
+// This method is idempotent - calling it multiple times will return the cached
+// result from the first successful commit, but will log a WARNING to indicate
+// a programming error (double commit).
 //
 // Returns CommitResult containing status code and reload ID (if reload triggered).
 func (tx *Transaction) Commit(ctx context.Context) (*CommitResult, error) {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+
+	// WARN: Already committed - return cached result
+	if tx.committed {
+		slog.Warn("Transaction.Commit() called multiple times - this is a programming error",
+			"transaction_id", tx.ID,
+			"version", tx.Version,
+		)
+		if tx.commitResult != nil {
+			return tx.commitResult, nil // Idempotent: return cached result
+		}
+		return nil, fmt.Errorf("transaction %s already committed but no cached result available", tx.ID)
+	}
+
+	// ERROR: Cannot commit aborted transaction
+	if tx.aborted {
+		return nil, fmt.Errorf("cannot commit aborted transaction %s", tx.ID)
+	}
+
+	// Perform actual commit
 	forceReload := false
 	params := &dataplaneapi.CommitTransactionParams{
 		ForceReload: &forceReload,
@@ -172,6 +205,10 @@ func (tx *Transaction) Commit(ctx context.Context) (*CommitResult, error) {
 		result.ReloadID = resp.Header.Get("Reload-ID")
 	}
 
+	// Mark as committed and cache result for idempotent behavior
+	tx.committed = true
+	tx.commitResult = result
+
 	return result, nil
 }
 
@@ -181,17 +218,38 @@ func (tx *Transaction) Commit(ctx context.Context) (*CommitResult, error) {
 // HAProxy configuration remains unchanged. This is useful for cleanup
 // when an error occurs during transaction execution.
 //
-// It's safe to call Abort multiple times or after Commit - subsequent
-// calls will return an error but not cause problems.
+// This method is idempotent - calling it multiple times is safe but will
+// log a WARNING to indicate a programming error (double abort). Calling
+// Abort() after Commit() is silently ignored (common in defer cleanup).
 func (tx *Transaction) Abort(ctx context.Context) error {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+
+	// Already committed - cannot abort, but don't fail (idempotent cleanup)
+	// This is common in defer cleanup: defer tx.Abort()
+	if tx.committed {
+		return nil // Silent: expected in defer cleanup after successful commit
+	}
+
+	// WARN: Already aborted
+	if tx.aborted {
+		slog.Warn("Transaction.Abort() called multiple times - this is a programming error",
+			"transaction_id", tx.ID,
+			"version", tx.Version,
+		)
+		return nil // Idempotent: safe to call multiple times
+	}
+
+	// Perform actual abort
 	resp, err := tx.client.client.DeleteTransaction(ctx, tx.ID)
 	if err != nil {
 		return fmt.Errorf("failed to abort transaction: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// 404 means transaction already gone (committed or aborted) - that's ok
+	// 404 means transaction already gone (committed or aborted elsewhere) - that's ok
 	if resp.StatusCode == 404 {
+		tx.aborted = true // Mark as aborted even though API said 404
 		return nil
 	}
 
@@ -200,5 +258,28 @@ func (tx *Transaction) Abort(ctx context.Context) error {
 		return fmt.Errorf("failed to abort transaction: status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Mark as aborted
+	tx.aborted = true
+
 	return nil
+}
+
+// IsCommitted returns true if the transaction has been committed.
+//
+// This can be useful for conditional logic or debugging, but generally
+// you should not need to check this - use proper control flow instead.
+func (tx *Transaction) IsCommitted() bool {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	return tx.committed
+}
+
+// IsAborted returns true if the transaction has been aborted.
+//
+// This can be useful for conditional logic or debugging, but generally
+// you should not need to check this - use proper control flow instead.
+func (tx *Transaction) IsAborted() bool {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	return tx.aborted
 }

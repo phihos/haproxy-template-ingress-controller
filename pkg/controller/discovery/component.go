@@ -81,6 +81,7 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 //
 // This method:
 //   - Subscribes to relevant events
+//   - Checks for existing pods and triggers initial discovery if needed
 //   - Maintains state from config and credential updates
 //   - Triggers discovery when HAProxy pods change
 //   - Publishes discovered endpoints
@@ -92,6 +93,10 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Subscribe to events
 	eventChan := c.eventBus.Subscribe(EventBufferSize)
+
+	// Perform initial discovery check after subscribing
+	// This ensures we discover pods even if ResourceSyncCompleteEvent was already published
+	c.performInitialDiscovery()
 
 	for {
 		select {
@@ -276,22 +281,72 @@ func (c *Component) SetPodStore(store types.Store) {
 	c.logger.Debug("pod store set")
 }
 
+// performInitialDiscovery checks if pods already exist and triggers discovery.
+//
+// This is called after subscribing to events to handle the case where
+// ResourceSyncCompleteEvent was already published before we subscribed.
+func (c *Component) performInitialDiscovery() {
+	c.mu.RLock()
+	podStore := c.podStore
+	credentials := c.credentials
+	hasCredentials := c.hasCredentials
+	hasDataplanePort := c.hasDataplanePort
+	c.mu.RUnlock()
+
+	// Check if we have all requirements
+	if !hasCredentials || !hasDataplanePort || podStore == nil {
+		c.logger.Debug("skipping initial discovery, missing requirements",
+			"has_credentials", hasCredentials,
+			"has_dataplane_port", hasDataplanePort,
+			"has_pod_store", podStore != nil)
+		return
+	}
+
+	// Check if pods exist in store
+	pods, err := podStore.List()
+	if err != nil {
+		c.logger.Error("failed to list pods during initial discovery", "error", err)
+		return
+	}
+
+	if len(pods) == 0 {
+		c.logger.Debug("no pods found during initial discovery check")
+		return
+	}
+
+	c.logger.Info("found existing pods during initial discovery check",
+		"count", len(pods))
+
+	// Trigger discovery
+	c.triggerDiscovery(podStore, *credentials)
+}
+
 // triggerDiscovery performs endpoint discovery and publishes the results.
 //
 // This method calls the pure Discovery component and publishes HAProxyPodsDiscoveredEvent.
 func (c *Component) triggerDiscovery(podStore types.Store, credentials coreconfig.Credentials) {
 	c.logger.Debug("triggering HAProxy pod discovery")
 
-	// Call pure Discovery component
-	endpoints, err := c.discovery.DiscoverEndpoints(podStore, credentials)
+	// Call pure Discovery component with logger for debugging
+	endpoints, err := c.discovery.DiscoverEndpointsWithLogger(podStore, credentials, c.logger)
 	if err != nil {
 		c.logger.Error("discovery failed", "error", err)
 		return
 	}
 
+	// Log summary
 	c.logger.Info("discovered HAProxy pods",
-		"count", len(endpoints),
-		"endpoints", endpoints)
+		"count", len(endpoints))
+
+	// Log detailed endpoint list for debugging connection issues
+	if c.logger != nil && len(endpoints) > 0 {
+		for i, ep := range endpoints {
+			c.logger.Debug("discovered endpoint",
+				"index", i,
+				"pod", ep.PodName,
+				"url", ep.URL)
+		}
+	}
 
 	// Convert endpoints to []interface{} for event
 	endpointsInterface := make([]interface{}, len(endpoints))

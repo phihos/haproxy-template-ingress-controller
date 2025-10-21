@@ -170,7 +170,7 @@ func New(
 		}
 
 		// Create watcher (dereference pointer to pass value)
-		w, err := watcher.New(*watcherConfig, k8sClient)
+		w, err := watcher.New(*watcherConfig, k8sClient, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create watcher for %q: %w", resourceTypeName, err)
 		}
@@ -201,12 +201,16 @@ func (r *ResourceWatcherComponent) Start(ctx context.Context) error {
 
 	// Start all watchers in goroutines
 	for resourceTypeName, w := range r.watchers {
-		go func() {
-			r.logger.Debug("starting watcher", "resource_type", resourceTypeName)
+		// Capture loop variables to avoid closure bug
+		name := resourceTypeName
+		watcher := w
 
-			if err := w.Start(ctx); err != nil {
+		go func() {
+			r.logger.Debug("starting watcher", "resource_type", name)
+
+			if err := watcher.Start(ctx); err != nil {
 				r.logger.Error("watcher failed",
-					"resource_type", resourceTypeName,
+					"resource_type", name,
 					"error", err)
 			}
 		}()

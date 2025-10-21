@@ -6,12 +6,6 @@ image:
   tag: dev
   pullPolicy: Never  # Never pull, always use local image
 
-# Enable validation sidecars for development
-validation:
-  enabled: true
-  haproxy:
-    port: 8404
-
 # Increase verbosity for debugging
 controller:
   config:

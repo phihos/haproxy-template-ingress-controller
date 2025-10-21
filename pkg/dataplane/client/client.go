@@ -24,6 +24,7 @@ type Endpoint struct {
 	URL      string
 	Username string
 	Password string
+	PodName  string // Kubernetes pod name for observability
 }
 
 // DataplaneClient wraps the generated API client with additional functionality
@@ -43,6 +44,9 @@ type Config struct {
 
 	// Password for basic authentication
 	Password string
+
+	// PodName is the Kubernetes pod name (for observability)
+	PodName string
 
 	// HTTPClient allows injecting a custom HTTP client (useful for testing)
 	HTTPClient *http.Client
@@ -98,6 +102,7 @@ func New(cfg Config) (*DataplaneClient, error) {
 			URL:      cfg.BaseURL,
 			Username: cfg.Username,
 			Password: cfg.Password,
+			PodName:  cfg.PodName,
 		},
 	}, nil
 }
@@ -120,6 +125,7 @@ func NewFromEndpoint(endpoint Endpoint) (*DataplaneClient, error) {
 		BaseURL:  endpoint.URL,
 		Username: endpoint.Username,
 		Password: endpoint.Password,
+		PodName:  endpoint.PodName,
 	})
 }
 

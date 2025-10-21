@@ -123,7 +123,7 @@ func TestRenderer_SuccessfulRendering(t *testing.T) {
 defaults
     mode http
 
-{% for ingress in resources.ingresses %}
+{% for ingress in resources.ingresses.List() %}
 # Ingress: {{ ingress.metadata.name }}
 {% endfor %}
 `,
@@ -200,7 +200,7 @@ func TestRenderer_WithAuxiliaryFiles(t *testing.T) {
 		},
 		Maps: map[string]config.MapFile{
 			"domains.map": {
-				Template: "{% for ingress in resources.ingresses %}{{ ingress.metadata.name }}.example.com backend1\n{% endfor %}",
+				Template: "{% for ingress in resources.ingresses.List() %}{{ ingress.metadata.name }}.example.com backend1\n{% endfor %}",
 			},
 		},
 		Files: map[string]config.GeneralFile{
@@ -332,7 +332,7 @@ func TestRenderer_EmptyStores(t *testing.T) {
 			Template: `global
     daemon
 
-{% if resources.ingresses|length == 0 %}
+{% if resources.ingresses.List()|length == 0 %}
 # No ingresses configured
 {% endif %}
 `,
@@ -387,9 +387,9 @@ func TestRenderer_MultipleStores(t *testing.T) {
 			Template: `global
     daemon
 
-# Ingresses: {{ resources.ingresses|length }}
-# Services: {{ resources.services|length }}
-# Pods: {{ resources.pods|length }}
+# Ingresses: {{ resources.ingresses.List()|length }}
+# Services: {{ resources.services.List()|length }}
+# Pods: {{ resources.pods.List()|length }}
 `,
 		},
 	}
@@ -500,7 +500,7 @@ func TestRenderer_MultipleReconciliations(t *testing.T) {
 
 	cfg := &config.Config{
 		HAProxyConfig: config.HAProxyConfig{
-			Template: "global\n    daemon\n# Count: {{ resources.ingresses|length }}\n",
+			Template: "global\n    daemon\n# Count: {{ resources.ingresses.List()|length }}\n",
 		},
 	}
 
@@ -612,13 +612,21 @@ func TestBuildRenderingContext(t *testing.T) {
 	resources, ok := ctx["resources"].(map[string]interface{})
 	require.True(t, ok, "resources should be a map")
 
-	// Verify ingresses
-	ingresses, ok := resources["ingresses"].([]interface{})
-	require.True(t, ok)
+	// Verify ingresses store wrapper
+	ingressesWrapper, ok := resources["ingresses"].(*StoreWrapper)
+	require.True(t, ok, "ingresses should be a StoreWrapper")
+	assert.Equal(t, "ingresses", ingressesWrapper.resourceType)
+
+	// Verify ingresses content via List()
+	ingresses := ingressesWrapper.List()
 	assert.Len(t, ingresses, 2)
 
-	// Verify services
-	services, ok := resources["services"].([]interface{})
-	require.True(t, ok)
+	// Verify services store wrapper
+	servicesWrapper, ok := resources["services"].(*StoreWrapper)
+	require.True(t, ok, "services should be a StoreWrapper")
+	assert.Equal(t, "services", servicesWrapper.resourceType)
+
+	// Verify services content via List()
+	services := servicesWrapper.List()
 	assert.Len(t, services, 1)
 }

@@ -13,6 +13,7 @@ dependenciesRules:
         - "**.pkg.core.**"
         - "**.pkg.dataplane.**"
         - "**.pkg.events.**"
+        - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
         - "**.pkg.templating.**"
         - "**.codegen.**"
@@ -23,6 +24,7 @@ dependenciesRules:
       internal:
         - "**.pkg.controller.**"
         - "**.pkg.dataplane.**"
+        - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
         - "**.pkg.templating.**"
 
@@ -33,6 +35,7 @@ dependenciesRules:
         - "**.pkg.controller.**"
         - "**.pkg.core.**"
         - "**.pkg.events.**"
+        - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
         - "**.pkg.templating.**"
 
@@ -43,10 +46,22 @@ dependenciesRules:
         - "**.pkg.controller.**"
         - "**.pkg.core.**"
         - "**.pkg.dataplane.**"
+        - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
         - "**.pkg.templating.**"
 
-  # Rule 5: k8s packages should NOT depend on other top-level packages
+  # Rule 5: introspection package should NOT depend on other top-level packages (pure infrastructure)
+  - package: "**.pkg.introspection.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.core.**"
+        - "**.pkg.dataplane.**"
+        - "**.pkg.events.**"
+        - "**.pkg.k8s.**"
+        - "**.pkg.templating.**"
+
+  # Rule 6: k8s packages should NOT depend on other top-level packages
   - package: "**.pkg.k8s.**"
     shouldNotDependsOn:
       internal:
@@ -54,9 +69,10 @@ dependenciesRules:
         - "**.pkg.core.**"
         - "**.pkg.dataplane.**"
         - "**.pkg.events.**"
+        - "**.pkg.introspection.**"
         - "**.pkg.templating.**"
 
-  # Rule 6: templating package should NOT depend on other top-level packages
+  # Rule 7: templating package should NOT depend on other top-level packages
   - package: "**.pkg.templating.**"
     shouldNotDependsOn:
       internal:
@@ -64,9 +80,10 @@ dependenciesRules:
         - "**.pkg.core.**"
         - "**.pkg.dataplane.**"
         - "**.pkg.events.**"
+        - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
 
-  # Rule 7: cmd packages can depend on all internal packages (composition root)
+  # Rule 8: cmd packages can depend on all internal packages (composition root)
   - package: "**.cmd.**"
     shouldOnlyDependsOn:
       internal:
@@ -74,7 +91,7 @@ dependenciesRules:
         - "**.pkg.**"
         - "**.codegen.**"
 
-  # Rule 8: codegen packages should NOT depend on internal packages (generated code)
+  # Rule 9: codegen packages should NOT depend on internal packages (generated code)
   - package: "**.codegen.**"
     shouldNotDependsOn:
       internal:
@@ -82,7 +99,7 @@ dependenciesRules:
         - "**.pkg.**"
         - "**.tests.**"
 
-  # Rule 9: tests packages can depend on all internal packages
+  # Rule 10: tests packages can depend on all internal packages
   - package: "**.tests.**"
     shouldOnlyDependsOn:
       internal:
@@ -91,7 +108,7 @@ dependenciesRules:
         - "**.pkg.**"
         - "**.codegen.**"
 
-  # Rule 10: examples packages can depend on all internal packages (demonstration code)
+  # Rule 11: examples packages can depend on all internal packages (demonstration code)
   - package: "**.examples.**"
     shouldOnlyDependsOn:
       internal:

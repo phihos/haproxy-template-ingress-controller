@@ -8,7 +8,6 @@ import (
 
 	"haproxy-template-ic/pkg/dataplane/client"
 	"haproxy-template-ic/pkg/dataplane/comparator"
-	"haproxy-template-ic/pkg/dataplane/comparator/sections"
 	"haproxy-template-ic/pkg/dataplane/parser"
 )
 
@@ -129,7 +128,7 @@ func (s *Synchronizer) apply(ctx context.Context, diff *comparator.ConfigDiff, o
 	retries := 0
 
 	// Execute with retry logic
-	err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
+	_, err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
 		retries++
 		s.logger.Info("Executing sync transaction",
 			"attempt", retries,
@@ -260,132 +259,41 @@ type SyncOperationsResult struct {
 	ReloadID string
 }
 
-// isRuntimeUpdatableOperation checks if an operation can be performed via runtime API.
-// Runtime API supports updating server attributes without reload when no transaction is used.
-func isRuntimeUpdatableOperation(op comparator.Operation) bool {
-	// Only server update operations support runtime API
-	// Based on HAProxy Dataplane API's changeThroughRuntimeAPI function,
-	// updates to server weight, address, port, and maintenance state
-	// can be performed through runtime API without reload.
-	return op.Section() == "server" && op.Type() == sections.OperationUpdate
-}
-
-// canUseRuntimeAPI checks if all operations can be performed via runtime API.
-// Returns true only if ALL operations are runtime-updatable (server updates).
-func canUseRuntimeAPI(operations []comparator.Operation) bool {
-	if len(operations) == 0 {
-		return false
-	}
-
-	for _, op := range operations {
-		if !isRuntimeUpdatableOperation(op) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// SyncOperations executes a list of operations and returns information about
-// whether a reload was triggered.
+// SyncOperations executes a list of operations within the provided transaction.
 //
-// This function intelligently chooses between two execution paths:
+// This function must be called within a transaction context (e.g., via VersionAdapter.ExecuteTransaction).
+// The transaction provides automatic retry logic on version conflicts.
 //
-// Runtime API path (no reload):
-//   - Used when ALL operations are server updates (weight, address, port, maintenance)
-//   - Operations executed without transaction_id
-//   - HAProxy runtime API applies changes instantly without reload
-//   - Returns status 200 (no reload)
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - client: The DataplaneClient
+//   - operations: List of operations to execute
+//   - tx: The transaction to execute operations within (from VersionAdapter)
 //
-// Transaction path (reload):
-//   - Used when ANY operation requires configuration change
-//   - Operations executed within a transaction
-//   - Transaction committed, triggering HAProxy reload
-//   - Returns status 202 with Reload-ID header
+// Returns:
+//   - SyncOperationsResult with reload information
+//   - Error if any operation fails
 //
 // Example:
 //
-//	result, err := synchronizer.SyncOperations(ctx, client, diff.Operations)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//	if result.ReloadTriggered {
-//	    log.Printf("HAProxy reloaded with ID: %s", result.ReloadID)
-//	} else {
-//	    log.Printf("Changes applied via runtime API (no reload)")
-//	}
-func SyncOperations(ctx context.Context, client *client.DataplaneClient, operations []comparator.Operation) (*SyncOperationsResult, error) {
-	// Check if all operations can use runtime API (no reload)
-	useRuntimeAPI := canUseRuntimeAPI(operations)
-
-	if useRuntimeAPI {
-		// Execute via runtime API without transaction
-		return syncViaRuntimeAPI(ctx, client, operations)
-	}
-
-	// Execute via transaction (requires reload)
-	return syncViaTransaction(ctx, client, operations)
-}
-
-// syncViaRuntimeAPI executes operations using runtime API without reload.
-func syncViaRuntimeAPI(ctx context.Context, client *client.DataplaneClient, operations []comparator.Operation) (*SyncOperationsResult, error) {
-	// Execute all operations without transaction_id (enables runtime API)
-	for _, op := range operations {
-		if err := op.Execute(ctx, client, ""); err != nil {
-			return nil, fmt.Errorf("runtime API operation %q failed: %w", op.Describe(), err)
-		}
-	}
-
-	// Runtime API operations don't trigger reload
-	return &SyncOperationsResult{
-		ReloadTriggered: false,
-		ReloadID:        "",
-	}, nil
-}
-
-// syncViaTransaction executes operations within a transaction (triggers reload).
-func syncViaTransaction(ctx context.Context, client *client.DataplaneClient, operations []comparator.Operation) (*SyncOperationsResult, error) {
-	// Step 1: Get current version for transaction
-	version, err := client.GetVersion(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get version: %w", err)
-	}
-
-	// Step 2: Start transaction
-	tx, err := client.CreateTransaction(ctx, version)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start transaction: %w", err)
-	}
-
-	// Step 3: Ensure transaction cleanup on error
-	var commitErr error
-	defer func() {
-		if commitErr != nil {
-			// Rollback transaction if commit failed
-			_ = tx.Abort(ctx)
-		}
-	}()
-
-	// Step 4: Execute all operations within the transaction
+//	adapter := client.NewVersionAdapter(client, 3)
+//	err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
+//	    result, err := synchronizer.SyncOperations(ctx, client, diff.Operations, tx)
+//	    return err
+//	})
+func SyncOperations(ctx context.Context, client *client.DataplaneClient, operations []comparator.Operation, tx *client.Transaction) (*SyncOperationsResult, error) {
+	// Execute all operations within the provided transaction
 	for _, op := range operations {
 		if err := op.Execute(ctx, client, tx.ID); err != nil {
-			commitErr = fmt.Errorf("operation %q failed: %w", op.Describe(), err)
-			return nil, commitErr
+			return nil, fmt.Errorf("operation %q failed: %w", op.Describe(), err)
 		}
 	}
 
-	// Step 5: Commit the transaction
-	commitResult, err := tx.Commit(ctx)
-	if err != nil {
-		commitErr = err
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	// Step 6: Build and return sync result
-	result := &SyncOperationsResult{
-		ReloadTriggered: commitResult.StatusCode == 202,
-		ReloadID:        commitResult.ReloadID,
-	}
-
-	return result, nil
+	// Operations succeeded - caller will commit the transaction
+	// We don't know yet if reload will be triggered (depends on commit response)
+	// Return minimal result - commit status will be added by caller
+	return &SyncOperationsResult{
+		ReloadTriggered: false, // Will be updated by caller after commit
+		ReloadID:        "",
+	}, nil
 }

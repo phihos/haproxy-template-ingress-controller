@@ -35,8 +35,12 @@ func (f *FieldFilter) Filter(resource interface{}) error {
 		return nil
 	}
 
-	// Get reflect.Value for the resource
-	rv := reflect.ValueOf(resource)
+	// Unwrap unstructured.Unstructured to get the underlying map
+	// This allows us to modify the actual data
+	data := unwrapUnstructuredForFilter(resource)
+
+	// Get reflect.Value for the unwrapped data
+	rv := reflect.ValueOf(data)
 
 	// Dereference pointers
 	for rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
@@ -226,6 +230,24 @@ func parseJSONPathPattern(pattern string) []string {
 	}
 
 	return segments
+}
+
+// unwrapUnstructuredForFilter extracts the underlying data map from unstructured.Unstructured.
+//
+// The filter needs to work with the actual data map to be able to modify fields.
+// This function returns the UnstructuredContent() map if the resource is an Unstructured object.
+func unwrapUnstructuredForFilter(resource interface{}) interface{} {
+	// Type assert to *unstructured.Unstructured
+	type unstructuredInterface interface {
+		UnstructuredContent() map[string]interface{}
+	}
+
+	if u, ok := resource.(unstructuredInterface); ok {
+		return u.UnstructuredContent()
+	}
+
+	// Not an unstructured object, return as-is
+	return resource
 }
 
 // FilterError represents an error during field filtering.

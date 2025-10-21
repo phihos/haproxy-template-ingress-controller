@@ -44,8 +44,9 @@ const (
 //  1. Syntax validation using client-native parser
 //  2. Semantic validation using haproxy binary (-c flag)
 type HAProxyValidatorComponent struct {
-	eventBus *busevents.EventBus
-	logger   *slog.Logger
+	eventBus        *busevents.EventBus
+	logger          *slog.Logger
+	validationPaths dataplane.ValidationPaths
 }
 
 // NewHAProxyValidator creates a new HAProxy validator component.
@@ -53,16 +54,19 @@ type HAProxyValidatorComponent struct {
 // Parameters:
 //   - eventBus: The EventBus for subscribing to events and publishing results
 //   - logger: Structured logger for component logging
+//   - validationPaths: Filesystem paths for HAProxy validation (must match Dataplane API config)
 //
 // Returns:
 //   - A new HAProxyValidatorComponent instance ready to be started
 func NewHAProxyValidator(
 	eventBus *busevents.EventBus,
 	logger *slog.Logger,
+	validationPaths dataplane.ValidationPaths,
 ) *HAProxyValidatorComponent {
 	return &HAProxyValidatorComponent{
-		eventBus: eventBus,
-		logger:   logger,
+		eventBus:        eventBus,
+		logger:          logger,
+		validationPaths: validationPaths,
 	}
 }
 
@@ -128,7 +132,7 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 	}
 
 	// Validate configuration using dataplane package
-	err := dataplane.ValidateConfiguration(event.HAProxyConfig, auxiliaryFiles)
+	err := dataplane.ValidateConfiguration(event.HAProxyConfig, auxiliaryFiles, v.validationPaths)
 	if err != nil {
 		v.logger.Error("HAProxy configuration validation failed",
 			"error", err)

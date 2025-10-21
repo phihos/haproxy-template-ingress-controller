@@ -36,7 +36,7 @@ func newOrchestrator(c *client.DataplaneClient) (*orchestrator, error) {
 		client:     c,
 		parser:     p,
 		comparator: comparator.New(),
-		logger:     slog.Default(),
+		logger:     slog.Default().With("pod", c.Endpoint.PodName),
 	}, nil
 }
 
@@ -44,11 +44,23 @@ func newOrchestrator(c *client.DataplaneClient) (*orchestrator, error) {
 func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *SyncOptions, auxFiles *AuxiliaryFiles) (*SyncResult, error) {
 	startTime := time.Now()
 
-	// Step 1: Fetch current configuration from dataplane API
+	// Step 1: Fetch current configuration from dataplane API (with retry for transient connection errors)
 	o.logger.Info("Fetching current configuration from dataplane API",
 		"endpoint", o.client.Endpoint.URL)
 
-	currentConfigStr, err := o.client.GetRawConfiguration(ctx)
+	// Configure retry for transient connection errors (e.g., dataplane API not yet ready)
+	retryConfig := client.RetryConfig{
+		MaxAttempts: 3,
+		RetryIf:     client.IsConnectionError(),
+		Backoff:     client.BackoffExponential,
+		BaseDelay:   100 * time.Millisecond,
+		Logger:      o.logger.With("operation", "fetch_config"),
+	}
+
+	currentConfigStr, err := client.WithRetry(ctx, retryConfig, func(attempt int) (string, error) {
+		return o.client.GetRawConfiguration(ctx)
+	})
+
 	if err != nil {
 		return nil, NewConnectionError(o.client.Endpoint.URL, err)
 	}
@@ -174,27 +186,31 @@ func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *compara
 	var retries int
 
 	// Execute with automatic retry on 409 conflicts
-	err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
+	commitResult, err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
 		retries++
 		o.logger.Info("Executing fine-grained sync",
 			"attempt", retries,
 			"transaction_id", tx.ID,
 			"version", tx.Version)
 
-		// Execute operations
-		syncResult, err := synchronizer.SyncOperations(ctx, o.client, diff.Operations)
+		// Execute operations within the transaction
+		_, err := synchronizer.SyncOperations(ctx, o.client, diff.Operations, tx)
 		if err != nil {
 			return err
 		}
 
-		reloadTriggered = syncResult.ReloadTriggered
-		reloadID = syncResult.ReloadID
-
-		// Convert operations to AppliedOperation
+		// Convert operations to AppliedOperation (do this here while we have access to operations)
 		appliedOps = convertOperationsToApplied(diff.Operations)
 
 		return nil
+		// VersionAdapter will commit the transaction after this callback returns
 	})
+
+	// Extract reload information from commit result (if successful)
+	if err == nil && commitResult != nil {
+		reloadTriggered = commitResult.StatusCode == 202
+		reloadID = commitResult.ReloadID
+	}
 
 	if err != nil {
 		// Check if it's a version conflict error

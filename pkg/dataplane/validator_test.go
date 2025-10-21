@@ -15,11 +15,24 @@
 package dataplane
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
 )
+
+// testValidationPaths returns validation paths for testing using temporary directories.
+func testValidationPaths(t *testing.T) ValidationPaths {
+	t.Helper()
+	tmpDir := t.TempDir()
+	return ValidationPaths{
+		MapsDir:           tmpDir + "/maps",
+		SSLCertsDir:       tmpDir + "/certs",
+		GeneralStorageDir: tmpDir + "/general",
+		ConfigFile:        tmpDir + "/haproxy.cfg",
+	}
+}
 
 // TestValidateConfiguration_ValidMinimalConfig tests validation of minimal valid HAProxy config.
 func TestValidateConfiguration_ValidMinimalConfig(t *testing.T) {
@@ -43,7 +56,7 @@ backend servers
 
 	auxFiles := &AuxiliaryFiles{}
 
-	err := ValidateConfiguration(config, auxFiles)
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
 	if err != nil {
 		t.Fatalf("ValidateConfiguration() failed on valid config: %v", err)
 	}
@@ -87,7 +100,7 @@ backend api-servers
 
 	auxFiles := &AuxiliaryFiles{}
 
-	err := ValidateConfiguration(config, auxFiles)
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
 	if err != nil {
 		t.Fatalf("ValidateConfiguration() failed on valid complex config: %v", err)
 	}
@@ -111,7 +124,7 @@ backend
 
 	auxFiles := &AuxiliaryFiles{}
 
-	err := ValidateConfiguration(config, auxFiles)
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
 	if err == nil {
 		t.Fatal("ValidateConfiguration() should fail on malformed config")
 	}
@@ -140,7 +153,7 @@ func TestValidateConfiguration_EmptyConfig(t *testing.T) {
 	config := ""
 	auxFiles := &AuxiliaryFiles{}
 
-	err := ValidateConfiguration(config, auxFiles)
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
 	if err == nil {
 		t.Fatal("ValidateConfiguration() should fail on empty config")
 	}
@@ -181,7 +194,7 @@ backend servers
 
 	auxFiles := &AuxiliaryFiles{}
 
-	err := ValidateConfiguration(config, auxFiles)
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
 	if err == nil {
 		t.Fatal("ValidateConfiguration() should fail on semantic error")
 	}
@@ -201,43 +214,6 @@ backend servers
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "semantic") {
 		t.Errorf("Expected error message to contain 'semantic', got: %s", errMsg)
-	}
-}
-
-// TestValidateConfiguration_WithMapFiles tests validation with map files.
-func TestValidateConfiguration_WithMapFiles(t *testing.T) {
-	// Use relative paths that will be resolved from the temp directory
-	config := `
-global
-    daemon
-
-defaults
-    mode http
-    timeout connect 5000ms
-    timeout client 50000ms
-    timeout server 50000ms
-
-frontend http-in
-    bind :80
-    http-request set-header X-Backend %[base,map(maps/host.map,default)]
-    default_backend servers
-
-backend servers
-    server s1 127.0.0.1:8080
-`
-
-	auxFiles := &AuxiliaryFiles{
-		MapFiles: []auxiliaryfiles.MapFile{
-			{
-				Path:    "maps/host.map",
-				Content: "example.com backend1\ntest.com backend2\n",
-			},
-		},
-	}
-
-	err := ValidateConfiguration(config, auxFiles)
-	if err != nil {
-		t.Fatalf("ValidateConfiguration() failed with map files: %v", err)
 	}
 }
 
@@ -318,16 +294,18 @@ Kw==
 		},
 	}
 
-	err := ValidateConfiguration(config, auxFiles)
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
 	if err != nil {
 		t.Fatalf("ValidateConfiguration() failed with SSL certificate: %v", err)
 	}
 }
 
-// TestValidateConfiguration_WithGeneralFiles tests validation with general files (error pages).
-func TestValidateConfiguration_WithGeneralFiles(t *testing.T) {
-	// Use relative path that will be resolved from the temp directory
-	config := `
+// TestValidateConfiguration_WithAbsolutePathMapFiles tests validation with absolute path map files.
+func TestValidateConfiguration_WithAbsolutePathMapFiles(t *testing.T) {
+	paths := testValidationPaths(t)
+
+	// Use absolute paths matching validation paths
+	config := fmt.Sprintf(`
 global
     daemon
 
@@ -336,7 +314,46 @@ defaults
     timeout connect 5000ms
     timeout client 50000ms
     timeout server 50000ms
-    errorfile 503 files/503.http
+
+frontend http-in
+    bind :80
+    http-request set-header X-Backend %%[base,map(%s/host.map,default)]
+    default_backend servers
+
+backend servers
+    server s1 127.0.0.1:8080
+`, paths.MapsDir)
+
+	auxFiles := &AuxiliaryFiles{
+		MapFiles: []auxiliaryfiles.MapFile{
+			{
+				Path:    paths.MapsDir + "/host.map",
+				Content: "example.com backend1\ntest.com backend2\n",
+			},
+		},
+	}
+
+	err := ValidateConfiguration(config, auxFiles, paths)
+	if err != nil {
+		t.Fatalf("ValidateConfiguration() failed with absolute path map files: %v", err)
+	}
+}
+
+// TestValidateConfiguration_WithAbsolutePathGeneralFiles tests validation with absolute path general files.
+func TestValidateConfiguration_WithAbsolutePathGeneralFiles(t *testing.T) {
+	paths := testValidationPaths(t)
+
+	// Use absolute paths matching validation paths
+	config := fmt.Sprintf(`
+global
+    daemon
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+    errorfile 503 %s/503.http
 
 frontend http-in
     bind :80
@@ -344,7 +361,7 @@ frontend http-in
 
 backend servers
     server s1 127.0.0.1:8080
-`
+`, paths.GeneralStorageDir)
 
 	auxFiles := &AuxiliaryFiles{
 		GeneralFiles: []auxiliaryfiles.GeneralFile{
@@ -361,103 +378,9 @@ Content-Type: text/html
 		},
 	}
 
-	err := ValidateConfiguration(config, auxFiles)
+	err := ValidateConfiguration(config, auxFiles, paths)
 	if err != nil {
-		t.Fatalf("ValidateConfiguration() failed with general files: %v", err)
-	}
-}
-
-// TestValidateConfiguration_MultipleAuxiliaryFiles tests validation with multiple auxiliary file types.
-func TestValidateConfiguration_MultipleAuxiliaryFiles(t *testing.T) {
-	t.Skip("Skipping test with SSL certificate - HAProxy strictly validates certificate format in -c mode")
-
-	// Use relative paths that will be resolved from the temp directory
-	config := `
-global
-    daemon
-
-defaults
-    mode http
-    timeout connect 5000ms
-    timeout client 50000ms
-    timeout server 50000ms
-    errorfile 503 files/503.http
-
-frontend https-in
-    bind :443 ssl crt ssl/cert.pem
-    http-request set-header X-Backend %[base,map(maps/host.map,default)]
-    default_backend servers
-
-backend servers
-    server s1 127.0.0.1:8080
-`
-
-	dummyCert := `-----BEGIN CERTIFICATE-----
-MIICljCCAX4CCQCKz8Q0Q0Q0QDANBgkqhkiG9w0BAQsFADANMQswCQYDVQQGEwJV
-UzAeFw0yNDAxMDEwMDAwMDBaFw0yNTAxMDEwMDAwMDBaMA0xCzAJBgNVBAYTAlVT
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq7BAxYCtENXeAZ0Qd5uV
-VwE1TJLy7cZKlLq4VrfBdXqMzLbQqpL0fKnYS0qIvzEz2vjdIKVQ5HBbzj7L8YhP
-lYKdAqLFH1KGq8JXxKpZxGS5vZ6T8nXGjCdLmJpQ1jVj5HvKzBpL5T9JKWmYfE6L
-K5pZ1HvQqYfJdX5K6qL5YhT9KpXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9Yp
-T5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLd
-XqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5
-KwIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQBzqYpQ1L5K6qL5YhT9KpXqLdXqL9Yp
-T5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLd
-XqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5
-KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXq
-L9YpT5KqXqLdXqL9YpT5Kw==
------END CERTIFICATE-----
------BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCrsEDFgK0Q1d4B
-nRB3m5VXATVMkvLtxkqUurhWt8F1eozMttCqkvR8qdhLSoi/MTPa+N0gpVDkcFvO
-PsvxiE+Vgp0CosUfUoarwlfEqlnEZLm9npPydcaMJ0uYmlDWNWPke8rMGkvlP0kp
-aZh8TosrmlnUe9Cph8l1fkrqovliFP0qleot1eov1ilPkqpeot1eov1ilPkqpeot
-1eov1ilPkqpeot1eov1ilPkqpeot1eov1ilPkqpeot1eov1ilPkqpeot1eov1ilP
-kqpeot1eov1ilPkqpeot1eov1ilPkqpeot1eov1ilPkrAgMBAA
-ECggEAH5j3L9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLd
-XqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5
-KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXq
-L9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5Kq
-XqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9
-YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KwKB
-gQDXL5K6qL5YhT9KpXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdX
-qL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5K
-qXqLdXqL9YpT5KwKBgQDLL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9
-YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXq
-LdXqL9YpT5KwKBgD5K6qL5YhT9KpXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9
-YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXq
-LdXqL9YpT5KwKBgBzL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT
-5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdX
-qL9YpT5KwKBgFpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLd
-XqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5KqXqLdXqL9YpT5
-Kw==
------END PRIVATE KEY-----
-`
-
-	auxFiles := &AuxiliaryFiles{
-		MapFiles: []auxiliaryfiles.MapFile{
-			{
-				Path:    "maps/host.map",
-				Content: "example.com backend1\n",
-			},
-		},
-		SSLCertificates: []auxiliaryfiles.SSLCertificate{
-			{
-				Path:    "ssl/cert.pem",
-				Content: dummyCert,
-			},
-		},
-		GeneralFiles: []auxiliaryfiles.GeneralFile{
-			{
-				Filename: "503.http",
-				Content:  "HTTP/1.0 503 Service Unavailable\n\n<html><body><h1>503</h1></body></html>\n",
-			},
-		},
-	}
-
-	err := ValidateConfiguration(config, auxFiles)
-	if err != nil {
-		t.Fatalf("ValidateConfiguration() failed with multiple auxiliary files: %v", err)
+		t.Fatalf("ValidateConfiguration() failed with absolute path general files: %v", err)
 	}
 }
 
@@ -481,7 +404,7 @@ backend servers
 
 	auxFiles := &AuxiliaryFiles{}
 
-	err := ValidateConfiguration(config, auxFiles)
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
 	// This may or may not fail depending on HAProxy version and parser strictness
 	// Just verify the function doesn't panic
 	_ = err

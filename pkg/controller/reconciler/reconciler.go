@@ -97,7 +97,6 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger, config *Config) *Rec
 // This method blocks until the context is cancelled or an error occurs.
 // It subscribes to the EventBus and processes events:
 //   - ResourceIndexUpdatedEvent: Starts/resets debounce timer
-//   - ConfigValidatedEvent: Triggers immediate reconciliation
 //   - Debounce timer expiration: Publishes ReconciliationTriggeredEvent
 //
 // The component runs until the context is cancelled, at which point it
@@ -185,17 +184,18 @@ func (r *Reconciler) handleResourceChange(event *events.ResourceIndexUpdatedEven
 	r.resetDebounceTimer()
 }
 
-// handleConfigChange processes configuration validation events.
+// handleConfigChange processes config validated events.
 //
-// Config changes trigger immediate reconciliation without debouncing,
-// as configuration updates are infrequent and require prompt action.
+// Config changes trigger immediate reconciliation without debouncing.
+// Any pending debounce timer is cancelled to prioritize config changes.
 func (r *Reconciler) handleConfigChange(event *events.ConfigValidatedEvent) {
-	r.logger.Info("Configuration change detected, triggering immediate reconciliation",
-		"config_version", event.Version,
-		"secret_version", event.SecretVersion)
+	r.logger.Debug("Config change detected, triggering immediate reconciliation",
+		"config_version", event.Version)
 
+	// Stop pending debounce timer - config changes take priority
 	r.stopDebounceTimer()
-	r.pendingTrigger = false
+
+	// Trigger reconciliation immediately
 	r.triggerReconciliation("config_change")
 }
 

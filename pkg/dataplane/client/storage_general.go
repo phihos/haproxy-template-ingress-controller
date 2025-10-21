@@ -65,6 +65,18 @@ func (c *DataplaneClient) GetGeneralFileContent(ctx context.Context, path string
 		return "", fmt.Errorf("get general file '%s' failed with status %d", path, resp.StatusCode)
 	}
 
+	// Read entire response body first to handle empty responses
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body for general file '%s': %w", path, err)
+	}
+
+	// Check if body is empty (can happen for empty files)
+	if len(bodyBytes) == 0 {
+		// Empty response - treat as empty file content
+		return "", nil
+	}
+
 	// Parse response body
 	var apiFile struct {
 		Id          *string `json:"id"`
@@ -74,8 +86,13 @@ func (c *DataplaneClient) GetGeneralFileContent(ctx context.Context, path string
 		StorageName *string `json:"storage_name"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiFile); err != nil {
-		return "", fmt.Errorf("failed to decode general file response: %w", err)
+	if err := json.Unmarshal(bodyBytes, &apiFile); err != nil {
+		// Include response body in error for debugging
+		bodySnippet := string(bodyBytes)
+		if len(bodySnippet) > 200 {
+			bodySnippet = bodySnippet[:200] + "..."
+		}
+		return "", fmt.Errorf("failed to decode general file response (body: %s): %w", bodySnippet, err)
 	}
 
 	if apiFile.File == nil {
