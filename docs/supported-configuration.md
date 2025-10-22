@@ -76,9 +76,6 @@ Backends support **14 child component types** with individual Create/Update/Dele
 
 The following sections use **whole-section comparison** via the models' `.Equal()` method, which includes all nested components:
 
-- **Resolvers**: Includes nameservers
-- **Mailers**: Includes mailer entries
-- **Peers**: Includes peer entries
 - **Rings**: All ring attributes
 - **HTTPErrors**: Includes errorfiles
 - **Userlists**: Includes users and groups
@@ -86,6 +83,15 @@ The following sections use **whole-section comparison** via the models' `.Equal(
 - **LogForwards**: Includes log targets
 - **FCGIApps**: Includes pass-header and set-param directives
 - **CrtStores**: Includes crt-load entries
+
+#### Known Limitations
+
+The following sections have **limited child component support**:
+
+- **Resolvers**: Nameserver entries are not individually managed (creates resolver section only, not nameservers)
+- **Peers**: Peer entries are not individually managed (may fall back to raw config push)
+
+**Note**: Mailers sections have full child component support with individual mailer entry management.
 
 ## Reload Behavior
 

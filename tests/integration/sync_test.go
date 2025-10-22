@@ -1145,14 +1145,15 @@ func TestSync(t *testing.T) {
 		name:              "mailers-add-section",
 		initialConfigFile: "mailers/mailers-base.cfg",
 		desiredConfigFile: "mailers/mailers-with-alerts.cfg",
-		expectedCreates:   1,
+		expectedCreates:   3,
 		expectedUpdates:   0,
 		expectedDeletes:   0,
 		expectedOperations: []string{
-			"Create mailers section 'alerts'",
+			"Create mailers 'alerts'",
+			"Create mailer entry 'smtp1' in mailers section 'alerts'",
+			"Create mailer entry 'smtp2' in mailers section 'alerts'",
 		},
-		expectedReload:        true,
-		expectedFallbackToRaw: true,
+		expectedReload: true,
 	},
 	{
 		name:              "mailers-remove-section",
@@ -1162,10 +1163,9 @@ func TestSync(t *testing.T) {
 		expectedUpdates:   0,
 		expectedDeletes:   1,
 		expectedOperations: []string{
-			"Delete mailers section 'alerts'",
+			"Delete mailers 'alerts'",
 		},
-		expectedReload:        true,
-		expectedFallbackToRaw: true,
+		expectedReload: true,
 	},
 
 	// ==================== PEERS SECTION OPERATIONS ====================
@@ -1454,22 +1454,33 @@ func runSyncTest(t *testing.T, tc syncTestCase) {
 		verifyDiff.Summary.TotalCreates, verifyDiff.Summary.TotalUpdates, verifyDiff.Summary.TotalDeletes)
 
 	// Step 10: Assert verification diff is EMPTY (idempotency check)
-	// Skip idempotency check for fallback-to-raw tests since unsupported sections
-	// (like mailers, resolvers, peers) may be reformatted by HAProxy
-	if !tc.expectedFallbackToRaw {
-		assert.Equal(t, 0, verifyDiff.Summary.TotalCreates,
-			"final config should match desired (no creates needed)")
-		assert.Equal(t, 0, verifyDiff.Summary.TotalUpdates,
-			"final config should match desired (no updates needed)")
-		assert.Equal(t, 0, verifyDiff.Summary.TotalDeletes,
-			"final config should match desired (no deletes needed)")
-
-		if verifyDiff.Summary.TotalCreates == 0 &&
-			verifyDiff.Summary.TotalUpdates == 0 &&
-			verifyDiff.Summary.TotalDeletes == 0 {
-			t.Logf("✓ Idempotency check passed: final config matches desired config")
+	// If there are differences, log them for debugging
+	if verifyDiff.Summary.TotalCreates > 0 || verifyDiff.Summary.TotalUpdates > 0 || verifyDiff.Summary.TotalDeletes > 0 {
+		t.Logf("⚠️  Idempotency check detected differences:")
+		for _, op := range verifyDiff.Operations {
+			opType := "unknown"
+			switch op.Type() {
+			case 0:
+				opType = "CREATE"
+			case 1:
+				opType = "UPDATE"
+			case 2:
+				opType = "DELETE"
+			}
+			t.Logf("  - %s: %s", opType, op.Describe())
 		}
-	} else {
-		t.Logf("⏭️  Skipping idempotency check for fallback-to-raw test (formatting differences expected)")
+	}
+
+	assert.Equal(t, 0, verifyDiff.Summary.TotalCreates,
+		"final config should match desired (no creates needed)")
+	assert.Equal(t, 0, verifyDiff.Summary.TotalUpdates,
+		"final config should match desired (no updates needed)")
+	assert.Equal(t, 0, verifyDiff.Summary.TotalDeletes,
+		"final config should match desired (no deletes needed)")
+
+	if verifyDiff.Summary.TotalCreates == 0 &&
+		verifyDiff.Summary.TotalUpdates == 0 &&
+		verifyDiff.Summary.TotalDeletes == 0 {
+		t.Logf("✓ Idempotency check passed: final config matches desired config")
 	}
 }

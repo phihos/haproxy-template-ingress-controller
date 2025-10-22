@@ -1631,10 +1631,8 @@ func resolverEqual(r1, r2 *models.Resolver) bool {
 }
 
 // compareMailers compares mailers sections between current and desired configurations.
-
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Peers, etc.) - each handles different types
 func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) []Operation {
-	var operations []Operation
+	operations := make([]Operation, 0, len(desired.Mailers))
 
 	// Convert slices to maps for easier comparison by Name
 	currentMap := make(map[string]*models.MailersSection)
@@ -1655,8 +1653,20 @@ func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) [
 
 	// Find added mailers sections
 	for name, mailers := range desiredMap {
-		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateMailersOperation(mailers))
+		if _, exists := currentMap[name]; exists {
+			continue
+		}
+
+		operations = append(operations, sections.NewCreateMailersOperation(mailers))
+
+		// Also create mailer entries for this new mailers section
+		// Compare against an empty mailers section to get all mailer entry create operations
+		emptyMailers := &models.MailersSection{}
+		emptyMailers.Name = name
+		emptyMailers.MailerEntries = make(map[string]models.MailerEntry)
+		mailerEntryOps := c.compareMailerEntries(name, emptyMailers, mailers)
+		if len(mailerEntryOps) > 0 {
+			operations = append(operations, mailerEntryOps...)
 		}
 	}
 
@@ -1670,7 +1680,14 @@ func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) [
 	// Find modified mailers sections
 	for name, desiredMailers := range desiredMap {
 		if currentMailers, exists := currentMap[name]; exists {
-			if !mailersEqual(currentMailers, desiredMailers) {
+			mailersModified := false
+
+			// Compare mailer entries within this mailers section
+			mailerEntryOps := c.compareMailerEntries(name, currentMailers, desiredMailers)
+			appendOperationsIfNotEmpty(&operations, mailerEntryOps, &mailersModified)
+
+			// Compare mailers section attributes (excluding mailer entries which we already compared)
+			if !mailersEqualWithoutMailerEntries(currentMailers, desiredMailers) {
 				operations = append(operations, sections.NewUpdateMailersOperation(desiredMailers))
 			}
 		}
@@ -1679,9 +1696,73 @@ func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) [
 	return operations
 }
 
-// mailersEqual compares two mailers sections for equality.
-func mailersEqual(m1, m2 *models.MailersSection) bool {
-	return m1.Equal(*m2)
+// mailersEqualWithoutMailerEntries checks if two mailers sections are equal, excluding mailer entries.
+// Uses the HAProxy models' built-in Equal() method to compare mailers section attributes
+// (name, timeout, etc.) automatically, excluding mailer entries we compare separately.
+func mailersEqualWithoutMailerEntries(m1, m2 *models.MailersSection) bool {
+	// Create copies to avoid modifying originals
+	m1Copy := *m1
+	m2Copy := *m2
+
+	// Clear mailer entries so they don't affect comparison
+	m1Copy.MailerEntries = nil
+	m2Copy.MailerEntries = nil
+
+	return m1Copy.Equal(m2Copy)
+}
+
+// compareMailerEntries compares mailer entry configurations within a mailers section.
+func (c *Comparator) compareMailerEntries(mailersSection string, currentMailers, desiredMailers *models.MailersSection) []Operation {
+	var operations []Operation
+
+	// MailersSection.MailerEntries is already a map[string]models.MailerEntry
+	currentEntries := currentMailers.MailerEntries
+	if currentEntries == nil {
+		currentEntries = make(map[string]models.MailerEntry)
+	}
+
+	desiredEntries := desiredMailers.MailerEntries
+	if desiredEntries == nil {
+		desiredEntries = make(map[string]models.MailerEntry)
+	}
+
+	// Find added mailer entries
+	for name := range desiredEntries {
+		if _, exists := currentEntries[name]; !exists {
+			entry := desiredEntries[name]
+			operations = append(operations, sections.NewCreateMailerEntryOperation(mailersSection, &entry))
+		}
+	}
+
+	// Find deleted mailer entries
+	for name := range currentEntries {
+		if _, exists := desiredEntries[name]; !exists {
+			entry := currentEntries[name]
+			operations = append(operations, sections.NewDeleteMailerEntryOperation(mailersSection, &entry))
+		}
+	}
+
+	// Find modified mailer entries
+	for name := range desiredEntries {
+		currentEntry, exists := currentEntries[name]
+		if !exists {
+			continue
+		}
+		desiredEntry := desiredEntries[name]
+
+		// Compare mailer entry attributes
+		if !mailerEntriesEqual(&currentEntry, &desiredEntry) {
+			operations = append(operations, sections.NewUpdateMailerEntryOperation(mailersSection, &desiredEntry))
+		}
+	}
+
+	return operations
+}
+
+// mailerEntriesEqual checks if two mailer entries are equal.
+// Uses the HAProxy models' built-in Equal() method to compare ALL attributes.
+func mailerEntriesEqual(e1, e2 *models.MailerEntry) bool {
+	return e1.Equal(*e2)
 }
 
 // comparePeers compares peer sections between current and desired configurations.
