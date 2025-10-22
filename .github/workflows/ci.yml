@@ -67,7 +67,7 @@ jobs:
           index: ${{ matrix.index }}
           total: ${{ matrix.total }}
           packages: ./tests/integration
-          tags: integration
+          flags: "-tags=integration"
       - name: Run integration tests (shard ${{ matrix.index }}/${{ matrix.total }})
         run: TEST_RUN_PATTERN="${{ steps.test-split.outputs.run }}" make test-integration
         env:
