@@ -147,9 +147,13 @@ func (k *KindCluster) CreateNamespace(name string) (*Namespace, error) {
 
 // CleanupOldTestNamespacesAsync triggers asynchronous cleanup of old test namespaces.
 // This function returns immediately without blocking - cleanup happens in the background.
-// It lists all namespaces with the "test-" prefix and deletes them in a goroutine.
+// It lists all namespaces with the "test-" prefix that are older than 5 minutes and deletes them.
+// This prevents race conditions where newly created test namespaces get deleted while tests are running.
 func (k *KindCluster) CleanupOldTestNamespacesAsync() {
 	go func() {
+		// Wait a bit before starting cleanup to allow current tests to create their namespaces
+		time.Sleep(2 * time.Second)
+
 		ctx := context.Background()
 
 		// List all namespaces with test- prefix
@@ -159,30 +163,37 @@ func (k *KindCluster) CleanupOldTestNamespacesAsync() {
 			return
 		}
 
-		// Filter to test namespaces
-		var testNamespaces []string
+		// Current time for age comparison
+		now := time.Now()
+		ageThreshold := 5 * time.Minute
+
+		// Filter to old test namespaces (created more than 5 minutes ago)
+		var oldTestNamespaces []string
 		for _, ns := range namespaces.Items {
 			if len(ns.Name) >= 5 && ns.Name[:5] == "test-" {
-				testNamespaces = append(testNamespaces, ns.Name)
+				age := now.Sub(ns.CreationTimestamp.Time)
+				if age > ageThreshold {
+					oldTestNamespaces = append(oldTestNamespaces, ns.Name)
+				}
 			}
 		}
 
-		if len(testNamespaces) == 0 {
+		if len(oldTestNamespaces) == 0 {
 			fmt.Printf("Background cleanup: no old test namespaces found\n")
 			return
 		}
 
-		fmt.Printf("Background cleanup: deleting %d old test namespaces in background\n", len(testNamespaces))
+		fmt.Printf("Background cleanup: deleting %d old test namespaces (>%v old) in background\n", len(oldTestNamespaces), ageThreshold)
 
-		// Delete each namespace
-		for _, nsName := range testNamespaces {
+		// Delete each old namespace
+		for _, nsName := range oldTestNamespaces {
 			err := k.clientset.CoreV1().Namespaces().Delete(ctx, nsName, metav1.DeleteOptions{})
 			if err != nil {
 				fmt.Printf("Background cleanup: failed to delete namespace %s: %v\n", nsName, err)
 			}
 		}
 
-		fmt.Printf("Background cleanup: completed deletion of %d namespaces\n", len(testNamespaces))
+		fmt.Printf("Background cleanup: completed deletion of %d namespaces\n", len(oldTestNamespaces))
 	}()
 }
 
