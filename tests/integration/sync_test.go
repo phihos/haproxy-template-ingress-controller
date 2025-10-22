@@ -612,46 +612,13 @@ func TestSync(t *testing.T) {
 		expectedReload: true,
 	},
 
-	// ==================== LISTEN SECTION OPERATIONS ====================
-	{
-		name:              "listen-add-section",
-		initialConfigFile: "listen/listen-base.cfg",
-		desiredConfigFile: "listen/listen-with-servers.cfg",
-		expectedCreates:   0,
-		expectedUpdates:   0,
-		expectedDeletes:   1,
-		expectedOperations: []string{
-			"Delete backend 'web'",
-		},
-		expectedReload: true,
-	},
-	{
-		name:              "listen-remove-section",
-		initialConfigFile: "listen/listen-with-servers.cfg",
-		desiredConfigFile: "listen/listen-base.cfg",
-		expectedCreates:   1,
-		expectedUpdates:   0,
-		expectedDeletes:   1,
-		expectedOperations: []string{
-			"Delete listen section 'web'",
-			"Create backend 'web'",
-		},
-		expectedReload: true,
-	},
-	{
-		name:              "listen-tcp-mode",
-		initialConfigFile: "listen/listen-base.cfg",
-		desiredConfigFile: "listen/listen-tcp-mode.cfg",
-		expectedCreates:   0,
-		expectedUpdates:   1,
-		expectedDeletes:   1,
-		expectedOperations: []string{
-			"Delete backend 'web'",
-			"Update defaults section 'unnamed_defaults_1'",
-		},
-		expectedReload: true,
-	},
-		// ==================== BIND OPERATIONS ====================
+	// ==================== LISTEN SECTIONS NOT SUPPORTED ====================
+	// Listen sections are not supported by HAProxy Dataplane API and cannot be
+	// managed via fine-grained sync. The parser ignores listen sections entirely.
+	// Users should convert listen sections to separate frontend+backend sections.
+	// See docs/supported-configuration.md for details.
+
+	// ==================== BIND OPERATIONS ====================
 		{
 			name:              "frontend-add-binds",
 			initialConfigFile: "binds/frontend-with-bind.cfg",
@@ -1118,14 +1085,15 @@ func TestSync(t *testing.T) {
 		name:              "resolvers-add-section",
 		initialConfigFile: "resolvers/resolvers-base.cfg",
 		desiredConfigFile: "resolvers/resolvers-with-dns.cfg",
-		expectedCreates:   1,
+		expectedCreates:   3,
 		expectedUpdates:   0,
 		expectedDeletes:   0,
 		expectedOperations: []string{
 			"Create resolver 'dns'",
+			"Create nameserver 'dns1' in resolvers section 'dns'",
+			"Create nameserver 'dns2' in resolvers section 'dns'",
 		},
-		expectedReload:        true,
-		expectedFallbackToRaw: true,
+		expectedReload: true,
 	},
 	{
 		name:              "resolvers-remove-section",
@@ -1173,15 +1141,17 @@ func TestSync(t *testing.T) {
 		name:              "peers-add-section",
 		initialConfigFile: "peers/peers-base.cfg",
 		desiredConfigFile: "peers/peers-with-cluster.cfg",
-		expectedCreates:   1,
+		expectedCreates:   4,
 		expectedUpdates:   1,
 		expectedDeletes:   0,
 		expectedOperations: []string{
 			"Create peer section 'mycluster'",
+			"Create peer entry 'node1' in peers section 'mycluster'",
+			"Create peer entry 'node2' in peers section 'mycluster'",
+			"Create peer entry 'node3' in peers section 'mycluster'",
 			"Update backend 'web'",
 		},
-		expectedReload:        true,
-		expectedFallbackToRaw: true,
+		expectedReload: true,
 	},
 	{
 		name:              "peers-remove-section",

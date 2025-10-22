@@ -41,6 +41,58 @@ func appendOperationsIfNotEmpty(dst *[]Operation, src []Operation, modified *boo
 	}
 }
 
+// compareMapEntries is a generic helper for comparing map-based child entries (nameservers, mailer entries, peer entries).
+// This reduces code duplication for the common pattern of comparing map[string]T entries.
+func compareMapEntries[T any](
+	currentMap, desiredMap map[string]T,
+	createOp func(*T) Operation,
+	deleteOp func(*T) Operation,
+	updateOp func(*T) Operation,
+	equalFunc func(*T, *T) bool,
+) []Operation {
+	var operations []Operation
+
+	// Handle nil maps
+	if currentMap == nil {
+		currentMap = make(map[string]T)
+	}
+	if desiredMap == nil {
+		desiredMap = make(map[string]T)
+	}
+
+	// Find added entries
+	for name := range desiredMap {
+		if _, exists := currentMap[name]; !exists {
+			entry := desiredMap[name]
+			operations = append(operations, createOp(&entry))
+		}
+	}
+
+	// Find deleted entries
+	for name := range currentMap {
+		if _, exists := desiredMap[name]; !exists {
+			entry := currentMap[name]
+			operations = append(operations, deleteOp(&entry))
+		}
+	}
+
+	// Find modified entries
+	for name := range desiredMap {
+		currentEntry, exists := currentMap[name]
+		if !exists {
+			continue
+		}
+		desiredEntry := desiredMap[name]
+
+		// Compare entry attributes
+		if !equalFunc(&currentEntry, &desiredEntry) {
+			operations = append(operations, updateOp(&desiredEntry))
+		}
+	}
+
+	return operations
+}
+
 // Compare performs a deep comparison between current and desired configurations.
 //
 // It returns a ConfigDiff containing all operations needed to transform
@@ -1577,10 +1629,10 @@ func httpErrorsEqual(h1, h2 *models.HTTPErrorsSection) bool {
 }
 
 // compareResolvers compares resolver sections between current and desired configurations.
-
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Mailers, Peers, etc.) - each handles different types
+//
+//nolint:dupl // Similar pattern to compareMailers/comparePeers - each handles different section types
 func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig) []Operation {
-	var operations []Operation
+	operations := make([]Operation, 0, len(desired.Resolvers))
 
 	// Convert slices to maps for easier comparison by Name
 	currentMap := make(map[string]*models.Resolver)
@@ -1601,8 +1653,20 @@ func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig)
 
 	// Find added resolver sections
 	for name, resolver := range desiredMap {
-		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateResolverOperation(resolver))
+		if _, exists := currentMap[name]; exists {
+			continue
+		}
+
+		operations = append(operations, sections.NewCreateResolverOperation(resolver))
+
+		// Also create nameserver entries for this new resolver section
+		// Compare against an empty resolver section to get all nameserver create operations
+		emptyResolver := &models.Resolver{}
+		emptyResolver.Name = name
+		emptyResolver.Nameservers = make(map[string]models.Nameserver)
+		nameserverOps := c.compareNameservers(name, emptyResolver, resolver)
+		if len(nameserverOps) > 0 {
+			operations = append(operations, nameserverOps...)
 		}
 	}
 
@@ -1616,7 +1680,14 @@ func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig)
 	// Find modified resolver sections
 	for name, desiredResolver := range desiredMap {
 		if currentResolver, exists := currentMap[name]; exists {
-			if !resolverEqual(currentResolver, desiredResolver) {
+			resolverModified := false
+
+			// Compare nameserver entries within this resolver section
+			nameserverOps := c.compareNameservers(name, currentResolver, desiredResolver)
+			appendOperationsIfNotEmpty(&operations, nameserverOps, &resolverModified)
+
+			// Compare resolver section attributes (excluding nameserver entries which we already compared)
+			if !resolversEqualWithoutNameservers(currentResolver, desiredResolver) {
 				operations = append(operations, sections.NewUpdateResolverOperation(desiredResolver))
 			}
 		}
@@ -1625,12 +1696,48 @@ func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig)
 	return operations
 }
 
-// resolverEqual compares two resolver sections for equality.
-func resolverEqual(r1, r2 *models.Resolver) bool {
-	return r1.Equal(*r2)
+// resolversEqualWithoutNameservers checks if two resolver sections are equal, excluding nameserver entries.
+// Uses the HAProxy models' built-in Equal() method to compare resolver section attributes
+// (name, timeouts, etc.) automatically, excluding nameserver entries we compare separately.
+func resolversEqualWithoutNameservers(r1, r2 *models.Resolver) bool {
+	// Create copies to avoid modifying originals
+	r1Copy := *r1
+	r2Copy := *r2
+
+	// Clear nameserver entries so they don't affect comparison
+	r1Copy.Nameservers = nil
+	r2Copy.Nameservers = nil
+
+	return r1Copy.Equal(r2Copy)
+}
+
+// compareNameservers compares nameserver configurations within a resolver section.
+func (c *Comparator) compareNameservers(resolverSection string, currentResolver, desiredResolver *models.Resolver) []Operation {
+	return compareMapEntries(
+		currentResolver.Nameservers,
+		desiredResolver.Nameservers,
+		func(entry *models.Nameserver) Operation {
+			return sections.NewCreateNameserverOperation(resolverSection, entry)
+		},
+		func(entry *models.Nameserver) Operation {
+			return sections.NewDeleteNameserverOperation(resolverSection, entry)
+		},
+		func(entry *models.Nameserver) Operation {
+			return sections.NewUpdateNameserverOperation(resolverSection, entry)
+		},
+		nameserversEqual,
+	)
+}
+
+// nameserversEqual checks if two nameserver entries are equal.
+// Uses the HAProxy models' built-in Equal() method to compare ALL attributes.
+func nameserversEqual(n1, n2 *models.Nameserver) bool {
+	return n1.Equal(*n2)
 }
 
 // compareMailers compares mailers sections between current and desired configurations.
+//
+//nolint:dupl // Similar pattern to compareResolvers/comparePeers - each handles different section types
 func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) []Operation {
 	operations := make([]Operation, 0, len(desired.Mailers))
 
@@ -1713,50 +1820,20 @@ func mailersEqualWithoutMailerEntries(m1, m2 *models.MailersSection) bool {
 
 // compareMailerEntries compares mailer entry configurations within a mailers section.
 func (c *Comparator) compareMailerEntries(mailersSection string, currentMailers, desiredMailers *models.MailersSection) []Operation {
-	var operations []Operation
-
-	// MailersSection.MailerEntries is already a map[string]models.MailerEntry
-	currentEntries := currentMailers.MailerEntries
-	if currentEntries == nil {
-		currentEntries = make(map[string]models.MailerEntry)
-	}
-
-	desiredEntries := desiredMailers.MailerEntries
-	if desiredEntries == nil {
-		desiredEntries = make(map[string]models.MailerEntry)
-	}
-
-	// Find added mailer entries
-	for name := range desiredEntries {
-		if _, exists := currentEntries[name]; !exists {
-			entry := desiredEntries[name]
-			operations = append(operations, sections.NewCreateMailerEntryOperation(mailersSection, &entry))
-		}
-	}
-
-	// Find deleted mailer entries
-	for name := range currentEntries {
-		if _, exists := desiredEntries[name]; !exists {
-			entry := currentEntries[name]
-			operations = append(operations, sections.NewDeleteMailerEntryOperation(mailersSection, &entry))
-		}
-	}
-
-	// Find modified mailer entries
-	for name := range desiredEntries {
-		currentEntry, exists := currentEntries[name]
-		if !exists {
-			continue
-		}
-		desiredEntry := desiredEntries[name]
-
-		// Compare mailer entry attributes
-		if !mailerEntriesEqual(&currentEntry, &desiredEntry) {
-			operations = append(operations, sections.NewUpdateMailerEntryOperation(mailersSection, &desiredEntry))
-		}
-	}
-
-	return operations
+	return compareMapEntries(
+		currentMailers.MailerEntries,
+		desiredMailers.MailerEntries,
+		func(entry *models.MailerEntry) Operation {
+			return sections.NewCreateMailerEntryOperation(mailersSection, entry)
+		},
+		func(entry *models.MailerEntry) Operation {
+			return sections.NewDeleteMailerEntryOperation(mailersSection, entry)
+		},
+		func(entry *models.MailerEntry) Operation {
+			return sections.NewUpdateMailerEntryOperation(mailersSection, entry)
+		},
+		mailerEntriesEqual,
+	)
 }
 
 // mailerEntriesEqual checks if two mailer entries are equal.
@@ -1766,10 +1843,10 @@ func mailerEntriesEqual(e1, e2 *models.MailerEntry) bool {
 }
 
 // comparePeers compares peer sections between current and desired configurations.
-
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
+//
+//nolint:dupl // Similar pattern to compareResolvers/compareMailers - each handles different section types
 func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []Operation {
-	var operations []Operation
+	operations := make([]Operation, 0, len(desired.Peers))
 
 	// Convert slices to maps for easier comparison by Name
 	currentMap := make(map[string]*models.PeerSection)
@@ -1790,8 +1867,20 @@ func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []O
 
 	// Find added peer sections
 	for name, peer := range desiredMap {
-		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreatePeerOperation(peer))
+		if _, exists := currentMap[name]; exists {
+			continue
+		}
+
+		operations = append(operations, sections.NewCreatePeerOperation(peer))
+
+		// Also create peer entries for this new peers section
+		// Compare against an empty peers section to get all peer entry create operations
+		emptyPeer := &models.PeerSection{}
+		emptyPeer.Name = name
+		emptyPeer.PeerEntries = make(map[string]models.PeerEntry)
+		peerEntryOps := c.comparePeerEntries(name, emptyPeer, peer)
+		if len(peerEntryOps) > 0 {
+			operations = append(operations, peerEntryOps...)
 		}
 	}
 
@@ -1803,11 +1892,16 @@ func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []O
 	}
 
 	// Find modified peer sections
-	// Note: HAProxy Dataplane API does not support updating peer sections
-	// So we only detect added and deleted peer sections
 	for name, desiredPeer := range desiredMap {
 		if currentPeer, exists := currentMap[name]; exists {
-			if !peerEqual(currentPeer, desiredPeer) {
+			peerModified := false
+
+			// Compare peer entries within this peers section
+			peerEntryOps := c.comparePeerEntries(name, currentPeer, desiredPeer)
+			appendOperationsIfNotEmpty(&operations, peerEntryOps, &peerModified)
+
+			// Compare peers section attributes (excluding peer entries which we already compared)
+			if !peersEqualWithoutPeerEntries(currentPeer, desiredPeer) {
 				operations = append(operations, sections.NewUpdatePeerOperation(desiredPeer))
 			}
 		}
@@ -1816,8 +1910,42 @@ func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []O
 	return operations
 }
 
-// peerEqual compares two peer sections for equality.
-func peerEqual(p1, p2 *models.PeerSection) bool {
+// peersEqualWithoutPeerEntries checks if two peer sections are equal, excluding peer entries.
+// Uses the HAProxy models' built-in Equal() method to compare peer section attributes
+// automatically, excluding peer entries we compare separately.
+func peersEqualWithoutPeerEntries(p1, p2 *models.PeerSection) bool {
+	// Create copies to avoid modifying originals
+	p1Copy := *p1
+	p2Copy := *p2
+
+	// Clear peer entries so they don't affect comparison
+	p1Copy.PeerEntries = nil
+	p2Copy.PeerEntries = nil
+
+	return p1Copy.Equal(p2Copy)
+}
+
+// comparePeerEntries compares peer entry configurations within a peers section.
+func (c *Comparator) comparePeerEntries(peersSection string, currentPeer, desiredPeer *models.PeerSection) []Operation {
+	return compareMapEntries(
+		currentPeer.PeerEntries,
+		desiredPeer.PeerEntries,
+		func(entry *models.PeerEntry) Operation {
+			return sections.NewCreatePeerEntryOperation(peersSection, entry)
+		},
+		func(entry *models.PeerEntry) Operation {
+			return sections.NewDeletePeerEntryOperation(peersSection, entry)
+		},
+		func(entry *models.PeerEntry) Operation {
+			return sections.NewUpdatePeerEntryOperation(peersSection, entry)
+		},
+		peerEntriesEqual,
+	)
+}
+
+// peerEntriesEqual checks if two peer entries are equal.
+// Uses the HAProxy models' built-in Equal() method to compare ALL attributes.
+func peerEntriesEqual(p1, p2 *models.PeerEntry) bool {
 	return p1.Equal(*p2)
 }
 
