@@ -50,13 +50,28 @@ jobs:
 
   test-integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        total: [4]
+        index: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: make test-integration
+      - uses: hashicorp-forge/go-test-split-action@v2
+        id: test-split
+        with:
+          index: ${{ matrix.index }}
+          total: ${{ matrix.total }}
+          packages: ./tests/integration
+          tags: integration
+      - name: Run integration tests (shard ${{ matrix.index }}/${{ matrix.total }})
+        run: TEST_RUN_PATTERN="${{ steps.test-split.outputs.run }}" make test-integration
+        env:
+          KEEP_CLUSTER: "false"
 
   test-acceptance:
     runs-on: ubuntu-latest
