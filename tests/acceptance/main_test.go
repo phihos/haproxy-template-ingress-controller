@@ -14,7 +14,6 @@ import (
 	"sigs.k8s.io/e2e-framework/support/kind"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -84,47 +83,10 @@ func TestMain(m *testing.M) {
 
 			return ctx, nil
 		},
-		// Create test namespace
-		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-			client, err := cfg.NewClient()
-			if err != nil {
-				return ctx, fmt.Errorf("failed to create client: %w", err)
-			}
-
-			ns := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: TestNamespace,
-				},
-			}
-
-			if err := client.Resources().Create(ctx, ns); err != nil {
-				return ctx, fmt.Errorf("failed to create namespace: %w", err)
-			}
-
-			return ctx, nil
-		},
 	)
 
 	// Finish: Cleanup resources
 	testEnv.Finish(
-		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
-			client, err := cfg.NewClient()
-			if err != nil {
-				// Don't fail on cleanup
-				return ctx, nil
-			}
-
-			ns := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: TestNamespace,
-				},
-			}
-
-			// Ignore errors on namespace cleanup
-			_ = client.Resources().Delete(ctx, ns)
-
-			return ctx, nil
-		},
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			// Destroy kind cluster
 			if err := kindCluster.Destroy(ctx); err != nil {

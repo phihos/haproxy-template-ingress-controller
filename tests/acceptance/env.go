@@ -36,10 +36,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-const (
-	// TestNamespace is the namespace where test resources are created.
-	TestNamespace = "haproxy-test"
+// namespaceContextKey is a type-safe key for storing namespace in context.
+type namespaceContextKey struct{}
 
+const (
 	// ControllerDeploymentName is the name of the controller deployment.
 	ControllerDeploymentName = "haproxy-template-ic"
 
@@ -76,6 +76,21 @@ var (
 	// testEnv is the shared test environment.
 	testEnv env.Environment
 )
+
+// StoreNamespaceInContext stores a namespace name in the context for use across test phases.
+func StoreNamespaceInContext(ctx context.Context, namespace string) context.Context {
+	return context.WithValue(ctx, namespaceContextKey{}, namespace)
+}
+
+// GetNamespaceFromContext retrieves the namespace name from the context.
+// Returns an error if the namespace is not found or has the wrong type.
+func GetNamespaceFromContext(ctx context.Context) (string, error) {
+	namespace, ok := ctx.Value(namespaceContextKey{}).(string)
+	if !ok || namespace == "" {
+		return "", fmt.Errorf("namespace not found in context")
+	}
+	return namespace, nil
+}
 
 
 // WaitForPodReady waits for a pod matching the label selector to be ready.

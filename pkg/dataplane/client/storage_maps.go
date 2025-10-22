@@ -1,4 +1,3 @@
-//nolint:dupl // Intentional duplication - multipart upload patterns for different storage types
 package client
 
 import (
@@ -64,40 +63,15 @@ func (c *DataplaneClient) GetMapFileContent(ctx context.Context, name string) (s
 		return "", fmt.Errorf("get map file '%s' failed with status %d", name, resp.StatusCode)
 	}
 
-	// Read entire response body first to handle empty responses
+	// Read the raw map file content (similar to general files)
+	// The API returns the raw content directly, not wrapped in JSON
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body for map file '%s': %w", name, err)
 	}
 
-	// Trim whitespace and check if body is effectively empty (can happen for empty map files)
-	trimmedBody := bytes.TrimSpace(bodyBytes)
-	if len(trimmedBody) == 0 {
-		// Empty response (or only whitespace) - treat as empty map file content
-		return "", nil
-	}
-
-	// Parse response body
-	var apiMap struct {
-		StorageName *string `json:"storage_name"`
-		File        *string `json:"file"`
-		Description *string `json:"description"`
-	}
-
-	if err := json.Unmarshal(bodyBytes, &apiMap); err != nil {
-		// Include response body in error for debugging
-		bodySnippet := string(bodyBytes)
-		if len(bodySnippet) > 200 {
-			bodySnippet = bodySnippet[:200] + "..."
-		}
-		return "", fmt.Errorf("failed to decode map file response (body: %s): %w", bodySnippet, err)
-	}
-
-	if apiMap.File == nil {
-		return "", fmt.Errorf("map file content is nil for '%s'", name)
-	}
-
-	return *apiMap.File, nil
+	// Return the raw content as a string
+	return string(bodyBytes), nil
 }
 
 // CreateMapFile creates a new map file using multipart form-data.
@@ -173,7 +147,7 @@ func (c *DataplaneClient) UpdateMapFile(ctx context.Context, name, content strin
 
 // DeleteMapFile deletes a map file by name.
 func (c *DataplaneClient) DeleteMapFile(ctx context.Context, name string) error {
-	resp, err := c.client.DeleteStorageMap(ctx, name, nil)
+	resp, err := c.client.DeleteStorageMap(ctx, name)
 	if err != nil {
 		return fmt.Errorf("failed to delete map file '%s': %w", name, err)
 	}

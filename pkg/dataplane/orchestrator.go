@@ -131,7 +131,7 @@ func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *Syn
 		o.logger.Warn("Fine-grained sync failed, attempting fallback to raw config push",
 			"error", err)
 
-		fallbackResult, fallbackErr := o.attemptRawFallback(ctx, desiredConfig, diff, startTime)
+		fallbackResult, fallbackErr := o.attemptRawFallback(ctx, desiredConfig, diff, auxFiles, startTime)
 		if fallbackErr != nil {
 			return nil, NewFallbackError(err, fallbackErr)
 		}
@@ -185,31 +185,59 @@ func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *compara
 	var reloadID string
 	var retries int
 
-	// Execute with automatic retry on 409 conflicts
-	commitResult, err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
-		retries++
-		o.logger.Info("Executing fine-grained sync",
-			"attempt", retries,
-			"transaction_id", tx.ID,
-			"version", tx.Version)
+	// Check if all operations are runtime-eligible (server UPDATE only)
+	// Runtime-eligible operations can be executed without reload via Runtime API
+	allRuntimeEligible := o.areAllOperationsRuntimeEligible(diff.Operations)
 
-		// Execute operations within the transaction
-		_, err := synchronizer.SyncOperations(ctx, o.client, diff.Operations, tx)
-		if err != nil {
-			return err
+	var commitResult *client.CommitResult
+	var err error
+
+	if allRuntimeEligible {
+		// Execute runtime-eligible operations without transaction (no reload)
+		o.logger.Info("All operations are runtime-eligible, executing without transaction")
+
+		// Execute operations directly using runtime API (empty transactionID)
+		for _, op := range diff.Operations {
+			if execErr := op.Execute(ctx, o.client, ""); execErr != nil {
+				err = fmt.Errorf("runtime operation failed: %w", execErr)
+				break
+			}
 		}
 
-		// Convert operations to AppliedOperation (do this here while we have access to operations)
-		appliedOps = convertOperationsToApplied(diff.Operations)
+		retries = 1             // Count single execution
+		reloadTriggered = false // Runtime API doesn't trigger reload
+		reloadID = ""           // No reload ID
 
-		return nil
-		// VersionAdapter will commit the transaction after this callback returns
-	})
+		if err == nil {
+			appliedOps = convertOperationsToApplied(diff.Operations)
+		}
+	} else {
+		// Execute with transaction (triggers reload)
+		commitResult, err = adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
+			retries++
+			o.logger.Info("Executing fine-grained sync",
+				"attempt", retries,
+				"transaction_id", tx.ID,
+				"version", tx.Version)
 
-	// Extract reload information from commit result (if successful)
-	if err == nil && commitResult != nil {
-		reloadTriggered = commitResult.StatusCode == 202
-		reloadID = commitResult.ReloadID
+			// Execute operations within the transaction
+			_, err := synchronizer.SyncOperations(ctx, o.client, diff.Operations, tx)
+			if err != nil {
+				return err
+			}
+
+			// Convert operations to AppliedOperation (do this here while we have access to operations)
+			appliedOps = convertOperationsToApplied(diff.Operations)
+
+			return nil
+			// VersionAdapter will commit the transaction after this callback returns
+		})
+
+		// Extract reload information from commit result (if successful)
+		if err == nil && commitResult != nil {
+			reloadTriggered = commitResult.StatusCode == 202
+			reloadID = commitResult.ReloadID
+		}
 	}
 
 	if err != nil {
@@ -255,9 +283,37 @@ func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *compara
 }
 
 // attemptRawFallback attempts to sync using raw configuration push.
-func (o *orchestrator) attemptRawFallback(ctx context.Context, desiredConfig string, diff *comparator.ConfigDiff, startTime time.Time) (*SyncResult, error) {
+func (o *orchestrator) attemptRawFallback(ctx context.Context, desiredConfig string, diff *comparator.ConfigDiff, auxFiles *AuxiliaryFiles, startTime time.Time) (*SyncResult, error) {
 	o.logger.Warn("Falling back to raw configuration push")
 
+	// Phase 1: Sync auxiliary files BEFORE pushing raw config (same as fine-grained sync)
+	// Files must exist before HAProxy validates the configuration
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// Sync general files
+	g.Go(func() error {
+		_, err := o.syncGeneralFilesPreConfig(gCtx, auxFiles.GeneralFiles)
+		return err
+	})
+
+	// Sync SSL certificates
+	g.Go(func() error {
+		_, err := o.syncSSLCertificatesPreConfig(gCtx, auxFiles.SSLCertificates)
+		return err
+	})
+
+	// Sync map files
+	g.Go(func() error {
+		_, err := o.syncMapFilesPreConfig(gCtx, auxFiles.MapFiles)
+		return err
+	})
+
+	// Wait for all auxiliary file syncs to complete
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	// Phase 2: Push raw configuration (now that auxiliary files exist)
 	reloadID, err := o.client.PushRawConfiguration(ctx, desiredConfig)
 	if err != nil {
 		return nil, &SyncError{
@@ -601,6 +657,28 @@ func (o *orchestrator) syncMapFilesPreConfig(ctx context.Context, mapFiles []aux
 
 	o.logger.Info("Map files synced successfully (pre-config phase)")
 	return mapDiff, nil
+}
+
+// areAllOperationsRuntimeEligible checks if all operations can be executed via Runtime API without reload.
+//
+// Currently, only server UPDATE operations are runtime-eligible because they can modify
+// server parameters (weight, address, port, state) without requiring HAProxy reload.
+//
+// All other operations (creates, deletes, structural changes) require transactions and trigger reload.
+func (o *orchestrator) areAllOperationsRuntimeEligible(operations []comparator.Operation) bool {
+	if len(operations) == 0 {
+		return false
+	}
+
+	for _, op := range operations {
+		// Only server UPDATE operations are runtime-eligible
+		// Server creates/deletes require transaction, other sections require transaction
+		if op.Section() != "server" || op.Type() != sections.OperationUpdate {
+			return false
+		}
+	}
+
+	return true
 }
 
 // deleteObsoleteFilesPostConfig deletes obsolete auxiliary files AFTER successful config sync.

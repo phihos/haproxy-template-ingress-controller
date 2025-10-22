@@ -17,6 +17,8 @@
 package acceptance
 
 import (
+	"fmt"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -29,6 +31,10 @@ pod_selector:
   match_labels:
     app: haproxy
     component: loadbalancer
+
+controller:
+  healthz_port: 8080
+  metrics_port: 9090
 
 haproxy_config:
   template: |
@@ -64,6 +70,10 @@ pod_selector:
   match_labels:
     app: haproxy
     component: loadbalancer
+
+controller:
+  healthz_port: 8080
+  metrics_port: 9090
 
 haproxy_config:
   template: |
@@ -184,11 +194,16 @@ func NewRoleBinding(namespace, name, roleName, serviceAccountName string) *rbacv
 	}
 }
 
-// NewClusterRole creates a ClusterRole with permissions for cluster-wide resource watching.
-func NewClusterRole(name string) *rbacv1.ClusterRole {
+// NewClusterRole creates a ClusterRole with a unique name for test isolation.
+// The name parameter is the base name, and namespace is appended to ensure uniqueness.
+func NewClusterRole(name, namespace string) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
+			Name: fmt.Sprintf("%s-%s", name, namespace),
+			Labels: map[string]string{
+				"app.kubernetes.io/name": ControllerDeploymentName,
+				"test-namespace":         namespace,
+			},
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
@@ -200,16 +215,22 @@ func NewClusterRole(name string) *rbacv1.ClusterRole {
 	}
 }
 
-// NewClusterRoleBinding creates a ClusterRoleBinding that binds the ClusterRole to the ServiceAccount.
-func NewClusterRoleBinding(name, clusterRoleName, serviceAccountName, serviceAccountNamespace string) *rbacv1.ClusterRoleBinding {
+// NewClusterRoleBinding creates a ClusterRoleBinding with a unique name for test isolation.
+// The name parameter is the base name, clusterRoleName is the base ClusterRole name,
+// and testNamespace is appended to both to ensure uniqueness and proper references.
+func NewClusterRoleBinding(name, clusterRoleName, serviceAccountName, serviceAccountNamespace, testNamespace string) *rbacv1.ClusterRoleBinding {
 	return &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
+			Name: fmt.Sprintf("%s-%s", name, testNamespace),
+			Labels: map[string]string{
+				"app.kubernetes.io/name": ControllerDeploymentName,
+				"test-namespace":         testNamespace,
+			},
 		},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",
 			Kind:     "ClusterRole",
-			Name:     clusterRoleName,
+			Name:     fmt.Sprintf("%s-%s", clusterRoleName, testNamespace),
 		},
 		Subjects: []rbacv1.Subject{
 			{

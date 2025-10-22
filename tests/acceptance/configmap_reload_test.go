@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TestConfigMapReload verifies that the controller detects and applies ConfigMap changes.
@@ -49,55 +50,73 @@ func TestConfigMapReload(t *testing.T) {
 			t.Helper()
 			t.Log("Setting up ConfigMap reload test")
 
+			// Generate unique namespace for this test
+			namespace := envconf.RandomName("acceptance", 16)
+			t.Logf("Using test namespace: %s", namespace)
+
+			// Store namespace in context for use in Assess and Teardown
+			ctx = StoreNamespaceInContext(ctx, namespace)
+
 			client, err := cfg.NewClient()
 			if err != nil {
 				t.Fatal("Failed to create client:", err)
 			}
 
+			// Create test namespace
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			if err := client.Resources().Create(ctx, ns); err != nil {
+				t.Fatal("Failed to create namespace:", err)
+			}
+			t.Logf("Created test namespace: %s", namespace)
+
 			// Create ServiceAccount for controller
-			serviceAccount := NewServiceAccount(TestNamespace, ControllerServiceAccountName)
+			serviceAccount := NewServiceAccount(namespace, ControllerServiceAccountName)
 			if err := client.Resources().Create(ctx, serviceAccount); err != nil {
 				t.Fatal("Failed to create serviceaccount:", err)
 			}
 			t.Log("Created controller serviceaccount")
 
 			// Create Role with ConfigMap and Secret permissions
-			role := NewRole(TestNamespace, ControllerRoleName)
+			role := NewRole(namespace, ControllerRoleName)
 			if err := client.Resources().Create(ctx, role); err != nil {
 				t.Fatal("Failed to create role:", err)
 			}
 			t.Log("Created controller role")
 
 			// Create RoleBinding
-			roleBinding := NewRoleBinding(TestNamespace, ControllerRoleBindingName, ControllerRoleName, ControllerServiceAccountName)
+			roleBinding := NewRoleBinding(namespace, ControllerRoleBindingName, ControllerRoleName, ControllerServiceAccountName)
 			if err := client.Resources().Create(ctx, roleBinding); err != nil {
 				t.Fatal("Failed to create rolebinding:", err)
 			}
 			t.Log("Created controller rolebinding")
 
-			// Create ClusterRole for cluster-wide Ingress watching
-			clusterRole := NewClusterRole(ControllerClusterRoleName)
+			// Create ClusterRole for cluster-wide Ingress watching (unique per test)
+			clusterRole := NewClusterRole(ControllerClusterRoleName, namespace)
 			if err := client.Resources().Create(ctx, clusterRole); err != nil {
 				t.Fatal("Failed to create clusterrole:", err)
 			}
 			t.Log("Created controller clusterrole")
 
-			// Create ClusterRoleBinding
-			clusterRoleBinding := NewClusterRoleBinding(ControllerClusterRoleBindingName, ControllerClusterRoleName, ControllerServiceAccountName, TestNamespace)
+			// Create ClusterRoleBinding (unique per test)
+			clusterRoleBinding := NewClusterRoleBinding(ControllerClusterRoleBindingName, ControllerClusterRoleName, ControllerServiceAccountName, namespace, namespace)
 			if err := client.Resources().Create(ctx, clusterRoleBinding); err != nil {
 				t.Fatal("Failed to create clusterrolebinding:", err)
 			}
 			t.Log("Created controller clusterrolebinding")
 
 			// Create controller Secret
-			secret := NewSecret(TestNamespace, ControllerSecretName)
+			secret := NewSecret(namespace, ControllerSecretName)
 			if err := client.Resources().Create(ctx, secret); err != nil {
 				t.Fatal("Failed to create secret:", err)
 			}
 			t.Log("Created controller secret")
 
 			// Create controller ConfigMap with initial configuration
-			configMap := NewConfigMap(TestNamespace, ControllerConfigMapName, InitialConfigYAML)
+			configMap := NewConfigMap(namespace, ControllerConfigMapName, InitialConfigYAML)
 			if err := client.Resources().Create(ctx, configMap); err != nil {
 				t.Fatal("Failed to create configmap:", err)
 			}
@@ -105,7 +124,7 @@ func TestConfigMapReload(t *testing.T) {
 
 			// Create controller Deployment
 			deployment := NewControllerDeployment(
-				TestNamespace,
+				namespace,
 				ControllerConfigMapName,
 				ControllerSecretName,
 				ControllerServiceAccountName,
@@ -118,7 +137,7 @@ func TestConfigMapReload(t *testing.T) {
 
 			// Wait for controller pod to be ready
 			t.Log("Waiting for controller pod to be ready...")
-			if err := WaitForPodReady(ctx, client, TestNamespace, "app="+ControllerDeploymentName, 2*time.Minute); err != nil {
+			if err := WaitForPodReady(ctx, client, namespace, "app="+ControllerDeploymentName, 2*time.Minute); err != nil {
 				t.Fatal("Controller pod did not become ready:", err)
 			}
 			t.Log("Controller pod is ready")
@@ -129,13 +148,19 @@ func TestConfigMapReload(t *testing.T) {
 			t.Helper()
 			t.Log("Verifying initial configuration is loaded")
 
+			// Retrieve namespace from context
+			namespace, err := GetNamespaceFromContext(ctx)
+			if err != nil {
+				t.Fatal("Failed to get namespace from context:", err)
+			}
+
 			client, err := cfg.NewClient()
 			if err != nil {
 				t.Fatal("Failed to create client:", err)
 			}
 
 			// Get controller pod
-			pod, err := GetControllerPod(ctx, client, TestNamespace)
+			pod, err := GetControllerPod(ctx, client, namespace)
 			if err != nil {
 				t.Fatal("Failed to get controller pod:", err)
 			}
@@ -221,6 +246,12 @@ func TestConfigMapReload(t *testing.T) {
 			t.Helper()
 			t.Log("Updating ConfigMap with new configuration")
 
+			// Retrieve namespace from context
+			namespace, err := GetNamespaceFromContext(ctx)
+			if err != nil {
+				t.Fatal("Failed to get namespace from context:", err)
+			}
+
 			client, err := cfg.NewClient()
 			if err != nil {
 				t.Fatal("Failed to create client:", err)
@@ -228,7 +259,7 @@ func TestConfigMapReload(t *testing.T) {
 
 			// Get existing ConfigMap
 			var configMap corev1.ConfigMap
-			if err := client.Resources().Get(ctx, ControllerConfigMapName, TestNamespace, &configMap); err != nil {
+			if err := client.Resources().Get(ctx, ControllerConfigMapName, namespace, &configMap); err != nil {
 				t.Fatal("Failed to get configmap:", err)
 			}
 
@@ -241,7 +272,7 @@ func TestConfigMapReload(t *testing.T) {
 			t.Log("ConfigMap updated with new config (maxconn 4000)")
 
 			// Get controller pod for debug client
-			pod, err := GetControllerPod(ctx, client, TestNamespace)
+			pod, err := GetControllerPod(ctx, client, namespace)
 			if err != nil {
 				t.Fatal("Failed to get controller pod:", err)
 			}
@@ -316,13 +347,19 @@ func TestConfigMapReload(t *testing.T) {
 			t.Helper()
 			t.Log("Verifying rendered HAProxy config contains updated values")
 
+			// Retrieve namespace from context
+			namespace, err := GetNamespaceFromContext(ctx)
+			if err != nil {
+				t.Fatal("Failed to get namespace from context:", err)
+			}
+
 			client, err := cfg.NewClient()
 			if err != nil {
 				t.Fatal("Failed to create client:", err)
 			}
 
 			// Get controller pod
-			pod, err := GetControllerPod(ctx, client, TestNamespace)
+			pod, err := GetControllerPod(ctx, client, namespace)
 			if err != nil {
 				t.Fatal("Failed to get controller pod:", err)
 			}
@@ -357,6 +394,13 @@ func TestConfigMapReload(t *testing.T) {
 			t.Helper()
 			t.Log("Cleaning up test resources")
 
+			// Retrieve namespace from context
+			namespace, err := GetNamespaceFromContext(ctx)
+			if err != nil {
+				t.Log("Warning: failed to get namespace from context:", err)
+				return ctx
+			}
+
 			client, err := cfg.NewClient()
 			if err != nil {
 				t.Log("Warning: failed to create client for cleanup:", err)
@@ -364,51 +408,63 @@ func TestConfigMapReload(t *testing.T) {
 			}
 
 			// Delete deployment
-			deployment := NewControllerDeployment(TestNamespace, ControllerConfigMapName, ControllerSecretName, ControllerServiceAccountName, DebugPort)
+			deployment := NewControllerDeployment(namespace, ControllerConfigMapName, ControllerSecretName, ControllerServiceAccountName, DebugPort)
 			if err := client.Resources().Delete(ctx, deployment); err != nil {
 				t.Log("Warning: failed to delete deployment:", err)
 			}
 
 			// Delete configmap
-			configMap := NewConfigMap(TestNamespace, ControllerConfigMapName, "")
+			configMap := NewConfigMap(namespace, ControllerConfigMapName, "")
 			if err := client.Resources().Delete(ctx, configMap); err != nil {
 				t.Log("Warning: failed to delete configmap:", err)
 			}
 
 			// Delete secret
-			secret := NewSecret(TestNamespace, ControllerSecretName)
+			secret := NewSecret(namespace, ControllerSecretName)
 			if err := client.Resources().Delete(ctx, secret); err != nil {
 				t.Log("Warning: failed to delete secret:", err)
 			}
 
 			// Delete rolebinding
-			roleBinding := NewRoleBinding(TestNamespace, ControllerRoleBindingName, ControllerRoleName, ControllerServiceAccountName)
+			roleBinding := NewRoleBinding(namespace, ControllerRoleBindingName, ControllerRoleName, ControllerServiceAccountName)
 			if err := client.Resources().Delete(ctx, roleBinding); err != nil {
 				t.Log("Warning: failed to delete rolebinding:", err)
 			}
 
 			// Delete role
-			role := NewRole(TestNamespace, ControllerRoleName)
+			role := NewRole(namespace, ControllerRoleName)
 			if err := client.Resources().Delete(ctx, role); err != nil {
 				t.Log("Warning: failed to delete role:", err)
 			}
 
 			// Delete serviceaccount
-			serviceAccount := NewServiceAccount(TestNamespace, ControllerServiceAccountName)
+			serviceAccount := NewServiceAccount(namespace, ControllerServiceAccountName)
 			if err := client.Resources().Delete(ctx, serviceAccount); err != nil {
 				t.Log("Warning: failed to delete serviceaccount:", err)
 			}
 
-			// Delete clusterrolebinding
-			clusterRoleBinding := NewClusterRoleBinding(ControllerClusterRoleBindingName, ControllerClusterRoleName, ControllerServiceAccountName, TestNamespace)
+			// Delete clusterrolebinding (unique per test)
+			clusterRoleBinding := NewClusterRoleBinding(ControllerClusterRoleBindingName, ControllerClusterRoleName, ControllerServiceAccountName, namespace, namespace)
 			if err := client.Resources().Delete(ctx, clusterRoleBinding); err != nil {
 				t.Log("Warning: failed to delete clusterrolebinding:", err)
 			}
 
-			// Delete clusterrole
-			clusterRole := NewClusterRole(ControllerClusterRoleName)
+			// Delete clusterrole (unique per test)
+			clusterRole := NewClusterRole(ControllerClusterRoleName, namespace)
 			if err := client.Resources().Delete(ctx, clusterRole); err != nil {
 				t.Log("Warning: failed to delete clusterrole:", err)
+			}
+
+			// Delete namespace
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			if err := client.Resources().Delete(ctx, ns); err != nil {
+				t.Log("Warning: failed to delete namespace:", err)
+			} else {
+				t.Logf("Deleted test namespace: %s", namespace)
 			}
 
 			t.Log("Test cleanup complete")
