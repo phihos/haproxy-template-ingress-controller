@@ -12,11 +12,24 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	parser "github.com/haproxytech/client-native/v6/config-parser"
 	"github.com/haproxytech/client-native/v6/configuration"
 	"github.com/haproxytech/client-native/v6/models"
 )
+
+// parserMutex protects against concurrent calls to the client-native parser.
+//
+// WORKAROUND: The upstream client-native library has a package-level global variable
+// (config-parser/parser.go:65 "var DefaultSectionName") that is written during parsing
+// without synchronization. This causes data races when multiple parsers are used concurrently.
+//
+// This mutex serializes all parsing operations to prevent the race condition.
+// See: https://github.com/haproxytech/client-native/blob/v6.2.5/config-parser/parser.go#L65
+//
+// TODO: Remove this mutex once upstream fixes the thread-safety issue.
+var parserMutex sync.Mutex
 
 // Parser wraps client-native's config-parser for parsing HAProxy configurations.
 type Parser struct {
@@ -85,6 +98,11 @@ func (p *Parser) ParseFromString(config string) (*StructuredConfig, error) {
 	if config == "" {
 		return nil, fmt.Errorf("configuration string is empty")
 	}
+
+	// Lock to prevent concurrent access to client-native parser
+	// (protects against upstream race condition in DefaultSectionName global variable)
+	parserMutex.Lock()
+	defer parserMutex.Unlock()
 
 	// Parse directly from string - NO file I/O
 	// This keeps all config data in memory as required
