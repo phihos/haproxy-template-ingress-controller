@@ -22,10 +22,6 @@ controller:
 logging:
   verbose: 2
 
-validation:
-  dataplane_host: localhost
-  dataplane_port: 5555
-
 watched_resources_ignore_fields:
   - metadata.managedFields
 
@@ -77,10 +73,6 @@ haproxy_config:
 
 	// Validate Logging
 	assert.Equal(t, 2, cfg.Logging.Verbose)
-
-	// Validate Validation
-	assert.Equal(t, "localhost", cfg.Validation.DataplaneHost)
-	assert.Equal(t, 5555, cfg.Validation.DataplanePort)
 
 	// Validate WatchedResourcesIgnoreFields
 	assert.Equal(t, []string{"metadata.managedFields"}, cfg.WatchedResourcesIgnoreFields)
@@ -159,20 +151,6 @@ verbose: 1
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, lc.Verbose)
-}
-
-func TestValidationConfig_UnmarshalYAML(t *testing.T) {
-	yamlConfig := `
-dataplane_host: 127.0.0.1
-dataplane_port: 5556
-`
-
-	var vc ValidationConfig
-	err := yaml.Unmarshal([]byte(yamlConfig), &vc)
-	require.NoError(t, err)
-
-	assert.Equal(t, "127.0.0.1", vc.DataplaneHost)
-	assert.Equal(t, 5556, vc.DataplanePort)
 }
 
 func TestWatchedResource_UnmarshalYAML(t *testing.T) {

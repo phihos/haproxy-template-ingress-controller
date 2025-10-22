@@ -63,6 +63,13 @@ COPY --from=builder /build/controller /usr/local/bin/controller
 # Ensure binary is executable
 RUN chmod +x /usr/local/bin/controller
 
+# Create validation directories for HAProxy configuration validation
+# These directories must be writable by the haproxy user
+RUN mkdir -p /usr/local/etc/haproxy/maps \
+             /usr/local/etc/haproxy/certs \
+             /usr/local/etc/haproxy/general && \
+    chown -R haproxy:haproxy /usr/local/etc/haproxy
+
 # Switch to haproxy user for security
 # The haproxy user is pre-created by the haproxytech base image
 USER haproxy

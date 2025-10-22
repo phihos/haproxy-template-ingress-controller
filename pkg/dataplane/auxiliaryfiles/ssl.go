@@ -1,4 +1,3 @@
-//nolint:dupl // Intentional duplication - minimal boilerplate for different file types using generics
 package auxiliaryfiles
 
 import (
@@ -36,32 +35,63 @@ func (o *sslCertificateOps) Delete(ctx context.Context, id string) error {
 // with the desired state, and returns a diff describing what needs to be created,
 // updated, or deleted.
 //
+// NOTE: HAProxy Data Plane API v3 does not provide SSL certificate content via GET endpoint.
+// It only returns metadata (file path, fingerprints, etc.). Therefore, this comparison is
+// name-based only. All certificates with matching names will be marked for update to ensure
+// content is synchronized, since we cannot verify if the stored content matches desired content.
+//
 // This function:
 //  1. Fetches all current certificate names from the Dataplane API
-//  2. Downloads content for each current certificate
-//  3. Compares with the desired certificates list
-//  4. Returns an SSLCertificateDiff with operations needed to reach desired state
+//  2. Compares names with the desired certificates list
+//  3. Returns an SSLCertificateDiff with operations needed to reach desired state
+//     - ToCreate: certificates that don't exist
+//     - ToUpdate: certificates that exist (always update since we can't verify content)
+//     - ToDelete: certificates that shouldn't exist
 func CompareSSLCertificates(ctx context.Context, c *client.DataplaneClient, desired []SSLCertificate) (*SSLCertificateDiff, error) {
-	ops := &sslCertificateOps{client: c}
-
-	// Use generic Compare function
-	genericDiff, err := Compare[SSLCertificate](
-		ctx,
-		ops,
-		desired,
-		func(id, content string) SSLCertificate {
-			return SSLCertificate{Path: id, Content: content}
-		},
-	)
+	// Fetch current certificate names from API
+	currentNames, err := c.GetAllSSLCertificates(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert generic diff to SSLCertificateDiff
+	// Create lookup maps
+	currentNamesMap := make(map[string]bool, len(currentNames))
+	for _, name := range currentNames {
+		currentNamesMap[name] = true
+	}
+
+	desiredMap := make(map[string]SSLCertificate, len(desired))
+	for _, cert := range desired {
+		desiredMap[cert.Path] = cert
+	}
+
+	// Determine operations
+	var toCreate, toUpdate []SSLCertificate
+	var toDelete []string
+
+	// Check desired certificates
+	for _, cert := range desired {
+		if currentNamesMap[cert.Path] {
+			// Certificate exists - always update since we can't verify content matches
+			toUpdate = append(toUpdate, cert)
+		} else {
+			// Certificate doesn't exist - create it
+			toCreate = append(toCreate, cert)
+		}
+	}
+
+	// Check for certificates to delete
+	for _, name := range currentNames {
+		if _, exists := desiredMap[name]; !exists {
+			// Certificate exists but not in desired state - delete it
+			toDelete = append(toDelete, name)
+		}
+	}
+
 	return &SSLCertificateDiff{
-		ToCreate: genericDiff.ToCreate,
-		ToUpdate: genericDiff.ToUpdate,
-		ToDelete: genericDiff.ToDelete,
+		ToCreate: toCreate,
+		ToUpdate: toUpdate,
+		ToDelete: toDelete,
 	}, nil
 }
 

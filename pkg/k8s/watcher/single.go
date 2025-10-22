@@ -167,18 +167,32 @@ func (w *SingleWatcher) handleAdd(obj interface{}) {
 
 // handleUpdate handles resource update events.
 func (w *SingleWatcher) handleUpdate(oldObj, newObj interface{}) {
+	slog.Debug("SingleWatcher.handleUpdate called",
+		"gvr", w.config.GVR.String(),
+		"synced", w.synced.Load())
+
 	resource := w.convertToUnstructured(newObj)
 	if resource == nil {
+		slog.Debug("SingleWatcher.handleUpdate: resource conversion returned nil")
 		return
 	}
+
+	slog.Debug("SingleWatcher.handleUpdate: resource converted",
+		"resource_name", resource.GetName(),
+		"resource_namespace", resource.GetNamespace(),
+		"resource_version", resource.GetResourceVersion())
 
 	// Skip callback during initial sync - we don't want to trigger change events
 	// for resources that are updating during the sync process. Only invoke callback
 	// for real updates that happen after sync completes.
 	if !w.synced.Load() {
 		// During initial sync, skip callback
+		slog.Debug("SingleWatcher.handleUpdate: skipping callback - not yet synced")
 		return
 	}
+
+	slog.Debug("SingleWatcher.handleUpdate: invoking OnChange callback",
+		"has_callback", w.config.OnChange != nil)
 
 	// Invoke callback immediately (no debouncing for single resource)
 	if w.config.OnChange != nil {
@@ -189,6 +203,8 @@ func (w *SingleWatcher) handleUpdate(oldObj, newObj interface{}) {
 				"resource_name", resource.GetName(),
 				"resource_namespace", resource.GetNamespace(),
 				"resource_kind", resource.GetKind())
+		} else {
+			slog.Debug("SingleWatcher.handleUpdate: OnChange callback succeeded")
 		}
 	}
 }

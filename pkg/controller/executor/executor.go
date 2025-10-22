@@ -135,14 +135,6 @@ func (e *Executor) handleReconciliationTriggered(event *events.ReconciliationTri
 	// Publish reconciliation started event
 	e.eventBus.Publish(events.NewReconciliationStartedEvent(event.Reason))
 
-	// TODO: Implement orchestration phases:
-	//   1. Render templates (call Renderer pure component)
-	//   2. Validate configuration (call Validator pure component)
-	//   3. Deploy to HAProxy instances (call Deployer pure component)
-	//
-	// For now, this is a minimal stub that establishes the event flow.
-	e.logger.Debug("Orchestration not yet implemented - skipping render/validate/deploy phases")
-
 	// Publish reconciliation completed event
 	durationMs := time.Since(startTime).Milliseconds()
 	e.eventBus.Publish(events.NewReconciliationCompletedEvent(durationMs))
@@ -196,10 +188,8 @@ func (e *Executor) handleValidationCompleted(event *events.ValidationCompletedEv
 		e.logger.Warn("Validation warning", "warning", warning)
 	}
 
-	// TODO: Implement deployment phase
-	//   1. Call Deployer pure component with validated config
-	//   2. Publish DeploymentCompletedEvent or DeploymentFailedEvent
-	e.logger.Debug("Deployment phase not yet implemented")
+	// Deployment is handled by the Deployer component via event subscription
+	// (Deployer subscribes to ValidationCompletedEvent and handles deployment)
 }
 
 // handleValidationFailed handles configuration validation failures.

@@ -337,12 +337,70 @@ backend servers
 1. **Phase 1 - Syntax Validation**: Uses client-native parser to validate configuration structure and syntax
 2. **Phase 2 - Semantic Validation**: Runs `haproxy -c -f config` to perform full semantic validation
 
-The validator creates a temporary directory structure mirroring production to validate file references (maps, certificates, error pages).
+The validator writes auxiliary files to the actual HAProxy directories on disk (with mutex locking to prevent concurrent writes) to validate file references (maps, certificates, error pages) exactly as the Dataplane API does.
 
 **ValidationError Fields:**
 - `Phase`: Either "syntax" or "semantic" indicating which phase failed
 - `Message`: Human-readable error description
 - `Err`: Wrapped underlying error for detailed inspection
+
+### Path Requirements for Auxiliary Files
+
+All auxiliary file references in HAProxy configuration **must use absolute paths** matching the configured validation paths.
+
+**Required Configuration:**
+
+Validation paths must match the HAProxy Dataplane API server's resource configuration. These are configured via the `validation` section in the controller ConfigMap:
+
+```yaml
+validation:
+  maps_dir: /etc/haproxy/maps
+  ssl_certs_dir: /etc/haproxy/certs
+  general_storage_dir: /etc/haproxy/general
+  config_file: /etc/haproxy/haproxy.cfg
+```
+
+**Supported Paths:**
+
+✅ `/etc/haproxy/maps/host.map` - absolute path to map file
+✅ `/etc/haproxy/general/503.http` - absolute path to general file
+✅ `/etc/haproxy/certs/server.pem` - absolute path to SSL certificate
+
+**Example:**
+
+```go
+config := `
+frontend http-in
+    bind :80
+    http-request set-header X-Backend %[base,map(/etc/haproxy/maps/host.map,default)]
+    errorfile 503 /etc/haproxy/general/503.http
+`
+
+auxFiles := &AuxiliaryFiles{
+    MapFiles: []auxiliaryfiles.MapFile{
+        {Path: "/etc/haproxy/maps/host.map", Content: "example.com backend1\n"},
+    },
+    GeneralFiles: []auxiliaryfiles.GeneralFile{
+        {Filename: "503.http", Content: "HTTP/1.0 503 Service Unavailable\n"},
+    },
+}
+
+paths := ValidationPaths{
+    MapsDir:           "/etc/haproxy/maps",
+    SSLCertsDir:       "/etc/haproxy/certs",
+    GeneralStorageDir: "/etc/haproxy/general",
+    ConfigFile:        "/etc/haproxy/haproxy.cfg",
+}
+
+err := ValidateConfiguration(config, auxFiles, paths)
+```
+
+**Validation Behavior:**
+
+- Validation writes files directly to the configured paths on disk
+- A mutex ensures only one validation runs at a time to prevent concurrent writes
+- Validation directories are cleared before each validation to ensure clean state
+- This approach matches exactly how the HAProxy Dataplane API validates configurations
 
 ## How It Works
 

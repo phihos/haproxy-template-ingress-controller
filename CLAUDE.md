@@ -282,6 +282,41 @@ make test-coverage
 make docker-build
 ```
 
+## Development Environment
+
+### Local Kind Cluster
+
+**IMPORTANT**: Always use the `kind-haproxy-template-ic-dev` context for development work.
+
+```bash
+# Verify you're using the correct cluster
+kubectl config current-context
+# Should output: kind-haproxy-template-ic-dev
+
+# If not, switch to it
+kubectl config use-context kind-haproxy-template-ic-dev
+
+# Start the dev environment (creates cluster if needed)
+./scripts/start-dev-env.sh
+
+# Build and deploy changes to dev cluster
+make build
+docker build -t haproxy-template-ic:dev .
+kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev
+kubectl rollout restart deployment haproxy-template-ic -n haproxy-template-ic
+
+# View controller logs
+kubectl logs -f -l app.kubernetes.io/name=haproxy-template-ic -n haproxy-template-ic
+
+# Check HAProxy configuration
+kubectl -n echo get pods -l app=haproxy
+kubectl -n echo exec <haproxy-pod> -- cat /etc/haproxy/haproxy.cfg
+```
+
+**Cluster Names:**
+- **Dev cluster**: `kind-haproxy-template-ic-dev` - Use this for development
+- **Test cluster**: `kind-haproxy-test` - Used by integration tests only
+
 ## Common Patterns
 
 ### Graceful Shutdown

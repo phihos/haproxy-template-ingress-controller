@@ -20,29 +20,48 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
-	"github.com/google/uuid"
-
-	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
 	"haproxy-template-ic/pkg/dataplane/parser"
 )
+
+var (
+	// validationMutex ensures only one validation runs at a time.
+	// This prevents concurrent writes to /etc/haproxy/ directories which could
+	// cause validation failures or incorrect results.
+	validationMutex sync.Mutex
+)
+
+// ValidationPaths holds the filesystem paths for HAProxy validation.
+// These paths must match the HAProxy Dataplane API server's resource configuration.
+type ValidationPaths struct {
+	MapsDir           string
+	SSLCertsDir       string
+	GeneralStorageDir string
+	ConfigFile        string
+}
 
 // ValidateConfiguration performs two-phase HAProxy configuration validation.
 //
 // Phase 1: Syntax validation using client-native parser
 // Phase 2: Semantic validation using haproxy binary (-c flag)
 //
-// The function creates a temporary directory structure mirroring the target system
-// to ensure HAProxy can validate file references (maps, certificates, error pages).
+// The validation writes files to the actual HAProxy directories specified in paths.
+// A mutex ensures only one validation runs at a time to prevent concurrent writes.
 //
 // Parameters:
 //   - mainConfig: The rendered HAProxy configuration (haproxy.cfg content)
 //   - auxFiles: All auxiliary files (maps, certificates, general files)
+//   - paths: Filesystem paths for validation (must match Dataplane API configuration)
 //
 // Returns:
 //   - nil if validation succeeds
 //   - ValidationError with phase information if validation fails
-func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles) error {
+func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+	// Acquire lock to ensure only one validation runs at a time
+	validationMutex.Lock()
+	defer validationMutex.Unlock()
+
 	// Phase 1: Syntax validation with client-native parser
 	if err := validateSyntax(mainConfig); err != nil {
 		return &ValidationError{
@@ -53,7 +72,7 @@ func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles) error {
 	}
 
 	// Phase 2: Semantic validation with haproxy binary
-	if err := validateSemantics(mainConfig, auxFiles); err != nil {
+	if err := validateSemantics(mainConfig, auxFiles, paths); err != nil {
 		return &ValidationError{
 			Phase:   "semantic",
 			Message: "configuration has semantic errors",
@@ -82,122 +101,88 @@ func validateSyntax(config string) error {
 }
 
 // validateSemantics performs semantic validation using haproxy binary.
-// This creates a temporary directory structure and runs haproxy -c.
-func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles) error {
-	// Create temporary directory for validation
-	tmpDir, err := createTempValidationDir()
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Write all files to temp directory
-	configPath, err := writeValidationFiles(tmpDir, mainConfig, auxFiles)
-	if err != nil {
-		return fmt.Errorf("failed to write validation files: %w", err)
+// This writes files to actual /etc/haproxy/ directories and runs haproxy -c.
+func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+	// Clear validation directories to remove any pre-existing files
+	if err := clearValidationDirectories(paths); err != nil {
+		return fmt.Errorf("failed to clear validation directories: %w", err)
 	}
 
-	// Run haproxy -c to validate
-	if err := runHAProxyCheck(configPath); err != nil {
+	// Write auxiliary files to their respective directories
+	if err := writeAuxiliaryFiles(auxFiles, paths); err != nil {
+		return fmt.Errorf("failed to write auxiliary files: %w", err)
+	}
+
+	// Write main configuration to ConfigFile path
+	if err := os.WriteFile(paths.ConfigFile, []byte(mainConfig), 0o600); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	// Run haproxy -c -f <ConfigFile>
+	if err := runHAProxyCheck(paths.ConfigFile); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// createTempValidationDir creates a temporary directory for validation.
-func createTempValidationDir() (string, error) {
-	tmpDir := filepath.Join(os.TempDir(), "haproxy-validate-"+uuid.New().String())
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return "", err
+// clearValidationDirectories removes all files from validation directories.
+// This ensures no pre-existing files interfere with validation.
+func clearValidationDirectories(paths ValidationPaths) error {
+	dirs := []string{
+		paths.MapsDir,
+		paths.SSLCertsDir,
+		paths.GeneralStorageDir,
 	}
-	return tmpDir, nil
+
+	for _, dir := range dirs {
+		// Create directory if it doesn't exist
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
+
+		// Remove all files in directory
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return fmt.Errorf("failed to read directory %s: %w", dir, err)
+		}
+
+		for _, entry := range entries {
+			path := filepath.Join(dir, entry.Name())
+			if err := os.RemoveAll(path); err != nil {
+				return fmt.Errorf("failed to remove %s: %w", path, err)
+			}
+		}
+	}
+
+	return nil
 }
 
-// writeValidationFiles writes all configuration files to the temp directory.
-// Returns the path to the main haproxy.cfg file.
-func writeValidationFiles(tmpDir, mainConfig string, auxFiles *AuxiliaryFiles) (string, error) {
-	// Write main config
-	configPath := filepath.Join(tmpDir, "haproxy.cfg")
-	if err := os.WriteFile(configPath, []byte(mainConfig), 0o600); err != nil {
-		return "", fmt.Errorf("failed to write haproxy.cfg: %w", err)
-	}
-
-	// Write auxiliary files
-	if err := writeMapFiles(tmpDir, auxFiles.MapFiles); err != nil {
-		return "", err
-	}
-
-	if err := writeGeneralFiles(tmpDir, auxFiles.GeneralFiles); err != nil {
-		return "", err
-	}
-
-	if err := writeSSLCertificates(tmpDir, auxFiles.SSLCertificates); err != nil {
-		return "", err
-	}
-
-	return configPath, nil
-}
-
-// writeMapFiles writes map files to the maps/ subdirectory.
-func writeMapFiles(tmpDir string, mapFiles []auxiliaryfiles.MapFile) error {
-	if len(mapFiles) == 0 {
-		return nil
-	}
-
-	mapsDir := filepath.Join(tmpDir, "maps")
-	if err := os.MkdirAll(mapsDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create maps directory: %w", err)
-	}
-
-	for _, mapFile := range mapFiles {
+// writeAuxiliaryFiles writes all auxiliary files to their respective directories.
+func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+	// Write map files
+	for _, mapFile := range auxFiles.MapFiles {
 		filename := filepath.Base(mapFile.Path)
-		mapPath := filepath.Join(mapsDir, filename)
+		mapPath := filepath.Join(paths.MapsDir, filename)
 		if err := os.WriteFile(mapPath, []byte(mapFile.Content), 0o600); err != nil {
 			return fmt.Errorf("failed to write map file %s: %w", filename, err)
 		}
 	}
 
-	return nil
-}
-
-// writeGeneralFiles writes general files to the files/ subdirectory.
-func writeGeneralFiles(tmpDir string, generalFiles []auxiliaryfiles.GeneralFile) error {
-	if len(generalFiles) == 0 {
-		return nil
-	}
-
-	filesDir := filepath.Join(tmpDir, "files")
-	if err := os.MkdirAll(filesDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create files directory: %w", err)
-	}
-
-	for _, file := range generalFiles {
-		filePath := filepath.Join(filesDir, file.Filename)
+	// Write general files
+	for _, file := range auxFiles.GeneralFiles {
+		filePath := filepath.Join(paths.GeneralStorageDir, file.Filename)
 		if err := os.WriteFile(filePath, []byte(file.Content), 0o600); err != nil {
-			return fmt.Errorf("failed to write file %s: %w", file.Filename, err)
+			return fmt.Errorf("failed to write general file %s: %w", file.Filename, err)
 		}
 	}
 
-	return nil
-}
-
-// writeSSLCertificates writes SSL certificates to the ssl/ subdirectory.
-func writeSSLCertificates(tmpDir string, sslCerts []auxiliaryfiles.SSLCertificate) error {
-	if len(sslCerts) == 0 {
-		return nil
-	}
-
-	sslDir := filepath.Join(tmpDir, "ssl")
-	if err := os.MkdirAll(sslDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create ssl directory: %w", err)
-	}
-
-	for _, cert := range sslCerts {
+	// Write SSL certificates
+	for _, cert := range auxFiles.SSLCertificates {
 		filename := filepath.Base(cert.Path)
-		certPath := filepath.Join(sslDir, filename)
+		certPath := filepath.Join(paths.SSLCertsDir, filename)
 		if err := os.WriteFile(certPath, []byte(cert.Content), 0o600); err != nil {
-			return fmt.Errorf("failed to write certificate %s: %w", filename, err)
+			return fmt.Errorf("failed to write SSL certificate %s: %w", filename, err)
 		}
 	}
 
@@ -205,6 +190,8 @@ func writeSSLCertificates(tmpDir string, sslCerts []auxiliaryfiles.SSLCertificat
 }
 
 // runHAProxyCheck runs haproxy binary with -c flag to validate configuration.
+// The configuration can reference auxiliary files using relative paths
+// (e.g., maps/host.map) which will be resolved relative to the config file directory.
 func runHAProxyCheck(configPath string) error {
 	// Find haproxy binary
 	haproxyBin, err := exec.LookPath("haproxy")
@@ -212,12 +199,16 @@ func runHAProxyCheck(configPath string) error {
 		return fmt.Errorf("haproxy binary not found: %w", err)
 	}
 
-	// Run haproxy -c -f config
-	cmd := exec.Command(haproxyBin, "-c", "-f", configPath)
+	// Get absolute path for config file
+	absConfigPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute config path: %w", err)
+	}
 
-	// Set working directory to the temp directory containing haproxy.cfg
-	// This allows HAProxy to resolve relative paths in the config file
-	cmd.Dir = filepath.Dir(configPath)
+	// Run haproxy -c -f <configPath>
+	// Set working directory to config file directory so relative paths work
+	cmd := exec.Command(haproxyBin, "-c", "-f", filepath.Base(absConfigPath))
+	cmd.Dir = filepath.Dir(absConfigPath)
 
 	// Capture both stdout and stderr
 	output, err := cmd.CombinedOutput()

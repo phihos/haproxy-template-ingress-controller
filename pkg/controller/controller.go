@@ -24,6 +24,7 @@ package controller
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"time"
@@ -36,6 +37,7 @@ import (
 	"haproxy-template-ic/pkg/controller/configchange"
 	"haproxy-template-ic/pkg/controller/configloader"
 	"haproxy-template-ic/pkg/controller/credentialsloader"
+	"haproxy-template-ic/pkg/controller/debug"
 	"haproxy-template-ic/pkg/controller/deployer"
 	"haproxy-template-ic/pkg/controller/discovery"
 	"haproxy-template-ic/pkg/controller/events"
@@ -46,7 +48,9 @@ import (
 	"haproxy-template-ic/pkg/controller/resourcewatcher"
 	"haproxy-template-ic/pkg/controller/validator"
 	coreconfig "haproxy-template-ic/pkg/core/config"
+	"haproxy-template-ic/pkg/dataplane"
 	busevents "haproxy-template-ic/pkg/events"
+	"haproxy-template-ic/pkg/introspection"
 	"haproxy-template-ic/pkg/k8s/client"
 	"haproxy-template-ic/pkg/k8s/types"
 	"haproxy-template-ic/pkg/k8s/watcher"
@@ -73,11 +77,12 @@ const (
 //   - k8sClient: Kubernetes client for API access
 //   - configMapName: Name of the ConfigMap containing the controller configuration
 //   - secretName: Name of the Secret containing HAProxy Dataplane API credentials
+//   - debugPort: Port for debug HTTP server (0 to disable)
 //
 // Returns:
 //   - Error if the controller cannot start or encounters a fatal error
 //   - nil if the context is cancelled (graceful shutdown)
-func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName string) error {
+func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName string, debugPort int) error {
 	logger := slog.Default()
 
 	logger.Info("HAProxy Template Ingress Controller starting",
@@ -93,7 +98,7 @@ func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretNam
 			return nil
 		default:
 			// Run one iteration
-			err := runIteration(ctx, k8sClient, configMapName, secretName, logger)
+			err := runIteration(ctx, k8sClient, configMapName, secretName, debugPort, logger)
 			if err != nil {
 				// Check if error is context cancellation (graceful shutdown)
 				if ctx.Err() != nil {
@@ -375,6 +380,153 @@ func setupConfigWatchers(
 	return nil
 }
 
+// reconciliationComponents holds all reconciliation-related components.
+type reconciliationComponents struct {
+	reconciler          *reconciler.Reconciler
+	renderer            *renderer.Component
+	haproxyValidator    *validator.HAProxyValidatorComponent
+	executor            *executor.Executor
+	discovery           *discovery.Component
+	deployer            *deployer.Component
+	deploymentScheduler *deployer.DeploymentScheduler
+	driftMonitor        *deployer.DriftPreventionMonitor
+}
+
+// createReconciliationComponents creates all reconciliation components.
+func createReconciliationComponents(
+	cfg *coreconfig.Config,
+	resourceWatcher *resourcewatcher.ResourceWatcherComponent,
+	bus *busevents.EventBus,
+	logger *slog.Logger,
+) (*reconciliationComponents, error) {
+	// Create Reconciler with default configuration
+	reconcilerComponent := reconciler.New(bus, logger, nil)
+
+	// Create Renderer with stores from ResourceWatcher
+	stores := resourceWatcher.GetAllStores()
+	rendererComponent, err := renderer.New(bus, cfg, stores, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create renderer: %w", err)
+	}
+
+	// Create HAProxy Validator
+	validationPaths := dataplane.ValidationPaths{
+		MapsDir:           cfg.Validation.MapsDir,
+		SSLCertsDir:       cfg.Validation.SSLCertsDir,
+		GeneralStorageDir: cfg.Validation.GeneralStorageDir,
+		ConfigFile:        cfg.Validation.ConfigFile,
+	}
+	haproxyValidatorComponent := validator.NewHAProxyValidator(bus, logger, validationPaths)
+
+	// Create Executor
+	executorComponent := executor.New(bus, logger)
+
+	// Create Deployer
+	deployerComponent := deployer.New(bus, logger)
+
+	// Create DeploymentScheduler with rate limiting
+	minDeploymentInterval := cfg.Dataplane.GetMinDeploymentInterval()
+	deploymentSchedulerComponent := deployer.NewDeploymentScheduler(bus, logger, minDeploymentInterval)
+
+	// Create DriftPreventionMonitor
+	driftPreventionInterval := cfg.Dataplane.GetDriftPreventionInterval()
+	driftMonitorComponent := deployer.NewDriftPreventionMonitor(bus, logger, driftPreventionInterval)
+
+	// Create Discovery component and set pod store
+	discoveryComponent := discovery.New(bus, logger)
+	podStore := resourceWatcher.GetStore("haproxy-pods")
+	if podStore == nil {
+		return nil, fmt.Errorf("haproxy-pods store not found (should be auto-injected)")
+	}
+	discoveryComponent.SetPodStore(podStore)
+
+	return &reconciliationComponents{
+		reconciler:          reconcilerComponent,
+		renderer:            rendererComponent,
+		haproxyValidator:    haproxyValidatorComponent,
+		executor:            executorComponent,
+		discovery:           discoveryComponent,
+		deployer:            deployerComponent,
+		deploymentScheduler: deploymentSchedulerComponent,
+		driftMonitor:        driftMonitorComponent,
+	}, nil
+}
+
+// startReconciliationComponents starts all reconciliation components in background goroutines.
+func startReconciliationComponents(
+	iterCtx context.Context,
+	components *reconciliationComponents,
+	logger *slog.Logger,
+	cancel context.CancelFunc,
+) {
+	// Start reconciler in background
+	go func() {
+		if err := components.reconciler.Start(iterCtx); err != nil {
+			logger.Error("reconciler failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start renderer in background
+	go func() {
+		if err := components.renderer.Start(iterCtx); err != nil {
+			logger.Error("renderer failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start HAProxy validator in background
+	go func() {
+		if err := components.haproxyValidator.Start(iterCtx); err != nil {
+			logger.Error("HAProxy validator failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start executor in background
+	go func() {
+		if err := components.executor.Start(iterCtx); err != nil {
+			logger.Error("executor failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start discovery in background
+	go func() {
+		if err := components.discovery.Start(iterCtx); err != nil {
+			logger.Error("discovery failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start deployer in background
+	go func() {
+		if err := components.deployer.Start(iterCtx); err != nil {
+			logger.Error("deployer failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start deployment scheduler in background
+	go func() {
+		if err := components.deploymentScheduler.Start(iterCtx); err != nil {
+			logger.Error("deployment scheduler failed", "error", err)
+			cancel()
+		}
+	}()
+
+	// Start drift prevention monitor in background
+	go func() {
+		if err := components.driftMonitor.Start(iterCtx); err != nil {
+			logger.Error("drift prevention monitor failed", "error", err)
+			cancel()
+		}
+	}()
+
+	logger.Info("Reconciliation components started",
+		"components", "Reconciler, Renderer, HAProxyValidator, Executor, Discovery, Deployer, DeploymentScheduler, DriftMonitor")
+}
+
 // setupReconciliation creates and starts the reconciliation components (Stage 5).
 //
 // The Reconciler debounces resource changes and triggers reconciliation events.
@@ -388,91 +540,33 @@ func setupConfigWatchers(
 func setupReconciliation(
 	iterCtx context.Context,
 	cfg *coreconfig.Config,
+	creds *coreconfig.Credentials,
 	resourceWatcher *resourcewatcher.ResourceWatcherComponent,
 	bus *busevents.EventBus,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
 ) error {
-	// Create Reconciler with default configuration
-	reconcilerComponent := reconciler.New(bus, logger, nil)
-
-	// Create Renderer with stores from ResourceWatcher
-	stores := resourceWatcher.GetAllStores()
-	rendererComponent, err := renderer.New(bus, cfg, stores, logger)
+	// Create all components
+	components, err := createReconciliationComponents(cfg, resourceWatcher, bus, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create renderer: %w", err)
+		return err
 	}
 
-	// Create HAProxy Validator
-	haproxyValidatorComponent := validator.NewHAProxyValidator(bus, logger)
-
-	// Create Executor
-	executorComponent := executor.New(bus, logger)
-
-	// Create Deployer
-	deployerComponent := deployer.New(bus, logger)
-
-	// Create Discovery component and set pod store
-	discoveryComponent := discovery.New(bus, logger)
-	podStore := resourceWatcher.GetStore("haproxy-pods")
-	if podStore == nil {
-		return fmt.Errorf("haproxy-pods store not found (should be auto-injected)")
-	}
-	discoveryComponent.SetPodStore(podStore)
-
-	// Start reconciler in background
-	go func() {
-		if err := reconcilerComponent.Start(iterCtx); err != nil {
-			logger.Error("reconciler failed", "error", err)
-			cancel()
-		}
-	}()
-
-	// Start renderer in background
-	go func() {
-		if err := rendererComponent.Start(iterCtx); err != nil {
-			logger.Error("renderer failed", "error", err)
-			cancel()
-		}
-	}()
-
-	// Start HAProxy validator in background
-	go func() {
-		if err := haproxyValidatorComponent.Start(iterCtx); err != nil {
-			logger.Error("HAProxy validator failed", "error", err)
-			cancel()
-		}
-	}()
-
-	// Start executor in background
-	go func() {
-		if err := executorComponent.Start(iterCtx); err != nil {
-			logger.Error("executor failed", "error", err)
-			cancel()
-		}
-	}()
-
-	// Start discovery in background
-	go func() {
-		if err := discoveryComponent.Start(iterCtx); err != nil {
-			logger.Error("discovery failed", "error", err)
-			cancel()
-		}
-	}()
-
-	// Start deployer in background
-	go func() {
-		if err := deployerComponent.Start(iterCtx); err != nil {
-			logger.Error("deployer failed", "error", err)
-			cancel()
-		}
-	}()
-
-	logger.Info("Reconciliation components started (Reconciler, Renderer, HAProxyValidator, Executor, Discovery, Deployer)")
+	// Start all components in background
+	startReconciliationComponents(iterCtx, components, logger, cancel)
 
 	// Give components a brief moment to subscribe to the EventBus
-	// before publishing the initial reconciliation trigger
+	// before publishing initial state events
 	time.Sleep(100 * time.Millisecond)
+
+	// Publish initial config and credentials events
+	// This ensures reconciliation components (especially Discovery) receive the initial state
+	// even though they started after the initial ConfigMap/Secret watcher events
+	bus.Publish(events.NewConfigValidatedEvent(cfg, "initial", "initial"))
+	logger.Debug("Published initial ConfigValidatedEvent for reconciliation components")
+
+	bus.Publish(events.NewCredentialsUpdatedEvent(creds, "initial"))
+	logger.Debug("Published initial CredentialsUpdatedEvent for reconciliation components")
 
 	// Trigger initial reconciliation to bootstrap the pipeline
 	// This ensures at least one reconciliation cycle runs even with 0 resources
@@ -491,7 +585,8 @@ func setupReconciliation(
 //  4. Creates and starts ConfigMap/Secret watchers, waits for sync
 //  5. Starts the EventBus (releases buffered events)
 //  6. Starts reconciliation components (Stage 5)
-//  7. Waits for config change signal or context cancellation
+//  7. Starts debug infrastructure (StateCache, EventBuffer, debug server if enabled)
+//  8. Waits for config change signal or context cancellation
 //
 // Returns:
 //   - Error if initialization fails (causes retry)
@@ -501,6 +596,7 @@ func runIteration(
 	k8sClient *client.Client,
 	configMapName string,
 	secretName string,
+	debugPort int,
 	logger *slog.Logger,
 ) error {
 	logger.Info("Starting controller iteration")
@@ -519,7 +615,7 @@ func runIteration(
 	}
 
 	// 1. Fetch and validate initial configuration
-	cfg, _, err := fetchAndValidateInitialConfig(
+	cfg, creds, err := fetchAndValidateInitialConfig(
 		ctx, k8sClient, configMapName, secretName,
 		configMapGVR, secretGVR, logger,
 	)
@@ -545,18 +641,67 @@ func runIteration(
 		return err
 	}
 
-	// 5. Start the EventBus (releases buffered events and begins normal operation)
+	// 5. Initialize StateCache and subscribe BEFORE bus.Start()
+	// This ensures StateCache receives all events, including buffered startup events
+	stateCache := NewStateCache(bus, resourceWatcher)
+	stateCache.Subscribe() // Synchronous - registers subscription immediately
+
+	// 5.5. Start the EventBus (releases buffered events and begins normal operation)
 	bus.Start()
+
+	// 5.6. Start StateCache event loop in background
+	go func() {
+		if err := stateCache.Run(iterCtx); err != nil {
+			logger.Error("state cache failed", "error", err)
+			// Non-fatal error - don't cancel iteration
+		}
+	}()
 
 	// 6. Start reconciliation components (Stage 5)
 	logger.Info("Stage 5: Starting reconciliation components")
-	if err := setupReconciliation(iterCtx, cfg, resourceWatcher, bus, logger, cancel); err != nil {
+	if err := setupReconciliation(iterCtx, cfg, creds, resourceWatcher, bus, logger, cancel); err != nil {
 		return err
+	}
+
+	// 7. Setup debug infrastructure (EventBuffer, debug server)
+	logger.Info("Stage 6: Starting debug infrastructure")
+
+	// Create instance-based introspection registry (lives/dies with this iteration)
+	registry := introspection.NewRegistry()
+
+	// Create event buffer for tracking recent events
+	eventBuffer := debug.NewEventBuffer(1000, bus)
+	go func() {
+		if err := eventBuffer.Start(iterCtx); err != nil {
+			logger.Error("event buffer failed", "error", err)
+			// Non-fatal error - don't cancel iteration
+		}
+	}()
+
+	// Register debug variables with registry
+	debug.RegisterVariables(registry, stateCache, eventBuffer)
+
+	// Start debug HTTP server if port is configured
+	if debugPort > 0 {
+		debugServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), registry)
+		go func() {
+			if err := debugServer.Start(iterCtx); err != nil {
+				logger.Error("debug server failed", "error", err, "port", debugPort)
+				// Don't cancel iteration - debug server failure is non-fatal
+			}
+		}()
+		logger.Info("Debug HTTP server started",
+			"port", debugPort,
+			"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
+			"access_method", "kubectl port-forward",
+			"endpoints", []string{"/debug/vars", "/debug/pprof"})
+	} else {
+		logger.Debug("Debug HTTP server disabled (port=0)")
 	}
 
 	logger.Info("Controller iteration initialized successfully - entering event loop")
 
-	// 7. Wait for config change signal or context cancellation
+	// 8. Wait for config change signal or context cancellation
 	select {
 	case <-iterCtx.Done():
 		logger.Info("Controller iteration cancelled", "reason", iterCtx.Err())
@@ -594,10 +739,10 @@ func parseConfigMap(resource *unstructured.Unstructured) (*coreconfig.Config, er
 		return nil, fmt.Errorf("ConfigMap data missing 'config' key")
 	}
 
-	// Parse YAML
-	cfg, err := coreconfig.ParseConfig(configYAML)
+	// Parse YAML and apply defaults
+	cfg, err := coreconfig.LoadConfig(configYAML)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse config YAML: %w", err)
+		return nil, fmt.Errorf("failed to load config YAML: %w", err)
 	}
 
 	return cfg, nil
@@ -615,10 +760,16 @@ func parseSecret(resource *unstructured.Unstructured) (*coreconfig.Credentials, 
 	}
 
 	// Convert map[string]interface{} to map[string][]byte
+	// Kubernetes Secrets are base64-encoded, so we need to decode them
 	data := make(map[string][]byte)
 	for key, value := range dataRaw {
 		if strValue, ok := value.(string); ok {
-			data[key] = []byte(strValue)
+			// Decode base64-encoded value
+			decoded, err := base64.StdEncoding.DecodeString(strValue)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode base64 for key %q: %w", key, err)
+			}
+			data[key] = decoded
 		} else {
 			return nil, fmt.Errorf("Secret data key %q has invalid type: %T", key, value)
 		}

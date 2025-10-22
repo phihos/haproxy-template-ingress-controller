@@ -16,6 +16,9 @@ Configuration updates apply through HAProxy's runtime API when possible, avoidin
 **Safe Deployments**
 Multi-phase validation catches configuration errors before they reach production HAProxy instances. Invalid configurations are rejected early, preventing service outages from bad configs.
 
+**Smart Deployment Scheduling**
+Rate limiting prevents rapid-fire deployments during high-frequency changes. Periodic drift prevention deployments detect and correct external configuration modifications. Concurrent deployment protection ensures version consistency across HAProxy instances.
+
 **Flexible Resource Mapping**
 Watch any Kubernetes resource type as input, not just Ingress objects. Use Services, ConfigMaps, custom CRDs, or any combination to drive your HAProxy configuration. Define your own data model.
 
@@ -187,7 +190,9 @@ Kubernetes API → Resource Watchers → EventBus → Components
                                          ↓
                    ConfigLoader, Validators, Reconciler
                                          ↓
-                   Template Engine → Validator → Deployer
+                   Template Engine → Validator → Deployment Scheduler
+                                         ↓
+                   Deployment Scheduler → Deployer → Drift Monitor
                                          ↓
                               HAProxy Dataplane API
 ```
@@ -196,6 +201,8 @@ Kubernetes API → Resource Watchers → EventBus → Components
 - Multi-phase validation catches configuration errors early
 - Optimized deployments minimize HAProxy reloads
 - Template-driven for maximum flexibility
+- Rate-limited deployments prevent version conflicts
+- Drift prevention detects external configuration changes
 
 For detailed architecture documentation, see [docs/development/design.md](docs/development/design.md).
 

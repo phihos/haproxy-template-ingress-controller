@@ -24,6 +24,7 @@ package discovery
 
 import (
 	"fmt"
+	"log/slog"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -53,11 +54,154 @@ func newDiscoveryEngine(dataplanePort int) *Discovery {
 	}
 }
 
+// isDataplaneContainerReady checks if the container exposing the dataplane port is ready.
+//
+// This method:
+//   - Finds which container has the dataplane port in spec.containers[].ports
+//   - Checks that container's ready status in status.containerStatuses[]
+//
+// Returns true only if the dataplane container exists and is ready.
+//
+//nolint:gocyclo,revive // Complex pod status checking required for robust discovery
+func (d *Discovery) isDataplaneContainerReady(pod *unstructured.Unstructured, logger *slog.Logger) (bool, error) {
+	// Step 1: Find which container has the dataplane port
+	containersSpec, found, err := unstructured.NestedSlice(pod.Object, "spec", "containers")
+	if err != nil || !found {
+		return false, fmt.Errorf("failed to get containers spec: %w", err)
+	}
+
+	var dataplaneContainerName string
+	for _, c := range containersSpec {
+		container, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Get container name
+		name, found, err := unstructured.NestedString(container, "name")
+		if err != nil || !found {
+			continue
+		}
+
+		// Check if this container has the dataplane port
+		ports, found, err := unstructured.NestedSlice(container, "ports")
+		if err != nil || !found {
+			continue
+		}
+
+		for _, p := range ports {
+			port, ok := p.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			containerPort, found, err := unstructured.NestedInt64(port, "containerPort")
+			if err != nil || !found {
+				continue
+			}
+
+			if int(containerPort) == d.dataplanePort {
+				dataplaneContainerName = name
+				break
+			}
+		}
+
+		if dataplaneContainerName != "" {
+			break
+		}
+	}
+
+	if dataplaneContainerName == "" {
+		return false, fmt.Errorf("no container found with dataplane port %d", d.dataplanePort)
+	}
+
+	if logger != nil {
+		logger.Debug("Found dataplane container in spec",
+			"pod", pod.GetName(),
+			"container", dataplaneContainerName,
+			"port", d.dataplanePort)
+	}
+
+	// Step 2: Check that container's ready status
+	containerStatuses, found, err := unstructured.NestedSlice(pod.Object, "status", "containerStatuses")
+	if err != nil || !found {
+		// No container statuses yet
+		if logger != nil {
+			logger.Debug("No containerStatuses found in pod status",
+				"pod", pod.GetName(),
+				"error", err)
+		}
+		return false, nil
+	}
+
+	for _, cs := range containerStatuses {
+		status, ok := cs.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		name, found, err := unstructured.NestedString(status, "name")
+		if err != nil || !found {
+			continue
+		}
+
+		if name == dataplaneContainerName {
+			ready, found, err := unstructured.NestedBool(status, "ready")
+
+			// Debug logging to investigate connection refused despite ready status
+			if logger != nil {
+				started, _, _ := unstructured.NestedBool(status, "started")
+				restartCount, _, _ := unstructured.NestedInt64(status, "restartCount")
+
+				// Extract state information
+				state, stateFound, _ := unstructured.NestedMap(status, "state")
+				var stateType string
+				if stateFound {
+					if _, ok := state["running"]; ok {
+						stateType = "running"
+					} else if _, ok := state["waiting"]; ok {
+						stateType = "waiting"
+					} else if _, ok := state["terminated"]; ok {
+						stateType = "terminated"
+					}
+				}
+
+				logger.Debug("Dataplane container status check",
+					"pod", pod.GetName(),
+					"container", name,
+					"ready", ready,
+					"ready_found", found,
+					"ready_error", err,
+					"started", started,
+					"restart_count", restartCount,
+					"state_type", stateType)
+			}
+
+			if err != nil {
+				return false, fmt.Errorf("failed to get ready status: %w", err)
+			}
+			if !found {
+				return false, nil
+			}
+			return ready, nil
+		}
+	}
+
+	// Container not found in status (shouldn't happen)
+	if logger != nil {
+		logger.Debug("Dataplane container not found in containerStatuses",
+			"pod", pod.GetName(),
+			"expected_container", dataplaneContainerName)
+	}
+	return false, nil
+}
+
 // DiscoverEndpoints discovers HAProxy Dataplane API endpoints from pod resources.
 //
 // This method:
 //   - Lists all pods from the provided store
 //   - Extracts pod IPs from pod.status.podIP
+//   - Checks that the dataplane container is ready
 //   - Constructs Dataplane API URLs (http://{IP}:{port})
 //   - Creates Endpoint structs with credentials
 //
@@ -80,6 +224,17 @@ func (d *Discovery) DiscoverEndpoints(
 	podStore types.Store,
 	credentials coreconfig.Credentials,
 ) ([]dataplane.Endpoint, error) {
+	return d.DiscoverEndpointsWithLogger(podStore, credentials, nil)
+}
+
+// DiscoverEndpointsWithLogger is like DiscoverEndpoints but accepts an optional logger for debugging.
+//
+//nolint:revive // High cognitive complexity required for robust pod filtering and error handling
+func (d *Discovery) DiscoverEndpointsWithLogger(
+	podStore types.Store,
+	credentials coreconfig.Credentials,
+	logger *slog.Logger,
+) ([]dataplane.Endpoint, error) {
 	if podStore == nil {
 		return nil, fmt.Errorf("pod store is nil")
 	}
@@ -100,6 +255,26 @@ func (d *Discovery) DiscoverEndpoints(
 			continue
 		}
 
+		// Log pod evaluation start
+		if logger != nil {
+			logger.Debug("Evaluating pod for discovery",
+				"pod", pod.GetName(),
+				"namespace", pod.GetNamespace(),
+				"uid", pod.GetUID())
+		}
+
+		// Skip terminating pods (pods with deletionTimestamp set)
+		// Terminating pods may still have phase="Running" and ready=true during graceful shutdown,
+		// but their ports are shutting down and will refuse connections
+		if pod.GetDeletionTimestamp() != nil {
+			if logger != nil {
+				logger.Debug("Skipping terminating pod",
+					"pod", pod.GetName(),
+					"deletionTimestamp", pod.GetDeletionTimestamp())
+			}
+			continue
+		}
+
 		// Extract pod IP from status.podIP
 		podIP, found, err := unstructured.NestedString(pod.Object, "status", "podIP")
 		if err != nil {
@@ -108,17 +283,63 @@ func (d *Discovery) DiscoverEndpoints(
 		}
 		if !found || podIP == "" {
 			// Skip pods without IP (not running yet)
+			if logger != nil {
+				logger.Debug("Skipping pod - no IP assigned",
+					"pod", pod.GetName())
+			}
 			continue
 		}
 
-		// Construct Dataplane API URL
-		url := fmt.Sprintf("http://%s:%d", podIP, d.dataplanePort)
+		// Extract pod phase from status.phase
+		phase, found, err := unstructured.NestedString(pod.Object, "status", "phase")
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract pod phase from %s: %w",
+				pod.GetName(), err)
+		}
+		if !found || phase != "Running" {
+			// Skip pods that aren't in Running phase
+			if logger != nil {
+				logger.Debug("Skipping pod - not in Running phase",
+					"pod", pod.GetName(),
+					"phase", phase)
+			}
+			continue
+		}
+
+		// Check if dataplane container is ready
+		ready, err := d.isDataplaneContainerReady(pod, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check dataplane container readiness for %s: %w",
+				pod.GetName(), err)
+		}
+		if !ready {
+			// Skip pods where dataplane container isn't ready yet
+			if logger != nil {
+				logger.Debug("Skipping pod - dataplane container not ready",
+					"pod", pod.GetName(),
+					"podIP", podIP,
+					"phase", phase)
+			}
+			continue
+		}
+
+		// Pod passed readiness check
+		if logger != nil {
+			logger.Debug("Including pod - dataplane container is ready",
+				"pod", pod.GetName(),
+				"podIP", podIP,
+				"phase", phase)
+		}
+
+		// Construct Dataplane API URL with v3 prefix
+		url := fmt.Sprintf("http://%s:%d/v3", podIP, d.dataplanePort)
 
 		// Create endpoint with credentials
 		endpoint := dataplane.Endpoint{
 			URL:      url,
 			Username: credentials.DataplaneUsername,
 			Password: credentials.DataplanePassword,
+			PodName:  pod.GetName(),
 		}
 
 		endpoints = append(endpoints, endpoint)

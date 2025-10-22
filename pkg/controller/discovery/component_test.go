@@ -83,12 +83,12 @@ func TestComponent_ConfigValidatedEvent(t *testing.T) {
 			// Verify endpoints
 			endpoints := convertToDataplaneEndpoints(discovered.Endpoints)
 			assert.Contains(t, endpoints, dataplane.Endpoint{
-				URL:      "http://10.0.0.1:5555",
+				URL:      "http://10.0.0.1:5555/v3",
 				Username: "admin",
 				Password: "secret",
 			})
 			assert.Contains(t, endpoints, dataplane.Endpoint{
-				URL:      "http://10.0.0.2:5555",
+				URL:      "http://10.0.0.2:5555/v3",
 				Username: "admin",
 				Password: "secret",
 			})

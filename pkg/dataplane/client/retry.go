@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"syscall"
 	"time"
 )
 
@@ -64,6 +66,86 @@ func IsVersionConflict() RetryCondition {
 		var vce *VersionConflictError
 		return errors.As(err, &vce)
 	}
+}
+
+// IsConnectionError returns a RetryCondition that retries on transient connection errors.
+//
+// This condition detects network-level connection failures such as:
+//   - Connection refused (ECONNREFUSED) - server not yet accepting connections
+//   - Connection reset (ECONNRESET) - connection lost during communication
+//
+// These errors are typically transient and resolve within a few seconds as
+// services start up or network conditions stabilize.
+//
+// This condition does NOT retry on:
+//   - HTTP errors (4xx, 5xx status codes)
+//   - Authentication failures
+//   - Parsing errors
+//   - Context cancellation
+//
+// Example:
+//
+//	retryConfig := RetryConfig{
+//	    MaxAttempts: 3,
+//	    RetryIf:     IsConnectionError(),
+//	    Backoff:     BackoffExponential,
+//	    BaseDelay:   100 * time.Millisecond,
+//	}
+//	result, err := WithRetry(ctx, retryConfig, func(attempt int) (*Result, error) {
+//	    return fetchFromAPI(ctx)
+//	})
+func IsConnectionError() RetryCondition {
+	return func(err error) bool {
+		if err == nil {
+			return false
+		}
+
+		// Check for net.OpError (network operation errors)
+		var opErr *net.OpError
+		if errors.As(err, &opErr) {
+			// Retry on connection refused (server not ready yet)
+			if errors.Is(opErr.Err, syscall.ECONNREFUSED) {
+				return true
+			}
+			// Retry on connection reset (connection lost)
+			if errors.Is(opErr.Err, syscall.ECONNRESET) {
+				return true
+			}
+		}
+
+		// Check error message for common connection failure patterns
+		// This handles wrapped errors where the underlying net.OpError
+		// might not be directly accessible via errors.As
+		errMsg := err.Error()
+		return containsAny(errMsg,
+			"connection refused",
+			"connection reset",
+			"dial tcp",
+			"no such host",
+		)
+	}
+}
+
+// containsAny checks if the string s contains any of the substrings.
+func containsAny(s string, substrings ...string) bool {
+	for _, substr := range substrings {
+		if len(s) >= len(substr) {
+			// Simple substring search
+			for i := 0; i <= len(s)-len(substr); i++ {
+				match := true
+				for j := 0; j < len(substr); j++ {
+					if s[i+j] != substr[j] {
+						match = false
+						break
+					}
+				}
+				if match {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // WithRetry executes fn with automatic retry logic based on config.

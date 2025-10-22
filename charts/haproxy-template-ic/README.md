@@ -49,6 +49,7 @@ helm install my-controller ./charts/haproxy-template-ic \
 | `replicaCount` | Number of controller replicas | `1` |
 | `image.repository` | Controller image repository | `ghcr.io/phihos/haproxy-template-ic` |
 | `image.tag` | Controller image tag | Chart appVersion |
+| `controller.debugPort` | Debug HTTP server port (0=disabled) | `0` |
 | `controller.config.pod_selector` | Labels to match HAProxy pods | `{app: haproxy, component: loadbalancer}` |
 | `controller.config.logging.verbose` | Log level (0=WARN, 1=INFO, 2=DEBUG) | `1` |
 | `credentials.dataplane.username` | Dataplane API username | `admin` |
@@ -83,6 +84,66 @@ controller:
         kind: Ingress
         index_by: ["metadata.namespace", "metadata.name"]
 ```
+
+## Resource Limits and Cloud-Native Behavior
+
+The controller automatically detects and respects container resource limits for optimal cloud-native operation:
+
+### CPU Limits (GOMAXPROCS)
+
+**Go 1.25+ Native Support**: The controller uses Go 1.25, which includes built-in container-aware GOMAXPROCS. The Go runtime automatically:
+- Detects cgroup CPU limits (v1 and v2)
+- Sets GOMAXPROCS to match the container's CPU limit (not the host's core count)
+- Dynamically adjusts if CPU limits change at runtime
+
+No configuration needed - this works automatically when you set CPU limits in the deployment.
+
+### Memory Limits (GOMEMLIMIT)
+
+**automemlimit Library**: The controller uses the `automemlimit` library to automatically set GOMEMLIMIT based on cgroup memory limits. By default:
+- Sets GOMEMLIMIT to 90% of the container memory limit
+- Leaves 10% headroom for non-heap memory sources
+- Works with both cgroups v1 and v2
+
+### Configuration
+
+Set resource limits in your values file:
+
+```yaml
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+```
+
+The controller will automatically log the detected limits at startup:
+
+```
+INFO HAProxy Template Ingress Controller starting ... gomaxprocs=1 gomemlimit="461373644 bytes (440.00 MiB)"
+```
+
+### Fine-Tuning Memory Limits
+
+The `AUTOMEMLIMIT` environment variable can adjust the memory limit ratio (default: 0.9):
+
+```yaml
+# In deployment.yaml or via Helm values
+env:
+  - name: AUTOMEMLIMIT
+    value: "0.8"  # Set GOMEMLIMIT to 80% of container limit
+```
+
+Valid range: 0.0 < AUTOMEMLIMIT ≤ 1.0
+
+### Why This Matters
+
+- **Prevents OOM kills**: GOMEMLIMIT helps the Go GC keep heap memory under control
+- **Reduces CPU throttling**: Proper GOMAXPROCS prevents over-scheduling goroutines
+- **Improves performance**: Better GC tuning and reduced context switching
+- **Cloud-native best practice**: Industry standard for containerized Go applications in 2025
 
 ## NetworkPolicy Configuration
 
@@ -162,27 +223,46 @@ spec:
             mkdir -p /etc/haproxy/maps /etc/haproxy/certs
             cat > /etc/haproxy/haproxy.cfg <<EOF
             global
-                stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
+                log stdout len 4096 local0 info
             defaults
                 timeout connect 5s
             frontend status
                 bind *:8404
                 http-request return status 200 if { path /healthz }
+                # Note: /ready endpoint intentionally omitted - added by controller
             EOF
             exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
         volumeMounts:
         - name: haproxy-config
           mountPath: /etc/haproxy
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8404
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8404
+          initialDelaySeconds: 5
+          periodSeconds: 5
 
       - name: dataplane
         image: haproxytech/haproxy-debian:3.2
-        command: ["dataplaneapi"]
+        command: ["/bin/sh", "-c"]
         args:
-          - --config-file=/etc/haproxy/dataplaneapi.yaml
-        env:
-        - name: DATAPLANE_CONFIG
-          value: |
+          - |
+            # Wait for HAProxy to create the socket
+            while [ ! -S /etc/haproxy/haproxy-master.sock ]; do
+              echo "Waiting for HAProxy master socket..."
+              sleep 1
+            done
+
+            # Create Dataplane API config
+            cat > /etc/haproxy/dataplaneapi.yaml <<'EOF'
             config_version: 2
+            name: haproxy-dataplaneapi
             dataplaneapi:
               host: 0.0.0.0
               port: 5555
@@ -190,9 +270,30 @@ spec:
                 - name: admin
                   password: adminpass
                   insecure: true
+              transaction:
+                transaction_dir: /var/lib/dataplaneapi/transactions
+                backups_number: 10
+                backups_dir: /var/lib/dataplaneapi/backups
+              resources:
+                maps_dir: /etc/haproxy/maps
+                ssl_certs_dir: /etc/haproxy/certs
             haproxy:
               config_file: /etc/haproxy/haproxy.cfg
               haproxy_bin: /usr/local/sbin/haproxy
+              master_worker_mode: true
+              master_runtime: /etc/haproxy/haproxy-master.sock
+              reload:
+                reload_delay: 1
+                reload_cmd: /bin/sh -c "echo 'reload' | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock"
+                restart_cmd: /bin/sh -c "echo 'reload' | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock"
+                reload_strategy: custom
+            log_targets:
+              - log_to: stdout
+                log_level: info
+            EOF
+
+            # Start Dataplane API
+            exec dataplaneapi -f /etc/haproxy/dataplaneapi.yaml
         volumeMounts:
         - name: haproxy-config
           mountPath: /etc/haproxy
@@ -212,6 +313,77 @@ validation:
 ```
 
 This adds HAProxy + Dataplane sidecars to the controller pod for config validation.
+
+## Debugging
+
+### Enable Debug HTTP Server
+
+The controller provides a debug HTTP server that exposes internal state via `/debug/vars` and Go profiling via `/debug/pprof`. This is disabled by default for security.
+
+Enable debug server:
+
+```yaml
+controller:
+  debugPort: 6060
+```
+
+Access debug endpoints via port-forward:
+
+```bash
+# Forward debug port from controller pod
+kubectl port-forward deployment/my-controller 6060:6060
+
+# List all available debug variables
+curl http://localhost:6060/debug/vars
+
+# Get current controller configuration
+curl http://localhost:6060/debug/vars/config
+
+# Get rendered HAProxy configuration
+curl http://localhost:6060/debug/vars/rendered
+
+# Get recent events (last 100)
+curl http://localhost:6060/debug/vars/events
+
+# Get resource counts
+curl http://localhost:6060/debug/vars/resources
+
+# Go profiling (CPU, heap, goroutines)
+curl http://localhost:6060/debug/pprof/
+go tool pprof http://localhost:6060/debug/pprof/heap
+```
+
+### Debug Variables
+
+Available debug variables:
+
+| Endpoint | Description |
+|----------|-------------|
+| `/debug/vars` | List all available variables |
+| `/debug/vars/config` | Current controller configuration |
+| `/debug/vars/credentials` | Credentials metadata (not actual values) |
+| `/debug/vars/rendered` | Last rendered HAProxy config |
+| `/debug/vars/auxfiles` | Auxiliary files (SSL certs, maps) |
+| `/debug/vars/resources` | Resource counts by type |
+| `/debug/vars/events` | Recent events (default: last 100) |
+| `/debug/vars/state` | Full state dump (use carefully) |
+| `/debug/vars/uptime` | Controller uptime |
+| `/debug/pprof/` | Go profiling endpoints |
+
+### JSONPath Field Selection
+
+Extract specific fields using JSONPath:
+
+```bash
+# Get only the config version
+curl 'http://localhost:6060/debug/vars/config?field={.version}'
+
+# Get only template names
+curl 'http://localhost:6060/debug/vars/config?field={.config.templates}'
+
+# Get rendered config size
+curl 'http://localhost:6060/debug/vars/rendered?field={.size}'
+```
 
 ## Monitoring
 

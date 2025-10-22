@@ -62,10 +62,12 @@ type TransactionFunc func(ctx context.Context, tx *Transaction) error
 // 5. Aborts the transaction if an error occurs
 // 6. Retries on 409 conflicts with the new version
 //
+// Returns the CommitResult from the successful commit.
+//
 // Example:
 //
 //	adapter := client.NewVersionAdapter(client, 3)
-//	err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *Transaction) error {
+//	result, err := adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *Transaction) error {
 //	    // Create backend
 //	    backend := &models.Backend{Name: "web"}
 //	    _, err := client.Client().CreateBackend(ctx, &CreateBackendParams{
@@ -73,14 +75,14 @@ type TransactionFunc func(ctx context.Context, tx *Transaction) error
 //	    }, backend)
 //	    return err
 //	})
-func (a *VersionAdapter) ExecuteTransaction(ctx context.Context, fn TransactionFunc) error {
+func (a *VersionAdapter) ExecuteTransaction(ctx context.Context, fn TransactionFunc) (*CommitResult, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= a.maxRetries; attempt++ {
 		// Get current version
 		version, err := a.client.GetVersion(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
+			return nil, fmt.Errorf("failed to get version: %w", err)
 		}
 
 		// Create transaction
@@ -92,7 +94,7 @@ func (a *VersionAdapter) ExecuteTransaction(ctx context.Context, fn TransactionF
 				lastErr = err
 				continue
 			}
-			return fmt.Errorf("failed to create transaction: %w", err)
+			return nil, fmt.Errorf("failed to create transaction: %w", err)
 		}
 
 		// Execute operations within transaction
@@ -100,11 +102,11 @@ func (a *VersionAdapter) ExecuteTransaction(ctx context.Context, fn TransactionF
 		if err != nil {
 			// Abort transaction on error
 			_ = tx.Abort(ctx) // Ignore abort errors
-			return fmt.Errorf("transaction operation failed: %w", err)
+			return nil, fmt.Errorf("transaction operation failed: %w", err)
 		}
 
 		// Commit transaction
-		_, err = tx.Commit(ctx)
+		commitResult, err := tx.Commit(ctx)
 		if err != nil {
 			var versionErr *VersionConflictError
 			if errors.As(err, &versionErr) {
@@ -114,15 +116,15 @@ func (a *VersionAdapter) ExecuteTransaction(ctx context.Context, fn TransactionF
 				continue
 			}
 			_ = tx.Abort(ctx) // Ensure cleanup
-			return fmt.Errorf("failed to commit transaction: %w", err)
+			return nil, fmt.Errorf("failed to commit transaction: %w", err)
 		}
 
-		// Success
-		return nil
+		// Success - return commit result
+		return commitResult, nil
 	}
 
 	// Max retries exceeded
-	return fmt.Errorf("transaction failed after %d retries: %w", a.maxRetries, lastErr)
+	return nil, fmt.Errorf("transaction failed after %d retries: %w", a.maxRetries, lastErr)
 }
 
 // ExecuteTransactionWithVersion executes a transactional operation with a specific version.

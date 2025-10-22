@@ -384,7 +384,10 @@ build_and_load_local_image() {
         docker_path="$(command -v docker)"
 
         run_with_spinner "Building controller image '${LOCAL_IMAGE}'" \
-            "${docker_path}" build "${build_args[@]}"
+            "${docker_path}" build "${build_args[@]}" || {
+            err "Docker build failed"
+            return 1
+        }
     elif docker image inspect "${LOCAL_IMAGE}" >/dev/null 2>&1; then
         ok "Using existing image '${LOCAL_IMAGE}'"
     else

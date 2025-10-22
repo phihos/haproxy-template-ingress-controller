@@ -17,7 +17,8 @@ package templating
 import (
 	"fmt"
 
-	"github.com/nikolalohinski/gonja/v2"
+	"github.com/nikolalohinski/gonja/v2/builtins"
+	"github.com/nikolalohinski/gonja/v2/config"
 	"github.com/nikolalohinski/gonja/v2/exec"
 )
 
@@ -61,12 +62,43 @@ func New(engineType EngineType, templates map[string]string) (*TemplateEngine, e
 		compiledTemplates: make(map[string]*exec.Template, len(templates)),
 	}
 
-	// Store raw templates and compile each one
+	// Create simple in-memory loader with all templates so they can reference each other
+	// via {% include "template-name" %} directives (no '/' prefix required)
+	loader := NewSimpleLoader(templates)
+
+	// Create custom config with whitespace control enabled
+	// TrimBlocks removes the first newline after a block (e.g., {% if %})
+	// LeftStripBlocks strips leading spaces/tabs before a block
+	// Note: LeftStripBlocks also sets RemoveTrailingWhiteSpaceFromLastLine on Data nodes,
+	// but this can be overridden using {%+ instead of {% on specific blocks
+	cfg := &config.Config{
+		BlockStartString:    "{%",
+		BlockEndString:      "%}",
+		VariableStartString: "{{",
+		VariableEndString:   "}}",
+		CommentStartString:  "{#",
+		CommentEndString:    "#}",
+		AutoEscape:          false,
+		StrictUndefined:     false,
+		TrimBlocks:          true, // Remove newlines after blocks for cleaner output
+		LeftStripBlocks:     true, // Strip leading spaces before blocks for proper indentation
+	}
+
+	// Create environment with default builtins (filters, tests, control structures, methods, functions)
+	environment := &exec.Environment{
+		Filters:           builtins.Filters,
+		Tests:             builtins.Tests,
+		ControlStructures: builtins.ControlStructures,
+		Methods:           builtins.Methods,
+		Context:           builtins.GlobalFunctions, // Include global functions like range()
+	}
+
+	// Store raw templates and compile each one through the loader
 	for name, content := range templates {
 		engine.rawTemplates[name] = content
 
-		// Compile the template
-		compiled, err := gonja.FromString(content)
+		// Compile the template with custom config for proper whitespace handling
+		compiled, err := exec.NewTemplate(name, cfg, loader, environment)
 		if err != nil {
 			return nil, NewCompilationError(name, content, err)
 		}

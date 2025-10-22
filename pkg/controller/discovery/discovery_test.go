@@ -16,9 +16,11 @@ package discovery
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	coreconfig "haproxy-template-ic/pkg/core/config"
@@ -53,9 +55,10 @@ func TestDiscovery_DiscoverEndpoints_Success(t *testing.T) {
 			},
 			expectedEndpoints: []dataplane.Endpoint{
 				{
-					URL:      "http://10.0.0.1:5555",
+					URL:      "http://10.0.0.1:5555/v3",
 					Username: "admin",
 					Password: "secret",
+					PodName:  "haproxy-0",
 				},
 			},
 		},
@@ -73,26 +76,29 @@ func TestDiscovery_DiscoverEndpoints_Success(t *testing.T) {
 			},
 			expectedEndpoints: []dataplane.Endpoint{
 				{
-					URL:      "http://10.0.0.1:5555",
+					URL:      "http://10.0.0.1:5555/v3",
 					Username: "admin",
 					Password: "secret",
+					PodName:  "haproxy-0",
 				},
 				{
-					URL:      "http://10.0.0.2:5555",
+					URL:      "http://10.0.0.2:5555/v3",
 					Username: "admin",
 					Password: "secret",
+					PodName:  "haproxy-1",
 				},
 				{
-					URL:      "http://10.0.0.3:5555",
+					URL:      "http://10.0.0.3:5555/v3",
 					Username: "admin",
 					Password: "secret",
+					PodName:  "haproxy-2",
 				},
 			},
 		},
 		{
 			name: "custom dataplane port",
 			pods: []*unstructured.Unstructured{
-				createPod("haproxy-0", "10.0.0.1"),
+				createPodWithPortAndPhase("haproxy-0", "10.0.0.1", "Running", 8080),
 			},
 			dataplanePort: 8080,
 			credentials: coreconfig.Credentials{
@@ -101,9 +107,10 @@ func TestDiscovery_DiscoverEndpoints_Success(t *testing.T) {
 			},
 			expectedEndpoints: []dataplane.Endpoint{
 				{
-					URL:      "http://10.0.0.1:8080",
+					URL:      "http://10.0.0.1:8080/v3",
 					Username: "admin",
 					Password: "secret",
+					PodName:  "haproxy-0",
 				},
 			},
 		},
@@ -131,14 +138,119 @@ func TestDiscovery_DiscoverEndpoints_Success(t *testing.T) {
 			},
 			expectedEndpoints: []dataplane.Endpoint{
 				{
-					URL:      "http://10.0.0.1:5555",
+					URL:      "http://10.0.0.1:5555/v3",
 					Username: "admin",
 					Password: "secret",
+					PodName:  "haproxy-0",
 				},
 				{
-					URL:      "http://10.0.0.3:5555",
+					URL:      "http://10.0.0.3:5555/v3",
 					Username: "admin",
 					Password: "secret",
+					PodName:  "haproxy-2",
+				},
+			},
+		},
+		{
+			name: "pods in Pending phase are skipped",
+			pods: []*unstructured.Unstructured{
+				createPodWithPhase("haproxy-0", "10.0.0.1", "Running"),
+				createPodWithPhase("haproxy-1", "10.0.0.2", "Pending"),
+				createPodWithPhase("haproxy-2", "10.0.0.3", "Running"),
+			},
+			dataplanePort: 5555,
+			credentials: coreconfig.Credentials{
+				DataplaneUsername: "admin",
+				DataplanePassword: "secret",
+			},
+			expectedEndpoints: []dataplane.Endpoint{
+				{
+					URL:      "http://10.0.0.1:5555/v3",
+					Username: "admin",
+					Password: "secret",
+					PodName:  "haproxy-0",
+				},
+				{
+					URL:      "http://10.0.0.3:5555/v3",
+					Username: "admin",
+					Password: "secret",
+					PodName:  "haproxy-2",
+				},
+			},
+		},
+		{
+			name: "pods in Failed phase are skipped",
+			pods: []*unstructured.Unstructured{
+				createPodWithPhase("haproxy-0", "10.0.0.1", "Running"),
+				createPodWithPhase("haproxy-1", "10.0.0.2", "Failed"),
+			},
+			dataplanePort: 5555,
+			credentials: coreconfig.Credentials{
+				DataplaneUsername: "admin",
+				DataplanePassword: "secret",
+			},
+			expectedEndpoints: []dataplane.Endpoint{
+				{
+					URL:      "http://10.0.0.1:5555/v3",
+					Username: "admin",
+					Password: "secret",
+					PodName:  "haproxy-0",
+				},
+			},
+		},
+		{
+			name: "only Running pods included in mixed scenario",
+			pods: []*unstructured.Unstructured{
+				createPodWithPhase("haproxy-0", "10.0.0.1", "Pending"),
+				createPodWithPhase("haproxy-1", "10.0.0.2", "Running"),
+				createPodWithPhase("haproxy-2", "10.0.0.3", "Failed"),
+				createPodWithPhase("haproxy-3", "10.0.0.4", "Running"),
+				createPodWithPhase("haproxy-4", "10.0.0.5", "Succeeded"),
+			},
+			dataplanePort: 5555,
+			credentials: coreconfig.Credentials{
+				DataplaneUsername: "admin",
+				DataplanePassword: "secret",
+			},
+			expectedEndpoints: []dataplane.Endpoint{
+				{
+					URL:      "http://10.0.0.2:5555/v3",
+					Username: "admin",
+					Password: "secret",
+					PodName:  "haproxy-1",
+				},
+				{
+					URL:      "http://10.0.0.4:5555/v3",
+					Username: "admin",
+					Password: "secret",
+					PodName:  "haproxy-3",
+				},
+			},
+		},
+		{
+			name: "terminating pods are skipped",
+			pods: []*unstructured.Unstructured{
+				createPodWithPhase("haproxy-0", "10.0.0.1", "Running"),
+				createTerminatingPod("haproxy-1", "10.0.0.2"),
+				createPodWithPhase("haproxy-2", "10.0.0.3", "Running"),
+			},
+			dataplanePort: 5555,
+			credentials: coreconfig.Credentials{
+				DataplaneUsername: "admin",
+				DataplanePassword: "secret",
+			},
+			expectedEndpoints: []dataplane.Endpoint{
+				{
+					URL:      "http://10.0.0.1:5555/v3",
+					Username: "admin",
+					Password: "secret",
+					PodName:  "haproxy-0",
+				},
+				{
+					URL:      "http://10.0.0.3:5555/v3",
+					Username: "admin",
+					Password: "secret",
+					PodName:  "haproxy-2",
 				},
 			},
 		},
@@ -218,7 +330,18 @@ func TestDiscovery_DiscoverEndpoints_StoreListError(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 // createPod creates a test pod with the specified name and IP in the default namespace.
+// The pod is created with phase "Running" by default.
 func createPod(name, podIP string) *unstructured.Unstructured {
+	return createPodWithPhase(name, podIP, "Running")
+}
+
+// createPodWithPhase creates a test pod with the specified name, IP, and phase in the default namespace.
+func createPodWithPhase(name, podIP, phase string) *unstructured.Unstructured {
+	return createPodWithPortAndPhase(name, podIP, phase, 5555)
+}
+
+// createPodWithPortAndPhase creates a test pod with the specified name, IP, phase, and dataplane port in the default namespace.
+func createPodWithPortAndPhase(name, podIP, phase string, dataplanePort int) *unstructured.Unstructured {
 	pod := &unstructured.Unstructured{}
 	pod.SetAPIVersion("v1")
 	pod.SetKind("Pod")
@@ -231,6 +354,47 @@ func createPod(name, podIP string) *unstructured.Unstructured {
 
 	// Set pod IP in status
 	_ = unstructured.SetNestedField(pod.Object, podIP, "status", "podIP")
+
+	// Set pod phase in status
+	_ = unstructured.SetNestedField(pod.Object, phase, "status", "phase")
+
+	// Set spec.containers with dataplane container
+	containers := []interface{}{
+		map[string]interface{}{
+			"name": "haproxy",
+			"ports": []interface{}{
+				map[string]interface{}{
+					"name":          "http",
+					"containerPort": int64(80),
+					"protocol":      "TCP",
+				},
+			},
+		},
+		map[string]interface{}{
+			"name": "dataplane",
+			"ports": []interface{}{
+				map[string]interface{}{
+					"name":          "dataplane",
+					"containerPort": int64(dataplanePort),
+					"protocol":      "TCP",
+				},
+			},
+		},
+	}
+	_ = unstructured.SetNestedSlice(pod.Object, containers, "spec", "containers")
+
+	// Set status.containerStatuses with ready containers
+	containerStatuses := []interface{}{
+		map[string]interface{}{
+			"name":  "haproxy",
+			"ready": true,
+		},
+		map[string]interface{}{
+			"name":  "dataplane",
+			"ready": true,
+		},
+	}
+	_ = unstructured.SetNestedSlice(pod.Object, containerStatuses, "status", "containerStatuses")
 
 	return pod
 }
@@ -248,6 +412,18 @@ func createPodWithoutIP(name string) *unstructured.Unstructured {
 	})
 
 	// No pod IP set (simulates pending pod)
+
+	return pod
+}
+
+// createTerminatingPod creates a test pod with deletionTimestamp set (terminating pod).
+// Terminating pods may still have phase="Running" and ready=true during graceful shutdown.
+func createTerminatingPod(name, podIP string) *unstructured.Unstructured {
+	pod := createPodWithPhase(name, podIP, "Running")
+
+	// Set deletionTimestamp to indicate pod is terminating
+	now := metav1.Time{Time: time.Now()}
+	pod.SetDeletionTimestamp(&now)
 
 	return pod
 }

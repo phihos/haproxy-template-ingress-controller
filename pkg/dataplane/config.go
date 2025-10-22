@@ -16,6 +16,20 @@ type Endpoint struct {
 
 	// Password for basic authentication
 	Password string
+
+	// PodName is the Kubernetes pod name (for observability)
+	PodName string
+}
+
+// Redacted returns a redacted version of the endpoint for safe logging.
+// Credentials are masked to prevent exposure in logs.
+func (e Endpoint) Redacted() map[string]string {
+	return map[string]string{
+		"url":      e.URL,
+		"username": e.Username,
+		"password": "***REDACTED***",
+		"pod":      e.PodName,
+	}
 }
 
 // AuxiliaryFiles contains files to synchronize before configuration changes.

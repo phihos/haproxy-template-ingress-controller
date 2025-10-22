@@ -181,6 +181,13 @@ func (h *ConfigChangeHandler) handleConfigParsed(ctx context.Context, event *eve
 
 // handleConfigValidated signals controller reinitialization when config is validated.
 func (h *ConfigChangeHandler) handleConfigValidated(event *events.ConfigValidatedEvent) {
+	// Ignore initial bootstrap events (version "initial")
+	// These are published to bootstrap reconciliation components and should not trigger reinitialization
+	if event.Version == "initial" {
+		h.logger.Debug("Ignoring initial bootstrap ConfigValidatedEvent (not a config change)")
+		return
+	}
+
 	h.logger.Info("Config validated, signaling controller reinitialization",
 		"version", event.Version)
 

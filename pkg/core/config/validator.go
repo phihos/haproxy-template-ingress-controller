@@ -27,11 +27,6 @@ func ValidateStructure(cfg *Config) error {
 		return fmt.Errorf("logging: %w", err)
 	}
 
-	// Validate Validation config
-	if err := validateValidationConfig(&cfg.Validation); err != nil {
-		return fmt.Errorf("validation: %w", err)
-	}
-
 	// Validate WatchedResources
 	if err := validateWatchedResources(cfg.WatchedResources); err != nil {
 		return fmt.Errorf("watched_resources: %w", err)
@@ -84,19 +79,6 @@ func validateControllerConfig(oc *ControllerConfig) error {
 func validateLoggingConfig(lc *LoggingConfig) error {
 	if lc.Verbose < 0 || lc.Verbose > 2 {
 		return fmt.Errorf("verbose must be 0 (WARNING), 1 (INFO), or 2 (DEBUG), got %d", lc.Verbose)
-	}
-
-	return nil
-}
-
-// validateValidationConfig validates the validation configuration.
-func validateValidationConfig(vc *ValidationConfig) error {
-	if vc.DataplaneHost == "" {
-		return fmt.Errorf("dataplane_host cannot be empty")
-	}
-
-	if vc.DataplanePort < 1 || vc.DataplanePort > 65535 {
-		return fmt.Errorf("dataplane_port must be between 1 and 65535, got %d", vc.DataplanePort)
 	}
 
 	return nil
@@ -162,14 +144,6 @@ func ValidateCredentials(creds *Credentials) error {
 
 	if creds.DataplanePassword == "" {
 		return fmt.Errorf("dataplane_password cannot be empty")
-	}
-
-	if creds.ValidationUsername == "" {
-		return fmt.Errorf("validation_username cannot be empty")
-	}
-
-	if creds.ValidationPassword == "" {
-		return fmt.Errorf("validation_password cannot be empty")
 	}
 
 	return nil

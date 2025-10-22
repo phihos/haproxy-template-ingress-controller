@@ -1,4 +1,3 @@
-//nolint:dupl // Intentional duplication - multipart upload/update patterns for different storage types
 package client
 
 import (
@@ -39,9 +38,13 @@ func (c *DataplaneClient) GetAllGeneralFiles(ctx context.Context) ([]string, err
 	}
 
 	// Extract paths
+	// The API may populate either 'storage_name' or 'id', we check both
 	paths := make([]string, 0, len(apiFiles))
 	for _, apiFile := range apiFiles {
-		if apiFile.Id != nil {
+		// Prefer storage_name (consistent with SSL certificates), fallback to id
+		if apiFile.StorageName != nil {
+			paths = append(paths, *apiFile.StorageName)
+		} else if apiFile.Id != nil {
 			paths = append(paths, *apiFile.Id)
 		}
 	}
@@ -50,6 +53,7 @@ func (c *DataplaneClient) GetAllGeneralFiles(ctx context.Context) ([]string, err
 }
 
 // GetGeneralFileContent retrieves the content of a specific general file by path.
+// The API returns the raw file content as application/octet-stream.
 func (c *DataplaneClient) GetGeneralFileContent(ctx context.Context, path string) (string, error) {
 	resp, err := c.client.GetOneStorageGeneralFile(ctx, path)
 	if err != nil {
@@ -65,24 +69,14 @@ func (c *DataplaneClient) GetGeneralFileContent(ctx context.Context, path string
 		return "", fmt.Errorf("get general file '%s' failed with status %d", path, resp.StatusCode)
 	}
 
-	// Parse response body
-	var apiFile struct {
-		Id          *string `json:"id"`
-		File        *string `json:"file"`
-		Description *string `json:"description"`
-		Size        *int    `json:"size"`
-		StorageName *string `json:"storage_name"`
+	// Read the raw file content (application/octet-stream)
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body for general file '%s': %w", path, err)
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiFile); err != nil {
-		return "", fmt.Errorf("failed to decode general file response: %w", err)
-	}
-
-	if apiFile.File == nil {
-		return "", fmt.Errorf("file content is nil for '%s'", path)
-	}
-
-	return *apiFile.File, nil
+	// Return the raw content as a string
+	return string(bodyBytes), nil
 }
 
 // CreateGeneralFile creates a new general file using multipart form-data.
@@ -126,7 +120,8 @@ func (c *DataplaneClient) CreateGeneralFile(ctx context.Context, path, content s
 		return fmt.Errorf("general file '%s' already exists", path)
 	}
 
-	if resp.StatusCode != http.StatusCreated {
+	// Accept both 201 (Created) and 202 (Accepted) as success
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
 		// Try to read error body for more details
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("create general file '%s' failed with status %d: %s", path, resp.StatusCode, string(bodyBytes))
@@ -171,7 +166,8 @@ func (c *DataplaneClient) UpdateGeneralFile(ctx context.Context, path, content s
 		return fmt.Errorf("general file '%s' not found", path)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	// Accept both 200 (OK) and 202 (Accepted) as success
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		// Try to read error body for more details
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("update general file '%s' failed with status %d: %s", path, resp.StatusCode, string(bodyBytes))
@@ -192,7 +188,8 @@ func (c *DataplaneClient) DeleteGeneralFile(ctx context.Context, path string) er
 		return fmt.Errorf("general file '%s' not found", path)
 	}
 
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+	// Accept 200 (OK), 202 (Accepted), and 204 (No Content) as success
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("delete general file '%s' failed with status %d", path, resp.StatusCode)
 	}
 

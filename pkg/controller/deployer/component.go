@@ -15,18 +15,21 @@
 // Package deployer implements the Deployer component that deploys validated
 // HAProxy configurations to discovered HAProxy pod endpoints.
 //
-// The Deployer maintains state of the last validated configuration and handles
-// two deployment scenarios:
-//  1. Full reconciliation: Deploy newly validated config to current endpoints
-//  2. Pod changes only: Re-deploy last validated config to new set of endpoints
+// The Deployer is a stateless executor that receives DeploymentScheduledEvent
+// and executes deployments to the specified endpoints. All deployment scheduling,
+// rate limiting, and queueing logic is handled by the DeploymentScheduler component.
 package deployer
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"haproxy-template-ic/pkg/controller/events"
+	"haproxy-template-ic/pkg/dataplane"
 	busevents "haproxy-template-ic/pkg/events"
 )
 
@@ -37,24 +40,18 @@ const (
 
 // Component implements the deployer component.
 //
-// It subscribes to validation completion and pod discovery events,
-// maintains the last validated configuration, and deploys to HAProxy instances.
+// It subscribes to DeploymentScheduledEvent and deploys configurations to
+// HAProxy instances. This is a stateless executor - all scheduling logic
+// is handled by the DeploymentScheduler component.
 //
 // Event subscriptions:
-//   - ValidationCompletedEvent: Cache validated config and deploy to current endpoints
-//   - HAProxyPodsDiscoveredEvent: Re-deploy cached config to new endpoints
+//   - DeploymentScheduledEvent: Execute deployment to specified endpoints
 //
 // The component publishes deployment result events for observability.
 type Component struct {
-	eventBus *busevents.EventBus
-	logger   *slog.Logger
-
-	// State protected by mutex
-	mu                  sync.RWMutex
-	lastValidatedConfig string        //nolint:unused // Will be used when deployment is implemented
-	lastAuxiliaryFiles  interface{}   //nolint:unused // Will be used when deployment is implemented
-	currentEndpoints    []interface{} // Current HAProxy pod endpoints
-	hasValidConfig      bool          // Whether we have a validated config to deploy
+	eventBus             *busevents.EventBus
+	logger               *slog.Logger
+	deploymentInProgress atomic.Bool // Defensive: prevents concurrent deployments if scheduler has bugs
 }
 
 // New creates a new Deployer component.
@@ -75,12 +72,7 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 // Start begins the deployer's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to the EventBus and processes events:
-//   - ValidationCompletedEvent: Cache config and deploy to current endpoints
-//   - HAProxyPodsDiscoveredEvent: Re-deploy cached config to new endpoints
-//
-// The component runs until the context is cancelled, at which point it
-// performs cleanup and returns.
+// It subscribes to the EventBus and processes deployment events.
 //
 // Parameters:
 //   - ctx: Context for cancellation and lifecycle management
@@ -96,7 +88,7 @@ func (c *Component) Start(ctx context.Context) error {
 	for {
 		select {
 		case event := <-eventChan:
-			c.handleEvent(event)
+			c.handleEvent(ctx, event)
 
 		case <-ctx.Done():
 			c.logger.Info("Deployer shutting down", "reason", ctx.Err())
@@ -106,58 +98,204 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // handleEvent processes events from the EventBus.
-func (c *Component) handleEvent(event busevents.Event) {
-	switch e := event.(type) {
-	case *events.ValidationCompletedEvent:
-		c.handleValidationCompleted(e)
-
-	case *events.HAProxyPodsDiscoveredEvent:
-		c.handlePodsDiscovered(e)
+func (c *Component) handleEvent(ctx context.Context, event busevents.Event) {
+	if e, ok := event.(*events.DeploymentScheduledEvent); ok {
+		c.handleDeploymentScheduled(ctx, e)
 	}
 }
 
-// handleValidationCompleted handles successful configuration validation.
+// handleDeploymentScheduled handles deployment scheduled events.
 //
-// This caches the validated configuration and triggers deployment to current endpoints.
-// This is called during full reconciliation cycles (config or resource changes).
-func (c *Component) handleValidationCompleted(event *events.ValidationCompletedEvent) {
-	c.logger.Info("Validation completed, caching config for deployment",
-		"warnings", len(event.Warnings),
-		"duration_ms", event.DurationMs)
-
-	// Log warnings if any
-	for _, warning := range event.Warnings {
-		c.logger.Warn("Validation warning", "warning", warning)
+// This executes the deployment to all specified endpoints in parallel.
+// Defensive: drops duplicate events if a deployment is already in progress.
+func (c *Component) handleDeploymentScheduled(ctx context.Context, event *events.DeploymentScheduledEvent) {
+	// Defensive check: atomically set deploymentInProgress from false to true
+	// This prevents concurrent deployments if scheduler has bugs
+	if !c.deploymentInProgress.CompareAndSwap(false, true) {
+		c.logger.Error("dropping duplicate DeploymentScheduledEvent - deployment already in progress",
+			"reason", event.Reason,
+			"endpoint_count", len(event.Endpoints))
+		return
 	}
+	// Note: flag will be cleared by deployToEndpoints after deployment completes
 
-	// TODO: Extract validated config from preceding TemplateRenderedEvent
-	// For now, this is a stub - we need to wire up config flow
+	c.logger.Info("deployment scheduled, starting execution",
+		"reason", event.Reason,
+		"endpoint_count", len(event.Endpoints),
+		"config_bytes", len(event.Config))
 
-	c.logger.Debug("Deployment phase not yet implemented")
+	// Execute deployment
+	c.deployToEndpoints(ctx, event.Config, event.AuxiliaryFiles, event.Endpoints, event.Reason)
 }
 
-// handlePodsDiscovered handles HAProxy pod discovery/changes.
+// convertEndpoints converts []interface{} to []dataplane.Endpoint.
+func (c *Component) convertEndpoints(endpointsRaw []interface{}) []dataplane.Endpoint {
+	endpoints := make([]dataplane.Endpoint, 0, len(endpointsRaw))
+	for i, ep := range endpointsRaw {
+		endpoint, ok := ep.(dataplane.Endpoint)
+		if !ok {
+			c.logger.Error("invalid endpoint type",
+				"index", i,
+				"expected", "dataplane.Endpoint",
+				"actual", fmt.Sprintf("%T", ep))
+			continue
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+	return endpoints
+}
+
+// convertAuxFiles converts interface{} to *dataplane.AuxiliaryFiles.
+func (c *Component) convertAuxFiles(auxFilesRaw interface{}) *dataplane.AuxiliaryFiles {
+	if auxFilesRaw == nil {
+		return nil
+	}
+
+	auxFiles, ok := auxFilesRaw.(*dataplane.AuxiliaryFiles)
+	if !ok {
+		c.logger.Warn("invalid auxiliary files type, proceeding without aux files",
+			"expected", "*dataplane.AuxiliaryFiles",
+			"actual", fmt.Sprintf("%T", auxFilesRaw))
+		return nil
+	}
+	return auxFiles
+}
+
+// deployToEndpoints deploys configuration to all HAProxy endpoints in parallel.
 //
-// This re-deploys the last validated configuration to the new set of endpoints.
-// This is called when HAProxy pods are added/removed/updated without config changes.
-func (c *Component) handlePodsDiscovered(event *events.HAProxyPodsDiscoveredEvent) {
-	c.mu.Lock()
-	c.currentEndpoints = event.Endpoints
-	endpointCount := len(event.Endpoints)
-	hasValidConfig := c.hasValidConfig
-	c.mu.Unlock()
+// This method:
+//  1. Publishes DeploymentStartedEvent
+//  2. Deploys to all endpoints in parallel
+//  3. Publishes InstanceDeployedEvent or InstanceDeploymentFailedEvent for each endpoint
+//  4. Publishes DeploymentCompletedEvent with summary
+func (c *Component) deployToEndpoints(
+	ctx context.Context,
+	config string,
+	auxFilesRaw interface{},
+	endpointsRaw []interface{},
+	reason string,
+) {
+	// Clear deployment flag after this function completes (after wg.Wait())
+	defer c.deploymentInProgress.Store(false)
 
-	c.logger.Info("HAProxy pods discovered",
-		"count", endpointCount)
+	startTime := time.Now()
 
-	if !hasValidConfig {
-		c.logger.Debug("No validated config available yet, skipping deployment")
+	// Convert endpoints and auxiliary files
+	endpoints := c.convertEndpoints(endpointsRaw)
+	if len(endpoints) == 0 {
+		c.logger.Error("no valid endpoints to deploy to")
 		return
 	}
 
-	// TODO: Implement re-deployment to new endpoints
-	//   1. Deploy lastValidatedConfig to currentEndpoints
-	//   2. Publish DeploymentCompletedEvent or DeploymentFailedEvent
-	c.logger.Debug("Re-deployment to new endpoints not yet implemented",
-		"endpoint_count", endpointCount)
+	auxFiles := c.convertAuxFiles(auxFilesRaw)
+
+	c.logger.Info("starting deployment",
+		"reason", reason,
+		"endpoint_count", len(endpoints),
+		"config_bytes", len(config),
+		"has_aux_files", auxFiles != nil)
+
+	// Publish DeploymentStartedEvent
+	c.eventBus.Publish(events.NewDeploymentStartedEvent(endpointsRaw))
+
+	// Deploy to all endpoints in parallel
+	var wg sync.WaitGroup
+	successCount := 0
+	failureCount := 0
+	var countMutex sync.Mutex
+
+	for _, endpoint := range endpoints {
+		wg.Add(1)
+		go func(ep dataplane.Endpoint) {
+			defer wg.Done()
+
+			instanceStart := time.Now()
+			err := c.deployToSingleEndpoint(ctx, config, auxFiles, ep)
+			durationMs := time.Since(instanceStart).Milliseconds()
+
+			if err != nil {
+				c.logger.Error("deployment failed for endpoint",
+					"endpoint", ep.URL,
+					"pod", ep.PodName,
+					"error", err,
+					"duration_ms", durationMs)
+
+				// Publish InstanceDeploymentFailedEvent
+				c.eventBus.Publish(events.NewInstanceDeploymentFailedEvent(
+					ep,
+					err.Error(),
+					true, // retryable
+				))
+
+				countMutex.Lock()
+				failureCount++
+				countMutex.Unlock()
+			} else {
+				c.logger.Info("deployment succeeded for endpoint",
+					"endpoint", ep.URL,
+					"pod", ep.PodName,
+					"duration_ms", durationMs)
+
+				// Publish InstanceDeployedEvent
+				c.eventBus.Publish(events.NewInstanceDeployedEvent(
+					ep,
+					durationMs,
+					true, // reloadRequired (we don't track this granularly yet)
+				))
+
+				countMutex.Lock()
+				successCount++
+				countMutex.Unlock()
+			}
+		}(endpoint)
+	}
+
+	// Wait for all deployments to complete
+	wg.Wait()
+
+	totalDurationMs := time.Since(startTime).Milliseconds()
+
+	c.logger.Info("deployment completed",
+		"total_endpoints", len(endpoints),
+		"succeeded", successCount,
+		"failed", failureCount,
+		"duration_ms", totalDurationMs)
+
+	// Publish DeploymentCompletedEvent
+	c.eventBus.Publish(events.NewDeploymentCompletedEvent(
+		len(endpoints),
+		successCount,
+		failureCount,
+		totalDurationMs,
+	))
+}
+
+// deployToSingleEndpoint deploys configuration to a single HAProxy endpoint.
+func (c *Component) deployToSingleEndpoint(
+	ctx context.Context,
+	config string,
+	auxFiles *dataplane.AuxiliaryFiles,
+	endpoint dataplane.Endpoint,
+) error {
+	// Create client for this endpoint
+	client, err := dataplane.NewClient(ctx, endpoint)
+	if err != nil {
+		return fmt.Errorf("failed to create client: %w", err)
+	}
+	defer client.Close()
+
+	// Sync configuration with default options
+	result, err := client.Sync(ctx, config, auxFiles, nil)
+	if err != nil {
+		return fmt.Errorf("sync failed: %w", err)
+	}
+
+	c.logger.Debug("sync completed for endpoint",
+		"endpoint", endpoint.URL,
+		"pod", endpoint.PodName,
+		"applied_operations", len(result.AppliedOperations),
+		"reload_triggered", result.ReloadTriggered,
+		"duration", result.Duration)
+
+	return nil
 }

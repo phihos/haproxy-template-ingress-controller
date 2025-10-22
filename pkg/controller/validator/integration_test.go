@@ -127,10 +127,6 @@ func createInvalidTestConfig() *coreconfig.Config {
 		Logging: coreconfig.LoggingConfig{
 			Verbose: 1,
 		},
-		Validation: coreconfig.ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
-		},
 		WatchedResourcesIgnoreFields: []string{
 			"invalid[[JSONPath", // Invalid JSONPath (jsonpath validator should catch)
 		},
@@ -163,10 +159,6 @@ func createValidTestConfig() *coreconfig.Config {
 		},
 		Logging: coreconfig.LoggingConfig{
 			Verbose: 1,
-		},
-		Validation: coreconfig.ValidationConfig{
-			DataplaneHost: "localhost",
-			DataplanePort: 5555,
 		},
 		WatchedResourcesIgnoreFields: []string{
 			"metadata.managedFields",

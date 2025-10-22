@@ -29,11 +29,13 @@ type Config struct {
 	// Logging configures logging behavior.
 	Logging LoggingConfig `yaml:"logging"`
 
-	// Validation configures the validation HAProxy sidecar.
-	Validation ValidationConfig `yaml:"validation"`
-
 	// Dataplane configures the Dataplane API for production HAProxy instances.
 	Dataplane DataplaneConfig `yaml:"dataplane"`
+
+	// Validation configures local HAProxy configuration validation.
+	// These paths must match the Dataplane API server's resource configuration.
+	// See: https://www.haproxy.com/documentation/haproxy-data-plane-api/reference/configuration-file/#resources
+	Validation ValidationConfig `yaml:"validation"`
 
 	// WatchedResourcesIgnoreFields specifies JSONPath expressions for fields
 	// to remove from all watched resources to reduce memory usage.
@@ -102,22 +104,45 @@ type LoggingConfig struct {
 	Verbose int `yaml:"verbose"`
 }
 
-// ValidationConfig configures the validation HAProxy sidecar.
-type ValidationConfig struct {
-	// DataplaneHost is the hostname of the validation dataplane API.
-	// Default: "localhost"
-	DataplaneHost string `yaml:"dataplane_host"`
-
-	// DataplanePort is the port of the validation dataplane API.
-	// Default: 5555
-	DataplanePort int `yaml:"dataplane_port"`
-}
-
 // DataplaneConfig configures the Dataplane API for production HAProxy instances.
 type DataplaneConfig struct {
 	// Port is the Dataplane API port for production HAProxy pods.
 	// Default: 5555
 	Port int `yaml:"port"`
+
+	// MinDeploymentInterval enforces minimum time between consecutive deployments.
+	// This prevents rapid-fire deployments from hammering HAProxy instances.
+	// Format: Go duration string (e.g., "2s", "500ms")
+	// Default: 2s
+	MinDeploymentInterval string `yaml:"min_deployment_interval"`
+
+	// DriftPreventionInterval triggers periodic deployments to prevent configuration drift.
+	// A deployment is automatically triggered if no deployment has occurred within this interval.
+	// This detects and corrects drift caused by external Dataplane API clients.
+	// Format: Go duration string (e.g., "60s", "5m")
+	// Default: 60s
+	DriftPreventionInterval string `yaml:"drift_prevention_interval"`
+}
+
+// ValidationConfig configures local HAProxy configuration validation paths.
+// These settings must match the HAProxy Dataplane API server's resources configuration
+// to ensure validation uses the same file paths as production deployments.
+type ValidationConfig struct {
+	// MapsDir is the directory for HAProxy map files.
+	// Default: /etc/haproxy/maps
+	MapsDir string `yaml:"maps_dir"`
+
+	// SSLCertsDir is the directory for SSL certificates.
+	// Default: /etc/haproxy/certs
+	SSLCertsDir string `yaml:"ssl_certs_dir"`
+
+	// GeneralStorageDir is the directory for general files (error pages, etc.).
+	// Default: /etc/haproxy/general
+	GeneralStorageDir string `yaml:"general_storage_dir"`
+
+	// ConfigFile is the path to the main HAProxy configuration file.
+	// Default: /etc/haproxy/haproxy.cfg
+	ConfigFile string `yaml:"config_file"`
 }
 
 // WatchedResource configures watching for a specific Kubernetes resource type.
@@ -191,10 +216,4 @@ type Credentials struct {
 
 	// DataplanePassword is the password for production HAProxy instances.
 	DataplanePassword string
-
-	// ValidationUsername is the username for the validation HAProxy sidecar.
-	ValidationUsername string
-
-	// ValidationPassword is the password for the validation HAProxy sidecar.
-	ValidationPassword string
 }

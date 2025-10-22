@@ -27,10 +27,17 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
+	"strconv"
 	"syscall"
+
+	_ "github.com/KimMachineGun/automemlimit"
 
 	"haproxy-template-ic/pkg/controller"
 	"haproxy-template-ic/pkg/k8s/client"
@@ -43,6 +50,9 @@ const (
 	// DefaultSecretName is the default name for the credentials Secret.
 	// #nosec G101 -- This is a Kubernetes resource name, not an actual credential
 	DefaultSecretName = "haproxy-credentials"
+
+	// DefaultDebugPort is the default port for the debug HTTP server (0 = disabled).
+	DefaultDebugPort = 0
 )
 
 func main() {
@@ -51,6 +61,7 @@ func main() {
 		configMapName string
 		secretName    string
 		kubeconfig    string
+		debugPort     int
 	)
 
 	flag.StringVar(&configMapName, "configmap-name", "",
@@ -59,6 +70,8 @@ func main() {
 		"Name of the Secret containing HAProxy Dataplane API credentials (env: SECRET_NAME)")
 	flag.StringVar(&kubeconfig, "kubeconfig", "",
 		"Path to kubeconfig file (for out-of-cluster development)")
+	flag.IntVar(&debugPort, "debug-port", 0,
+		"Port for debug HTTP server (0 to disable, env: DEBUG_PORT)")
 	flag.Parse()
 
 	// Configuration priority: CLI flags > Environment variables > Defaults
@@ -79,6 +92,18 @@ func main() {
 		secretName = DefaultSecretName
 	}
 
+	// Debug port
+	if debugPort == 0 {
+		if envDebugPort := os.Getenv("DEBUG_PORT"); envDebugPort != "" {
+			if port, err := strconv.Atoi(envDebugPort); err == nil {
+				debugPort = port
+			}
+		}
+	}
+	if debugPort == 0 {
+		debugPort = DefaultDebugPort
+	}
+
 	// Set up structured logging
 	logLevel := slog.LevelInfo
 
@@ -96,11 +121,23 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
+	// Log detected resource limits for observability
+	gomaxprocs := runtime.GOMAXPROCS(0)
+	var gomemlimit string
+	if limit := debug.SetMemoryLimit(-1); limit != math.MaxInt64 {
+		gomemlimit = fmt.Sprintf("%d bytes (%.2f MiB)", limit, float64(limit)/(1024*1024))
+	} else {
+		gomemlimit = "unlimited"
+	}
+
 	logger.Info("HAProxy Template Ingress Controller starting",
 		"version", "v0.1.0",
 		"configmap", configMapName,
 		"secret", secretName,
-		"log_level", logLevel.String())
+		"debug_port", debugPort,
+		"log_level", logLevel.String(),
+		"gomaxprocs", gomaxprocs,
+		"gomemlimit", gomemlimit)
 
 	// Create Kubernetes client
 	k8sClient, err := client.New(client.Config{
@@ -120,7 +157,7 @@ func main() {
 	defer cancel()
 
 	// Run the controller
-	if err := controller.Run(ctx, k8sClient, configMapName, secretName); err != nil {
+	if err := controller.Run(ctx, k8sClient, configMapName, secretName, debugPort); err != nil {
 		// Only log error if it's not a graceful shutdown
 		if ctx.Err() == nil {
 			logger.Error("Controller failed", "error", err)

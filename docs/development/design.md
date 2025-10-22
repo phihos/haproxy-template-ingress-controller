@@ -209,7 +209,7 @@ graph TD
 The two-phase validation eliminates the need for a separate validation sidecar container:
 
 1. **Phase 1 - Syntax Parsing**: client-native library parses configuration structure and validates against HAProxy config grammar
-2. **Phase 2 - Semantic Validation**: haproxy binary (`haproxy -c -f config`) performs full semantic validation including resource availability checks
+2. **Phase 2 - Semantic Validation**: haproxy binary (`haproxy -c -f config`) performs full semantic validation including resource availability checks. Writes auxiliary files to actual HAProxy directories (with mutex locking) to match Dataplane API validation behavior exactly.
 
 This approach provides the same validation guarantees as running a full HAProxy instance while being more lightweight and faster.
 
@@ -231,6 +231,7 @@ haproxy-template-ic/
 │   │   ├── client/          # API client with transactions and retries
 │   │   ├── comparator/      # Fine-grained config comparison
 │   │   │   └── sections/    # Section-specific comparators (30+ files)
+│   │   ├── discovery/       # HAProxy endpoint discovery
 │   │   ├── parser/          # Config parser using client-native
 │   │   ├── synchronizer/    # Operation execution logic
 │   │   ├── types/           # Public types (Endpoint, SyncOptions, etc.)
@@ -241,7 +242,23 @@ haproxy-template-ic/
 │   │   └── result.go        # Result types
 │   ├── events/              # Event bus infrastructure
 │   │   ├── bus.go           # EventBus with startup coordination
-│   │   └── request.go       # Scatter-gather pattern
+│   │   ├── request.go       # Scatter-gather pattern
+│   │   └── ringbuffer/      # Generic ring buffer for event history
+│   │       ├── ringbuffer.go         # Thread-safe circular buffer with generics
+│   │       ├── ringbuffer_test.go    # Unit tests
+│   │       ├── README.md             # API documentation
+│   │       └── CLAUDE.md             # Development context
+│   ├── introspection/       # Generic debug HTTP server infrastructure
+│   │   ├── handlers.go      # HTTP handlers for /debug/vars endpoints
+│   │   ├── http.go          # HTTP client utilities
+│   │   ├── jsonpath.go      # JSONPath field selection
+│   │   ├── registry.go      # Instance-based variable registry
+│   │   ├── registry_test.go # Registry tests
+│   │   ├── server.go        # HTTP server with graceful shutdown
+│   │   ├── types.go         # Var interface and types
+│   │   ├── var.go           # Built-in Var implementations
+│   │   ├── README.md        # API documentation
+│   │   └── CLAUDE.md        # Development context
 │   ├── k8s/                 # Kubernetes integration
 │   │   ├── types/           # Core interfaces and types
 │   │   ├── client/          # Kubernetes client wrapper with dynamic client
@@ -253,21 +270,44 @@ haproxy-template-ic/
 │   │   ├── configchange/    # Configuration change handler
 │   │   ├── configloader/    # Config parsing and loading
 │   │   ├── credentialsloader/ # Credentials parsing and loading
+│   │   ├── debug/           # Controller-specific debug variables
+│   │   │   ├── events.go    # Event buffer implementation
+│   │   │   ├── setup.go     # Variable registration
+│   │   │   ├── state.go     # State snapshot variables
+│   │   │   ├── vars.go      # Debug Var implementations (Config, Credentials, etc.)
+│   │   │   ├── README.md    # API documentation
+│   │   │   └── CLAUDE.md    # Development context
+│   │   ├── deployer/        # Deployment orchestration (scheduler, executor, drift monitor)
+│   │   ├── discovery/       # HAProxy pod discovery and endpoint management
 │   │   ├── events/          # Domain-specific event types
 │   │   ├── executor/        # Reconciliation orchestrator
 │   │   ├── indextracker/    # Index synchronization tracking
 │   │   ├── reconciler/      # Reconciliation debouncer and trigger
+│   │   ├── renderer/        # Template rendering component
 │   │   ├── resourcewatcher/ # Resource watcher lifecycle management
 │   │   ├── validator/       # Config validation (basic, template, jsonpath)
-│   │   └── controller.go    # Event coordination and startup orchestration
+│   │   ├── controller.go    # Event coordination and startup orchestration
+│   │   └── statecache.go    # Event-driven state tracking for debug endpoints
 │   └── templating/          # Template engine library
 │       ├── engine.go        # TemplateEngine with pre-compilation and rendering
 │       ├── types.go         # Engine type definitions (EngineTypeGonja)
 │       ├── errors.go        # Custom error types
+│       ├── loader.go        # Template loading utilities
+│       ├── loader_test.go   # Loader tests
 │       ├── engine_test.go   # Unit tests
 │       └── README.md        # Usage documentation
-├── internal/                # Internal packages
-│   └── signals/             # Signal handling
+├── tests/                   # End-to-end tests
+│   ├── acceptance/          # Acceptance tests with debug endpoint validation
+│   │   ├── configmap_reload_test.go  # ConfigMap reload validation
+│   │   ├── debug_client.go  # Debug endpoint client for tests
+│   │   ├── env.go           # Test environment setup
+│   │   ├── fixtures.go      # Test resource management
+│   │   ├── main_test.go     # Test suite entry point
+│   │   ├── README.md        # Testing documentation
+│   │   └── CLAUDE.md        # Development context
+│   └── integration/         # Integration tests
+│       ├── README.md        # Integration test documentation
+│       └── CLAUDE.md        # Development context
 └── tools/                   # Development tools
     └── linters/             # Custom linters
         └── eventimmutability/  # Event pointer receiver linter
@@ -286,15 +326,21 @@ haproxy-template-ic/
 **Event Bus Infrastructure:**
 
 - `pkg/events`: Generic event bus providing pub/sub and request-response (scatter-gather) patterns for component coordination. Domain-agnostic infrastructure that could be extracted as standalone library.
+- `pkg/events/ringbuffer`: Generic thread-safe ring buffer implementation using Go generics. Fixed-size circular buffer with automatic old-item eviction. O(1) add, O(n) retrieval. Used by EventCommentator and EventBuffer for event history tracking. Domain-agnostic, can be used with any type.
+
+**Runtime Introspection Infrastructure:**
+
+- `pkg/introspection`: Generic HTTP debug server infrastructure for exposing internal application state. Provides instance-based variable registry (not global like expvar), HTTP handlers for `/debug/vars` endpoints, JSONPath field selection support, Go profiling integration (`/debug/pprof`), and graceful shutdown. Domain-agnostic package that can be reused in any Go application.
 
 **Dataplane Integration:**
 
 - `pkg/dataplane`: Public API providing Client interface and convenience functions (Sync, DryRun, Diff)
 - `pkg/dataplane/orchestrator`: Coordinates complete sync workflow (parse → compare → sync → auxiliary files)
 - `pkg/dataplane/parser`: Wraps haproxytech/client-native for syntax validation and structured config parsing
-- `pkg/dataplane/validator`: Pure validation functions implementing two-phase HAProxy configuration validation: Phase 1 (syntax validation using client-native parser) and Phase 2 (semantic validation using haproxy binary with -c flag). Creates temporary directory structure mirroring production to validate file references (maps, certificates, error pages). Provides ValidateConfiguration(mainConfig, auxFiles) as pure function with no event dependencies.
+- `pkg/dataplane` (validator.go): Pure validation functions implementing two-phase HAProxy configuration validation: Phase 1 (syntax validation using client-native parser) and Phase 2 (semantic validation using haproxy binary with -c flag). Writes auxiliary files to actual HAProxy directories (with mutex locking to prevent concurrent writes) to validate file references exactly as the Dataplane API does. Requires ValidationPaths parameter matching Dataplane API resource configuration. Provides ValidateConfiguration(mainConfig, auxFiles, paths) as pure function with no event dependencies.
 - `pkg/dataplane/comparator`: Performs fine-grained section-by-section comparison to generate minimal change operations
 - `pkg/dataplane/comparator/sections`: Section-specific comparison logic for all HAProxy config sections (global, defaults, frontends, backends, servers, ACLs, rules, binds, filters, checks, etc.)
+- `pkg/dataplane/discovery`: HAProxy endpoint discovery utilities for identifying dataplane API endpoints
 - `pkg/dataplane/synchronizer`: Executes operations with transaction management and retry logic
 - `pkg/dataplane/auxiliaryfiles`: Manages auxiliary files (general files, SSL certificates, map files) with 3-phase sync: pre-config (create/update), config sync, post-config (delete)
 - `pkg/dataplane/client`: HTTP client wrapper for Dataplane API with version conflict handling, transaction lifecycle, and storage API integration
@@ -380,12 +426,17 @@ Both watchers use the event-driven architecture: changes publish events to Event
 
 **Controller Logic:**
 
-- `pkg/controller`: Main controller package coordinating startup orchestration and component lifecycle via EventBus
+- `pkg/controller`: Main controller package implementing reinitialization loop pattern. Coordinates startup orchestration and component lifecycle via EventBus, responds to configuration changes by cleanly restarting iterations with new settings
 - `pkg/controller/commentator`: Event commentator that subscribes to all events and produces domain-aware log messages with contextual insights using ring buffer for event correlation
 - `pkg/controller/configloader`: Loads and parses controller configuration from ConfigMap resources, publishes ConfigParsedEvent
 - `pkg/controller/credentialsloader`: Loads and validates credentials from Secret resources, publishes CredentialsUpdatedEvent
 - `pkg/controller/configchange`: Handles configuration change events and coordinates reloading of resources
-- `pkg/controller/executor`: Orchestrates reconciliation cycles by handling events from pure components. Subscribes to ReconciliationTriggeredEvent, TemplateRenderedEvent, TemplateRenderFailedEvent, ValidationCompletedEvent, and ValidationFailedEvent. Publishes ReconciliationStartedEvent, ReconciliationCompletedEvent, and ReconciliationFailedEvent. Coordinates the event-driven flow: Renderer → Validator → Deployer (deployment pending implementation). Measures reconciliation duration for observability and handles validation failures by publishing ReconciliationFailedEvent.
+- `pkg/controller/deployer`: Deployment orchestration package (Stage 5) implementing three-component architecture:
+  - **DeploymentScheduler**: Coordinates WHEN deployments happen. Maintains state (last validated config, current endpoints), enforces minimum deployment interval (default 2s) for rate limiting, implements "latest wins" queueing for concurrent changes. Subscribes to TemplateRenderedEvent, ValidationCompletedEvent, HAProxyPodsDiscoveredEvent, DriftPreventionTriggeredEvent, DeploymentCompletedEvent. Publishes DeploymentScheduledEvent.
+  - **Deployer**: Stateless executor that performs deployments. Subscribes to DeploymentScheduledEvent, executes parallel deployments to multiple HAProxy endpoints. Publishes DeploymentStartedEvent, InstanceDeployedEvent, InstanceDeploymentFailedEvent, DeploymentCompletedEvent.
+  - **DriftPreventionMonitor**: Prevents configuration drift from external changes. Monitors deployment activity and triggers periodic deployments (default 60s) when system is idle. Subscribes to DeploymentCompletedEvent. Publishes DriftPreventionTriggeredEvent.
+- `pkg/controller/discovery`: HAProxy pod discovery component (Stage 5). Discovers HAProxy pods in the cluster and provides endpoint information to the Deployer. Publishes HAProxyPodsDiscoveredEvent with discovered endpoints.
+- `pkg/controller/executor`: Orchestrates reconciliation cycles by handling events from pure components. Subscribes to ReconciliationTriggeredEvent, TemplateRenderedEvent, TemplateRenderFailedEvent, ValidationCompletedEvent, and ValidationFailedEvent. Publishes ReconciliationStartedEvent, ReconciliationCompletedEvent, and ReconciliationFailedEvent. Coordinates the event-driven flow: Renderer → Validator → Deployer. Measures reconciliation duration for observability and handles validation failures by publishing ReconciliationFailedEvent.
 - `pkg/controller/indextracker`: Tracks synchronization state across multiple resource types, publishes IndexSynchronizedEvent when all resources complete initial sync, enabling staged controller startup with clear initialization checkpoints
 - `pkg/controller/reconciler`: Debounces resource change events and triggers reconciliation cycles. Subscribes to ResourceIndexUpdatedEvent (applies debouncing with configurable interval, default 500ms) and ConfigValidatedEvent (triggers immediately without debouncing). Publishes ReconciliationTriggeredEvent when conditions are met. Filters initial sync events to prevent premature reconciliation. First Stage 5 component enabling controlled reconciliation trigger logic.
 - `pkg/controller/resourcewatcher`: Manages lifecycle of all Kubernetes resource watchers defined in configuration, provides centralized WaitForAllSync() method for coordinated initialization, publishes ResourceIndexUpdatedEvent with detailed change statistics
@@ -393,6 +444,13 @@ Both watchers use the event-driven architecture: changes publish events to Event
 - `pkg/controller/validator/haproxy_validator.go`: HAProxy configuration validator component (Stage 5). Subscribes to TemplateRenderedEvent and validates rendered HAProxy configurations using two-phase validation: syntax validation with client-native parser and semantic validation with haproxy binary. Publishes ValidationCompletedEvent on success or ValidationFailedEvent with detailed error messages on failure. Integrates pkg/dataplane validation logic into the event-driven architecture.
 - `pkg/controller/renderer`: Template rendering component (Stage 5). Subscribes to ReconciliationTriggeredEvent and renders HAProxy configuration and auxiliary files from templates using the templating engine. Publishes TemplateRenderedEvent with rendered configuration and auxiliary files, or TemplateRenderFailedEvent on rendering errors.
 - `pkg/controller/events`: Domain-specific event type definitions (~50 event types covering complete controller lifecycle including validation events)
+- `pkg/controller/debug`: Controller-specific debug variable implementations for introspection HTTP server. Implements `introspection.Var` interface for controller data including ConfigVar, CredentialsVar (metadata only, not actual passwords), RenderedVar, ResourcesVar, and EventsVar. Provides EventBuffer for independent event tracking separate from EventCommentator. Exposes StateProvider interface for accessing controller state in a thread-safe manner.
+- `pkg/controller/statecache.go`: Event-driven state cache implementing StateProvider interface. Subscribes to validation, rendering, and resource events to maintain current state snapshot in memory with thread-safe RWMutex-protected access. Provides debug endpoints with access to current configuration, credentials (metadata), rendered output, and resource counts without querying EventBus for historical state.
+
+**Testing Infrastructure:**
+
+- `tests/acceptance`: End-to-end acceptance testing framework with debug endpoint validation. Provides fixture management for test resources (ConfigMaps, Services, Endpoints), debug client for querying introspection endpoints during tests via kubectl port-forward, environment helpers for test cluster setup and teardown, and initial tests for ConfigMap reload functionality. Enables true end-to-end testing without parsing logs or relying on timing heuristics.
+- `tests/integration`: Integration testing infrastructure for component interaction tests with documentation of testing strategies and environment setup.
 
 **Template Engine:**
 
@@ -480,69 +538,73 @@ type ConfigSynchronizer interface {
 
 ##### Startup and Initialization
 
+The controller uses a **reinitialization loop** pattern where it responds to configuration changes by restarting with the new configuration. Each iteration follows these initialization steps:
+
 ```mermaid
 sequenceDiagram
     participant Main
+    participant Iteration as runIteration()
     participant EventBus
-    participant ConfigWatcher as Config<br/>Watcher
-    participant ConfigValidator as Config<br/>Validator
+    participant Components
     participant ResourceWatcher as Resource<br/>Watcher
-    participant IndexTracker as Index Sync<br/>Tracker
+    participant ConfigWatcher as Config<br/>Watcher
     participant Reconciler
-    participant Renderer
-    participant Validator as HAProxy<br/>Validator
-    participant Executor
 
-    Main->>EventBus: Create EventBus(1000)
+    Main->>Main: Reinitialization Loop
 
-    Note over Main,ConfigValidator: Stage 1: Config Management Components
-    Main->>ConfigWatcher: NewConfigWatcher(client, eventBus)
-    Main->>ConfigValidator: NewConfigValidator(eventBus)
-    ConfigWatcher->>ConfigWatcher: go Run(ctx)
-    ConfigValidator->>ConfigValidator: go Run(ctx)
-    Main->>EventBus: Start()
+    loop Until Context Cancelled
+        Main->>Iteration: Run iteration
 
-    Note over Main,EventBus: Stage 2: Wait for Valid Config
-    Main->>EventBus: Subscribe(100)
-    ConfigWatcher->>EventBus: Publish(ConfigParsedEvent)
-    ConfigValidator->>EventBus: Publish(ConfigValidatedEvent)
-    EventBus-->>Main: ConfigValidatedEvent
-    Main->>EventBus: Publish(ControllerStartedEvent)
+        Note over Iteration: 1. Fetch & Validate Initial Config
+        Iteration->>Iteration: Fetch ConfigMap & Secret
+        Iteration->>Iteration: Parse & Validate
 
-    Note over Main,IndexTracker: Stage 3: Resource Watchers
-    Main->>ResourceWatcher: NewResourceWatcher(client, eventBus, stores)
-    Main->>IndexTracker: NewIndexSynchronizationTracker(eventBus)
-    ResourceWatcher->>ResourceWatcher: go Run(ctx)
-    IndexTracker->>IndexTracker: go Run(ctx)
+        Note over Iteration,EventBus: 2. Setup Components
+        Iteration->>EventBus: Create EventBus(100)
+        Iteration->>Components: Start validators, loaders, commentator
 
-    ResourceWatcher->>EventBus: Publish(ResourceIndexUpdatedEvent)
+        Note over Iteration,ResourceWatcher: 3. Setup Resource Watchers
+        Iteration->>ResourceWatcher: Create & Start
+        Iteration->>ResourceWatcher: WaitForAllSync()
 
-    Note over Main,EventBus: Stage 4: Wait for Index Sync
-    IndexTracker->>EventBus: Publish(IndexSynchronizedEvent)
-    EventBus-->>Main: IndexSynchronizedEvent
+        Note over Iteration,ConfigWatcher: 4. Setup Config/Secret Watchers
+        Iteration->>ConfigWatcher: Create & Start
+        Iteration->>ConfigWatcher: WaitForSync()
 
-    Note over Main,Executor: Stage 5: Reconciliation Components
-    Main->>Reconciler: NewReconciliationComponent(eventBus)
-    Main->>Renderer: NewRendererComponent(eventBus, config, stores)
-    Main->>Validator: NewHAProxyValidator(eventBus)
-    Main->>Executor: NewReconciliationExecutor(eventBus)
-    Reconciler->>Reconciler: go Run(ctx)
-    Renderer->>Renderer: go Start(ctx)
-    Validator->>Validator: go Start(ctx)
-    Executor->>Executor: go Run(ctx)
+        Note over Iteration,EventBus: 5. Start EventBus
+        Iteration->>EventBus: Start() (replay buffered events)
 
-    Main-->>Main: All components running
+        Note over Iteration,Reconciler: Stage 5: Reconciliation Components
+        Iteration->>Reconciler: Start Reconciler, Renderer, Validator, Executor, Deployer, Discovery
+        Iteration->>EventBus: Publish initial ReconciliationTriggeredEvent
+
+        Note over Iteration: 6. Event Loop
+        Iteration->>Iteration: Wait for config change or cancellation
+
+        alt Config Change Detected
+            ConfigWatcher->>EventBus: ConfigValidatedEvent (new config)
+            Iteration->>Iteration: Cancel iteration context
+            Iteration-->>Main: Return nil (reinitialize)
+        else Context Cancelled
+            Iteration-->>Main: Return nil (shutdown)
+        end
+    end
 ```
 
-**Event-Driven Startup Flow:**
+**Reinitialization Loop Pattern:**
 
-1. **Stage 1 - Config Management**: Start ConfigWatcher and ConfigValidator as goroutines (they subscribe to EventBus), then call EventBus.Start() to replay any buffered events and enter normal operation mode
-2. **Stage 2 - Wait for Valid Config**: Main subscribes to EventBus and blocks until ConfigValidatedEvent is received
-3. **Stage 3 - Resource Watchers**: Start ResourceWatcher and IndexSynchronizationTracker to monitor Kubernetes resources
-4. **Stage 4 - Wait for Index Sync**: Block until IndexSynchronizedEvent confirms all resource indices are populated
-5. **Stage 5 - Reconciliation**: Start Reconciler (debouncer), Renderer (template rendering), HAProxyValidator (configuration validation), and Executor (orchestration) to handle the complete reconciliation workflow
+The controller runs iterations that respond to configuration changes:
 
-The EventBus.Start() call after Stage 1 ensures all initial components have subscribed before events flow, preventing race conditions during initialization. All coordination happens via EventBus pub/sub - components communicate through events, not direct calls.
+1. **Initial Config Fetch**: Fetch and validate ConfigMap and Secret synchronously before starting components
+2. **Component Setup**: Create EventBus and start config management components (validators, loaders, commentator)
+3. **Resource Watchers**: Create watchers for configured resources and wait for initial sync
+4. **Config Watchers**: Create watchers for ConfigMap and Secret, wait for sync
+5. **EventBus Start**: Call EventBus.Start() to replay buffered events and begin normal operation
+6. **Stage 5 - Reconciliation**: Start reconciliation components (Reconciler, Renderer, Validator, Executor, Deployer, Discovery)
+7. **Event Loop**: Wait for configuration changes or context cancellation
+8. **Reinitialization**: When config changes, cancel iteration context to stop all components, then restart with new config
+
+This pattern ensures the controller always operates with validated configuration and handles configuration updates by cleanly restarting with the new settings. The Stage 5 label is explicitly used in code for reconciliation components; earlier stages are implicit in the initialization sequence.
 
 ##### Resource Change Handling
 
@@ -643,13 +705,20 @@ sequenceDiagram
 
 **Validation Steps:**
 
-1. **Syntax Validation**: client-native library parses config structure
+1. **Mutex Acquisition**: Acquire validation mutex to ensure single-threaded validation
+   - Prevents concurrent writes to HAProxy directories
+   - Ensures consistent validation state
+
+2. **Syntax Validation**: client-native library parses config structure
    - Checks grammar and syntax rules
    - Validates section structure
    - Returns parsing errors if invalid
 
-2. **Semantic Validation**: haproxy binary performs full validation
-   - Checks resource availability
+3. **Semantic Validation**: haproxy binary performs full validation
+   - Writes auxiliary files to configured HAProxy directories (maps, certs, general files)
+   - Writes main configuration to configured path
+   - Executes `haproxy -c -f /etc/haproxy/haproxy.cfg`
+   - Checks resource availability (files referenced in config must exist)
    - Validates directive combinations
    - Verifies configuration coherence
    - Returns detailed error messages if invalid
@@ -935,29 +1004,50 @@ graph LR
 
 **Implementation**:
 ```go
-// Validation is implemented in pkg/dataplane/parser (client-native integration)
-// and by invoking haproxy binary for semantic validation
-type ConfigValidator struct {
-    parser *clientnative.Parser
-    haproxyBinary string
+// Validation is implemented in pkg/dataplane/validator.go
+// Uses real HAProxy directories with mutex locking to match Dataplane API behavior
+
+// ValidationPaths holds filesystem paths for validation
+type ValidationPaths struct {
+    MapsDir           string  // e.g., /etc/haproxy/maps
+    SSLCertsDir       string  // e.g., /etc/haproxy/certs
+    GeneralStorageDir string  // e.g., /etc/haproxy/general
+    ConfigFile        string  // e.g., /etc/haproxy/haproxy.cfg
 }
 
-func (v *ConfigValidator) Validate(config string) error {
-    // Phase 1: Syntax validation with client-native
-    if err := v.parser.ParseConfiguration(config); err != nil {
-        return fmt.Errorf("syntax error: %w", err)
+func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+    // Acquire mutex to ensure only one validation at a time
+    validationMutex.Lock()
+    defer validationMutex.Unlock()
+
+    // Phase 1: Syntax validation with client-native parser
+    if err := validateSyntax(mainConfig); err != nil {
+        return &ValidationError{Phase: "syntax", Err: err}
     }
 
     // Phase 2: Semantic validation with haproxy binary
-    cmd := exec.Command(v.haproxyBinary, "-c", "-f", "-")
-    cmd.Stdin = strings.NewReader(config)
-    if err := cmd.Run(); err != nil {
-        return fmt.Errorf("semantic error: %w", err)
+    // Writes files to real HAProxy directories, then runs haproxy -c
+    if err := validateSemantics(mainConfig, auxFiles, paths); err != nil {
+        return &ValidationError{Phase: "semantic", Err: err}
     }
 
     return nil
 }
 ```
+
+**Validation Paths Configuration**:
+
+The validation paths must match the HAProxy Dataplane API server's resource configuration. These are configured via the controller's ConfigMap:
+
+```yaml
+validation:
+  maps_dir: /etc/haproxy/maps
+  ssl_certs_dir: /etc/haproxy/certs
+  general_storage_dir: /etc/haproxy/general
+  config_file: /etc/haproxy/haproxy.cfg
+```
+
+The validator uses mutex locking to ensure only one validation runs at a time, preventing concurrent writes to the HAProxy directories. This approach exactly matches how the Dataplane API performs validation.
 
 **Parser Improvements**:
 
@@ -2564,6 +2654,229 @@ Notice how the commentator provides context that would be impossible with tradit
 
 **Selected**: The Event Commentator pattern provides superior observability while keeping business logic clean and maintaining the architectural principle of event-agnostic pure components.
 
+#### Runtime Introspection and Debugging
+
+The controller provides comprehensive runtime introspection capabilities through an HTTP debug server, enabling production debugging, operational visibility, and acceptance testing without relying solely on logs.
+
+##### Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "Controller Process"
+        EB[EventBus]
+        SC[StateCache<br/>Event-Driven State Tracking]
+        EVB[EventBuffer<br/>Ring Buffer]
+
+        subgraph "Debug Infrastructure"
+            REG[Introspection Registry]
+            HTTP[HTTP Debug Server<br/>:6060]
+
+            VARS[Debug Variables]
+            CONFIG[ConfigVar]
+            CREDS[CredentialsVar]
+            REND[RenderedVar]
+            RES[ResourcesVar]
+            EVENTS[EventsVar]
+            STATE[StateVar]
+        end
+    end
+
+    EB -->|Subscribe| SC
+    EB -->|Subscribe| EVB
+    SC -->|Implements| SP[StateProvider]
+    SP -->|Used by| VARS
+    EVB -->|Events History| EVENTS
+
+    VARS --> CONFIG
+    VARS --> CREDS
+    VARS --> REND
+    VARS --> RES
+    VARS --> EVENTS
+    VARS --> STATE
+
+    CONFIG --> REG
+    CREDS --> REG
+    REND --> REG
+    RES --> REG
+    EVENTS --> REG
+    STATE --> REG
+
+    REG --> HTTP
+
+    EXT[External Clients<br/>Tests, Debug Tools] -->|HTTP| HTTP
+
+    style HTTP fill:#4CAF50
+    style SC fill:#2196F3
+    style EVB fill:#FF9800
+    style REG fill:#9C27B0
+```
+
+##### Key Components
+
+**pkg/introspection** - Generic debug HTTP server infrastructure:
+- Instance-based variable registry (not global like expvar)
+- HTTP handlers for `/debug/vars` endpoints
+- JSONPath field selection support (kubectl-style syntax)
+- Go profiling integration (`/debug/pprof`)
+- Graceful shutdown with context
+
+**pkg/events/ringbuffer** - Event history storage:
+- Thread-safe circular buffer using Go generics
+- Fixed-size with automatic old-item eviction
+- O(1) add, O(n) retrieval performance
+- Used by both EventCommentator and EventBuffer
+
+**pkg/controller/debug** - Controller-specific debug variables:
+- Implements `introspection.Var` interface for controller data
+- ConfigVar, CredentialsVar (metadata only), RenderedVar, ResourcesVar
+- EventBuffer for independent event tracking
+- StateProvider interface for accessing controller state
+
+**StateCache** - Event-driven state tracking:
+- Subscribes to validation, rendering, and resource events
+- Maintains current state snapshot in memory
+- Thread-safe RWMutex-protected access
+- Implements StateProvider interface for debug endpoints
+- Prevents need to query EventBus for historical state
+
+##### HTTP Endpoints
+
+The debug server exposes controller state via HTTP:
+
+```bash
+# List all available variables
+curl http://localhost:6060/debug/vars
+
+# Get current configuration
+curl http://localhost:6060/debug/vars/config
+
+# Get just the config version using JSONPath
+curl 'http://localhost:6060/debug/vars/config?field={.version}'
+
+# Get rendered HAProxy configuration
+curl http://localhost:6060/debug/vars/rendered
+
+# Get resource counts
+curl http://localhost:6060/debug/vars/resources
+
+# Get recent events (last 1000)
+curl http://localhost:6060/debug/vars/events
+
+# Get recent 100 events
+curl 'http://localhost:6060/debug/vars/events?field={.last_100}'
+
+# Get complete state dump
+curl http://localhost:6060/debug/vars/state
+
+# Go profiling
+curl http://localhost:6060/debug/pprof/
+curl http://localhost:6060/debug/pprof/heap
+curl http://localhost:6060/debug/pprof/goroutine
+```
+
+##### Event History
+
+Two independent event tracking mechanisms:
+
+**EventCommentator** (observability):
+- Subscribes to all events for domain-aware logging
+- Ring buffer for event correlation in log messages
+- Produces rich contextual log output
+- Lives in pkg/controller/commentator
+
+**EventBuffer** (debugging):
+- Subscribes to all events for debug endpoint access
+- Simplified event representation for HTTP API
+- Exposes last N events via `/debug/vars/events`
+- Lives in pkg/controller/debug
+
+This separation allows different buffer sizes, retention policies, and use cases without coupling logging to debugging infrastructure.
+
+##### Integration with Acceptance Testing
+
+The debug endpoints enable powerful acceptance testing:
+
+```go
+// tests/acceptance/debug_client.go
+type DebugClient struct {
+    podName   string
+    debugPort int
+}
+
+// In test
+func TestConfigMapReload(t *testing.T) {
+    // Create debug client with port-forward
+    debugClient := NewDebugClient(cfg.RESTConfig(), "controller-pod", 6060)
+    debugClient.Start(ctx)
+
+    // Update ConfigMap
+    UpdateConfigMap(ctx, "new-template")
+
+    // Wait for controller to process change
+    err := debugClient.WaitForConfigVersion(ctx, "v2", 30*time.Second)
+    require.NoError(t, err)
+
+    // Verify rendered config includes changes
+    rendered, err := debugClient.GetRenderedConfig(ctx)
+    require.NoError(t, err)
+    assert.Contains(t, rendered, "expected-content")
+
+    // Verify event history
+    events, err := debugClient.GetEvents(ctx)
+    require.NoError(t, err)
+    assert.Contains(t, events, "config.validated")
+}
+```
+
+This enables true end-to-end testing without parsing logs or relying on timing heuristics.
+
+##### Security Considerations
+
+Debug variables implement careful filtering:
+
+```go
+// CredentialsVar returns metadata only
+func (v *CredentialsVar) Get() (interface{}, error) {
+    creds, version, err := v.provider.GetCredentials()
+    if err != nil {
+        return nil, err
+    }
+
+    return map[string]interface{}{
+        "version":             version,
+        "has_dataplane_creds": creds.DataplanePassword != "",
+        // NEVER expose actual passwords
+    }, nil
+}
+```
+
+The debug server should be:
+- Bound to localhost in production (kubectl port-forward for access)
+- Protected by network policies
+- Disabled or restricted in multi-tenant environments
+
+##### Configuration
+
+Debug server configuration via controller ConfigMap:
+
+```yaml
+controller:
+  introspection:
+    enabled: true
+    port: 6060
+    bind_address: "0.0.0.0"  # For kubectl port-forward compatibility
+
+  debug:
+    enabled: true
+    event_buffer_size: 1000
+    state_snapshots: true
+```
+
+For detailed implementation and API documentation, see:
+- `pkg/introspection/README.md` - Generic debug HTTP server
+- `pkg/events/ringbuffer/README.md` - Ring buffer implementation
+- `pkg/controller/debug/README.md` - Controller-specific debug variables
+
 ## User Interface Design
 
 This is a headless controller with no graphical user interface. Interaction occurs through:
@@ -2572,7 +2885,8 @@ This is a headless controller with no graphical user interface. Interaction occu
 2. **Kubernetes Resources**: Watched resources (Ingress, Service, etc.)
 3. **Metrics Endpoint**: Prometheus metrics on `:9090/metrics`
 4. **Health Endpoint**: Liveness/readiness on `:8080/healthz`
-5. **Logs**: Structured JSON logs for operational visibility
+5. **Debug Endpoint**: Runtime introspection on `:6060/debug/vars` (with JSONPath support and pprof)
+6. **Logs**: Structured JSON logs for operational visibility
 
 ## Configuration Example
 

@@ -72,13 +72,32 @@ Backends support **14 child component types** with individual Create/Update/Dele
 | **TCP Checks** | TCP health check configurations | `comparator.go:1347` |
 | **Log Targets** | Logging destinations | `comparator.go:992` |
 
+### Mailers, Resolvers, and Peers Child Components
+
+The following sections support fine-grained child component management:
+
+**Mailers** - Individual mailer entry operations:
+
+| Component | Description |
+|-----------|-------------|
+| **Mailer Entries** | SMTP server definitions for email alerts |
+
+**Resolvers** - Individual nameserver operations:
+
+| Component | Description |
+|-----------|-------------|
+| **Nameservers** | DNS server definitions for service discovery |
+
+**Peers** - Individual peer entry operations:
+
+| Component | Description |
+|-----------|-------------|
+| **Peer Entries** | Peer server definitions for stick-table replication |
+
 ### Other Section Components
 
 The following sections use **whole-section comparison** via the models' `.Equal()` method, which includes all nested components:
 
-- **Resolvers**: Includes nameservers
-- **Mailers**: Includes mailer entries
-- **Peers**: Includes peer entries
 - **Rings**: All ring attributes
 - **HTTPErrors**: Includes errorfiles
 - **Userlists**: Includes users and groups

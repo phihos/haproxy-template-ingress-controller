@@ -74,13 +74,12 @@ func DeployHAProxy(ns *Namespace, cfg *HAProxyConfig) (*HAProxyInstance, error) 
 	ctx := context.Background()
 	name := "haproxy-test"
 
-	// Create initial HAProxy config with userlist for Dataplane API authentication
-	initialHAProxyConfig := fmt.Sprintf(`global
+	// Create initial HAProxy config
+	// Note: Dataplane API authentication is configured via dataplaneapi.yaml (user section)
+	// and does not require a userlist in the HAProxy config
+	initialHAProxyConfig := `global
     log stdout format raw local0
     stats socket /etc/haproxy/haproxy-master.sock mode 600 level admin
-
-userlist dataplaneapi
-    user %s insecure-password %s
 
 defaults
     log     global
@@ -93,14 +92,16 @@ defaults
 frontend status
     bind *:8404
     http-request return status 200 content-type text/plain string "OK" if { path /healthz }
-`, cfg.DataplaneUser, cfg.DataplanePass)
+`
 
 	// Create Dataplane API YAML config
 	dataplaneConfig := fmt.Sprintf(`dataplaneapi:
   host: 0.0.0.0
   port: %d
-  userlist:
-    userlist: dataplaneapi
+  user:
+    - name: %s
+      password: %s
+      insecure: true
   transaction:
     transaction_dir: /var/lib/dataplaneapi/transactions
     backups_number: 10
@@ -126,7 +127,7 @@ log_targets:
   log_types:
   - access
   - app
-`, cfg.DataplanePort)
+`, cfg.DataplanePort, cfg.DataplaneUser, cfg.DataplanePass)
 
 	// Create ConfigMap with both configs
 	configMap := &corev1.ConfigMap{

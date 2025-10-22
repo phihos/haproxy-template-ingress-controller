@@ -116,10 +116,10 @@ func (c *ConfigLoaderComponent) processConfigChange(event *events.ConfigResource
 		return
 	}
 
-	// Parse the configuration
-	cfg, err := config.ParseConfig(configYAML)
+	// Parse the configuration and apply defaults
+	cfg, err := config.LoadConfig(configYAML)
 	if err != nil {
-		c.logger.Error("Failed to parse configuration YAML",
+		c.logger.Error("Failed to load configuration YAML",
 			"error", err,
 			"version", version)
 		return

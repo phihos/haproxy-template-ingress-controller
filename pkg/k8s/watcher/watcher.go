@@ -8,6 +8,7 @@ package watcher
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"haproxy-template-ic/pkg/k8s/client"
@@ -43,6 +44,7 @@ type Watcher struct {
 	synced       bool // True after initial sync completes
 	syncMu       sync.RWMutex
 	initialCount int // Number of resources loaded during initial sync
+	logger       *slog.Logger
 }
 
 // New creates a new resource watcher with the provided configuration.
@@ -71,7 +73,7 @@ type Watcher struct {
 //	})
 //
 //nolint:gocritic // hugeParam: Config passed by value to prevent external mutation
-func New(cfg types.WatcherConfig, k8sClient *client.Client) (*Watcher, error) {
+func New(cfg types.WatcherConfig, k8sClient *client.Client, logger *slog.Logger) (*Watcher, error) {
 	// Set defaults
 	cfg.SetDefaults()
 
@@ -137,6 +139,7 @@ func New(cfg types.WatcherConfig, k8sClient *client.Client) (*Watcher, error) {
 		stopCh:       make(chan struct{}),
 		synced:       false,
 		initialCount: 0,
+		logger:       logger,
 	}
 
 	// Create informer
@@ -197,9 +200,11 @@ func (w *Watcher) createInformer() error {
 func (w *Watcher) applyListOptions(options *metav1.ListOptions) {
 	if w.config.LabelSelector != nil {
 		selector, err := metav1.LabelSelectorAsSelector(w.config.LabelSelector)
-		if err == nil {
-			options.LabelSelector = selector.String()
+		if err != nil {
+			// This should never happen with valid MatchLabels
+			return
 		}
+		options.LabelSelector = selector.String()
 	}
 }
 
@@ -213,13 +218,22 @@ func (w *Watcher) handleAdd(obj interface{}) {
 	// Process resource (filter fields and extract keys)
 	keys, err := w.indexer.Process(resource)
 	if err != nil {
-		// Log error but continue
+		w.logger.Error("failed to process resource for indexing",
+			"gvr", w.config.GVR.String(),
+			"name", resource.GetName(),
+			"namespace", resource.GetNamespace(),
+			"error", err)
 		return
 	}
 
 	// Add to store
 	if err := w.store.Add(resource, keys); err != nil {
-		// Log error but continue
+		w.logger.Error("failed to add resource to store",
+			"gvr", w.config.GVR.String(),
+			"name", resource.GetName(),
+			"namespace", resource.GetNamespace(),
+			"keys", keys,
+			"error", err)
 		return
 	}
 
@@ -237,13 +251,22 @@ func (w *Watcher) handleUpdate(oldObj, newObj interface{}) {
 	// Process resource (filter fields and extract keys)
 	keys, err := w.indexer.Process(resource)
 	if err != nil {
-		// Log error but continue
+		w.logger.Error("failed to process resource for indexing",
+			"gvr", w.config.GVR.String(),
+			"name", resource.GetName(),
+			"namespace", resource.GetNamespace(),
+			"error", err)
 		return
 	}
 
 	// Update in store
 	if err := w.store.Update(resource, keys); err != nil {
-		// Log error but continue
+		w.logger.Error("failed to update resource in store",
+			"gvr", w.config.GVR.String(),
+			"name", resource.GetName(),
+			"namespace", resource.GetNamespace(),
+			"keys", keys,
+			"error", err)
 		return
 	}
 
@@ -267,13 +290,22 @@ func (w *Watcher) handleDelete(obj interface{}) {
 	// Extract keys for deletion (before filtering)
 	keys, err := w.indexer.ExtractKeys(resource)
 	if err != nil {
-		// Log error but continue
+		w.logger.Error("failed to extract keys from resource for deletion",
+			"gvr", w.config.GVR.String(),
+			"name", resource.GetName(),
+			"namespace", resource.GetNamespace(),
+			"error", err)
 		return
 	}
 
 	// Delete from store
 	if err := w.store.Delete(keys...); err != nil {
-		// Log error but continue
+		w.logger.Error("failed to delete resource from store",
+			"gvr", w.config.GVR.String(),
+			"name", resource.GetName(),
+			"namespace", resource.GetNamespace(),
+			"keys", keys,
+			"error", err)
 		return
 	}
 

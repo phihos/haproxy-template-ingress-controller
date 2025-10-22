@@ -14,38 +14,47 @@
 
 package renderer
 
-// buildRenderingContext extracts all resources from stores and builds the template context.
+// buildRenderingContext wraps stores for template access and builds the template context.
 //
 // The context structure is:
 //
 //	{
 //	  "resources": {
-//	    "ingresses": [...],  // All resources of type "ingresses"
-//	    "services": [...],   // All resources of type "services"
-//	    "secrets": [...],    // All resources of type "secrets"
+//	    "ingresses": StoreWrapper,  // Provides List() and Get() methods
+//	    "services": StoreWrapper,   // Provides List() and Get() methods
+//	    "secrets": StoreWrapper,    // Provides List() and Get() methods
 //	    // ... other watched resources
 //	  }
 //	}
 //
-// Templates can access resources like: {{ resources.ingresses }}.
+// Templates can access resources with List() for iteration:
+//
+//	{% for ingress in resources.ingresses.List() %}
+//	  {{ ingress.metadata.name }}
+//	{% endfor %}
+//
+// Or with Get() for O(1) indexed lookups:
+//
+//	{% for endpoint_slice in resources.endpoints.Get(service_name) %}
+//	  {{ endpoint_slice.metadata.name }}
+//	{% endfor %}
 func (c *Component) buildRenderingContext() map[string]interface{} {
-	// Create resources map
+	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
 
-	// Extract all resources from each store
+	// Wrap each store to provide template-friendly methods
 	for resourceTypeName, store := range c.stores {
-		resourceList, err := store.List()
-		if err != nil {
-			c.logger.Warn("failed to list resources from store",
-				"resource_type", resourceTypeName,
-				"error", err)
-			// Continue with empty list for this resource type
-			resources[resourceTypeName] = []interface{}{}
-			continue
+		c.logger.Info("wrapping store for rendering context",
+			"resource_type", resourceTypeName)
+		resources[resourceTypeName] = &StoreWrapper{
+			store:        store,
+			resourceType: resourceTypeName,
+			logger:       c.logger,
 		}
-
-		resources[resourceTypeName] = resourceList
 	}
+
+	c.logger.Info("rendering context built",
+		"resource_count", len(resources))
 
 	// Build final context with resources under "resources" key
 	context := map[string]interface{}{
