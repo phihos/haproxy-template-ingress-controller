@@ -387,6 +387,26 @@ curl 'http://localhost:6060/debug/vars/rendered?field={.size}'
 
 ## Monitoring
 
+The controller exposes 11 Prometheus metrics on port 9090 at `/metrics` endpoint covering:
+
+- **Reconciliation**: Cycles, errors, and duration
+- **Deployment**: Operations, errors, and duration
+- **Validation**: Total validations and errors
+- **Resources**: Tracked resource counts by type
+- **Events**: Event bus activity and subscribers
+
+### Quick Access
+
+Access metrics directly via port-forward:
+
+```bash
+# Port-forward to controller pod
+kubectl port-forward -n <namespace> pod/<controller-pod> 9090:9090
+
+# Fetch metrics
+curl http://localhost:9090/metrics
+```
+
 ### Prometheus ServiceMonitor
 
 Enable Prometheus Operator integration:
@@ -396,9 +416,79 @@ monitoring:
   serviceMonitor:
     enabled: true
     interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      prometheus: kube-prometheus  # Match your Prometheus selector
+```
+
+### With NetworkPolicy
+
+If using NetworkPolicy, allow Prometheus to scrape metrics:
+
+```yaml
+networkPolicy:
+  enabled: true
+  ingress:
+    monitoring:
+      enabled: true  # Enable metrics ingress
+      podSelector:
+        matchLabels:
+          app: prometheus
+      namespaceSelector:
+        matchLabels:
+          name: monitoring
+```
+
+### Advanced ServiceMonitor Configuration
+
+Add custom labels and relabeling:
+
+```yaml
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: 15s
     labels:
       prometheus: kube-prometheus
+      team: platform
+    # Add cluster label to all metrics
+    relabelings:
+      - sourceLabels: [__address__]
+        targetLabel: cluster
+        replacement: production
+    # Drop specific metrics
+    metricRelabelings:
+      - sourceLabels: [__name__]
+        regex: 'haproxy_ic_event_subscribers'
+        action: drop
 ```
+
+### Example Prometheus Queries
+
+```promql
+# Reconciliation rate (per second)
+rate(haproxy_ic_reconciliation_total[5m])
+
+# Error rate
+rate(haproxy_ic_reconciliation_errors_total[5m])
+
+# 95th percentile reconciliation duration
+histogram_quantile(0.95, rate(haproxy_ic_reconciliation_duration_seconds_bucket[5m]))
+
+# Current HAProxy pod count
+haproxy_ic_resource_count{type="haproxy-pods"}
+```
+
+### Grafana Dashboard
+
+Create dashboards using these key metrics:
+
+1. **Operations Overview**: reconciliation_total, deployment_total, validation_total
+2. **Error Tracking**: *_errors_total counters
+3. **Performance**: *_duration_seconds histograms
+4. **Resource Utilization**: resource_count gauge
+
+For complete metric definitions and more queries, see `pkg/controller/metrics/README.md` in the repository.
 
 ## High Availability
 

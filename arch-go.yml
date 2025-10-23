@@ -15,6 +15,7 @@ dependenciesRules:
         - "**.pkg.events.**"
         - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
+        - "**.pkg.metrics.**"
         - "**.pkg.templating.**"
         - "**.codegen.**"
 
@@ -115,3 +116,15 @@ dependenciesRules:
         - "**.examples.**"
         - "**.pkg.**"
         - "**.codegen.**"
+
+  # Rule 12: metrics package should NOT depend on other top-level packages (pure library)
+  - package: "**.pkg.metrics.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.core.**"
+        - "**.pkg.dataplane.**"
+        - "**.pkg.events.**"
+        - "**.pkg.introspection.**"
+        - "**.pkg.k8s.**"
+        - "**.pkg.templating.**"

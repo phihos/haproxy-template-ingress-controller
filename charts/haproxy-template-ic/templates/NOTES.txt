@@ -10,6 +10,28 @@ Configuration:
   ConfigMap: {{ .Values.controller.configmapName }}
   Secret: {{ include "haproxy-template-ic.fullname" . }}-credentials
 
+{{- if gt (.Values.controller.debugPort | int) 0 }}
+
+Debug Endpoint:
+  The debug server is running on port {{ .Values.controller.debugPort }}
+  Access via: kubectl port-forward -n {{ .Release.Namespace }} pod/<controller-pod> {{ .Values.controller.debugPort }}:{{ .Values.controller.debugPort }}
+  Endpoints: /debug/vars, /debug/pprof
+{{- end }}
+
+Metrics Endpoint:
+  Prometheus metrics are available on port {{ .Values.controller.config.controller.metrics_port }}
+  Access via: kubectl port-forward -n {{ .Release.Namespace }} pod/<controller-pod> {{ .Values.controller.config.controller.metrics_port }}:{{ .Values.controller.config.controller.metrics_port }}
+  URL: http://localhost:{{ .Values.controller.config.controller.metrics_port }}/metrics
+
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+
+  ✓ ServiceMonitor has been created for Prometheus Operator
+  Prometheus will automatically discover and scrape metrics
+{{- else }}
+
+  ServiceMonitor: disabled (set monitoring.serviceMonitor.enabled=true to enable)
+{{- end }}
+
 {{- if .Values.networkPolicy.enabled }}
 
 NetworkPolicy:
@@ -18,7 +40,9 @@ NetworkPolicy:
   - Kubernetes API access
   - HAProxy Dataplane API access (cross-namespace)
   {{- if .Values.networkPolicy.ingress.monitoring.enabled }}
-  - Prometheus metrics scraping
+  - Prometheus metrics scraping ✓
+  {{- else }}
+  - Prometheus metrics scraping (disabled - set networkPolicy.ingress.monitoring.enabled=true)
   {{- end }}
 
   If you experience connectivity issues, check the NetworkPolicy configuration.
