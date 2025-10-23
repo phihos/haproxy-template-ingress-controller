@@ -191,7 +191,28 @@ Any Ingress resource created in your cluster automatically appears in the `resou
 
 ## Architecture
 
-The controller uses an event-driven architecture where components communicate exclusively through an EventBus:
+The controller watches Kubernetes resources, renders HAProxy configurations from templates, and deploys them to HAProxy instances via the Dataplane API:
+
+```mermaid
+graph LR
+    K8S[(Kubernetes API)]
+
+    subgraph ctrl[Controller Deployment]
+        CTL[Template Controller]
+    end
+
+    subgraph pod[HAProxy Pod]
+        DPA[Dataplane API<br/>Sidecar]
+        HAP[HAProxy]
+    end
+
+    K8S -->|1. Watch/Fetch<br/>Resources| CTL
+    CTL -->|2. Render<br/>Templates| CTL
+    CTL -->|3. Deploy<br/>Config| DPA
+    DPA -.->|4. Configure| HAP
+```
+
+Internally, the controller uses an event-driven architecture where components communicate exclusively through an EventBus:
 
 ```
 Kubernetes API → Resource Watchers → EventBus → Reconciler

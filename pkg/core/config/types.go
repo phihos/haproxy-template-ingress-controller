@@ -32,11 +32,6 @@ type Config struct {
 	// Dataplane configures the Dataplane API for production HAProxy instances.
 	Dataplane DataplaneConfig `yaml:"dataplane"`
 
-	// Validation configures local HAProxy configuration validation.
-	// These paths must match the Dataplane API server's resource configuration.
-	// See: https://www.haproxy.com/documentation/haproxy-data-plane-api/reference/configuration-file/#resources
-	Validation ValidationConfig `yaml:"validation"`
-
 	// WatchedResourcesIgnoreFields specifies JSONPath expressions for fields
 	// to remove from all watched resources to reduce memory usage.
 	//
@@ -140,33 +135,6 @@ type DataplaneConfig struct {
 
 	// ConfigFile is the path to the main HAProxy configuration file.
 	// Used for validation.
-	// Default: /etc/haproxy/haproxy.cfg
-	ConfigFile string `yaml:"config_file"`
-}
-
-// ValidationConfig configures local HAProxy configuration validation paths.
-//
-// Deprecated: These fields have been moved to DataplaneConfig since they affect
-// both validation and deployment behavior. The validation section is maintained
-// for backward compatibility and will be automatically migrated to dataplane config.
-type ValidationConfig struct {
-	// MapsDir is the directory for HAProxy map files.
-	// Deprecated: Use Dataplane.MapsDir instead.
-	// Default: /etc/haproxy/maps
-	MapsDir string `yaml:"maps_dir"`
-
-	// SSLCertsDir is the directory for SSL certificates.
-	// Deprecated: Use Dataplane.SSLCertsDir instead.
-	// Default: /etc/haproxy/ssl
-	SSLCertsDir string `yaml:"ssl_certs_dir"`
-
-	// GeneralStorageDir is the directory for general files (error pages, etc.).
-	// Deprecated: Use Dataplane.GeneralStorageDir instead.
-	// Default: /etc/haproxy/general
-	GeneralStorageDir string `yaml:"general_storage_dir"`
-
-	// ConfigFile is the path to the main HAProxy configuration file.
-	// Deprecated: Use Dataplane.ConfigFile instead.
 	// Default: /etc/haproxy/haproxy.cfg
 	ConfigFile string `yaml:"config_file"`
 }
