@@ -69,8 +69,9 @@ Pure business logic components (templating, k8s, dataplane) have no event depend
 
 ## See Also
 
+- [Templating Guide](../templating.md) - User guide for writing templates
 - [Controller Package Documentation](../../pkg/controller/README.md) - Implementation details for the event-driven controller
-- [Template Engine Documentation](../../pkg/templating/README.md) - How to use Jinja2 templates
+- [Template Engine Documentation](../../pkg/templating/README.md) - Template engine API reference
 - [Kubernetes Integration](../../pkg/k8s/README.md) - Resource watching and indexing API
 - [Dataplane Integration](../../pkg/dataplane/README.md) - HAProxy configuration synchronization
 - [Supported Configuration Reference](../supported-configuration.md) - What HAProxy features you can configure

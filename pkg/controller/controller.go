@@ -497,10 +497,10 @@ func createReconciliationComponents(
 
 	// Create HAProxy Validator
 	validationPaths := dataplane.ValidationPaths{
-		MapsDir:           cfg.Validation.MapsDir,
-		SSLCertsDir:       cfg.Validation.SSLCertsDir,
-		GeneralStorageDir: cfg.Validation.GeneralStorageDir,
-		ConfigFile:        cfg.Validation.ConfigFile,
+		MapsDir:           cfg.Dataplane.MapsDir,
+		SSLCertsDir:       cfg.Dataplane.SSLCertsDir,
+		GeneralStorageDir: cfg.Dataplane.GeneralStorageDir,
+		ConfigFile:        cfg.Dataplane.ConfigFile,
 	}
 	haproxyValidatorComponent := validator.NewHAProxyValidator(bus, logger, validationPaths)
 

@@ -84,8 +84,20 @@ func New(
 	// Extract all templates from config
 	templates := extractTemplates(config)
 
-	// Pre-compile all templates
-	engine, err := templating.New(templating.EngineTypeGonja, templates)
+	// Create path resolver for get_path filter
+	pathResolver := &templating.PathResolver{
+		MapsDir:    config.Dataplane.MapsDir,
+		SSLDir:     config.Dataplane.SSLCertsDir,
+		GeneralDir: config.Dataplane.GeneralStorageDir,
+	}
+
+	// Register custom filters
+	filters := map[string]templating.FilterFunc{
+		"get_path": pathResolver.GetPath,
+	}
+
+	// Pre-compile all templates with custom filters
+	engine, err := templating.NewWithFilters(templating.EngineTypeGonja, templates, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create template engine: %w", err)
 	}

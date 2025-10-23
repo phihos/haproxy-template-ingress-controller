@@ -218,6 +218,7 @@ For detailed architecture documentation, see [docs/development/design.md](docs/d
 
 ### User Guides
 
+- [Templating Guide](docs/templating.md) - How to write templates for HAProxy configuration, maps, and certificates
 - [Supported HAProxy Configuration](docs/supported-configuration.md) - Reference for what HAProxy features you can configure
 - [Helm Chart](charts/haproxy-template-ic/README.md) - Installation and configuration guide
 

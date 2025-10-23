@@ -25,17 +25,23 @@ const (
 	// DefaultDriftPreventionInterval is the default interval for periodic drift prevention deployments.
 	DefaultDriftPreventionInterval = 60 * time.Second
 
-	// DefaultValidationMapsDir is the default directory for HAProxy map files.
-	DefaultValidationMapsDir = "/etc/haproxy/maps"
+	// DefaultDataplaneMapsDir is the default directory for HAProxy map files.
+	DefaultDataplaneMapsDir = "/etc/haproxy/maps"
 
-	// DefaultValidationSSLCertsDir is the default directory for SSL certificates.
-	DefaultValidationSSLCertsDir = "/etc/haproxy/certs"
+	// DefaultDataplaneSSLCertsDir is the default directory for SSL certificates.
+	DefaultDataplaneSSLCertsDir = "/etc/haproxy/ssl"
 
-	// DefaultValidationGeneralStorageDir is the default directory for general files.
-	DefaultValidationGeneralStorageDir = "/etc/haproxy/general"
+	// DefaultDataplaneGeneralStorageDir is the default directory for general files.
+	DefaultDataplaneGeneralStorageDir = "/etc/haproxy/general"
 
-	// DefaultValidationConfigFile is the default path to the main HAProxy config file.
-	DefaultValidationConfigFile = "/etc/haproxy/haproxy.cfg"
+	// DefaultDataplaneConfigFile is the default path to the main HAProxy config file.
+	DefaultDataplaneConfigFile = "/etc/haproxy/haproxy.cfg"
+
+	// Deprecated: Use DefaultDataplane* constants instead.
+	DefaultValidationMapsDir           = DefaultDataplaneMapsDir
+	DefaultValidationSSLCertsDir       = DefaultDataplaneSSLCertsDir
+	DefaultValidationGeneralStorageDir = DefaultDataplaneGeneralStorageDir
+	DefaultValidationConfigFile        = DefaultDataplaneConfigFile
 )
 
 // setDefaults applies default values to unset configuration fields.
@@ -61,18 +67,48 @@ func setDefaults(cfg *Config) {
 		cfg.Dataplane.Port = DefaultDataplanePort
 	}
 
-	// Validation defaults
+	// Migrate deprecated validation paths to dataplane config
+	// If validation paths are set but dataplane paths are not, copy them over
+	if cfg.Dataplane.MapsDir == "" && cfg.Validation.MapsDir != "" {
+		cfg.Dataplane.MapsDir = cfg.Validation.MapsDir
+	}
+	if cfg.Dataplane.SSLCertsDir == "" && cfg.Validation.SSLCertsDir != "" {
+		cfg.Dataplane.SSLCertsDir = cfg.Validation.SSLCertsDir
+	}
+	if cfg.Dataplane.GeneralStorageDir == "" && cfg.Validation.GeneralStorageDir != "" {
+		cfg.Dataplane.GeneralStorageDir = cfg.Validation.GeneralStorageDir
+	}
+	if cfg.Dataplane.ConfigFile == "" && cfg.Validation.ConfigFile != "" {
+		cfg.Dataplane.ConfigFile = cfg.Validation.ConfigFile
+	}
+
+	// Apply dataplane defaults
+	if cfg.Dataplane.MapsDir == "" {
+		cfg.Dataplane.MapsDir = DefaultDataplaneMapsDir
+	}
+	if cfg.Dataplane.SSLCertsDir == "" {
+		cfg.Dataplane.SSLCertsDir = DefaultDataplaneSSLCertsDir
+	}
+	if cfg.Dataplane.GeneralStorageDir == "" {
+		cfg.Dataplane.GeneralStorageDir = DefaultDataplaneGeneralStorageDir
+	}
+	if cfg.Dataplane.ConfigFile == "" {
+		cfg.Dataplane.ConfigFile = DefaultDataplaneConfigFile
+	}
+
+	// Copy dataplane paths back to validation config for backward compatibility
+	// This ensures old code reading from validation config still works
 	if cfg.Validation.MapsDir == "" {
-		cfg.Validation.MapsDir = DefaultValidationMapsDir
+		cfg.Validation.MapsDir = cfg.Dataplane.MapsDir
 	}
 	if cfg.Validation.SSLCertsDir == "" {
-		cfg.Validation.SSLCertsDir = DefaultValidationSSLCertsDir
+		cfg.Validation.SSLCertsDir = cfg.Dataplane.SSLCertsDir
 	}
 	if cfg.Validation.GeneralStorageDir == "" {
-		cfg.Validation.GeneralStorageDir = DefaultValidationGeneralStorageDir
+		cfg.Validation.GeneralStorageDir = cfg.Dataplane.GeneralStorageDir
 	}
 	if cfg.Validation.ConfigFile == "" {
-		cfg.Validation.ConfigFile = DefaultValidationConfigFile
+		cfg.Validation.ConfigFile = cfg.Dataplane.ConfigFile
 	}
 
 	// Watched resources defaults
