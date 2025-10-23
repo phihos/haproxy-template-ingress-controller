@@ -193,6 +193,30 @@ func TestSyncAuxiliary(t *testing.T) {
 			},
 			expectedReload: true,
 		},
+		{
+			name:              "update-map-only-no-config-change",
+			initialConfigFile: "map-frontend/with-map.cfg",
+			desiredConfigFile: "map-frontend/with-map.cfg", // SAME config - no changes
+			// Initial config needs this map
+			initialMapFiles: map[string]string{
+				"domains.map": "map-files/domains.map",
+			},
+			// Desired config needs different map content
+			mapFiles: map[string]string{
+				"domains.map": "map-files/domains-updated.map", // Same name, different content
+			},
+			expectedCreates: 0,
+			expectedUpdates: 0,
+			expectedDeletes: 0,
+			expectedOperations: []string{
+				// No HAProxy config operations expected - config is identical
+			},
+			expectedReload: false, // No config changes, but map should still update
+			// Verify the map file was actually updated
+			verifyMapFiles: map[string]string{
+				"domains.map": "map-files/domains-updated.map",
+			},
+		},
 	}
 
 	for _, tc := range testCases {

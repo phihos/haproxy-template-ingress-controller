@@ -2955,15 +2955,14 @@ template_snippets:
   path-map-entry:
     name: path-map-entry
     template: |
-      {#- Generate map entries for paths matching specified pathTypes #}
-      {#- Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
-      {%- for _, ingress in resources.get('ingresses', {}).items() %}
-      {%- for rule in (ingress.spec.get('rules', []) | selectattr("http", "defined")) %}
-      {%- for path in (rule.http.get('paths', []) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
+      {{ "" }}
+      {% for ingress in resources.ingresses.List() %}
+      {% for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
+      {% for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
       {{ rule.host }}{{ path.path }} {% include "backend-name" %}{{ suffix }}
-      {%- endfor %}
-      {%- endfor %}
-      {%- endfor %}
+      {% endfor %}
+      {% endfor %}
+      {% endfor %}
 
   validate-ingress:
     name: validate-ingress
@@ -3068,9 +3067,14 @@ maps:
   path-prefix-exact.map:
     template: |
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
-      {%- set path_types = ["Prefix", "ImplementationSpecific"] %}
-      {%- set suffix = "" %}
-      {% include "path-map-entry" %}
+
+      {%- for ingress in resources.ingresses.List() -%}
+      {% for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
+      {% for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", ["Prefix", "ImplementationSpecific"])) %}
+      {{ rule.host }}{{ path.path }} ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+      {% endfor %}
+      {% endfor %}
+      {% endfor %}
 
   path-prefix.map:
     template: |

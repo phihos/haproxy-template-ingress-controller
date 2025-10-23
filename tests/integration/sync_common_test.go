@@ -75,6 +75,14 @@ type syncTestCase struct {
 	// Example: map[string]string{"domains.map": "map-files/domains.map"}
 	mapFiles map[string]string
 
+	// Optional: Verify auxiliary file content after sync
+	// These fields enable verification that auxiliary files were actually updated
+	// Map: filename → testdata file to compare against
+	// Example: map[string]string{"domains.map": "map-files/domains-updated.map"}
+	verifyMapFiles        map[string]string
+	verifyGeneralFiles    map[string]string
+	verifySSLCertificates map[string]string
+
 	// Skip reason for unsupported features (test-first approach)
 	// If set, test will be skipped with this message
 	skipReason string
@@ -297,5 +305,63 @@ func runSyncTest(t *testing.T, tc syncTestCase) {
 		verifyDiff.Summary.TotalUpdates == 0 &&
 		verifyDiff.Summary.TotalDeletes == 0 {
 		t.Logf("✓ Idempotency check passed: final config matches desired config")
+	}
+
+	// Step 11: Verify auxiliary file content if requested
+	if len(tc.verifyMapFiles) > 0 {
+		t.Logf("Verifying %d map files", len(tc.verifyMapFiles))
+		for filename, testdataFile := range tc.verifyMapFiles {
+			// Load expected content from testdata
+			fullPath := filepath.Join("testdata", testdataFile)
+			expectedContent, err := os.ReadFile(fullPath)
+			require.NoError(t, err, "failed to read expected map file %s", testdataFile)
+
+			// Fetch actual content from HAProxy
+			actualContent, err := client.GetMapFileContent(ctx, filename)
+			require.NoError(t, err, "failed to get map file %s from HAProxy", filename)
+
+			// Compare
+			assert.Equal(t, string(expectedContent), actualContent,
+				"map file %s content mismatch", filename)
+			t.Logf("  ✓ Map file %s matches expected content", filename)
+		}
+	}
+
+	if len(tc.verifyGeneralFiles) > 0 {
+		t.Logf("Verifying %d general files", len(tc.verifyGeneralFiles))
+		for filename, testdataFile := range tc.verifyGeneralFiles {
+			// Load expected content from testdata
+			fullPath := filepath.Join("testdata", testdataFile)
+			expectedContent, err := os.ReadFile(fullPath)
+			require.NoError(t, err, "failed to read expected general file %s", testdataFile)
+
+			// Fetch actual content from HAProxy
+			actualContent, err := client.GetGeneralFileContent(ctx, filename)
+			require.NoError(t, err, "failed to get general file %s from HAProxy", filename)
+
+			// Compare
+			assert.Equal(t, string(expectedContent), actualContent,
+				"general file %s content mismatch", filename)
+			t.Logf("  ✓ General file %s matches expected content", filename)
+		}
+	}
+
+	if len(tc.verifySSLCertificates) > 0 {
+		t.Logf("Verifying %d SSL certificates", len(tc.verifySSLCertificates))
+		for certName, testdataFile := range tc.verifySSLCertificates {
+			// Load expected content from testdata
+			fullPath := filepath.Join("testdata", testdataFile)
+			expectedContent, err := os.ReadFile(fullPath)
+			require.NoError(t, err, "failed to read expected SSL cert %s", testdataFile)
+
+			// Fetch actual content from HAProxy
+			actualContent, err := client.GetSSLCertificateContent(ctx, certName)
+			require.NoError(t, err, "failed to get SSL cert %s from HAProxy", certName)
+
+			// Compare
+			assert.Equal(t, string(expectedContent), actualContent,
+				"SSL certificate %s content mismatch", certName)
+			t.Logf("  ✓ SSL certificate %s matches expected content", certName)
+		}
 	}
 }

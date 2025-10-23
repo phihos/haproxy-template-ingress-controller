@@ -300,17 +300,32 @@ kubectl config use-context kind-haproxy-template-ic-dev
 ./scripts/start-dev-env.sh
 
 # Build and deploy changes to dev cluster
-make build
-docker build -t haproxy-template-ic:dev .
-kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev
-kubectl rollout restart deployment haproxy-template-ic -n haproxy-template-ic
+./scripts/start-dev-env.sh restart
+
+# Or if you need to manually run the build steps:
+# make build
+# docker build -t haproxy-template-ic:dev .
+# kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev
+# kubectl rollout restart deployment haproxy-template-ic -n haproxy-template-ic
 
 # View controller logs
-kubectl logs -f -l app.kubernetes.io/name=haproxy-template-ic -n haproxy-template-ic
+./scripts/start-dev-env.sh logs
+
+# Or use kubectl directly:
+# kubectl logs -f -l app.kubernetes.io/name=haproxy-template-ic -n haproxy-template-ic
+
+# Check deployment status
+./scripts/start-dev-env.sh status
+
+# Test ingress functionality
+./scripts/start-dev-env.sh test
 
 # Check HAProxy configuration
 kubectl -n echo get pods -l app=haproxy
 kubectl -n echo exec <haproxy-pod> -- cat /etc/haproxy/haproxy.cfg
+
+# Clean up dev environment
+./scripts/start-dev-env.sh down
 ```
 
 **Cluster Names:**

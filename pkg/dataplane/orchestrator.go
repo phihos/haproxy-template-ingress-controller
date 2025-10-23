@@ -65,46 +65,27 @@ func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *Syn
 		return nil, NewConnectionError(o.client.Endpoint.URL, err)
 	}
 
-	// Step 2: Parse current configuration
-	o.logger.Debug("Parsing current configuration")
-	currentConfig, err := o.parser.ParseFromString(currentConfigStr)
+	// Step 2-4: Parse and compare configurations
+	diff, err := o.parseAndCompareConfigs(currentConfigStr, desiredConfig)
 	if err != nil {
-		snippet := currentConfigStr
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
-		}
-		return nil, NewParseError("current", snippet, err)
+		return nil, err
 	}
 
-	// Step 3: Parse desired configuration
-	o.logger.Debug("Parsing desired configuration")
-	desiredParsed, err := o.parser.ParseFromString(desiredConfig)
+	// Step 5: Compare auxiliary files (before checking if there are changes)
+	// This ensures we detect auxiliary file changes even when config is identical
+	fileDiff, sslDiff, mapDiff, err := o.compareAuxiliaryFiles(ctx, auxFiles)
 	if err != nil {
-		snippet := desiredConfig
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
-		}
-		return nil, NewParseError("desired", snippet, err)
+		return nil, err
 	}
 
-	// Step 4: Compare configurations
-	o.logger.Info("Comparing configurations")
-	diff, err := o.comparator.Compare(currentConfig, desiredParsed)
-	if err != nil {
-		return nil, &SyncError{
-			Stage:   "compare",
-			Message: "failed to compare configurations",
-			Cause:   err,
-			Hints: []string{
-				"Check that both configurations are valid",
-				"Review the comparison error for details",
-			},
-		}
-	}
+	// Check if there are auxiliary file changes
+	hasAuxChanges := (fileDiff != nil && fileDiff.HasChanges()) ||
+		(sslDiff != nil && sslDiff.HasChanges()) ||
+		(mapDiff != nil && mapDiff.HasChanges())
 
-	// Step 5: Check if there are any changes
-	if !diff.Summary.HasChanges() {
-		o.logger.Info("No configuration changes detected")
+	// Step 6: Check if there are any changes (config OR auxiliary files)
+	if !diff.Summary.HasChanges() && !hasAuxChanges {
+		o.logger.Info("No configuration or auxiliary file changes detected")
 		return &SyncResult{
 			Success:           true,
 			AppliedOperations: nil,
@@ -113,18 +94,27 @@ func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *Syn
 			Duration:          time.Since(startTime),
 			Retries:           0,
 			Details:           convertDiffSummary(&diff.Summary),
-			Message:           "No configuration changes detected",
+			Message:           "No configuration or auxiliary file changes detected",
 		}, nil
 	}
 
-	o.logger.Info("Configuration changes detected",
-		"total_operations", diff.Summary.TotalOperations(),
-		"creates", diff.Summary.TotalCreates,
-		"updates", diff.Summary.TotalUpdates,
-		"deletes", diff.Summary.TotalDeletes)
+	if diff.Summary.HasChanges() {
+		o.logger.Info("Configuration changes detected",
+			"total_operations", diff.Summary.TotalOperations(),
+			"creates", diff.Summary.TotalCreates,
+			"updates", diff.Summary.TotalUpdates,
+			"deletes", diff.Summary.TotalDeletes)
+	}
 
-	// Step 6: Attempt fine-grained sync with retry logic
-	result, err := o.attemptFineGrainedSync(ctx, diff, opts, auxFiles, startTime)
+	if hasAuxChanges {
+		o.logger.Info("Auxiliary file changes detected",
+			"general_files", fileDiff != nil && fileDiff.HasChanges(),
+			"ssl_certs", sslDiff != nil && sslDiff.HasChanges(),
+			"maps", mapDiff != nil && mapDiff.HasChanges())
+	}
+
+	// Step 7: Attempt fine-grained sync with retry logic (pass pre-computed diffs)
+	result, err := o.attemptFineGrainedSyncWithDiffs(ctx, diff, opts, fileDiff, sslDiff, mapDiff, startTime)
 
 	// Step 7: If fine-grained sync failed and fallback is enabled, try raw config push
 	if err != nil && opts.FallbackToRaw {
@@ -142,35 +132,119 @@ func (o *orchestrator) sync(ctx context.Context, desiredConfig string, opts *Syn
 	return result, err
 }
 
-// attemptFineGrainedSync attempts to sync using fine-grained operations with retry logic.
-func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *comparator.ConfigDiff, opts *SyncOptions, auxFiles *AuxiliaryFiles, startTime time.Time) (*SyncResult, error) {
-	// Phase 1: Compare and sync auxiliary files (pre-config) in parallel
-	var fileDiff *auxiliaryfiles.FileDiff
-	var sslDiff *auxiliaryfiles.SSLCertificateDiff
-	var mapDiff *auxiliaryfiles.MapFileDiff
-
+// attemptFineGrainedSyncWithDiffs attempts fine-grained sync with pre-computed auxiliary file diffs.
+// This version accepts pre-computed diffs to avoid redundant comparison when diffs are already known.
+func (o *orchestrator) attemptFineGrainedSyncWithDiffs(
+	ctx context.Context,
+	diff *comparator.ConfigDiff,
+	opts *SyncOptions,
+	fileDiff *auxiliaryfiles.FileDiff,
+	sslDiff *auxiliaryfiles.SSLCertificateDiff,
+	mapDiff *auxiliaryfiles.MapFileDiff,
+	startTime time.Time,
+) (*SyncResult, error) {
+	// Phase 1: Sync auxiliary files (pre-config) using pre-computed diffs
+	// Only sync if there are changes to apply
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Sync general files
-	g.Go(func() error {
-		var err error
-		fileDiff, err = o.syncGeneralFilesPreConfig(gCtx, auxFiles.GeneralFiles)
-		return err
-	})
+	// Sync general files if there are changes
+	if fileDiff != nil && fileDiff.HasChanges() {
+		g.Go(func() error {
+			o.logger.Info("General file changes detected",
+				"creates", len(fileDiff.ToCreate),
+				"updates", len(fileDiff.ToUpdate),
+				"deletes", len(fileDiff.ToDelete))
 
-	// Sync SSL certificates
-	g.Go(func() error {
-		var err error
-		sslDiff, err = o.syncSSLCertificatesPreConfig(gCtx, auxFiles.SSLCertificates)
-		return err
-	})
+			// Sync creates and updates BEFORE config sync (don't delete yet)
+			preConfigDiff := &auxiliaryfiles.FileDiff{
+				ToCreate: fileDiff.ToCreate,
+				ToUpdate: fileDiff.ToUpdate,
+				ToDelete: nil,
+			}
 
-	// Sync map files
-	g.Go(func() error {
-		var err error
-		mapDiff, err = o.syncMapFilesPreConfig(gCtx, auxFiles.MapFiles)
-		return err
-	})
+			if err := auxiliaryfiles.SyncGeneralFiles(gCtx, o.client, preConfigDiff); err != nil {
+				return &SyncError{
+					Stage:   "sync_files_pre",
+					Message: "failed to sync general files before config sync",
+					Cause:   err,
+					Hints: []string{
+						"Check HAProxy storage is writable",
+						"Verify file contents are valid",
+						"Review error message for specific file failures",
+					},
+				}
+			}
+
+			o.logger.Info("General files synced successfully (pre-config phase)")
+			return nil
+		})
+	}
+
+	// Sync SSL certificates if there are changes
+	if sslDiff != nil && sslDiff.HasChanges() {
+		g.Go(func() error {
+			o.logger.Info("SSL certificate changes detected",
+				"creates", len(sslDiff.ToCreate),
+				"updates", len(sslDiff.ToUpdate),
+				"deletes", len(sslDiff.ToDelete))
+
+			// Sync creates and updates BEFORE config sync (don't delete yet)
+			preConfigSSL := &auxiliaryfiles.SSLCertificateDiff{
+				ToCreate: sslDiff.ToCreate,
+				ToUpdate: sslDiff.ToUpdate,
+				ToDelete: nil,
+			}
+
+			if err := auxiliaryfiles.SyncSSLCertificates(gCtx, o.client, preConfigSSL); err != nil {
+				return &SyncError{
+					Stage:   "sync_ssl_pre",
+					Message: "failed to sync SSL certificates before config sync",
+					Cause:   err,
+					Hints: []string{
+						"Check SSL storage permissions",
+						"Verify certificate contents are valid PEM format",
+						"Review error message for specific certificate failures",
+					},
+				}
+			}
+
+			o.logger.Info("SSL certificates synced successfully (pre-config phase)")
+			return nil
+		})
+	}
+
+	// Sync map files if there are changes
+	if mapDiff != nil && mapDiff.HasChanges() {
+		g.Go(func() error {
+			o.logger.Info("Map file changes detected",
+				"creates", len(mapDiff.ToCreate),
+				"updates", len(mapDiff.ToUpdate),
+				"deletes", len(mapDiff.ToDelete))
+
+			// Sync creates and updates BEFORE config sync (don't delete yet)
+			preConfigMap := &auxiliaryfiles.MapFileDiff{
+				ToCreate: mapDiff.ToCreate,
+				ToUpdate: mapDiff.ToUpdate,
+				ToDelete: nil,
+			}
+
+			if err := auxiliaryfiles.SyncMapFiles(gCtx, o.client, preConfigMap); err != nil {
+				return &SyncError{
+					Stage:   "sync_maps_pre",
+					Message: "failed to sync map files before config sync",
+					Cause:   err,
+					Hints: []string{
+						"Check map storage permissions",
+						"Verify map file format is correct",
+						"Review error message for specific map failures",
+					},
+				}
+			}
+
+			o.logger.Info("Map files synced successfully (pre-config phase)")
+			return nil
+		})
+	}
 
 	// Wait for all auxiliary file syncs to complete
 	if err := g.Wait(); err != nil {
@@ -178,86 +252,9 @@ func (o *orchestrator) attemptFineGrainedSync(ctx context.Context, diff *compara
 	}
 
 	// Phase 2: Execute configuration sync with retry logic
-	adapter := client.NewVersionAdapter(o.client, opts.MaxRetries)
-
-	var appliedOps []AppliedOperation
-	var reloadTriggered bool
-	var reloadID string
-	var retries int
-
-	// Check if all operations are runtime-eligible (server UPDATE only)
-	// Runtime-eligible operations can be executed without reload via Runtime API
-	allRuntimeEligible := o.areAllOperationsRuntimeEligible(diff.Operations)
-
-	var commitResult *client.CommitResult
-	var err error
-
-	if allRuntimeEligible {
-		// Execute runtime-eligible operations without transaction (no reload)
-		o.logger.Info("All operations are runtime-eligible, executing without transaction")
-
-		// Execute operations directly using runtime API (empty transactionID)
-		for _, op := range diff.Operations {
-			if execErr := op.Execute(ctx, o.client, ""); execErr != nil {
-				err = fmt.Errorf("runtime operation failed: %w", execErr)
-				break
-			}
-		}
-
-		retries = 1             // Count single execution
-		reloadTriggered = false // Runtime API doesn't trigger reload
-		reloadID = ""           // No reload ID
-
-		if err == nil {
-			appliedOps = convertOperationsToApplied(diff.Operations)
-		}
-	} else {
-		// Execute with transaction (triggers reload)
-		commitResult, err = adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
-			retries++
-			o.logger.Info("Executing fine-grained sync",
-				"attempt", retries,
-				"transaction_id", tx.ID,
-				"version", tx.Version)
-
-			// Execute operations within the transaction
-			_, err := synchronizer.SyncOperations(ctx, o.client, diff.Operations, tx)
-			if err != nil {
-				return err
-			}
-
-			// Convert operations to AppliedOperation (do this here while we have access to operations)
-			appliedOps = convertOperationsToApplied(diff.Operations)
-
-			return nil
-			// VersionAdapter will commit the transaction after this callback returns
-		})
-
-		// Extract reload information from commit result (if successful)
-		if err == nil && commitResult != nil {
-			reloadTriggered = commitResult.StatusCode == 202
-			reloadID = commitResult.ReloadID
-		}
-	}
-
+	appliedOps, reloadTriggered, reloadID, retries, err := o.executeConfigOperations(ctx, diff, opts)
 	if err != nil {
-		// Check if it's a version conflict error
-		var conflictErr *client.VersionConflictError
-		if errors.As(err, &conflictErr) {
-			return nil, NewConflictError(retries, conflictErr.ExpectedVersion, conflictErr.ActualVersion)
-		}
-
-		// Other errors - return with details
-		return nil, &SyncError{
-			Stage:   "apply",
-			Message: "failed to apply configuration changes",
-			Cause:   err,
-			Hints: []string{
-				"Review the error message for specific operation failures",
-				"Check HAProxy logs for detailed error information",
-				"Verify all resource references are valid",
-			},
-		}
+		return nil, err
 	}
 
 	// Phase 3: Delete obsolete files AFTER successful config sync
@@ -734,4 +731,254 @@ func (o *orchestrator) deleteObsoleteFilesPostConfig(ctx context.Context, fileDi
 			o.logger.Info("Obsolete map files deleted successfully")
 		}
 	}
+}
+
+// parseAndCompareConfigs parses both current and desired configurations and compares them.
+// Returns the configuration diff or an error if parsing or comparison fails.
+func (o *orchestrator) parseAndCompareConfigs(currentConfigStr, desiredConfig string) (*comparator.ConfigDiff, error) {
+	// Parse current configuration
+	o.logger.Debug("Parsing current configuration")
+	currentConfig, err := o.parser.ParseFromString(currentConfigStr)
+	if err != nil {
+		snippet := currentConfigStr
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return nil, NewParseError("current", snippet, err)
+	}
+
+	// Parse desired configuration
+	o.logger.Debug("Parsing desired configuration")
+	desiredParsed, err := o.parser.ParseFromString(desiredConfig)
+	if err != nil {
+		snippet := desiredConfig
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return nil, NewParseError("desired", snippet, err)
+	}
+
+	// Compare configurations
+	o.logger.Info("Comparing configurations")
+	diff, err := o.comparator.Compare(currentConfig, desiredParsed)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare",
+			Message: "failed to compare configurations",
+			Cause:   err,
+			Hints: []string{
+				"Check that both configurations are valid",
+				"Review the comparison error for details",
+			},
+		}
+	}
+
+	return diff, nil
+}
+
+// compareAuxiliaryFiles compares all auxiliary file types in parallel.
+// Returns file diffs for general files, SSL certificates, and map files.
+func (o *orchestrator) compareAuxiliaryFiles(
+	ctx context.Context,
+	auxFiles *AuxiliaryFiles,
+) (*auxiliaryfiles.FileDiff, *auxiliaryfiles.SSLCertificateDiff, *auxiliaryfiles.MapFileDiff, error) {
+	var fileDiff *auxiliaryfiles.FileDiff
+	var sslDiff *auxiliaryfiles.SSLCertificateDiff
+	var mapDiff *auxiliaryfiles.MapFileDiff
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// Compare general files
+	g.Go(func() error {
+		var err error
+		fileDiff, err = o.compareGeneralFiles(gCtx, auxFiles.GeneralFiles)
+		return err
+	})
+
+	// Compare SSL certificates
+	g.Go(func() error {
+		var err error
+		sslDiff, err = o.compareSSLCertificates(gCtx, auxFiles.SSLCertificates)
+		return err
+	})
+
+	// Compare map files
+	g.Go(func() error {
+		var err error
+		mapDiff, err = o.compareMapFiles(gCtx, auxFiles.MapFiles)
+		return err
+	})
+
+	// Wait for all auxiliary file comparisons to complete
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, err
+	}
+
+	return fileDiff, sslDiff, mapDiff, nil
+}
+
+// compareGeneralFiles compares current and desired general files (comparison only, no sync).
+func (o *orchestrator) compareGeneralFiles(ctx context.Context, generalFiles []auxiliaryfiles.GeneralFile) (*auxiliaryfiles.FileDiff, error) {
+	if len(generalFiles) == 0 {
+		return &auxiliaryfiles.FileDiff{}, nil
+	}
+
+	o.logger.Debug("Comparing general files", "desired_files", len(generalFiles))
+
+	fileDiff, err := auxiliaryfiles.CompareGeneralFiles(ctx, o.client, generalFiles)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare_files",
+			Message: "failed to compare general files",
+			Cause:   err,
+			Hints: []string{
+				"Verify Dataplane API is accessible",
+				"Check file permissions on HAProxy storage",
+			},
+		}
+	}
+
+	return fileDiff, nil
+}
+
+// compareSSLCertificates compares current and desired SSL certificates (comparison only, no sync).
+func (o *orchestrator) compareSSLCertificates(ctx context.Context, sslCerts []auxiliaryfiles.SSLCertificate) (*auxiliaryfiles.SSLCertificateDiff, error) {
+	if len(sslCerts) == 0 {
+		return &auxiliaryfiles.SSLCertificateDiff{}, nil
+	}
+
+	o.logger.Debug("Comparing SSL certificates", "desired_certs", len(sslCerts))
+
+	sslDiff, err := auxiliaryfiles.CompareSSLCertificates(ctx, o.client, sslCerts)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare_ssl",
+			Message: "failed to compare SSL certificates",
+			Cause:   err,
+			Hints: []string{
+				"Verify Dataplane API is accessible",
+				"Check SSL storage permissions",
+			},
+		}
+	}
+
+	return sslDiff, nil
+}
+
+// compareMapFiles compares current and desired map files (comparison only, no sync).
+func (o *orchestrator) compareMapFiles(ctx context.Context, mapFiles []auxiliaryfiles.MapFile) (*auxiliaryfiles.MapFileDiff, error) {
+	if len(mapFiles) == 0 {
+		return &auxiliaryfiles.MapFileDiff{}, nil
+	}
+
+	o.logger.Debug("Comparing map files", "desired_maps", len(mapFiles))
+
+	mapDiff, err := auxiliaryfiles.CompareMapFiles(ctx, o.client, mapFiles)
+	if err != nil {
+		return nil, &SyncError{
+			Stage:   "compare_maps",
+			Message: "failed to compare map files",
+			Cause:   err,
+			Hints: []string{
+				"Verify Dataplane API is accessible",
+				"Check map storage permissions",
+			},
+		}
+	}
+
+	return mapDiff, nil
+}
+
+// executeConfigOperations executes configuration operations with retry logic.
+// Returns applied operations, reload status, reload ID, retry count, and error.
+func (o *orchestrator) executeConfigOperations(
+	ctx context.Context,
+	diff *comparator.ConfigDiff,
+	opts *SyncOptions,
+) (appliedOps []AppliedOperation, reloadTriggered bool, reloadID string, retries int, err error) {
+	// If there are no config operations, skip sync entirely (no reload needed)
+	// This happens when only auxiliary files changed
+	if len(diff.Operations) == 0 {
+		o.logger.Info("No configuration operations to execute (auxiliary files only)")
+		return nil, false, "", 0, nil
+	}
+
+	// Execute configuration operations
+	adapter := client.NewVersionAdapter(o.client, opts.MaxRetries)
+
+	// Check if all operations are runtime-eligible (server UPDATE only)
+	// Runtime-eligible operations can be executed without reload via Runtime API
+	allRuntimeEligible := o.areAllOperationsRuntimeEligible(diff.Operations)
+
+	var commitResult *client.CommitResult
+
+	if allRuntimeEligible {
+		// Execute runtime-eligible operations without transaction (no reload)
+		o.logger.Info("All operations are runtime-eligible, executing without transaction")
+
+		// Execute operations directly using runtime API (empty transactionID)
+		for _, op := range diff.Operations {
+			if execErr := op.Execute(ctx, o.client, ""); execErr != nil {
+				err = fmt.Errorf("runtime operation failed: %w", execErr)
+				break
+			}
+		}
+
+		retries = 1             // Count single execution
+		reloadTriggered = false // Runtime API doesn't trigger reload
+		reloadID = ""           // No reload ID
+
+		if err == nil {
+			appliedOps = convertOperationsToApplied(diff.Operations)
+		}
+	} else {
+		// Execute with transaction (triggers reload)
+		commitResult, err = adapter.ExecuteTransaction(ctx, func(ctx context.Context, tx *client.Transaction) error {
+			retries++
+			o.logger.Info("Executing fine-grained sync",
+				"attempt", retries,
+				"transaction_id", tx.ID,
+				"version", tx.Version)
+
+			// Execute operations within the transaction
+			_, err := synchronizer.SyncOperations(ctx, o.client, diff.Operations, tx)
+			if err != nil {
+				return err
+			}
+
+			// Convert operations to AppliedOperation (do this here while we have access to operations)
+			appliedOps = convertOperationsToApplied(diff.Operations)
+
+			return nil
+			// VersionAdapter will commit the transaction after this callback returns
+		})
+
+		// Extract reload information from commit result (if successful)
+		if err == nil && commitResult != nil {
+			reloadTriggered = commitResult.StatusCode == 202
+			reloadID = commitResult.ReloadID
+		}
+	}
+
+	if err != nil {
+		// Check if it's a version conflict error
+		var conflictErr *client.VersionConflictError
+		if errors.As(err, &conflictErr) {
+			return nil, false, "", retries, NewConflictError(retries, conflictErr.ExpectedVersion, conflictErr.ActualVersion)
+		}
+
+		// Other errors - return with details
+		return nil, false, "", retries, &SyncError{
+			Stage:   "apply",
+			Message: "failed to apply configuration changes",
+			Cause:   err,
+			Hints: []string{
+				"Review the error message for specific operation failures",
+				"Check HAProxy logs for detailed error information",
+				"Verify all resource references are valid",
+			},
+		}
+	}
+
+	return appliedOps, reloadTriggered, reloadID, retries, nil
 }

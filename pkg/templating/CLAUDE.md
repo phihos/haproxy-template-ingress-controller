@@ -493,6 +493,15 @@ This package uses Gonja v2 (`github.com/nikolalohinski/gonja/v2`):
 
 ### Gonja Quirks
 
+**CRITICAL: Escape sequences in string literals not supported:**
+```jinja2
+{{ "\n" }}  {# Does NOT produce a newline! #}
+{{ "Line 1\nLine 2" }}  {# Output: Line 1\nLine 2 (literal backslash-n) #}
+```
+Gonja does not interpret escape sequences (`\n`, `\t`, etc.) in string literals. The backslash-n is output as literal characters or ignored entirely. This is a fundamental limitation of Gonja.
+
+**Workaround**: Use actual newlines in templates or pass newlines through context variables.
+
 **Whitespace handling:**
 ```jinja2
 {% if true %}
