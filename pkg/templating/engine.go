@@ -22,6 +22,20 @@ import (
 	"github.com/nikolalohinski/gonja/v2/exec"
 )
 
+// FilterFunc is a custom filter function that can be registered with the template engine.
+// It receives the input value and optional arguments, and returns the filtered value or an error.
+//
+// Example:
+//
+//	func uppercase(in interface{}, args ...interface{}) (interface{}, error) {
+//	    str, ok := in.(string)
+//	    if !ok {
+//	        return nil, fmt.Errorf("uppercase: expected string, got %T", in)
+//	    }
+//	    return strings.ToUpper(str), nil
+//	}
+type FilterFunc func(in interface{}, args ...interface{}) (interface{}, error)
+
 // TemplateEngine provides template compilation and rendering capabilities.
 // It pre-compiles all templates at initialization for optimal runtime performance
 // and early detection of syntax errors.
@@ -40,6 +54,8 @@ type TemplateEngine struct {
 // All templates are compiled during initialization. Returns an error if any
 // template fails to compile or if the engine type is not supported.
 //
+// For custom filters, use NewWithFilters instead.
+//
 // Example:
 //
 //	templates := map[string]string{
@@ -51,6 +67,26 @@ type TemplateEngine struct {
 //	    log.Fatal(err)
 //	}
 func New(engineType EngineType, templates map[string]string) (*TemplateEngine, error) {
+	return NewWithFilters(engineType, templates, nil)
+}
+
+// NewWithFilters creates a new TemplateEngine with custom filters.
+// All templates are compiled during initialization with the custom filters registered.
+//
+// Example:
+//
+//	pathResolver := &templating.PathResolver{
+//	    MapsDir: "/etc/haproxy/maps",
+//	    SSLDir:  "/etc/haproxy/ssl",
+//	}
+//	filters := map[string]templating.FilterFunc{
+//	    "get_path": pathResolver.GetPath,
+//	}
+//	engine, err := templating.NewWithFilters(templating.EngineTypeGonja, templates, filters)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+func NewWithFilters(engineType EngineType, templates map[string]string, customFilters map[string]FilterFunc) (*TemplateEngine, error) {
 	// Validate engine type
 	if engineType != EngineTypeGonja {
 		return nil, NewUnsupportedEngineError(engineType)
@@ -85,8 +121,26 @@ func New(engineType EngineType, templates map[string]string) (*TemplateEngine, e
 	}
 
 	// Create environment with default builtins (filters, tests, control structures, methods, functions)
+	// Start with builtin filters and register custom filters
+	filters := builtins.Filters
+
+	// Register custom filters if provided
+	if len(customFilters) > 0 {
+		// Create a new filter set with built-ins
+		filterMap := make(map[string]exec.FilterFunction)
+		// Gonja v2 doesn't expose iteration over FilterSet, so we start fresh
+		// This is acceptable since we only add custom filters on top of builtins
+		for name, customFilter := range customFilters {
+			// Wrap FilterFunc in Gonja's FilterFunction signature
+			filterMap[name] = wrapCustomFilter(customFilter)
+		}
+		customFilterSet := exec.NewFilterSet(filterMap)
+		// Update builtin filters with custom ones
+		filters = filters.Update(customFilterSet)
+	}
+
 	environment := &exec.Environment{
-		Filters:           builtins.Filters,
+		Filters:           filters,
 		Tests:             builtins.Tests,
 		ControlStructures: builtins.ControlStructures,
 		Methods:           builtins.Methods,
@@ -187,4 +241,33 @@ func (e *TemplateEngine) TemplateCount() int {
 // String returns a string representation of the engine for debugging.
 func (e *TemplateEngine) String() string {
 	return fmt.Sprintf("TemplateEngine{type=%s, templates=%d}", e.engineType, e.TemplateCount())
+}
+
+// wrapCustomFilter wraps a FilterFunc into Gonja's FilterFunction signature.
+// This adapter converts between our simple FilterFunc interface and Gonja's
+// more complex signature that includes the evaluator and typed values.
+func wrapCustomFilter(customFilter FilterFunc) exec.FilterFunction {
+	return func(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.Value {
+		// Extract the input value as Go interface{}
+		inputValue := in.Interface()
+
+		// Extract arguments from VarArgs as interface{} slice
+		var args []interface{}
+		if params != nil && len(params.Args) > 0 {
+			// Get all positional arguments from Args slice
+			for _, arg := range params.Args {
+				args = append(args, arg.Interface())
+			}
+		}
+
+		// Call the custom filter
+		result, err := customFilter(inputValue, args...)
+		if err != nil {
+			// Return error wrapped in Value
+			return exec.AsValue(err)
+		}
+
+		// Return result as Value
+		return exec.AsValue(result)
+	}
 }

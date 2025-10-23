@@ -1,86 +1,40 @@
 # HAProxy Template Ingress Controller
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Build Status](https://github.com/phihos/haproxy-template-ic/actions/workflows/ci.yml/badge.svg)](https://github.com/phihos/haproxy-template-ic/actions/workflows/ci.yml)
+[![Build Status](https://github.com/phihos/haproxy-template-ingress-controller/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/phihos/haproxy-template-ingress-controller/actions/workflows/ci.yml)
 
-A Kubernetes ingress controller that manages HAProxy load balancer configurations through powerful template-driven approaches. Continuously monitors user-defined Kubernetes resources and translates them into optimized HAProxy configurations with zero-reload deployments.
+## Overview
 
-## Highlights
+The HAProxy Template Ingress Controller is a Kubernetes operator that manages HAProxy load balancer configurations through Jinja2-like templates. Unlike annotation-based ingress controllers, you define the entire HAProxy configuration using templates, giving you complete control over all HAProxy features without being constrained by a predefined set of annotations.
 
-**Complete HAProxy Control**
-Unlike annotation-based ingress controllers, templates give you full access to HAProxy's configuration language. Configure advanced features like custom ACLs, stick tables, rate limiting, or multi-tier routing without being limited by a predefined set of annotations.
+The controller watches Kubernetes resources you specify (Ingress, Service, ConfigMap, custom CRDs, or any combination), renders your templates with the current resource state, validates the generated configuration, and deploys it to HAProxy instances using the Dataplane API. Configuration changes are applied through HAProxy's runtime API when possible to avoid process reloads and maintain existing connections.
 
-**Minimal Service Disruption**
-Configuration updates apply through HAProxy's runtime API when possible, avoiding process reloads and maintaining existing connections. Only changes that require a reload will trigger one.
+**When to use this controller:**
+- You need access to HAProxy features not exposed by annotation-based controllers (custom ACLs, stick tables, rate limiting, multi-tier routing)
+- You want to define your own data model using Kubernetes resources rather than adapting to the Ingress resource structure
+- You need fine-grained control over how Kubernetes resources map to HAProxy configuration
+- You're comfortable writing and maintaining Jinja2 templates
 
-**Safe Deployments**
-Multi-phase validation catches configuration errors before they reach production HAProxy instances. Invalid configurations are rejected early, preventing service outages from bad configs.
+## Features
 
-**Smart Deployment Scheduling**
-Rate limiting prevents rapid-fire deployments during high-frequency changes. Periodic drift prevention deployments detect and correct external configuration modifications. Concurrent deployment protection ensures version consistency across HAProxy instances.
-
-**Flexible Resource Mapping**
-Watch any Kubernetes resource type as input, not just Ingress objects. Use Services, ConfigMaps, custom CRDs, or any combination to drive your HAProxy configuration. Define your own data model.
-
-**Battle-Tested Load Balancer**
-Built on HAProxy, trusted by high-traffic sites for decades. Get enterprise-grade load balancing with the flexibility of Kubernetes-native configuration management.
-
-## Quick Example
-
-Here's a minimal configuration that watches Kubernetes Ingress resources and generates HAProxy backends:
-
-```yaml
-# ConfigMap: haproxy-config
-watched_resources:
-  ingresses:
-    api_version: networking.k8s.io/v1
-    kind: Ingress
-    index_by:
-      - metadata.namespace
-      - metadata.name
-
-haproxy_config:
-  template: |
-    global
-        daemon
-
-    defaults
-        mode http
-        timeout client 30s
-        timeout server 30s
-        timeout connect 5s
-
-    frontend http
-        bind :80
-        {% for ingress in resources.ingresses %}
-        {% for rule in ingress.spec.rules %}
-        acl host_{{ ingress.metadata.name }} hdr(host) -i {{ rule.host }}
-        use_backend {{ ingress.metadata.name }} if host_{{ ingress.metadata.name }}
-        {% endfor %}
-        {% endfor %}
-
-    {% for ingress in resources.ingresses %}
-    backend {{ ingress.metadata.name }}
-        balance roundrobin
-        {% for rule in ingress.spec.rules %}
-        {% for path in rule.http.paths %}
-        server {{ path.backend.service.name }} {{ path.backend.service.name }}.{{ ingress.metadata.namespace }}.svc.cluster.local:{{ path.backend.service.port.number }} check
-        {% endfor %}
-        {% endfor %}
-    {% endfor %}
-```
-
-Any Ingress created in your cluster automatically appears in the `resources.ingresses` collection, and the template generates the corresponding HAProxy configuration.
+- **Template-driven configuration**: Use Jinja2-like syntax to generate HAProxy configurations from any Kubernetes resources
+- **Flexible resource watching**: Monitor any Kubernetes resource type (Ingress, Service, ConfigMap, CRDs) as input to your templates
+- **Multi-phase validation**: Configurations are validated by the client-native parser and HAProxy binary before deployment
+- **Zero-reload optimization**: Uses HAProxy runtime API for server weight, address, and maintenance state changes
+- **Smart deployment scheduling**: Rate limiting prevents concurrent deployments, periodic drift detection corrects external modifications
+- **Event-driven architecture**: Components communicate through an event bus for clean separation and observability
+- **Prometheus metrics**: Comprehensive metrics for controller operations, reconciliation cycles, and deployment success rates
 
 ## Quick Start
 
-Get the controller running in your cluster in a few minutes.
+This guide shows you how to deploy the controller and create your first template-driven configuration.
 
-### 1. Deploy HAProxy with Dataplane API
+> [!NOTE]
+> The examples below use simplified HAProxy deployments for demonstration. For production deployments with proper volume sharing, health checks, and HA setup, see the [Helm chart documentation](charts/haproxy-template-ic/README.md#haproxy-pod-requirements).
 
-Deploy HAProxy pods that the controller will manage. Here's a simplified example for testing:
+### Deploy HAProxy with Dataplane API
 
-> **Note**: This is a minimal example for quick testing. For production deployments with proper volume sharing, health checks, and configuration management, see the [Helm chart HAProxy examples](charts/haproxy-template-ic/README.md#haproxy-pod-requirements).
+The controller manages HAProxy instances through the Dataplane API. You need to deploy HAProxy pods with Dataplane API sidecars:
 
 ```bash
 kubectl apply -f - <<EOF
@@ -88,6 +42,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: haproxy
+  namespace: default
 spec:
   replicas: 2
   selector:
@@ -101,11 +56,15 @@ spec:
         component: loadbalancer
     spec:
       containers:
+      # Main HAProxy container
       - name: haproxy
         image: haproxytech/haproxy-debian:3.2
         ports:
         - containerPort: 80
+          name: http
         - containerPort: 443
+          name: https
+      # Dataplane API sidecar for configuration management
       - name: dataplane
         image: haproxytech/dataplane-api:3.0
         args:
@@ -118,14 +77,15 @@ spec:
           value: admin
         - name: DATAPLANE_PASS
           value: adminpass
+        ports:
+        - containerPort: 5555
+          name: dataplane-api
 EOF
 ```
 
-See [charts/haproxy-template-ic/README.md](charts/haproxy-template-ic/README.md#haproxy-pod-requirements) for production-ready HAProxy deployment examples.
+### Install the Controller
 
-### 2. Install the Controller
-
-Install using Helm:
+Install the controller using Helm:
 
 ```bash
 helm install haproxy-ic ./charts/haproxy-template-ic \
@@ -133,11 +93,11 @@ helm install haproxy-ic ./charts/haproxy-template-ic \
   --set credentials.dataplane.password=adminpass
 ```
 
-The default configuration watches Ingress resources and generates HAProxy backends. Customize via values file for advanced scenarios.
+The default configuration watches Ingress resources and generates corresponding HAProxy frontends and backends. You can customize the configuration through values or by editing the ConfigMap after installation.
 
-### 3. Create an Ingress
+### Create an Ingress Resource
 
-Create a sample Ingress resource:
+Create an Ingress to test the controller:
 
 ```bash
 kubectl apply -f - <<EOF
@@ -145,6 +105,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: example
+  namespace: default
 spec:
   rules:
   - host: example.com
@@ -160,99 +121,199 @@ spec:
 EOF
 ```
 
-### 4. Verify
+### Verify the Deployment
 
-Check that the controller generated HAProxy configuration:
+Check that the controller rendered and deployed the configuration:
 
 ```bash
-# Check controller logs
-kubectl logs -l app.kubernetes.io/name=haproxy-template-ic
+# View controller logs to see the reconciliation process
+kubectl logs -l app.kubernetes.io/name=haproxy-template-ic -n haproxy-template-ic
 
-# View generated HAProxy config in HAProxy pod
+# Verify the generated HAProxy configuration in one of the HAProxy pods
 kubectl exec -it deployment/haproxy -c haproxy -- cat /etc/haproxy/haproxy.cfg
 ```
 
-You should see your Ingress translated into HAProxy frontend rules and backend servers.
+You should see your Ingress resource translated into HAProxy frontend rules and backend server definitions.
 
-### Next Steps
+## Configuration Example
 
-- Customize templates in the [ConfigMap configuration](charts/haproxy-template-ic/README.md#controller-configuration)
-- Add more watched resources (Services, EndpointSlices, custom CRDs)
-- Enable [validation sidecar](charts/haproxy-template-ic/README.md#validation-sidecar) for safer deployments
-- Review [HAProxy pod requirements](charts/haproxy-template-ic/README.md#haproxy-pod-requirements) for production
+Here's a minimal configuration that watches Kubernetes Ingress resources and generates HAProxy backends:
+
+```yaml
+# ConfigMap: haproxy-template-ic-config
+watched_resources:
+  # Watch Ingress resources across all namespaces
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    # Index by namespace and name for O(1) lookups in templates
+    index_by:
+      - metadata.namespace
+      - metadata.name
+
+haproxy_config:
+  template: |
+    global
+        daemon
+        maxconn 256
+
+    defaults
+        mode http
+        timeout client 30s
+        timeout server 30s
+        timeout connect 5s
+
+    # Frontend that routes requests based on Host header
+    frontend http
+        bind :80
+        {% for ingress in resources.ingresses %}
+        {% for rule in ingress.spec.rules %}
+        # Route for {{ rule.host }}
+        acl host_{{ ingress.metadata.name }} hdr(host) -i {{ rule.host }}
+        use_backend {{ ingress.metadata.name }} if host_{{ ingress.metadata.name }}
+        {% endfor %}
+        {% endfor %}
+
+    # Backend for each Ingress resource
+    {% for ingress in resources.ingresses %}
+    backend {{ ingress.metadata.name }}
+        balance roundrobin
+        {% for rule in ingress.spec.rules %}
+        {% for path in rule.http.paths %}
+        # Server pointing to Kubernetes Service
+        server {{ path.backend.service.name }} {{ path.backend.service.name }}.{{ ingress.metadata.namespace }}.svc.cluster.local:{{ path.backend.service.port.number }} check
+        {% endfor %}
+        {% endfor %}
+    {% endfor %}
+```
+
+Any Ingress resource created in your cluster automatically appears in the `resources.ingresses` collection, and the template generates the corresponding HAProxy configuration. The controller renders the template, validates it, and deploys it to all HAProxy instances.
 
 ## Architecture
 
-The controller follows an event-driven architecture with pure components:
+The controller watches Kubernetes resources, renders HAProxy configurations from templates, and deploys them to HAProxy instances via the Dataplane API:
+
+```mermaid
+graph LR
+    K8S[(Kubernetes API)]
+
+    subgraph ctrl[Controller Deployment]
+        CTL[Template Controller]
+    end
+
+    subgraph pod[HAProxy Pod]
+        DPA[Dataplane API<br/>Sidecar]
+        HAP[HAProxy]
+    end
+
+    K8S -->|1. Watch/Fetch<br/>Resources| CTL
+    CTL -->|2. Render<br/>Templates| CTL
+    CTL -->|3. Deploy<br/>Config| DPA
+    DPA -.->|4. Configure| HAP
+```
+
+Internally, the controller uses an event-driven architecture where components communicate exclusively through an EventBus:
 
 ```
-Kubernetes API → Resource Watchers → EventBus → Components
+Kubernetes API → Resource Watchers → EventBus → Reconciler
                                          ↓
-                   ConfigLoader, Validators, Reconciler
+                   Template Renderer → Configuration Validator
                                          ↓
-                   Template Engine → Validator → Deployment Scheduler
-                                         ↓
-                   Deployment Scheduler → Deployer → Drift Monitor
+                   Deployment Scheduler → HAProxy Deployer
                                          ↓
                               HAProxy Dataplane API
 ```
 
-**Key Design Principles:**
-- Multi-phase validation catches configuration errors early
-- Optimized deployments minimize HAProxy reloads
-- Template-driven for maximum flexibility
-- Rate-limited deployments prevent version conflicts
-- Drift prevention detects external configuration changes
+**Key components:**
+
+- **Resource Watchers**: Monitor Kubernetes resources and index them for fast template lookups
+- **Reconciler**: Debounces resource changes and triggers reconciliation cycles
+- **Template Renderer**: Renders Jinja2 templates using indexed Kubernetes resources
+- **Configuration Validator**: Validates generated configurations using client-native parser and HAProxy binary
+- **Deployment Scheduler**: Rate-limits deployments and prevents version conflicts
+- **HAProxy Deployer**: Deploys configurations to HAProxy instances via Dataplane API
 
 For detailed architecture documentation, see [docs/development/design.md](docs/development/design.md).
 
 ## Documentation
 
+### User Guides
+
+- [Templating Guide](docs/templating.md) - How to write templates for HAProxy configuration, maps, and certificates
+- [Supported HAProxy Configuration](docs/supported-configuration.md) - Reference for what HAProxy features you can configure
+- [Helm Chart](charts/haproxy-template-ic/README.md) - Installation and configuration guide
+
 ### Package Documentation
 
-- [pkg/controller/](pkg/controller/README.md) - Event-driven controller orchestration
-- [pkg/core/](pkg/core/README.md) - Configuration API reference
-- [pkg/dataplane/](pkg/dataplane/README.md) - HAProxy integration guide
-- [pkg/templating/](pkg/templating/README.md) - Template engine comprehensive guide
-- [pkg/k8s/](pkg/k8s/README.md) - Kubernetes resource watching and indexing
-- [pkg/events/](pkg/events/README.md) - Event bus infrastructure
+- [Controller](pkg/controller/README.md) - Event-driven controller orchestration
+- [Core](pkg/core/README.md) - Configuration API reference
+- [Dataplane](pkg/dataplane/README.md) - HAProxy integration and synchronization
+- [Templating](pkg/templating/README.md) - Template engine usage and Jinja2 syntax
+- [Kubernetes](pkg/k8s/README.md) - Resource watching and indexing
+- [Events](pkg/events/README.md) - Event bus infrastructure
 
 ### Development Documentation
 
-- [docs/development/design.md](docs/development/design.md) - Complete architecture overview
-- [docs/development/linting.md](docs/development/linting.md) - Code quality and linting guidelines
-- [docs/supported-configuration.md](docs/supported-configuration.md) - Configuration options reference
+- [Design Documentation](docs/development/design.md) - Architecture overview and design decisions
+- [Linting Guidelines](docs/development/linting.md) - Code quality and linting setup
 
 ## Development
 
-### Build Commands
+### Build and Test
 
 ```bash
-# Build binary
+# Build the controller binary
 make build
 
-# Run tests
+# Run unit tests
 make test
 
 # Run integration tests (requires kind cluster)
 make test-integration
 
-# Run linting
+# Run linting checks
 make lint
 
-# Run all checks
+# Run all checks (tests + linting)
 make check-all
 
 # Build Docker image
 make docker-build
 
-# Coverage report
+# Generate coverage report
 make test-coverage
 ```
 
+### Local Development Environment
+
+The project includes scripts for local development with kind:
+
+```bash
+# Start development cluster with controller
+./scripts/start-dev-env.sh
+
+# Rebuild and restart controller after code changes
+./scripts/start-dev-env.sh --restart
+
+# View controller logs
+./scripts/start-dev-env.sh logs
+
+# Check deployment status
+./scripts/start-dev-env.sh status
+
+# Test ingress functionality
+./scripts/start-dev-env.sh test
+
+# Clean up development environment
+./scripts/start-dev-env.sh down
+```
+
+> [!WARNING]
+> Always use the `kind-haproxy-template-ic-dev` cluster context for development work. The `kind-haproxy-test` context is reserved for integration tests and will be automatically created and destroyed by test runs.
+
 ### Pre-commit Hooks
 
-Automatic code quality checks can be set up using [pre-commit](https://pre-commit.com/):
+Set up automatic code quality checks using pre-commit:
 
 ```bash
 # Install pre-commit (one-time setup)
@@ -265,24 +326,25 @@ pre-commit install
 # Hooks now run automatically on git commit
 git commit -m "my changes"  # Runs make lint && make audit
 
-# Skip hooks if needed (e.g., for WIP commits)
+# Skip hooks if needed (for WIP commits)
 git commit --no-verify -m "WIP"
 
 # Run hooks manually on all files
 pre-commit run --all-files
 ```
 
-The hooks will automatically run `make lint` and `make audit` before each commit, catching issues early.
+The hooks run `make lint` and `make audit` before each commit to catch issues early.
 
 ## Contributing
 
-Contributions are welcome!
+Contributions are welcome. Before submitting pull requests:
 
-Before submitting pull requests:
 1. Run `make check-all` to verify code quality
 2. Add tests for new functionality
 3. Update documentation as needed
-4. Follow the existing code style and patterns
+4. Follow existing code style and patterns
+
+See [CLAUDE.md](CLAUDE.md) for detailed development context and patterns.
 
 ## License
 
@@ -292,7 +354,8 @@ Copyright 2025 Philipp Hossner
 
 ## Acknowledgments
 
-This project builds on excellent open source software:
-- [Kubernetes client-go](https://github.com/kubernetes/client-go) - Kubernetes API client
+This project builds on open source software:
+
+- [Kubernetes client-go](https://github.com/kubernetes/client-go) - Kubernetes API client library
 - [HAProxy client-native](https://github.com/haproxytech/client-native) - HAProxy Dataplane API client
-- [Gonja](https://github.com/nikolalohinski/gonja) - Jinja2-like templating for Go
+- [Gonja](https://github.com/nikolalohinski/gonja) - Jinja2-like templating engine for Go

@@ -1,6 +1,16 @@
 # Template Engine Library
 
-A high-performance Go template engine library with support for Jinja2-like syntax via Gonja. The library pre-compiles all templates at initialization for optimal runtime performance and early detection of syntax errors.
+## Overview
+
+This package provides a Go template engine with Jinja2-like syntax through the Gonja v2 library. You create an engine with your templates, and it pre-compiles them all at initialization. This design catches syntax errors early (at startup) rather than at runtime, and makes rendering fast since templates are already compiled.
+
+**When to use this package:**
+- You need Jinja2/Django-style template syntax in Go
+- You want to catch template syntax errors at application startup
+- You're building a system that renders the same templates repeatedly with different data
+- You need features like loops, conditionals, filters, and macros in your templates
+
+The engine is thread-safe, so you can render templates concurrently from multiple goroutines without additional synchronization.
 
 ## Features
 

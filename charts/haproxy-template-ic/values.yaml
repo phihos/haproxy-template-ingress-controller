@@ -47,16 +47,16 @@ controller:
       # Default: 60s
       drift_prevention_interval: 60s
 
-    logging:
-      verbose: 1  # 0=WARNING, 1=INFO, 2=DEBUG
-
-    # Validation configuration - must match HAProxy Dataplane API server settings
-    # See: https://www.haproxy.com/documentation/haproxy-data-plane-api/reference/configuration-file/#resources
-    validation:
+      # Directory paths for HAProxy auxiliary files
+      # These paths are used for both validation and deployment
+      # See: https://www.haproxy.com/documentation/haproxy-data-plane-api/reference/configuration-file/#resources
       maps_dir: /etc/haproxy/maps
-      ssl_certs_dir: /etc/haproxy/certs
+      ssl_certs_dir: /etc/haproxy/ssl
       general_storage_dir: /etc/haproxy/general
       config_file: /etc/haproxy/haproxy.cfg
+
+    logging:
+      verbose: 1  # 0=WARNING, 1=INFO, 2=DEBUG
 
     watched_resources_ignore_fields:
       - metadata.managedFields
@@ -160,15 +160,14 @@ controller:
           {%- endif %}
           {%- endfor %}
 
-    # IMPORTANT: All file references in HAProxy configuration must use relative paths
-    # from /etc/haproxy/ as the working directory.
+    # IMPORTANT: Use the get_path filter to resolve file paths automatically.
     #
-    # Correct:   maps/host.map, general/503.http, certs/server.pem
-    # Incorrect: /etc/haproxy/maps/host.map (will fail validation)
+    # The get_path filter constructs absolute paths based on file type:
+    #   {{ "host.map" | get_path("map") }}    → /etc/haproxy/maps/host.map
+    #   {{ "503.http" | get_path("file") }}   → /etc/haproxy/general/503.http
+    #   {{ "cert.pem" | get_path("cert") }}   → /etc/haproxy/ssl/cert.pem
     #
-    # This restriction exists because validation runs in isolated environments where
-    # absolute path redirection requires elevated privileges that conflict with
-    # restrictive pod security policies.
+    # This ensures correct paths for both validation and deployment.
 
     maps:
       host.map:
@@ -184,7 +183,7 @@ controller:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           # It should be used with the equality string matcher. Example:
-          #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map(/etc/haproxy/maps/path-exact.map)
+          #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
           {% set path_types = ["Exact"] %}
           {%- set suffix = "" %}
           {% include "path-map-entry" %}
@@ -202,7 +201,7 @@ controller:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           # It should be used with the prefix string matcher. Example:
-          #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg(maps/path-prefix.map)
+          #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
           {% set path_types = ["Prefix", "ImplementationSpecific"] %}
           {%- set suffix = "/" %}
           {% include "path-map-entry" %}
@@ -295,7 +294,7 @@ controller:
             group haproxy
             daemon
             ca-base /etc/ssl/certs
-            crt-base /etc/haproxy/certs
+            crt-base /etc/haproxy/ssl
             tune.ssl.default-dh-param 2048
 
         defaults
@@ -308,13 +307,13 @@ controller:
             timeout connect 5000
             timeout client 50000
             timeout server 50000
-            errorfile 400 /etc/haproxy/general/400.http
-            errorfile 403 /etc/haproxy/general/403.http
-            errorfile 408 /etc/haproxy/general/408.http
-            errorfile 500 /etc/haproxy/general/500.http
-            errorfile 502 /etc/haproxy/general/502.http
-            errorfile 503 /etc/haproxy/general/503.http
-            errorfile 504 /etc/haproxy/general/504.http
+            errorfile 400 {{ "400.http" | get_path("file") }}
+            errorfile 403 {{ "403.http" | get_path("file") }}
+            errorfile 408 {{ "408.http" | get_path("file") }}
+            errorfile 500 {{ "500.http" | get_path("file") }}
+            errorfile 502 {{ "502.http" | get_path("file") }}
+            errorfile 503 {{ "503.http" | get_path("file") }}
+            errorfile 504 {{ "504.http" | get_path("file") }}
 
         frontend status
             bind *:8404
@@ -329,11 +328,11 @@ controller:
             http-request set-var(txn.base) base
             http-request set-var(txn.path) path
             http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
-            http-request set-var(txn.host_match) var(txn.host),map(/etc/haproxy/maps/host.map)
-            http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map(/etc/haproxy/maps/host.map,'') if !{ var(txn.host_match) -m found }
-            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map(/etc/haproxy/maps/path-exact.map)
-            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map(/etc/haproxy/maps/path-prefix-exact.map) if !{ var(txn.path_match) -m found }
-            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg(/etc/haproxy/maps/path-prefix.map) if !{ var(txn.path_match) -m found }
+            http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
+            http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ "host.map" | get_path("map") }},'') if !{ var(txn.host_match) -m found }
+            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
+            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
 
             # Use path maps for routing
             use_backend %[var(txn.path_match)]

@@ -25,17 +25,17 @@ const (
 	// DefaultDriftPreventionInterval is the default interval for periodic drift prevention deployments.
 	DefaultDriftPreventionInterval = 60 * time.Second
 
-	// DefaultValidationMapsDir is the default directory for HAProxy map files.
-	DefaultValidationMapsDir = "/etc/haproxy/maps"
+	// DefaultDataplaneMapsDir is the default directory for HAProxy map files.
+	DefaultDataplaneMapsDir = "/etc/haproxy/maps"
 
-	// DefaultValidationSSLCertsDir is the default directory for SSL certificates.
-	DefaultValidationSSLCertsDir = "/etc/haproxy/certs"
+	// DefaultDataplaneSSLCertsDir is the default directory for SSL certificates.
+	DefaultDataplaneSSLCertsDir = "/etc/haproxy/ssl"
 
-	// DefaultValidationGeneralStorageDir is the default directory for general files.
-	DefaultValidationGeneralStorageDir = "/etc/haproxy/general"
+	// DefaultDataplaneGeneralStorageDir is the default directory for general files.
+	DefaultDataplaneGeneralStorageDir = "/etc/haproxy/general"
 
-	// DefaultValidationConfigFile is the default path to the main HAProxy config file.
-	DefaultValidationConfigFile = "/etc/haproxy/haproxy.cfg"
+	// DefaultDataplaneConfigFile is the default path to the main HAProxy config file.
+	DefaultDataplaneConfigFile = "/etc/haproxy/haproxy.cfg"
 )
 
 // setDefaults applies default values to unset configuration fields.
@@ -61,18 +61,18 @@ func setDefaults(cfg *Config) {
 		cfg.Dataplane.Port = DefaultDataplanePort
 	}
 
-	// Validation defaults
-	if cfg.Validation.MapsDir == "" {
-		cfg.Validation.MapsDir = DefaultValidationMapsDir
+	// Apply dataplane defaults
+	if cfg.Dataplane.MapsDir == "" {
+		cfg.Dataplane.MapsDir = DefaultDataplaneMapsDir
 	}
-	if cfg.Validation.SSLCertsDir == "" {
-		cfg.Validation.SSLCertsDir = DefaultValidationSSLCertsDir
+	if cfg.Dataplane.SSLCertsDir == "" {
+		cfg.Dataplane.SSLCertsDir = DefaultDataplaneSSLCertsDir
 	}
-	if cfg.Validation.GeneralStorageDir == "" {
-		cfg.Validation.GeneralStorageDir = DefaultValidationGeneralStorageDir
+	if cfg.Dataplane.GeneralStorageDir == "" {
+		cfg.Dataplane.GeneralStorageDir = DefaultDataplaneGeneralStorageDir
 	}
-	if cfg.Validation.ConfigFile == "" {
-		cfg.Validation.ConfigFile = DefaultValidationConfigFile
+	if cfg.Dataplane.ConfigFile == "" {
+		cfg.Dataplane.ConfigFile = DefaultDataplaneConfigFile
 	}
 
 	// Watched resources defaults
