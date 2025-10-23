@@ -101,6 +101,11 @@ type FileDiff struct {
 	ToDelete []string
 }
 
+// HasChanges returns true if there are any changes to general files.
+func (d *FileDiff) HasChanges() bool {
+	return len(d.ToCreate) > 0 || len(d.ToUpdate) > 0 || len(d.ToDelete) > 0
+}
+
 // SSLCertificateDiff represents the differences between current and desired SSL certificate states.
 // It contains lists of certificates that need to be created, updated, or deleted.
 type SSLCertificateDiff struct {
@@ -115,6 +120,11 @@ type SSLCertificateDiff struct {
 	ToDelete []string
 }
 
+// HasChanges returns true if there are any changes to SSL certificates.
+func (d *SSLCertificateDiff) HasChanges() bool {
+	return len(d.ToCreate) > 0 || len(d.ToUpdate) > 0 || len(d.ToDelete) > 0
+}
+
 // MapFileDiff represents the differences between current and desired map file states.
 // It contains lists of map files that need to be created, updated, or deleted.
 type MapFileDiff struct {
@@ -127,4 +137,9 @@ type MapFileDiff struct {
 	// ToDelete contains map file paths that exist in the current state but not in the desired state.
 	// These are file paths (not full MapFile structs) since we only need the path to delete.
 	ToDelete []string
+}
+
+// HasChanges returns true if there are any changes to map files.
+func (d *MapFileDiff) HasChanges() bool {
+	return len(d.ToCreate) > 0 || len(d.ToUpdate) > 0 || len(d.ToDelete) > 0
 }

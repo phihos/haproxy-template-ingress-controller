@@ -136,7 +136,8 @@ func (c *DataplaneClient) UpdateMapFile(ctx context.Context, name, content strin
 		return fmt.Errorf("map file '%s' not found", name)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	// Accept both 200 (OK) and 202 (Accepted) as success
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		// Try to read error body for more details
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("update map file '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))

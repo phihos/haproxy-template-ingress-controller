@@ -82,8 +82,8 @@ controller:
     template_snippets:
       backend-name:
         name: backend-name
-        template: |
-          ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+        template: >-
+          {{- " " -}}ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
 
       backend-servers:
         name: backend-servers
@@ -127,10 +127,10 @@ controller:
           {%- for ingress in resources.ingresses.List() %}
           {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
           {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
-          {{ rule.host }}{{ path.path }} {% include "backend-name" %}{{ suffix }}
-          {%- endfor %}
-          {%- endfor %}
-          {%- endfor %}
+          {{ rule.host }}{{ path.path }} {% include "backend-name" -%}{{ suffix }}
+          {% endfor %}
+          {% endfor %}
+          {% endfor %}
 
       ingress-backends:
         name: ingress-backends
@@ -185,25 +185,28 @@ controller:
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           # It should be used with the equality string matcher. Example:
           #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map(/etc/haproxy/maps/path-exact.map)
-          {%- set path_types = ["Exact"] %}
+          {% set path_types = ["Exact"] %}
           {%- set suffix = "" %}
           {% include "path-map-entry" %}
+
 
       path-prefix-exact.map:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
-          {%- set path_types = ["Prefix", "ImplementationSpecific"] %}
+          {% set path_types = ["Prefix", "ImplementationSpecific"] %}
           {%- set suffix = "" %}
           {% include "path-map-entry" %}
+
 
       path-prefix.map:
         template: |
           # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
           # It should be used with the prefix string matcher. Example:
           #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg(maps/path-prefix.map)
-          {%- set path_types = ["Prefix", "ImplementationSpecific"] %}
+          {% set path_types = ["Prefix", "ImplementationSpecific"] %}
           {%- set suffix = "/" %}
           {% include "path-map-entry" %}
+
 
     files:
       400.http:
