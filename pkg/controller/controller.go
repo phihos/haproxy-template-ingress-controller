@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -43,6 +44,7 @@ import (
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/controller/executor"
 	"haproxy-template-ic/pkg/controller/indextracker"
+	"haproxy-template-ic/pkg/controller/metrics"
 	"haproxy-template-ic/pkg/controller/reconciler"
 	"haproxy-template-ic/pkg/controller/renderer"
 	"haproxy-template-ic/pkg/controller/resourcewatcher"
@@ -54,6 +56,7 @@ import (
 	"haproxy-template-ic/pkg/k8s/client"
 	"haproxy-template-ic/pkg/k8s/types"
 	"haproxy-template-ic/pkg/k8s/watcher"
+	pkgmetrics "haproxy-template-ic/pkg/metrics"
 )
 
 const (
@@ -192,15 +195,30 @@ func fetchAndValidateInitialConfig(
 	return cfg, creds, nil
 }
 
+// componentSetup contains all resources created during component initialization.
+type componentSetup struct {
+	Bus              *busevents.EventBus
+	MetricsComponent *metrics.Component
+	MetricsRegistry  *prometheus.Registry
+	IterCtx          context.Context
+	Cancel           context.CancelFunc
+	ConfigChangeCh   chan *coreconfig.Config
+}
+
 // setupComponents creates and starts all event-driven components.
-//
-// Returns the EventBus, iteration context, cancel function, and config change channel.
 func setupComponents(
 	ctx context.Context,
 	logger *slog.Logger,
-) (*busevents.EventBus, context.Context, context.CancelFunc, chan *coreconfig.Config) {
+) *componentSetup {
 	// Create EventBus with buffer for pre-start events
 	bus := busevents.NewEventBus(100)
+
+	// Create Prometheus registry for this iteration (instance-based, not global)
+	registry := prometheus.NewRegistry()
+
+	// Create metrics collector
+	domainMetrics := metrics.New(registry)
+	metricsComponent := metrics.NewComponent(domainMetrics, bus)
 
 	// Create components
 	eventCommentator := commentator.NewEventCommentator(bus, logger, 1000)
@@ -238,7 +256,75 @@ func setupComponents(
 
 	logger.Debug("All components started")
 
-	return bus, iterCtx, cancel, configChangeCh
+	return &componentSetup{
+		Bus:              bus,
+		MetricsComponent: metricsComponent,
+		MetricsRegistry:  registry,
+		IterCtx:          iterCtx,
+		Cancel:           cancel,
+		ConfigChangeCh:   configChangeCh,
+	}
+}
+
+// setupInfrastructureServers starts debug and metrics HTTP servers.
+func setupInfrastructureServers(
+	ctx context.Context,
+	cfg *coreconfig.Config,
+	debugPort int,
+	setup *componentSetup,
+	stateCache *StateCache,
+	logger *slog.Logger,
+) {
+	logger.Info("Stage 6: Starting debug infrastructure")
+
+	// Create instance-based introspection registry (lives/dies with this iteration)
+	registry := introspection.NewRegistry()
+
+	// Create event buffer for tracking recent events
+	eventBuffer := debug.NewEventBuffer(1000, setup.Bus)
+	go func() {
+		if err := eventBuffer.Start(ctx); err != nil {
+			logger.Error("event buffer failed", "error", err)
+		}
+	}()
+
+	// Register debug variables with registry
+	debug.RegisterVariables(registry, stateCache, eventBuffer)
+
+	// Start debug HTTP server if port is configured
+	if debugPort > 0 {
+		debugServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), registry)
+		go func() {
+			if err := debugServer.Start(ctx); err != nil {
+				logger.Error("debug server failed", "error", err, "port", debugPort)
+			}
+		}()
+		logger.Info("Debug HTTP server started",
+			"port", debugPort,
+			"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
+			"access_method", "kubectl port-forward",
+			"endpoints", []string{"/debug/vars", "/debug/pprof"})
+	} else {
+		logger.Debug("Debug HTTP server disabled (port=0)")
+	}
+
+	// Start metrics HTTP server if port is configured
+	metricsPort := cfg.Controller.MetricsPort
+	if metricsPort > 0 {
+		metricsServer := pkgmetrics.NewServer(fmt.Sprintf(":%d", metricsPort), setup.MetricsRegistry)
+		go func() {
+			if err := metricsServer.Start(ctx); err != nil {
+				logger.Error("metrics server failed", "error", err, "port", metricsPort)
+			}
+		}()
+		logger.Info("Metrics HTTP server started",
+			"port", metricsPort,
+			"bind_address", fmt.Sprintf("0.0.0.0:%d", metricsPort),
+			"access_method", "kubectl port-forward",
+			"endpoint", "/metrics")
+	} else {
+		logger.Debug("Metrics HTTP server disabled (port=0)")
+	}
 }
 
 // setupResourceWatchers creates and starts resource watchers and index tracker, then waits for sync.
@@ -624,95 +710,72 @@ func runIteration(
 	}
 
 	// 2. Setup components
-	bus, iterCtx, cancel, configChangeCh := setupComponents(ctx, logger)
-	defer cancel()
+	setup := setupComponents(ctx, logger)
+	defer setup.Cancel()
 
 	// 3. Setup resource watchers
-	resourceWatcher, err := setupResourceWatchers(iterCtx, cfg, k8sClient, bus, logger, cancel)
+	resourceWatcher, err := setupResourceWatchers(setup.IterCtx, cfg, k8sClient, setup.Bus, logger, setup.Cancel)
 	if err != nil {
 		return err
 	}
 
 	// 4. Setup config watchers
 	if err := setupConfigWatchers(
-		iterCtx, k8sClient, configMapName, secretName,
-		configMapGVR, secretGVR, bus, logger, cancel,
+		setup.IterCtx, k8sClient, configMapName, secretName,
+		configMapGVR, secretGVR, setup.Bus, logger, setup.Cancel,
 	); err != nil {
 		return err
 	}
 
-	// 5. Initialize StateCache and subscribe BEFORE bus.Start()
-	// This ensures StateCache receives all events, including buffered startup events
-	stateCache := NewStateCache(bus, resourceWatcher)
+	// 5. Initialize StateCache and metrics component, subscribe BEFORE bus.Start()
+	// This ensures they receive all events, including buffered startup events
+	stateCache := NewStateCache(setup.Bus, resourceWatcher)
 	stateCache.Subscribe() // Synchronous - registers subscription immediately
 
-	// 5.5. Start the EventBus (releases buffered events and begins normal operation)
-	bus.Start()
+	// Subscribe metrics component (synchronous - must be before bus.Start())
+	setup.MetricsComponent.Start()
 
-	// 5.6. Start StateCache event loop in background
+	// 5.5. Start the EventBus (releases buffered events and begins normal operation)
+	setup.Bus.Start()
+
+	// 5.6. Start StateCache and metrics component event loops in background
 	go func() {
-		if err := stateCache.Run(iterCtx); err != nil {
+		if err := stateCache.Run(setup.IterCtx); err != nil {
 			logger.Error("state cache failed", "error", err)
+			// Non-fatal error - don't cancel iteration
+		}
+	}()
+
+	go func() {
+		if err := setup.MetricsComponent.Run(setup.IterCtx); err != nil {
+			logger.Error("metrics component failed", "error", err)
 			// Non-fatal error - don't cancel iteration
 		}
 	}()
 
 	// 6. Start reconciliation components (Stage 5)
 	logger.Info("Stage 5: Starting reconciliation components")
-	if err := setupReconciliation(iterCtx, cfg, creds, resourceWatcher, bus, logger, cancel); err != nil {
+	if err := setupReconciliation(setup.IterCtx, cfg, creds, resourceWatcher, setup.Bus, logger, setup.Cancel); err != nil {
 		return err
 	}
 
-	// 7. Setup debug infrastructure (EventBuffer, debug server)
-	logger.Info("Stage 6: Starting debug infrastructure")
-
-	// Create instance-based introspection registry (lives/dies with this iteration)
-	registry := introspection.NewRegistry()
-
-	// Create event buffer for tracking recent events
-	eventBuffer := debug.NewEventBuffer(1000, bus)
-	go func() {
-		if err := eventBuffer.Start(iterCtx); err != nil {
-			logger.Error("event buffer failed", "error", err)
-			// Non-fatal error - don't cancel iteration
-		}
-	}()
-
-	// Register debug variables with registry
-	debug.RegisterVariables(registry, stateCache, eventBuffer)
-
-	// Start debug HTTP server if port is configured
-	if debugPort > 0 {
-		debugServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), registry)
-		go func() {
-			if err := debugServer.Start(iterCtx); err != nil {
-				logger.Error("debug server failed", "error", err, "port", debugPort)
-				// Don't cancel iteration - debug server failure is non-fatal
-			}
-		}()
-		logger.Info("Debug HTTP server started",
-			"port", debugPort,
-			"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
-			"access_method", "kubectl port-forward",
-			"endpoints", []string{"/debug/vars", "/debug/pprof"})
-	} else {
-		logger.Debug("Debug HTTP server disabled (port=0)")
-	}
+	// 7. Setup debug and metrics infrastructure
+	setupInfrastructureServers(setup.IterCtx, cfg, debugPort, setup, stateCache, logger)
 
 	logger.Info("Controller iteration initialized successfully - entering event loop")
 
 	// 8. Wait for config change signal or context cancellation
 	select {
-	case <-iterCtx.Done():
-		logger.Info("Controller iteration cancelled", "reason", iterCtx.Err())
+	case <-setup.IterCtx.Done():
+		logger.Info("Controller iteration cancelled", "reason", setup.IterCtx.Err())
 		return nil
 
-	case newConfig := <-configChangeCh:
+	case newConfig := <-setup.ConfigChangeCh:
 		logger.Info("Configuration change detected, triggering reinitialization",
 			"new_config_version", fmt.Sprintf("%p", newConfig))
 
 		// Cancel iteration context to stop all components and watchers
-		cancel()
+		setup.Cancel()
 
 		// Brief pause to allow cleanup
 		time.Sleep(500 * time.Millisecond)

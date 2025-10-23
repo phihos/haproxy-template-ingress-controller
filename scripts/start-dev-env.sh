@@ -20,6 +20,8 @@ SKIP_BUILD=false
 SKIP_ECHO=false
 FORCE_REBUILD=false
 VERBOSE=false
+METRICS_RAW=false
+METRICS_WATCH=false
 
 RED="\033[0;31m"
 GREEN="\033[0;32m"
@@ -97,6 +99,7 @@ COMMANDS:
     exec        Execute shell in controller pod
     restart     Rebuild image and restart controller (use --skip-build to skip)
     status      Show deployment status
+    metrics     Show controller Prometheus metrics
     clean       Clean up and reset environment
     test        Test ingress controller functionality
     port-forward Setup port forwarding for HAProxy services
@@ -117,6 +120,9 @@ EXAMPLES:
     $0 up --skip-build      # Start without rebuilding image
     $0 restart              # Rebuild image and restart controller
     $0 restart --skip-build # Restart controller without rebuilding
+    $0 metrics              # Show controller metrics
+    $0 metrics --watch      # Continuously monitor metrics
+    $0 metrics --raw        # Show raw Prometheus format
     $0 test                 # Test ingress controller functionality
     $0 logs                 # Follow controller logs
     $0 port-forward         # Setup port forwarding for testing
@@ -171,6 +177,14 @@ parse_args() {
                 ;;
             --verbose)
                 VERBOSE=true
+                shift
+                ;;
+            --raw)
+                METRICS_RAW=true
+                shift
+                ;;
+            --watch)
+                METRICS_WATCH=true
                 shift
                 ;;
             --help|-h)
@@ -937,6 +951,132 @@ post_deploy_tips() {
 	echo
 }
 
+dev_metrics() {
+	verify_cluster_context
+
+	# Use global flags set by parse_args
+	local show_raw="$METRICS_RAW"
+	local watch_mode="$METRICS_WATCH"
+
+	print_section "📊 Controller Metrics"
+
+	# Get controller deployment
+	local ctrl_deploy
+	ctrl_deploy=$(kubectl -n "$CTRL_NAMESPACE" get deployment -l "app.kubernetes.io/instance=${HELM_RELEASE_NAME},app.kubernetes.io/name=haproxy-template-ic" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+	if [[ -z "$ctrl_deploy" ]]; then
+		err "Controller deployment not found in namespace '$CTRL_NAMESPACE'"
+		warn "Deploy the controller first with: $0 up"
+		return 1
+	fi
+
+	# Check if controller pod is ready
+	local pod_ready
+	pod_ready=$(kubectl -n "$CTRL_NAMESPACE" get deployment "$ctrl_deploy" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+	if [[ "$pod_ready" == "0" ]]; then
+		err "Controller deployment exists but has no ready pods"
+		echo "Check status with: $0 status"
+		return 1
+	fi
+
+	ok "Controller is running"
+
+	# Set up port-forward in background
+	log INFO "Setting up port-forward to metrics endpoint (port 9090)..."
+
+	# Use a temporary port-forward that we'll clean up
+	local pf_pid
+	kubectl -n "$CTRL_NAMESPACE" port-forward deploy/"$ctrl_deploy" 9090:9090 >/dev/null 2>&1 &
+	pf_pid=$!
+
+	# Ensure cleanup on exit
+	trap "kill $pf_pid 2>/dev/null || true" RETURN
+
+	# Wait for port-forward to be ready
+	local max_wait=10
+	local waited=0
+	while [[ $waited -lt $max_wait ]]; do
+		if curl -s --max-time 1 http://localhost:9090/metrics >/dev/null 2>&1; then
+			break
+		fi
+		sleep 0.5
+		((waited++)) || true
+	done
+
+	if [[ $waited -ge $max_wait ]]; then
+		err "Port-forward did not become ready in time"
+		return 1
+	fi
+
+	ok "Port-forward ready"
+	echo
+
+	if [[ "$watch_mode" == "true" ]]; then
+		log INFO "Starting watch mode (Ctrl+C to exit)..."
+		echo "Refreshing every 2 seconds..."
+		echo
+
+		# Use watch command if available, otherwise loop
+		if command -v watch >/dev/null 2>&1; then
+			watch -n 2 "curl -s http://localhost:9090/metrics 2>/dev/null | grep -E '^haproxy_ic_' | grep -v '#'"
+		else
+			while true; do
+				clear
+				echo "$(date) - Controller Metrics (refreshing every 2s)"
+				echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+				curl -s http://localhost:9090/metrics 2>/dev/null | grep -E '^haproxy_ic_' | grep -v '#'
+				sleep 2
+			done
+		fi
+	elif [[ "$show_raw" == "true" ]]; then
+		log INFO "Fetching raw metrics..."
+		curl -s http://localhost:9090/metrics
+	else
+		log INFO "Fetching controller metrics..."
+
+		local metrics_output
+		metrics_output=$(curl -s http://localhost:9090/metrics 2>/dev/null)
+
+		if [[ -z "$metrics_output" ]]; then
+			err "Failed to fetch metrics"
+			return 1
+		fi
+
+		echo -e "${GREEN}Operational Metrics:${NC}"
+		echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+		# Extract key metrics
+		echo "$metrics_output" | grep -E '^haproxy_ic_(reconciliation|deployment|validation)_total' | sed 's/haproxy_ic_/  /'
+
+		echo
+		echo -e "${YELLOW}Error Metrics:${NC}"
+		echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+		echo "$metrics_output" | grep -E '^haproxy_ic_.*_errors_total' | sed 's/haproxy_ic_/  /'
+
+		echo
+		echo -e "${BLUE}Resource Metrics:${NC}"
+		echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+		echo "$metrics_output" | grep -E '^haproxy_ic_resource_count' | sed 's/haproxy_ic_/  /'
+
+		echo
+		echo -e "${BLUE}Event Bus Metrics:${NC}"
+		echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+		echo "$metrics_output" | grep -E '^haproxy_ic_event' | sed 's/haproxy_ic_/  /'
+
+		echo
+		echo -e "${GREEN}Duration Metrics (histograms):${NC}"
+		echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+		echo "$metrics_output" | grep -E '^haproxy_ic_.*_duration_seconds_(sum|count)' | sed 's/haproxy_ic_/  /'
+
+		echo
+		ok "Use --raw to see full Prometheus output"
+		ok "Use --watch to continuously monitor metrics"
+		echo
+		echo "Keep port-forward running:"
+		echo "  kubectl -n $CTRL_NAMESPACE port-forward deploy/$ctrl_deploy 9090:9090"
+		echo "  curl http://localhost:9090/metrics"
+	fi
+}
 
 dev_up() {
     print_section "🏗️  Starting Development Environment"
@@ -991,6 +1131,9 @@ main() {
             ;;
         status)
             dev_status
+            ;;
+        metrics)
+            dev_metrics "$@"
             ;;
         test)
             test_ingress

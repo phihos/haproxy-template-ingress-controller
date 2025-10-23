@@ -259,6 +259,13 @@ haproxy-template-ic/
 │   │   ├── var.go           # Built-in Var implementations
 │   │   ├── README.md        # API documentation
 │   │   └── CLAUDE.md        # Development context
+│   ├── metrics/             # Prometheus metrics infrastructure
+│   │   ├── server.go        # HTTP server for /metrics endpoint
+│   │   ├── helpers.go       # Metric creation helpers
+│   │   ├── server_test.go   # Server tests
+│   │   ├── helpers_test.go  # Helper tests
+│   │   ├── README.md        # API documentation
+│   │   └── CLAUDE.md        # Development context
 │   ├── k8s/                 # Kubernetes integration
 │   │   ├── types/           # Core interfaces and types
 │   │   ├── client/          # Kubernetes client wrapper with dynamic client
@@ -282,6 +289,13 @@ haproxy-template-ic/
 │   │   ├── events/          # Domain-specific event types
 │   │   ├── executor/        # Reconciliation orchestrator
 │   │   ├── indextracker/    # Index synchronization tracking
+│   │   ├── metrics/         # Prometheus metrics (event adapter)
+│   │   │   ├── metrics.go   # Domain metric definitions
+│   │   │   ├── component.go # Event adapter for metrics
+│   │   │   ├── metrics_test.go
+│   │   │   ├── component_test.go
+│   │   │   ├── README.md    # API documentation
+│   │   │   └── CLAUDE.md    # Development context
 │   │   ├── reconciler/      # Reconciliation debouncer and trigger
 │   │   ├── renderer/        # Template rendering component
 │   │   ├── resourcewatcher/ # Resource watcher lifecycle management
@@ -299,6 +313,7 @@ haproxy-template-ic/
 ├── tests/                   # End-to-end tests
 │   ├── acceptance/          # Acceptance tests with debug endpoint validation
 │   │   ├── configmap_reload_test.go  # ConfigMap reload validation
+│   │   ├── metrics_test.go  # Metrics endpoint validation
 │   │   ├── debug_client.go  # Debug endpoint client for tests
 │   │   ├── env.go           # Test environment setup
 │   │   ├── fixtures.go      # Test resource management
@@ -331,6 +346,11 @@ haproxy-template-ic/
 **Runtime Introspection Infrastructure:**
 
 - `pkg/introspection`: Generic HTTP debug server infrastructure for exposing internal application state. Provides instance-based variable registry (not global like expvar), HTTP handlers for `/debug/vars` endpoints, JSONPath field selection support, Go profiling integration (`/debug/pprof`), and graceful shutdown. Domain-agnostic package that can be reused in any Go application.
+
+**Observability - Metrics Infrastructure:**
+
+- `pkg/metrics`: Generic Prometheus metrics infrastructure providing HTTP server for `/metrics` endpoint and metric creation helpers. Uses instance-based `prometheus.Registry` (not global DefaultRegisterer) for clean lifecycle management. Provides `NewServer()` for metrics HTTP server and helper functions for creating counters, histograms, gauges, and gauge vectors. Domain-agnostic package that can be reused in any Go application.
+- `pkg/controller/metrics`: Domain-specific Prometheus metrics for controller operations. Implements event adapter pattern to track reconciliation, deployment, validation, resource counts, and event activity. Exposes 11 metrics including operation counters, error counters, duration histograms, and resource gauges. Started via explicit `Start()` method after EventBus initialization to prevent race conditions during startup.
 
 **Dataplane Integration:**
 
@@ -438,6 +458,7 @@ Both watchers use the event-driven architecture: changes publish events to Event
 - `pkg/controller/discovery`: HAProxy pod discovery component (Stage 5). Discovers HAProxy pods in the cluster and provides endpoint information to the Deployer. Publishes HAProxyPodsDiscoveredEvent with discovered endpoints.
 - `pkg/controller/executor`: Orchestrates reconciliation cycles by handling events from pure components. Subscribes to ReconciliationTriggeredEvent, TemplateRenderedEvent, TemplateRenderFailedEvent, ValidationCompletedEvent, and ValidationFailedEvent. Publishes ReconciliationStartedEvent, ReconciliationCompletedEvent, and ReconciliationFailedEvent. Coordinates the event-driven flow: Renderer → Validator → Deployer. Measures reconciliation duration for observability and handles validation failures by publishing ReconciliationFailedEvent.
 - `pkg/controller/indextracker`: Tracks synchronization state across multiple resource types, publishes IndexSynchronizedEvent when all resources complete initial sync, enabling staged controller startup with clear initialization checkpoints
+- `pkg/controller/metrics`: Prometheus metrics event adapter. Subscribes to controller lifecycle events (reconciliation, deployment, validation, discovery) and exports 11 metrics including operation counters (reconciliation_total, deployment_total, validation_total), error counters, duration histograms (reconciliation_duration_seconds, deployment_duration_seconds), resource gauges (resource_count with type labels), and event bus metrics (event_subscribers, events_published_total). Uses instance-based prometheus.Registry and explicit Start() method to prevent race conditions during startup. Metrics exposed on configurable port (default 9090) via pkg/metrics HTTP server.
 - `pkg/controller/reconciler`: Debounces resource change events and triggers reconciliation cycles. Subscribes to ResourceIndexUpdatedEvent (applies debouncing with configurable interval, default 500ms) and ConfigValidatedEvent (triggers immediately without debouncing). Publishes ReconciliationTriggeredEvent when conditions are met. Filters initial sync events to prevent premature reconciliation. First Stage 5 component enabling controlled reconciliation trigger logic.
 - `pkg/controller/resourcewatcher`: Manages lifecycle of all Kubernetes resource watchers defined in configuration, provides centralized WaitForAllSync() method for coordinated initialization, publishes ResourceIndexUpdatedEvent with detailed change statistics
 - `pkg/controller/validator`: Contains validation components for controller configuration validation (basic structural validation, template syntax validation, JSONPath expression validation) that respond to ConfigValidationRequest events using scatter-gather pattern
@@ -449,7 +470,7 @@ Both watchers use the event-driven architecture: changes publish events to Event
 
 **Testing Infrastructure:**
 
-- `tests/acceptance`: End-to-end acceptance testing framework with debug endpoint validation. Provides fixture management for test resources (ConfigMaps, Services, Endpoints), debug client for querying introspection endpoints during tests via kubectl port-forward, environment helpers for test cluster setup and teardown, and initial tests for ConfigMap reload functionality. Enables true end-to-end testing without parsing logs or relying on timing heuristics.
+- `tests/acceptance`: End-to-end acceptance testing framework with debug endpoint and metrics validation. Provides fixture management for test resources (ConfigMaps, Services, Endpoints), debug client for querying introspection endpoints during tests via kubectl port-forward, environment helpers for test cluster setup and teardown, ConfigMap reload tests, and metrics endpoint validation tests. Tests verify metrics endpoint accessibility, presence of all 11 expected metrics, non-zero operational values, and histogram structure. Enables true end-to-end testing without parsing logs or relying on timing heuristics.
 - `tests/integration`: Integration testing infrastructure for component interaction tests with documentation of testing strategies and environment setup.
 
 **Template Engine:**
@@ -574,8 +595,8 @@ sequenceDiagram
         Note over Iteration,EventBus: 5. Start EventBus
         Iteration->>EventBus: Start() (replay buffered events)
 
-        Note over Iteration,Reconciler: Stage 5: Reconciliation Components
-        Iteration->>Reconciler: Start Reconciler, Renderer, Validator, Executor, Deployer, Discovery
+        Note over Iteration,Reconciler: Stage 5: Reconciliation & Observability Components
+        Iteration->>Reconciler: Start Reconciler, Renderer, Validator, Executor, Deployer, Discovery, Metrics
         Iteration->>EventBus: Publish initial ReconciliationTriggeredEvent
 
         Note over Iteration: 6. Event Loop
@@ -600,11 +621,11 @@ The controller runs iterations that respond to configuration changes:
 3. **Resource Watchers**: Create watchers for configured resources and wait for initial sync
 4. **Config Watchers**: Create watchers for ConfigMap and Secret, wait for sync
 5. **EventBus Start**: Call EventBus.Start() to replay buffered events and begin normal operation
-6. **Stage 5 - Reconciliation**: Start reconciliation components (Reconciler, Renderer, Validator, Executor, Deployer, Discovery)
+6. **Stage 5 - Reconciliation & Observability**: Start reconciliation components (Reconciler, Renderer, Validator, Executor, Deployer, Discovery) and observability components (Metrics, Debug HTTP servers)
 7. **Event Loop**: Wait for configuration changes or context cancellation
 8. **Reinitialization**: When config changes, cancel iteration context to stop all components, then restart with new config
 
-This pattern ensures the controller always operates with validated configuration and handles configuration updates by cleanly restarting with the new settings. The Stage 5 label is explicitly used in code for reconciliation components; earlier stages are implicit in the initialization sequence.
+This pattern ensures the controller always operates with validated configuration and handles configuration updates by cleanly restarting with the new settings. The Stage 5 label is explicitly used in code for reconciliation components; earlier stages are implicit in the initialization sequence. Metrics collection starts in Stage 5 after EventBus.Start() to ensure all event subscriptions are properly registered before metrics begin tracking events.
 
 ##### Resource Change Handling
 
@@ -1162,27 +1183,55 @@ factory.Start(stopCh)
 
 **Decision**: Prometheus metrics + OpenTelemetry tracing with standardized naming.
 
-**Metrics Design**:
-```go
-// Counter for template renders
-renderCounter := prometheus.NewCounterVec(
-    prometheus.CounterOpts{
-        Name: "haproxy_template_ic_renders_total",
-        Help: "Total number of template renders",
-    },
-    []string{"status"}, // success, error
-)
+**Metrics Implementation**:
 
-// Histogram for deployment duration
-deployDuration := prometheus.NewHistogramVec(
-    prometheus.HistogramOpts{
-        Name:    "haproxy_template_ic_deploy_duration_seconds",
-        Help:    "Duration of configuration deployments",
-        Buckets: prometheus.DefBuckets,
-    },
-    []string{"instance", "method"}, // method: runtime, structured, reload
-)
+The controller implements comprehensive Prometheus metrics through the event adapter pattern:
+
+**Architecture**:
+- `pkg/metrics`: Generic metrics infrastructure with instance-based registry
+- `pkg/controller/metrics`: Event adapter subscribing to controller lifecycle events
+- Metrics exposed on configurable port (default 9090) at `/metrics` endpoint
+
+**Implementation**:
+```go
+// Instance-based registry (not global)
+metricsRegistry := prometheus.NewRegistry()
+
+// Create metrics component
+metricsComponent := metrics.NewMetricsComponent(eventBus, metricsRegistry)
+
+// Start metrics collection (after EventBus.Start())
+go metricsComponent.Start(ctx)
+
+// Start HTTP server
+metricsServer := pkgmetrics.NewServer(":9090", metricsRegistry)
+go metricsServer.Start(ctx)
 ```
+
+**Metrics Exposed** (11 total):
+
+1. **Reconciliation Metrics**:
+   - `haproxy_ic_reconciliation_total`: Counter for reconciliation cycles
+   - `haproxy_ic_reconciliation_errors_total`: Counter for reconciliation failures
+   - `haproxy_ic_reconciliation_duration_seconds`: Histogram for reconciliation duration
+
+2. **Deployment Metrics**:
+   - `haproxy_ic_deployment_total`: Counter for deployments
+   - `haproxy_ic_deployment_errors_total`: Counter for deployment failures
+   - `haproxy_ic_deployment_duration_seconds`: Histogram for deployment duration
+
+3. **Validation Metrics**:
+   - `haproxy_ic_validation_total`: Counter for validations
+   - `haproxy_ic_validation_errors_total`: Counter for validation failures
+
+4. **Resource Metrics**:
+   - `haproxy_ic_resource_count`: Gauge vector with type labels (haproxy-pods, watched-resources)
+
+5. **Event Bus Metrics**:
+   - `haproxy_ic_event_subscribers`: Gauge for active subscribers
+   - `haproxy_ic_events_published_total`: Counter for published events
+
+See `pkg/controller/metrics/README.md` for complete metric definitions and Prometheus queries.
 
 **Tracing Integration**:
 ```go

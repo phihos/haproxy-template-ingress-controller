@@ -390,9 +390,13 @@ securityContext: {}
   # runAsUser: 1000
 
 # Service configuration
+# Exposes controller endpoints (health and metrics)
 service:
   type: ClusterIP
+  # Health check endpoint port
   healthzPort: 8080
+  # Prometheus metrics endpoint port
+  # Must match controller.config.controller.metrics_port
   metricsPort: 9090
 
 # Liveness and readiness probes
@@ -454,18 +458,45 @@ podDisruptionBudget:
   minAvailable: 1
   # maxUnavailable: 1
 
-# Prometheus ServiceMonitor
+# Prometheus Metrics and Monitoring
+# The controller exposes 11 Prometheus metrics on port 9090 covering:
+# - Reconciliation cycles and errors
+# - Deployment operations and duration
+# - Configuration validation
+# - Resource counts and event bus activity
+#
+# Metrics endpoint: http://<pod-ip>:9090/metrics
+# Access via: kubectl port-forward pod/<controller-pod> 9090:9090
+#
+# For complete metric definitions and queries, see:
+# pkg/controller/metrics/README.md in the repository
 monitoring:
+  # ServiceMonitor for Prometheus Operator
+  # Creates a ServiceMonitor resource that configures Prometheus to scrape metrics
   serviceMonitor:
     enabled: false
+    # Scrape interval for metrics collection
     interval: 30s
+    # Timeout for each scrape
     scrapeTimeout: 10s
-    # Additional labels for ServiceMonitor
+    # Additional labels for ServiceMonitor resource
+    # Used by Prometheus to select which ServiceMonitors to use
     labels: {}
-    # Relabeling configurations
+    #   prometheus: kube-prometheus
+    #   release: prometheus
+    # Relabeling configurations applied before scraping
+    # https://prometheus.io/docs/prometheus/latest/configuration/configuration/#relabel_config
     relabelings: []
-    # Metric relabeling configurations
+    # Example: Add cluster label
+    # - sourceLabels: [__address__]
+    #   targetLabel: cluster
+    #   replacement: production
+    # Metric relabeling configurations applied to scraped metrics
     metricRelabelings: []
+    # Example: Drop specific metrics
+    # - sourceLabels: [__name__]
+    #   regex: 'haproxy_ic_event_subscribers'
+    #   action: drop
 
 # NetworkPolicy configuration
 networkPolicy:
@@ -519,18 +550,24 @@ networkPolicy:
   # Ingress rules
   ingress:
     # Allow Prometheus/monitoring to scrape metrics
+    # IMPORTANT: Enable this if using ServiceMonitor with NetworkPolicy
+    # Without this, Prometheus cannot access the metrics endpoint
     monitoring:
-      enabled: false
+      enabled: false  # Set to true when using Prometheus with NetworkPolicy
       # Pod selector for monitoring systems (e.g., Prometheus)
+      # Match the labels of your Prometheus pods
       podSelector: {}
       #   matchLabels:
       #     app: prometheus
+      #     app.kubernetes.io/name: prometheus
       # Namespace selector for monitoring systems
+      # Match the namespace where Prometheus is running
       namespaceSelector: {}
       #   matchLabels:
       #     name: monitoring
+      #     kubernetes.io/metadata.name: monitoring
       ports:
-        - port: 9090  # Metrics
+        - port: 9090  # Metrics endpoint
           protocol: TCP
 
     # Allow health checks from load balancers/ingress
