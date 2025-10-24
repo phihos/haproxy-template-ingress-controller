@@ -76,7 +76,7 @@ func TestToGVR(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := toGVR(tt.wr)
+			got, err := toGVR(&tt.wr)
 
 			if tt.wantErr {
 				require.Error(t, err)

@@ -12,13 +12,15 @@ import (
 // This provides O(1) lookup performance at the cost of higher memory usage.
 // Resources are stored with their full specification after field filtering.
 //
+// Supports non-unique index keys by storing multiple resources per composite key.
+//
 // Thread-safe for concurrent access.
 type MemoryStore struct {
 	mu       sync.RWMutex
-	data     map[string]interface{} // Flat map: composite key -> resource
-	numKeys  int                    // Number of index keys
-	allItems []interface{}          // Cache of all items for List()
-	dirty    bool                   // True if allItems needs rebuilding
+	data     map[string][]interface{} // Flat map: composite key -> slice of resources
+	numKeys  int                      // Number of index keys
+	allItems []interface{}            // Cache of all items for List()
+	dirty    bool                     // True if allItems needs rebuilding
 }
 
 // NewMemoryStore creates a new memory-backed store.
@@ -31,7 +33,7 @@ func NewMemoryStore(numKeys int) *MemoryStore {
 	}
 
 	return &MemoryStore{
-		data:     make(map[string]interface{}),
+		data:     make(map[string][]interface{}),
 		numKeys:  numKeys,
 		allItems: make([]interface{}, 0),
 		dirty:    false,
@@ -59,23 +61,26 @@ func (s *MemoryStore) Get(keys ...string) ([]interface{}, error) {
 		}
 	}
 
-	// Exact match: return single item
+	// Exact match: return all resources with this exact key
 	if len(keys) == s.numKeys {
 		keyStr := makeKeyString(keys)
-		if item, ok := s.data[keyStr]; ok {
-			return []interface{}{item}, nil
+		if items, ok := s.data[keyStr]; ok {
+			// Return copy to prevent external modification
+			result := make([]interface{}, len(items))
+			copy(result, items)
+			return result, nil
 		}
 		return []interface{}{}, nil
 	}
 
-	// Partial match: return all matching items
+	// Partial match: return all resources matching prefix
 	prefix := makeKeyString(keys) + "/"
 	var results []interface{}
 
-	for key, item := range s.data {
+	for key, items := range s.data {
 		// Check if key starts with prefix
 		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
-			results = append(results, item)
+			results = append(results, items...)
 		}
 	}
 
@@ -105,9 +110,10 @@ func (s *MemoryStore) List() ([]interface{}, error) {
 		return s.allItems, nil
 	}
 
-	items := make([]interface{}, 0, len(s.data))
-	for _, item := range s.data {
-		items = append(items, item)
+	// Flatten all resource slices into single list
+	items := make([]interface{}, 0)
+	for _, resourceSlice := range s.data {
+		items = append(items, resourceSlice...)
 	}
 
 	s.allItems = items
@@ -117,6 +123,7 @@ func (s *MemoryStore) List() ([]interface{}, error) {
 }
 
 // Add inserts a new resource into the store.
+// If resources with the same index keys already exist, the new resource is appended.
 func (s *MemoryStore) Add(resource interface{}, keys []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,19 +137,59 @@ func (s *MemoryStore) Add(resource interface{}, keys []string) error {
 	}
 
 	keyStr := makeKeyString(keys)
-	s.data[keyStr] = resource
+	s.data[keyStr] = append(s.data[keyStr], resource)
 	s.dirty = true
 
 	return nil
 }
 
 // Update modifies an existing resource or adds it if it doesn't exist.
+// For non-unique index keys, it finds the resource by namespace+name and replaces it.
 func (s *MemoryStore) Update(resource interface{}, keys []string) error {
-	// Update is identical to Add for memory store
-	return s.Add(resource, keys)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(keys) != s.numKeys {
+		return &StoreError{
+			Operation: "update",
+			Keys:      keys,
+			Err:       fmt.Errorf("wrong number of keys: got %d, expected %d", len(keys), s.numKeys),
+		}
+	}
+
+	keyStr := makeKeyString(keys)
+	resources, ok := s.data[keyStr]
+	if !ok {
+		// No resources with these keys - add new
+		s.data[keyStr] = []interface{}{resource}
+		s.dirty = true
+		return nil
+	}
+
+	// Try to find existing resource by namespace+name
+	ns, name := extractNamespaceName(resource)
+	for i, existing := range resources {
+		existingNs, existingName := extractNamespaceName(existing)
+		if existingNs == ns && existingName == name {
+			// Replace existing resource
+			resources[i] = resource
+			s.data[keyStr] = resources
+			s.dirty = true
+			return nil
+		}
+	}
+
+	// Resource not found - append
+	s.data[keyStr] = append(resources, resource)
+	s.dirty = true
+	return nil
 }
 
 // Delete removes a resource from the store.
+// NOTE: With non-unique index keys, this method cannot identify which specific resource
+// to delete when multiple resources have the same index keys. It removes ALL resources
+// matching the provided keys. The watcher should call this with the resource's actual
+// namespace+name as the index keys to delete a specific resource.
 func (s *MemoryStore) Delete(keys ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -169,7 +216,7 @@ func (s *MemoryStore) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.data = make(map[string]interface{})
+	s.data = make(map[string][]interface{})
 	s.allItems = make([]interface{}, 0)
 	s.dirty = false
 
@@ -180,7 +227,12 @@ func (s *MemoryStore) Clear() error {
 func (s *MemoryStore) Size() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.data)
+
+	count := 0
+	for _, resources := range s.data {
+		count += len(resources)
+	}
+	return count
 }
 
 // Ensure MemoryStore implements types.Store interface.

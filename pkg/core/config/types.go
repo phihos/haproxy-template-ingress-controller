@@ -166,6 +166,13 @@ type WatchedResource struct {
 	//   app: haproxy
 	//   component: loadbalancer
 	LabelSelector map[string]string `yaml:"label_selector,omitempty"`
+
+	// Store specifies the storage backend: "full" (MemoryStore) or "on-demand" (CachedStore).
+	// Default: "full"
+	//
+	// Use "on-demand" for large resources that are accessed infrequently (e.g., Secrets).
+	// Use "full" for frequently accessed resources (e.g., Ingress, Service, EndpointSlice).
+	Store string `yaml:"store"`
 }
 
 // TemplateSnippet is a reusable template fragment.
@@ -175,6 +182,11 @@ type TemplateSnippet struct {
 
 	// Template is the template content.
 	Template string `yaml:"template"`
+
+	// Priority determines the rendering order when multiple snippets are included.
+	// Lower values are rendered first. Snippets with the same priority are sorted alphabetically by name.
+	// Default: 500
+	Priority int `yaml:"priority"`
 }
 
 // MapFile is an HAProxy map file template.

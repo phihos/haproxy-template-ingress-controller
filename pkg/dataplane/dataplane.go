@@ -152,6 +152,7 @@ package dataplane
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"haproxy-template-ic/pkg/dataplane/client"
 )
@@ -201,19 +202,22 @@ type Client struct {
 //
 //	result, err := client.Sync(ctx, desiredConfig, nil, nil)
 func NewClient(ctx context.Context, endpoint Endpoint) (*Client, error) {
+	// Create logger with pod context
+	logger := slog.Default().With("pod", endpoint.PodName)
+
 	// Create dataplane client
 	c, err := client.NewFromEndpoint(client.Endpoint{
 		URL:      endpoint.URL,
 		Username: endpoint.Username,
 		Password: endpoint.Password,
 		PodName:  endpoint.PodName,
-	})
+	}, logger)
 	if err != nil {
 		return nil, NewConnectionError(endpoint.URL, err)
 	}
 
-	// Create orchestrator
-	orch, err := newOrchestrator(c)
+	// Create orchestrator with the same logger
+	orch, err := newOrchestrator(c, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create orchestrator: %w", err)
 	}

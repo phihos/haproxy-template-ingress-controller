@@ -348,6 +348,134 @@ Returns the template engine type used by this instance.
 
 Returns a string representation for debugging.
 
+## Custom Filters
+
+The template engine supports custom filters through the `NewWithFilters` constructor. Custom filters extend Gonja's built-in filters with domain-specific functionality.
+
+### NewWithFilters Constructor
+
+```go
+func NewWithFilters(
+    engineType EngineType,
+    templates map[string]string,
+    filters map[string]FilterFunc,
+) (*TemplateEngine, error)
+```
+
+Creates a template engine with custom filters registered globally for all templates.
+
+**Parameters:**
+- `engineType`: Template engine to use (currently only `EngineTypeGonja`)
+- `templates`: Map of template name to template content
+- `filters`: Map of filter name to filter function
+
+**Filter Function Signature:**
+
+```go
+type FilterFunc func(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+- `in`: The value being filtered (left side of the pipe)
+- `args`: Optional arguments passed to the filter
+- Returns: Transformed value or error
+
+**Example:**
+
+```go
+// Define custom filters
+filters := map[string]templating.FilterFunc{
+    "to_upper": func(in interface{}, args ...interface{}) (interface{}, error) {
+        str, ok := in.(string)
+        if !ok {
+            return nil, fmt.Errorf("to_upper requires string input")
+        }
+        return strings.ToUpper(str), nil
+    },
+    "multiply": func(in interface{}, args ...interface{}) (interface{}, error) {
+        val, ok := in.(int)
+        if !ok {
+            return nil, fmt.Errorf("multiply requires integer input")
+        }
+        if len(args) == 0 {
+            return nil, fmt.Errorf("multiply requires a multiplier argument")
+        }
+        multiplier, ok := args[0].(int)
+        if !ok {
+            return nil, fmt.Errorf("multiply argument must be integer")
+        }
+        return val * multiplier, nil
+    },
+}
+
+// Create engine with custom filters
+engine, err := templating.NewWithFilters(
+    templating.EngineTypeGonja,
+    templates,
+    filters,
+)
+```
+
+**Usage in templates:**
+
+```jinja2
+{{ "hello" | to_upper }}
+{# Output: HELLO #}
+
+{{ 5 | multiply(3) }}
+{# Output: 15 #}
+```
+
+### Built-in Custom Filters
+
+The HAProxy Template Ingress Controller provides these custom filters:
+
+**glob_match** - Pattern matching for lists:
+
+```go
+// Usage: {{ list | glob_match("pattern") }}
+func GlobMatch(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Filters a list of strings using glob patterns with `*` (match any characters) and `?` (match single character) wildcards.
+
+**Example:**
+```jinja2
+{% set backend_snippets = template_snippets | glob_match("backend-annotation-*") %}
+{% for snippet in backend_snippets %}
+  {% include snippet %}
+{% endfor %}
+```
+
+**b64decode** - Base64 decoding:
+
+```go
+// Usage: {{ string | b64decode }}
+func B64Decode(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Decodes base64-encoded strings. Essential for accessing Kubernetes Secret data, which is automatically base64-encoded.
+
+**Example:**
+```jinja2
+{% set secret = resources.secrets.GetSingle("default", "my-secret") %}
+password: {{ secret.data.password | b64decode }}
+```
+
+**get_path** - File path resolution:
+
+```go
+// Usage: {{ filename | get_path("type") }}
+func (pr *PathResolver) GetPath(filename interface{}, args ...interface{}) (interface{}, error)
+```
+
+Resolves filenames to absolute paths based on file type (`"map"`, `"file"`, or `"cert"`). Used for HAProxy auxiliary file references.
+
+**Example:**
+```jinja2
+use_backend %[req.hdr(host),map({{ "host.map" | get_path("map") }})]
+{# Output: use_backend %[req.hdr(host),map(/etc/haproxy/maps/host.map)] #}
+```
+
 ### Types
 
 #### `EngineType`

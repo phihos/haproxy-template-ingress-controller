@@ -14,30 +14,38 @@
 
 package renderer
 
+import (
+	"sort"
+
+	"haproxy-template-ic/pkg/core/config"
+)
+
 // buildRenderingContext wraps stores for template access and builds the template context.
 //
 // The context structure is:
 //
 //	{
 //	  "resources": {
-//	    "ingresses": StoreWrapper,  // Provides List() and Get() methods
-//	    "services": StoreWrapper,   // Provides List() and Get() methods
-//	    "secrets": StoreWrapper,    // Provides List() and Get() methods
+//	    "ingresses": StoreWrapper,  // Provides List(), Fetch(), and GetSingle() methods
+//	    "services": StoreWrapper,
+//	    "secrets": StoreWrapper,
 //	    // ... other watched resources
-//	  }
+//	  },
+//	  "template_snippets": ["snippet1", "snippet2", ...]  // Sorted by priority
 //	}
 //
-// Templates can access resources with List() for iteration:
+// Templates can access resources:
 //
 //	{% for ingress in resources.ingresses.List() %}
 //	  {{ ingress.metadata.name }}
 //	{% endfor %}
 //
-// Or with Get() for O(1) indexed lookups:
+// And iterate over matching template snippets:
 //
-//	{% for endpoint_slice in resources.endpoints.Get(service_name) %}
-//	  {{ endpoint_slice.metadata.name }}
-//	{% endfor %}
+//	{%- set matching = template_snippets | glob_match("backend-annotation-*") %}
+//	{%- for snippet_name in matching %}
+//	  {% include snippet_name %}
+//	{%- endfor %}
 func (c *Component) buildRenderingContext() map[string]interface{} {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
@@ -53,13 +61,56 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 		}
 	}
 
-	c.logger.Info("rendering context built",
-		"resource_count", len(resources))
+	// Sort template snippets by priority for template access
+	snippetNames := sortSnippetsByPriority(c.config.TemplateSnippets)
 
-	// Build final context with resources under "resources" key
+	c.logger.Info("rendering context built",
+		"resource_count", len(resources),
+		"snippet_count", len(snippetNames))
+
+	// Build final context
 	context := map[string]interface{}{
-		"resources": resources,
+		"resources":         resources,
+		"template_snippets": snippetNames,
 	}
 
 	return context
+}
+
+// sortSnippetsByPriority sorts template snippet names by priority, then alphabetically.
+// Returns a slice of snippet names in the sorted order.
+//
+// Snippets without an explicit priority default to 500.
+// Lower priority values are sorted first.
+func sortSnippetsByPriority(snippets map[string]config.TemplateSnippet) []string {
+	type snippetWithPriority struct {
+		name     string
+		priority int
+	}
+
+	// Build list with priorities
+	list := make([]snippetWithPriority, 0, len(snippets))
+	for name, snippet := range snippets {
+		priority := snippet.Priority
+		if priority == 0 {
+			priority = 500 // Default priority
+		}
+		list = append(list, snippetWithPriority{name, priority})
+	}
+
+	// Sort by priority (ascending), then by name (alphabetically)
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].priority != list[j].priority {
+			return list[i].priority < list[j].priority
+		}
+		return list[i].name < list[j].name
+	})
+
+	// Extract sorted names
+	names := make([]string, len(list))
+	for i, item := range list {
+		names[i] = item.name
+	}
+
+	return names
 }

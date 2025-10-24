@@ -15,6 +15,7 @@
 package templating
 
 import (
+	"encoding/base64"
 	"fmt"
 	"path/filepath"
 )
@@ -92,4 +93,98 @@ func (pr *PathResolver) GetPath(filename interface{}, args ...interface{}) (inte
 	absolutePath := filepath.Join(basePath, filenameStr)
 
 	return absolutePath, nil
+}
+
+// GlobMatch filters a list of strings by glob pattern.
+//
+// Usage in templates:
+//
+//	{%- set matching = template_snippets | glob_match("backend-annotation-*") %}
+//	{%- for snippet_name in matching %}
+//	  {% include snippet_name %}
+//	{%- endfor %}
+//
+// Parameters:
+//   - in: List of strings to filter ([]interface{} or []string)
+//   - args: Single argument specifying glob pattern (supports * and ? wildcards)
+//
+// Returns:
+//   - Filtered list containing only matching strings
+//   - Error if input is not a list, pattern is missing, or pattern is invalid
+func GlobMatch(in interface{}, args ...interface{}) (interface{}, error) {
+	// Convert input to []interface{}
+	var list []interface{}
+
+	switch v := in.(type) {
+	case []interface{}:
+		list = v
+	case []string:
+		// Convert []string to []interface{}
+		list = make([]interface{}, len(v))
+		for i, s := range v {
+			list[i] = s
+		}
+	default:
+		return nil, fmt.Errorf("glob_match: input must be a list, got %T", in)
+	}
+
+	// Validate pattern argument
+	if len(args) == 0 {
+		return nil, fmt.Errorf("glob_match: pattern argument required")
+	}
+
+	pattern, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("glob_match: pattern must be a string, got %T", args[0])
+	}
+
+	// Filter by glob pattern
+	var result []interface{}
+	for _, item := range list {
+		str, ok := item.(string)
+		if !ok {
+			continue // Skip non-string items
+		}
+
+		matched, err := filepath.Match(pattern, str)
+		if err != nil {
+			return nil, fmt.Errorf("glob_match: invalid pattern %q: %w", pattern, err)
+		}
+
+		if matched {
+			result = append(result, str)
+		}
+	}
+
+	return result, nil
+}
+
+// B64Decode decodes a base64-encoded string.
+//
+// Usage in templates:
+//
+//	{{ secret.data.username | b64decode }}
+//	{{ secret.data.password | b64decode }}
+//
+// Parameters:
+//   - in: Base64-encoded string to decode
+//
+// Returns:
+//   - Decoded string
+//   - Error if input is not a string or decoding fails
+//
+// Note: Kubernetes secrets automatically base64-encode all data values,
+// so this filter is needed to access the plain-text content.
+func B64Decode(in interface{}, args ...interface{}) (interface{}, error) {
+	str, ok := in.(string)
+	if !ok {
+		return nil, fmt.Errorf("b64decode: input must be a string, got %T", in)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(str)
+	if err != nil {
+		return nil, fmt.Errorf("b64decode: %w", err)
+	}
+
+	return string(decoded), nil
 }

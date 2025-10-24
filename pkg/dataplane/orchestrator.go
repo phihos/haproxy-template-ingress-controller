@@ -26,7 +26,7 @@ type orchestrator struct {
 }
 
 // newOrchestrator creates a new orchestrator instance.
-func newOrchestrator(c *client.DataplaneClient) (*orchestrator, error) {
+func newOrchestrator(c *client.DataplaneClient, logger *slog.Logger) (*orchestrator, error) {
 	p, err := parser.New()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create parser: %w", err)
@@ -36,7 +36,7 @@ func newOrchestrator(c *client.DataplaneClient) (*orchestrator, error) {
 		client:     c,
 		parser:     p,
 		comparator: comparator.New(),
-		logger:     slog.Default().With("pod", c.Endpoint.PodName),
+		logger:     logger,
 	}, nil
 }
 
