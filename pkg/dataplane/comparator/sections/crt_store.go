@@ -3,13 +3,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityCrtStore defines priority for crt-store sections.
@@ -57,14 +57,10 @@ func (op *CreateCrtStoreOperation) Execute(ctx context.Context, c *client.Datapl
 
 	apiClient := c.Client()
 
-	// Convert models.CrtStore to dataplaneapi.CrtStore using JSON marshaling
-	var apiCrtStore dataplaneapi.CrtStore
-	data, err := json.Marshal(op.CrtStore)
-	if err != nil {
-		return fmt.Errorf("failed to marshal crt-store section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiCrtStore); err != nil {
-		return fmt.Errorf("failed to unmarshal crt-store section: %w", err)
+	// Convert models.CrtStore to dataplaneapi.CrtStore using transform package
+	apiCrtStore := transform.ToAPICrtStore(op.CrtStore)
+	if apiCrtStore == nil {
+		return fmt.Errorf("failed to transform crt-store section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -81,7 +77,7 @@ func (op *CreateCrtStoreOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the CreateCrtStore API
-	resp, err := apiClient.CreateCrtStore(ctx, params, apiCrtStore)
+	resp, err := apiClient.CreateCrtStore(ctx, params, *apiCrtStore)
 	if err != nil {
 		return fmt.Errorf("failed to create crt-store section '%s': %w", op.CrtStore.Name, err)
 	}
@@ -217,14 +213,10 @@ func (op *UpdateCrtStoreOperation) Execute(ctx context.Context, c *client.Datapl
 
 	apiClient := c.Client()
 
-	// Convert models.CrtStore to dataplaneapi.CrtStore using JSON marshaling
-	var apiCrtStore dataplaneapi.CrtStore
-	data, err := json.Marshal(op.CrtStore)
-	if err != nil {
-		return fmt.Errorf("failed to marshal crt-store section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiCrtStore); err != nil {
-		return fmt.Errorf("failed to unmarshal crt-store section: %w", err)
+	// Convert models.CrtStore to dataplaneapi.CrtStore using transform package
+	apiCrtStore := transform.ToAPICrtStore(op.CrtStore)
+	if apiCrtStore == nil {
+		return fmt.Errorf("failed to transform crt-store section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -241,7 +233,7 @@ func (op *UpdateCrtStoreOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the EditCrtStore API (note: uses Edit, not Replace)
-	resp, err := apiClient.EditCrtStore(ctx, op.CrtStore.Name, params, apiCrtStore)
+	resp, err := apiClient.EditCrtStore(ctx, op.CrtStore.Name, params, *apiCrtStore)
 	if err != nil {
 		return fmt.Errorf("failed to update crt-store section '%s': %w", op.CrtStore.Name, err)
 	}

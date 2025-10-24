@@ -6,13 +6,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityHTTPCheck defines the priority for HTTP check operations.
@@ -64,13 +64,9 @@ func (op *CreateHTTPCheckBackendOperation) Execute(ctx context.Context, c *clien
 	apiClient := c.Client()
 
 	// Convert models.HTTPCheck to dataplaneapi.HttpCheck using JSON marshaling
-	var apiHTTPCheck dataplaneapi.HttpCheck
-	data, err := json.Marshal(op.HTTPCheck)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP check: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiHTTPCheck); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP check: %w", err)
+	apiHTTPCheck := transform.ToAPIHTTPCheck(op.HTTPCheck)
+	if apiHTTPCheck == nil {
+		return fmt.Errorf("failed to transform HTTP check")
 	}
 
 	// Prepare parameters with transaction ID
@@ -79,7 +75,7 @@ func (op *CreateHTTPCheckBackendOperation) Execute(ctx context.Context, c *clien
 	}
 
 	// Call the CreateHTTPCheckBackend API
-	resp, err := apiClient.CreateHTTPCheckBackend(ctx, op.BackendName, op.Index, params, apiHTTPCheck)
+	resp, err := apiClient.CreateHTTPCheckBackend(ctx, op.BackendName, op.Index, params, *apiHTTPCheck)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP check in backend '%s': %w", op.BackendName, err)
 	}
@@ -208,13 +204,9 @@ func (op *UpdateHTTPCheckBackendOperation) Execute(ctx context.Context, c *clien
 	apiClient := c.Client()
 
 	// Convert models.HTTPCheck to dataplaneapi.HttpCheck using JSON marshaling
-	var apiHTTPCheck dataplaneapi.HttpCheck
-	data, err := json.Marshal(op.HTTPCheck)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP check: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiHTTPCheck); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP check: %w", err)
+	apiHTTPCheck := transform.ToAPIHTTPCheck(op.HTTPCheck)
+	if apiHTTPCheck == nil {
+		return fmt.Errorf("failed to transform HTTP check")
 	}
 
 	// Prepare parameters with transaction ID
@@ -223,7 +215,7 @@ func (op *UpdateHTTPCheckBackendOperation) Execute(ctx context.Context, c *clien
 	}
 
 	// Call the ReplaceHTTPCheckBackend API
-	resp, err := apiClient.ReplaceHTTPCheckBackend(ctx, op.BackendName, op.Index, params, apiHTTPCheck)
+	resp, err := apiClient.ReplaceHTTPCheckBackend(ctx, op.BackendName, op.Index, params, *apiHTTPCheck)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP check in backend '%s': %w", op.BackendName, err)
 	}

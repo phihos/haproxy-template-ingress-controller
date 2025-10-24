@@ -17,6 +17,7 @@ Architecture documentation: `docs/development/design.md`
 - Run linters before commits: `make lint`
 - Table-driven tests for multiple scenarios
 - Early returns for error cases
+- **NEVER use //nolint directives** - Fix linting issues properly by refactoring code, not by suppressing warnings
 
 ### Error Handling
 
@@ -300,19 +301,11 @@ kubectl config use-context kind-haproxy-template-ic-dev
 ./scripts/start-dev-env.sh
 
 # Build and deploy changes to dev cluster
+# IMPORTANT: Always use this script - do not run manual build commands
 ./scripts/start-dev-env.sh restart
-
-# Or if you need to manually run the build steps:
-# make build
-# docker build -t haproxy-template-ic:dev .
-# kind load docker-image haproxy-template-ic:dev --name haproxy-template-ic-dev
-# kubectl rollout restart deployment haproxy-template-ic -n haproxy-template-ic
 
 # View controller logs
 ./scripts/start-dev-env.sh logs
-
-# Or use kubectl directly:
-# kubectl logs -f -l app.kubernetes.io/name=haproxy-template-ic -n haproxy-template-ic
 
 # Check deployment status
 ./scripts/start-dev-env.sh status

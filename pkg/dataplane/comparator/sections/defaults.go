@@ -8,13 +8,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -61,13 +61,9 @@ func (op *CreateDefaultsOperation) Execute(ctx context.Context, c *client.Datapl
 
 	// Convert models.Defaults to dataplaneapi.Defaults using JSON marshaling
 	// This is necessary because they are incompatible types
-	var apiDefaults dataplaneapi.Defaults
-	data, err := json.Marshal(op.Defaults)
-	if err != nil {
-		return fmt.Errorf("failed to marshal defaults section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiDefaults); err != nil {
-		return fmt.Errorf("failed to unmarshal defaults section: %w", err)
+	apiDefaults := transform.ToAPIDefaults(op.Defaults)
+	if apiDefaults == nil {
+		return fmt.Errorf("failed to transform defaults section")
 	}
 
 	// Prepare parameters with transaction ID
@@ -76,7 +72,7 @@ func (op *CreateDefaultsOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the CreateDefaultsSection API
-	resp, err := apiClient.CreateDefaultsSection(ctx, params, apiDefaults)
+	resp, err := apiClient.CreateDefaultsSection(ctx, params, *apiDefaults)
 	if err != nil {
 		return fmt.Errorf("failed to create defaults section '%s': %w", op.Defaults.Name, err)
 	}
@@ -205,13 +201,9 @@ func (op *UpdateDefaultsOperation) Execute(ctx context.Context, c *client.Datapl
 	apiClient := c.Client()
 
 	// Convert models.Defaults to dataplaneapi.Defaults using JSON marshaling
-	var apiDefaults dataplaneapi.Defaults
-	data, err := json.Marshal(op.Defaults)
-	if err != nil {
-		return fmt.Errorf("failed to marshal defaults section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiDefaults); err != nil {
-		return fmt.Errorf("failed to unmarshal defaults section: %w", err)
+	apiDefaults := transform.ToAPIDefaults(op.Defaults)
+	if apiDefaults == nil {
+		return fmt.Errorf("failed to transform defaults section")
 	}
 
 	// Prepare parameters with transaction ID
@@ -220,7 +212,7 @@ func (op *UpdateDefaultsOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the ReplaceDefaultsSection API
-	resp, err := apiClient.ReplaceDefaultsSection(ctx, op.Defaults.Name, params, apiDefaults)
+	resp, err := apiClient.ReplaceDefaultsSection(ctx, op.Defaults.Name, params, *apiDefaults)
 	if err != nil {
 		return fmt.Errorf("failed to update defaults section '%s': %w", op.Defaults.Name, err)
 	}

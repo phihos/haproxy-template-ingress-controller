@@ -5,13 +5,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -56,14 +56,10 @@ func (op *CreateFrontendOperation) Execute(ctx context.Context, c *client.Datapl
 
 	apiClient := c.Client()
 
-	// Convert models.Frontend to dataplaneapi.Frontend using JSON marshaling
-	var apiFrontend dataplaneapi.Frontend
-	data, err := json.Marshal(op.Frontend)
-	if err != nil {
-		return fmt.Errorf("failed to marshal frontend: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFrontend); err != nil {
-		return fmt.Errorf("failed to unmarshal frontend: %w", err)
+	// Convert models.Frontend to dataplaneapi.Frontend using transform package
+	apiFrontend := transform.ToAPIFrontend(op.Frontend)
+	if apiFrontend == nil {
+		return fmt.Errorf("failed to transform frontend")
 	}
 
 	// Prepare parameters with transaction ID
@@ -72,7 +68,7 @@ func (op *CreateFrontendOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the CreateFrontend API
-	resp, err := apiClient.CreateFrontend(ctx, params, apiFrontend)
+	resp, err := apiClient.CreateFrontend(ctx, params, *apiFrontend)
 	if err != nil {
 		return fmt.Errorf("failed to create frontend '%s': %w", op.Frontend.Name, err)
 	}
@@ -200,14 +196,10 @@ func (op *UpdateFrontendOperation) Execute(ctx context.Context, c *client.Datapl
 
 	apiClient := c.Client()
 
-	// Convert models.Frontend to dataplaneapi.Frontend using JSON marshaling
-	var apiFrontend dataplaneapi.Frontend
-	data, err := json.Marshal(op.Frontend)
-	if err != nil {
-		return fmt.Errorf("failed to marshal frontend: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFrontend); err != nil {
-		return fmt.Errorf("failed to unmarshal frontend: %w", err)
+	// Convert models.Frontend to dataplaneapi.Frontend using transform package
+	apiFrontend := transform.ToAPIFrontend(op.Frontend)
+	if apiFrontend == nil {
+		return fmt.Errorf("failed to transform frontend")
 	}
 
 	// Prepare parameters with transaction ID
@@ -216,7 +208,7 @@ func (op *UpdateFrontendOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the ReplaceFrontend API
-	resp, err := apiClient.ReplaceFrontend(ctx, op.Frontend.Name, params, apiFrontend)
+	resp, err := apiClient.ReplaceFrontend(ctx, op.Frontend.Name, params, *apiFrontend)
 	if err != nil {
 		return fmt.Errorf("failed to update frontend '%s': %w", op.Frontend.Name, err)
 	}

@@ -3,13 +3,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityResolver defines priority for resolver sections.
@@ -58,14 +58,10 @@ func (op *CreateResolverOperation) Execute(ctx context.Context, c *client.Datapl
 
 	apiClient := c.Client()
 
-	// Convert models.Resolver to dataplaneapi.Resolver using JSON marshaling
-	var apiResolver dataplaneapi.Resolver
-	data, err := json.Marshal(op.Resolver)
-	if err != nil {
-		return fmt.Errorf("failed to marshal resolver section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiResolver); err != nil {
-		return fmt.Errorf("failed to unmarshal resolver section: %w", err)
+	// Convert models.Resolver to dataplaneapi.Resolver using transform package
+	apiResolver := transform.ToAPIResolver(op.Resolver)
+	if apiResolver == nil {
+		return fmt.Errorf("failed to transform resolver section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -82,7 +78,7 @@ func (op *CreateResolverOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the CreateResolver API
-	resp, err := apiClient.CreateResolver(ctx, params, apiResolver)
+	resp, err := apiClient.CreateResolver(ctx, params, *apiResolver)
 	if err != nil {
 		return fmt.Errorf("failed to create resolver section '%s': %w", op.Resolver.Name, err)
 	}
@@ -218,14 +214,10 @@ func (op *UpdateResolverOperation) Execute(ctx context.Context, c *client.Datapl
 
 	apiClient := c.Client()
 
-	// Convert models.Resolver to dataplaneapi.Resolver using JSON marshaling
-	var apiResolver dataplaneapi.Resolver
-	data, err := json.Marshal(op.Resolver)
-	if err != nil {
-		return fmt.Errorf("failed to marshal resolver section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiResolver); err != nil {
-		return fmt.Errorf("failed to unmarshal resolver section: %w", err)
+	// Convert models.Resolver to dataplaneapi.Resolver using transform package
+	apiResolver := transform.ToAPIResolver(op.Resolver)
+	if apiResolver == nil {
+		return fmt.Errorf("failed to transform resolver section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -242,7 +234,7 @@ func (op *UpdateResolverOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the ReplaceResolver API
-	resp, err := apiClient.ReplaceResolver(ctx, op.Resolver.Name, params, apiResolver)
+	resp, err := apiClient.ReplaceResolver(ctx, op.Resolver.Name, params, *apiResolver)
 	if err != nil {
 		return fmt.Errorf("failed to update resolver section '%s': %w", op.Resolver.Name, err)
 	}

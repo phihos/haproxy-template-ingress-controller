@@ -2,13 +2,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityCache defines priority for cache sections.
@@ -57,14 +57,10 @@ func (op *CreateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 
 	apiClient := c.Client()
 
-	// Convert models.Cache to dataplaneapi.Cache using JSON marshaling
-	var apiCache dataplaneapi.Cache
-	data, err := json.Marshal(op.Cache)
-	if err != nil {
-		return fmt.Errorf("failed to marshal cache section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiCache); err != nil {
-		return fmt.Errorf("failed to unmarshal cache section: %w", err)
+	// Convert models.Cache to dataplaneapi.Cache using transform package
+	apiCache := transform.ToAPICache(op.Cache)
+	if apiCache == nil {
+		return fmt.Errorf("failed to transform cache section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -81,7 +77,7 @@ func (op *CreateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 	}
 
 	// Call the CreateCache API
-	resp, err := apiClient.CreateCache(ctx, params, apiCache)
+	resp, err := apiClient.CreateCache(ctx, params, *apiCache)
 	if err != nil {
 		return fmt.Errorf("failed to create cache section '%s': %w", *op.Cache.Name, err)
 	}
@@ -217,14 +213,10 @@ func (op *UpdateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 
 	apiClient := c.Client()
 
-	// Convert models.Cache to dataplaneapi.Cache using JSON marshaling
-	var apiCache dataplaneapi.Cache
-	data, err := json.Marshal(op.Cache)
-	if err != nil {
-		return fmt.Errorf("failed to marshal cache section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiCache); err != nil {
-		return fmt.Errorf("failed to unmarshal cache section: %w", err)
+	// Convert models.Cache to dataplaneapi.Cache using transform package
+	apiCache := transform.ToAPICache(op.Cache)
+	if apiCache == nil {
+		return fmt.Errorf("failed to transform cache section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -241,7 +233,7 @@ func (op *UpdateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 	}
 
 	// Call the ReplaceCache API
-	resp, err := apiClient.ReplaceCache(ctx, *op.Cache.Name, params, apiCache)
+	resp, err := apiClient.ReplaceCache(ctx, *op.Cache.Name, params, *apiCache)
 	if err != nil {
 		return fmt.Errorf("failed to update cache section '%s': %w", *op.Cache.Name, err)
 	}

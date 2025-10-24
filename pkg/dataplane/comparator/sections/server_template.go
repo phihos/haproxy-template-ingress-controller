@@ -2,13 +2,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -59,13 +59,9 @@ func (op *CreateServerTemplateOperation) Execute(ctx context.Context, c *client.
 	apiClient := c.Client()
 
 	// Convert models.ServerTemplate to dataplaneapi.ServerTemplate using JSON marshaling
-	var apiServerTemplate dataplaneapi.ServerTemplate
-	data, err := json.Marshal(op.ServerTemplate)
-	if err != nil {
-		return fmt.Errorf("failed to marshal server template: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiServerTemplate); err != nil {
-		return fmt.Errorf("failed to unmarshal server template: %w", err)
+	apiServerTemplate := transform.ToAPIServerTemplate(op.ServerTemplate)
+	if apiServerTemplate == nil {
+		return fmt.Errorf("failed to transform server template")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -82,7 +78,7 @@ func (op *CreateServerTemplateOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the CreateServerTemplate API
-	resp, err := apiClient.CreateServerTemplate(ctx, op.BackendName, params, apiServerTemplate)
+	resp, err := apiClient.CreateServerTemplate(ctx, op.BackendName, params, *apiServerTemplate)
 	if err != nil {
 		return fmt.Errorf("failed to create server template '%s' in backend '%s': %w", op.ServerTemplate.Prefix, op.BackendName, err)
 	}
@@ -229,13 +225,9 @@ func (op *UpdateServerTemplateOperation) Execute(ctx context.Context, c *client.
 	apiClient := c.Client()
 
 	// Convert models.ServerTemplate to dataplaneapi.ServerTemplate using JSON marshaling
-	var apiServerTemplate dataplaneapi.ServerTemplate
-	data, err := json.Marshal(op.ServerTemplate)
-	if err != nil {
-		return fmt.Errorf("failed to marshal server template: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiServerTemplate); err != nil {
-		return fmt.Errorf("failed to unmarshal server template: %w", err)
+	apiServerTemplate := transform.ToAPIServerTemplate(op.ServerTemplate)
+	if apiServerTemplate == nil {
+		return fmt.Errorf("failed to transform server template")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -252,7 +244,7 @@ func (op *UpdateServerTemplateOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the ReplaceServerTemplate API
-	resp, err := apiClient.ReplaceServerTemplate(ctx, op.BackendName, op.ServerTemplate.Prefix, params, apiServerTemplate)
+	resp, err := apiClient.ReplaceServerTemplate(ctx, op.BackendName, op.ServerTemplate.Prefix, params, *apiServerTemplate)
 	if err != nil {
 		return fmt.Errorf("failed to update server template '%s' in backend '%s': %w", op.ServerTemplate.Prefix, op.BackendName, err)
 	}

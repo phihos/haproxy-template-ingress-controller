@@ -6,13 +6,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityBackendSwitchingRule defines the priority for backend switching rule operations.
@@ -63,14 +63,10 @@ func (op *CreateBackendSwitchingRuleFrontendOperation) Execute(ctx context.Conte
 
 	apiClient := c.Client()
 
-	// Convert models.BackendSwitchingRule to dataplaneapi.BackendSwitchingRule using JSON marshaling
-	var apiRule dataplaneapi.BackendSwitchingRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backend switching rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal backend switching rule: %w", err)
+	// Convert models.BackendSwitchingRule to dataplaneapi.BackendSwitchingRule using transform package
+	apiRule := transform.ToAPIBackendSwitchingRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform backend switching rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -79,7 +75,7 @@ func (op *CreateBackendSwitchingRuleFrontendOperation) Execute(ctx context.Conte
 	}
 
 	// Call the CreateBackendSwitchingRule API
-	resp, err := apiClient.CreateBackendSwitchingRule(ctx, op.FrontendName, op.Index, params, apiRule)
+	resp, err := apiClient.CreateBackendSwitchingRule(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create backend switching rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -207,14 +203,10 @@ func (op *UpdateBackendSwitchingRuleFrontendOperation) Execute(ctx context.Conte
 
 	apiClient := c.Client()
 
-	// Convert models.BackendSwitchingRule to dataplaneapi.BackendSwitchingRule using JSON marshaling
-	var apiRule dataplaneapi.BackendSwitchingRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backend switching rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal backend switching rule: %w", err)
+	// Convert models.BackendSwitchingRule to dataplaneapi.BackendSwitchingRule using transform package
+	apiRule := transform.ToAPIBackendSwitchingRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform backend switching rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -223,7 +215,7 @@ func (op *UpdateBackendSwitchingRuleFrontendOperation) Execute(ctx context.Conte
 	}
 
 	// Call the ReplaceBackendSwitchingRule API
-	resp, err := apiClient.ReplaceBackendSwitchingRule(ctx, op.FrontendName, op.Index, params, apiRule)
+	resp, err := apiClient.ReplaceBackendSwitchingRule(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update backend switching rule in frontend '%s': %w", op.FrontendName, err)
 	}

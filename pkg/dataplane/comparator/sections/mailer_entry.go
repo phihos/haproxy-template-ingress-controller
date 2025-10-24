@@ -2,7 +2,6 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -10,6 +9,7 @@ import (
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -64,13 +64,9 @@ func (op *CreateMailerEntryOperation) Execute(ctx context.Context, c *client.Dat
 	apiClient := c.Client()
 
 	// Convert models.MailerEntry to dataplaneapi.MailerEntry using JSON marshaling
-	var apiMailerEntry dataplaneapi.MailerEntry
-	data, err := json.Marshal(op.MailerEntry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal mailer entry: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiMailerEntry); err != nil {
-		return fmt.Errorf("failed to unmarshal mailer entry: %w", err)
+	apiMailerEntry := transform.ToAPIMailerEntry(op.MailerEntry)
+	if apiMailerEntry == nil {
+		return fmt.Errorf("failed to transform mailer entry")
 	}
 
 	// Prepare parameters and execute with transaction ID or version
@@ -79,16 +75,17 @@ func (op *CreateMailerEntryOperation) Execute(ctx context.Context, c *client.Dat
 	}
 
 	var resp *http.Response
+	var err error
 
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.CreateMailerEntry(ctx, params, apiMailerEntry)
+		resp, err = apiClient.CreateMailerEntry(ctx, params, *apiMailerEntry)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.CreateMailerEntry(ctx, params, apiMailerEntry)
+			return apiClient.CreateMailerEntry(ctx, params, *apiMailerEntry)
 		})
 	}
 
@@ -243,13 +240,9 @@ func (op *UpdateMailerEntryOperation) Execute(ctx context.Context, c *client.Dat
 	apiClient := c.Client()
 
 	// Convert models.MailerEntry to dataplaneapi.MailerEntry using JSON marshaling
-	var apiMailerEntry dataplaneapi.MailerEntry
-	data, err := json.Marshal(op.MailerEntry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal mailer entry: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiMailerEntry); err != nil {
-		return fmt.Errorf("failed to unmarshal mailer entry: %w", err)
+	apiMailerEntry := transform.ToAPIMailerEntry(op.MailerEntry)
+	if apiMailerEntry == nil {
+		return fmt.Errorf("failed to transform mailer entry")
 	}
 
 	// Prepare parameters and execute with transaction ID or version
@@ -260,16 +253,17 @@ func (op *UpdateMailerEntryOperation) Execute(ctx context.Context, c *client.Dat
 	}
 
 	var resp *http.Response
+	var err error
 
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.ReplaceMailerEntry(ctx, op.MailerEntry.Name, params, apiMailerEntry)
+		resp, err = apiClient.ReplaceMailerEntry(ctx, op.MailerEntry.Name, params, *apiMailerEntry)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.ReplaceMailerEntry(ctx, op.MailerEntry.Name, params, apiMailerEntry)
+			return apiClient.ReplaceMailerEntry(ctx, op.MailerEntry.Name, params, *apiMailerEntry)
 		})
 	}
 

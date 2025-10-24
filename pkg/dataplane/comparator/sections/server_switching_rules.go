@@ -6,13 +6,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityServerSwitchingRule defines the priority for server switching rule operations.
@@ -64,13 +64,9 @@ func (op *CreateServerSwitchingRuleBackendOperation) Execute(ctx context.Context
 	apiClient := c.Client()
 
 	// Convert models.ServerSwitchingRule to dataplaneapi.ServerSwitchingRule using JSON marshaling
-	var apiRule dataplaneapi.ServerSwitchingRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal server switching rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal server switching rule: %w", err)
+	apiRule := transform.ToAPIServerSwitchingRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform server switching rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -79,7 +75,7 @@ func (op *CreateServerSwitchingRuleBackendOperation) Execute(ctx context.Context
 	}
 
 	// Call the CreateServerSwitchingRule API
-	resp, err := apiClient.CreateServerSwitchingRule(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := apiClient.CreateServerSwitchingRule(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create server switching rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -206,13 +202,9 @@ func (op *UpdateServerSwitchingRuleBackendOperation) Execute(ctx context.Context
 	apiClient := c.Client()
 
 	// Convert models.ServerSwitchingRule to dataplaneapi.ServerSwitchingRule using JSON marshaling
-	var apiRule dataplaneapi.ServerSwitchingRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal server switching rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal server switching rule: %w", err)
+	apiRule := transform.ToAPIServerSwitchingRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform server switching rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -221,7 +213,7 @@ func (op *UpdateServerSwitchingRuleBackendOperation) Execute(ctx context.Context
 	}
 
 	// Call the ReplaceServerSwitchingRule API
-	resp, err := apiClient.ReplaceServerSwitchingRule(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := apiClient.ReplaceServerSwitchingRule(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update server switching rule in backend '%s': %w", op.BackendName, err)
 	}

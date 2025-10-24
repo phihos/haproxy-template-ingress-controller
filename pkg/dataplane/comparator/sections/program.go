@@ -3,13 +3,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityProgram defines priority for program sections.
@@ -58,14 +58,10 @@ func (op *CreateProgramOperation) Execute(ctx context.Context, c *client.Datapla
 
 	apiClient := c.Client()
 
-	// Convert models.Program to dataplaneapi.Program using JSON marshaling
-	var apiProgram dataplaneapi.Program
-	data, err := json.Marshal(op.Program)
-	if err != nil {
-		return fmt.Errorf("failed to marshal program section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiProgram); err != nil {
-		return fmt.Errorf("failed to unmarshal program section: %w", err)
+	// Convert models.Program to dataplaneapi.Program using transform package
+	apiProgram := transform.ToAPIProgram(op.Program)
+	if apiProgram == nil {
+		return fmt.Errorf("failed to transform program section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -82,7 +78,7 @@ func (op *CreateProgramOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the CreateProgram API
-	resp, err := apiClient.CreateProgram(ctx, params, apiProgram)
+	resp, err := apiClient.CreateProgram(ctx, params, *apiProgram)
 	if err != nil {
 		return fmt.Errorf("failed to create program section '%s': %w", op.Program.Name, err)
 	}
@@ -218,14 +214,10 @@ func (op *UpdateProgramOperation) Execute(ctx context.Context, c *client.Datapla
 
 	apiClient := c.Client()
 
-	// Convert models.Program to dataplaneapi.Program using JSON marshaling
-	var apiProgram dataplaneapi.Program
-	data, err := json.Marshal(op.Program)
-	if err != nil {
-		return fmt.Errorf("failed to marshal program section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiProgram); err != nil {
-		return fmt.Errorf("failed to unmarshal program section: %w", err)
+	// Convert models.Program to dataplaneapi.Program using transform package
+	apiProgram := transform.ToAPIProgram(op.Program)
+	if apiProgram == nil {
+		return fmt.Errorf("failed to transform program section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -242,7 +234,7 @@ func (op *UpdateProgramOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the ReplaceProgram API
-	resp, err := apiClient.ReplaceProgram(ctx, op.Program.Name, params, apiProgram)
+	resp, err := apiClient.ReplaceProgram(ctx, op.Program.Name, params, *apiProgram)
 	if err != nil {
 		return fmt.Errorf("failed to update program section '%s': %w", op.Program.Name, err)
 	}

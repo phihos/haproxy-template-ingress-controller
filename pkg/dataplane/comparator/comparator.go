@@ -1,14 +1,13 @@
 package comparator
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
-	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/comparator/sections"
 	"haproxy-template-ic/pkg/dataplane/parser"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -1302,7 +1301,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 		if _, exists := currentBinds[name]; !exists {
 			bind := desiredBinds[name]
 			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := convertToAPIBind(&bind)
+			apiBind := transform.ToAPIBind(&bind)
 			operations = append(operations, sections.NewCreateBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
@@ -1312,7 +1311,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 		if _, exists := desiredBinds[name]; !exists {
 			bind := currentBinds[name]
 			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := convertToAPIBind(&bind)
+			apiBind := transform.ToAPIBind(&bind)
 			operations = append(operations, sections.NewDeleteBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
@@ -1327,33 +1326,12 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 		// Compare using built-in Equal() method
 		if !currentBind.Equal(desiredBind) {
 			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := convertToAPIBind(&desiredBind)
+			apiBind := transform.ToAPIBind(&desiredBind)
 			operations = append(operations, sections.NewUpdateBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
 
 	return operations
-}
-
-// convertToAPIBind converts a models.Bind to dataplaneapi.Bind using JSON marshaling.
-func convertToAPIBind(modelBind *models.Bind) *dataplaneapi.Bind {
-	if modelBind == nil {
-		return nil
-	}
-
-	data, err := json.Marshal(modelBind)
-	if err != nil {
-		// This should never happen with valid models.Bind
-		return nil
-	}
-
-	var apiBind dataplaneapi.Bind
-	if err := json.Unmarshal(data, &apiBind); err != nil {
-		// This should never happen with valid JSON
-		return nil
-	}
-
-	return &apiBind
 }
 
 // compareFilters compares filter configurations within a frontend or backend.
@@ -2057,55 +2035,150 @@ func ringEqual(r1, r2 *models.Ring) bool {
 
 // compareUserlists compares userlist sections between current and desired configurations.
 func (c *Comparator) compareUserlists(current, desired *parser.StructuredConfig) []Operation {
+	currentMap := buildUserlistMap(current.Userlists)
+	desiredMap := buildUserlistMap(desired.Userlists)
+
 	var operations []Operation
-
-	// Convert slices to maps for easier comparison by Name
-	currentMap := make(map[string]*models.Userlist)
-	for i := range current.Userlists {
-		userlist := current.Userlists[i]
-		if userlist.Name != "" {
-			currentMap[userlist.Name] = userlist
-		}
-	}
-
-	desiredMap := make(map[string]*models.Userlist)
-	for i := range desired.Userlists {
-		userlist := desired.Userlists[i]
-		if userlist.Name != "" {
-			desiredMap[userlist.Name] = userlist
-		}
-	}
-
-	// Find added userlist sections
-	for name, userlist := range desiredMap {
-		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateUserlistOperation(userlist))
-		}
-	}
-
-	// Find deleted userlist sections
-	for name, userlist := range currentMap {
-		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteUserlistOperation(userlist))
-		}
-	}
-
-	// Find modified userlist sections
-	// Note: UserList API doesn't support updates, so we delete and recreate
-	for name, desiredUserlist := range desiredMap {
-		if currentUserlist, exists := currentMap[name]; exists {
-			if !userlistEqual(currentUserlist, desiredUserlist) {
-				operations = append(operations, sections.NewDeleteUserlistOperation(currentUserlist), sections.NewCreateUserlistOperation(desiredUserlist))
-			}
-		}
-	}
+	operations = append(operations, c.findAddedUserlists(desiredMap, currentMap)...)
+	operations = append(operations, findDeletedUserlists(currentMap, desiredMap)...)
+	operations = append(operations, c.findModifiedUserlists(currentMap, desiredMap)...)
 
 	return operations
 }
 
-// userlistEqual compares two userlist sections for equality.
-func userlistEqual(u1, u2 *models.Userlist) bool {
-	return u1.Equal(*u2)
+// buildUserlistMap converts a userlist slice to a map for comparison.
+func buildUserlistMap(userlists []*models.Userlist) map[string]*models.Userlist {
+	userlistMap := make(map[string]*models.Userlist)
+	for i := range userlists {
+		userlist := userlists[i]
+		if userlist.Name != "" {
+			userlistMap[userlist.Name] = userlist
+		}
+	}
+	return userlistMap
+}
+
+// findAddedUserlists identifies userlist sections that need to be created.
+func (c *Comparator) findAddedUserlists(desired, current map[string]*models.Userlist) []Operation {
+	var operations []Operation
+	for name, userlist := range desired {
+		if _, exists := current[name]; !exists {
+			operations = append(operations, sections.NewCreateUserlistOperation(userlist))
+			// Explicitly create each user (Dataplane API may not persist users from request body)
+			for _, user := range userlist.Users {
+				userCopy := user
+				operations = append(operations, sections.NewCreateUserOperation(name, &userCopy))
+			}
+		}
+	}
+	return operations
+}
+
+// findDeletedUserlists identifies userlist sections that need to be removed.
+func findDeletedUserlists(current, desired map[string]*models.Userlist) []Operation {
+	var operations []Operation
+	for name, userlist := range current {
+		if _, exists := desired[name]; !exists {
+			operations = append(operations, sections.NewDeleteUserlistOperation(userlist))
+		}
+	}
+	return operations
+}
+
+// findModifiedUserlists identifies userlist sections that have changed.
+func (c *Comparator) findModifiedUserlists(current, desired map[string]*models.Userlist) []Operation {
+	var operations []Operation
+	for name, desiredUserlist := range desired {
+		currentUserlist, exists := current[name]
+		if !exists {
+			continue
+		}
+
+		if userlistMetadataChanged(currentUserlist, desiredUserlist) {
+			// Recreate entire userlist if metadata changed
+			operations = append(operations,
+				sections.NewDeleteUserlistOperation(currentUserlist),
+				sections.NewCreateUserlistOperation(desiredUserlist))
+		} else {
+			// Compare users for fine-grained operations
+			userOps := c.compareUserlistUsers(name, currentUserlist, desiredUserlist)
+			operations = append(operations, userOps...)
+		}
+	}
+	return operations
+}
+
+// userlistMetadataChanged checks if userlist metadata (excluding users and groups) has changed.
+func userlistMetadataChanged(current, desired *models.Userlist) bool {
+	// Compare metadata fields (currently only Name is in UserlistBase)
+	// Users and Groups are compared separately for fine-grained operations
+	// For now, we only check if there are other structural changes
+	// If groups are present and different, that requires recreating the userlist
+	if !groupsEqual(current.Groups, desired.Groups) {
+		return true
+	}
+
+	return false
+}
+
+// groupsEqual compares two group maps for equality.
+func groupsEqual(g1, g2 map[string]models.Group) bool {
+	if len(g1) != len(g2) {
+		return false
+	}
+
+	for name, group1 := range g1 {
+		group2, exists := g2[name]
+		if !exists {
+			return false
+		}
+		if !group1.Equal(group2) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// compareUserlistUsers compares users within a userlist and generates fine-grained user operations.
+func (c *Comparator) compareUserlistUsers(userlistName string, current, desired *models.Userlist) []Operation {
+	var operations []Operation
+
+	// Get user maps (they are not pointers in client-native models)
+	currentUsers := current.Users
+	desiredUsers := desired.Users
+
+	// Find added users
+	for username, user := range desiredUsers {
+		if _, exists := currentUsers[username]; !exists {
+			userCopy := user
+			operations = append(operations, sections.NewCreateUserOperation(userlistName, &userCopy))
+		}
+	}
+
+	// Find deleted users
+	for username, user := range currentUsers {
+		if _, exists := desiredUsers[username]; !exists {
+			userCopy := user
+			operations = append(operations, sections.NewDeleteUserOperation(userlistName, &userCopy))
+		}
+	}
+
+	// Find modified users
+	for username, desiredUser := range desiredUsers {
+		currentUser, exists := currentUsers[username]
+		if !exists {
+			continue
+		}
+
+		// Compare user attributes (password, groups, etc.)
+		if !currentUser.Equal(desiredUser) {
+			userCopy := desiredUser
+			operations = append(operations, sections.NewReplaceUserOperation(userlistName, &userCopy))
+		}
+	}
+
+	return operations
 }
 
 // comparePrograms compares program sections between current and desired configurations.

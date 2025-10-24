@@ -6,13 +6,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityCapture defines the priority for capture operations.
@@ -64,13 +64,9 @@ func (op *CreateCaptureFrontendOperation) Execute(ctx context.Context, c *client
 	apiClient := c.Client()
 
 	// Convert models.Capture to dataplaneapi.Capture using JSON marshaling
-	var apiCapture dataplaneapi.Capture
-	data, err := json.Marshal(op.Capture)
-	if err != nil {
-		return fmt.Errorf("failed to marshal capture: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiCapture); err != nil {
-		return fmt.Errorf("failed to unmarshal capture: %w", err)
+	apiCapture := transform.ToAPICapture(op.Capture)
+	if apiCapture == nil {
+		return fmt.Errorf("failed to transform capture")
 	}
 
 	// Prepare parameters with transaction ID
@@ -79,7 +75,7 @@ func (op *CreateCaptureFrontendOperation) Execute(ctx context.Context, c *client
 	}
 
 	// Call the CreateDeclareCapture API
-	resp, err := apiClient.CreateDeclareCapture(ctx, op.FrontendName, op.Index, params, apiCapture)
+	resp, err := apiClient.CreateDeclareCapture(ctx, op.FrontendName, op.Index, params, *apiCapture)
 	if err != nil {
 		return fmt.Errorf("failed to create capture in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -206,13 +202,9 @@ func (op *UpdateCaptureFrontendOperation) Execute(ctx context.Context, c *client
 	apiClient := c.Client()
 
 	// Convert models.Capture to dataplaneapi.Capture using JSON marshaling
-	var apiCapture dataplaneapi.Capture
-	data, err := json.Marshal(op.Capture)
-	if err != nil {
-		return fmt.Errorf("failed to marshal capture: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiCapture); err != nil {
-		return fmt.Errorf("failed to unmarshal capture: %w", err)
+	apiCapture := transform.ToAPICapture(op.Capture)
+	if apiCapture == nil {
+		return fmt.Errorf("failed to transform capture")
 	}
 
 	// Prepare parameters with transaction ID
@@ -221,7 +213,7 @@ func (op *UpdateCaptureFrontendOperation) Execute(ctx context.Context, c *client
 	}
 
 	// Call the ReplaceDeclareCapture API
-	resp, err := apiClient.ReplaceDeclareCapture(ctx, op.FrontendName, op.Index, params, apiCapture)
+	resp, err := apiClient.ReplaceDeclareCapture(ctx, op.FrontendName, op.Index, params, *apiCapture)
 	if err != nil {
 		return fmt.Errorf("failed to update capture in frontend '%s': %w", op.FrontendName, err)
 	}

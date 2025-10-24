@@ -6,13 +6,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityStickRule defines the priority for stick rule operations.
@@ -64,13 +64,9 @@ func (op *CreateStickRuleBackendOperation) Execute(ctx context.Context, c *clien
 	apiClient := c.Client()
 
 	// Convert models.StickRule to dataplaneapi.StickRule using JSON marshaling
-	var apiStickRule dataplaneapi.StickRule
-	data, err := json.Marshal(op.StickRule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal stick rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiStickRule); err != nil {
-		return fmt.Errorf("failed to unmarshal stick rule: %w", err)
+	apiStickRule := transform.ToAPIStickRule(op.StickRule)
+	if apiStickRule == nil {
+		return fmt.Errorf("failed to transform stick rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -79,7 +75,7 @@ func (op *CreateStickRuleBackendOperation) Execute(ctx context.Context, c *clien
 	}
 
 	// Call the CreateStickRule API
-	resp, err := apiClient.CreateStickRule(ctx, op.BackendName, op.Index, params, apiStickRule)
+	resp, err := apiClient.CreateStickRule(ctx, op.BackendName, op.Index, params, *apiStickRule)
 	if err != nil {
 		return fmt.Errorf("failed to create stick rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -206,13 +202,9 @@ func (op *UpdateStickRuleBackendOperation) Execute(ctx context.Context, c *clien
 	apiClient := c.Client()
 
 	// Convert models.StickRule to dataplaneapi.StickRule using JSON marshaling
-	var apiStickRule dataplaneapi.StickRule
-	data, err := json.Marshal(op.StickRule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal stick rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiStickRule); err != nil {
-		return fmt.Errorf("failed to unmarshal stick rule: %w", err)
+	apiStickRule := transform.ToAPIStickRule(op.StickRule)
+	if apiStickRule == nil {
+		return fmt.Errorf("failed to transform stick rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -221,7 +213,7 @@ func (op *UpdateStickRuleBackendOperation) Execute(ctx context.Context, c *clien
 	}
 
 	// Call the ReplaceStickRule API
-	resp, err := apiClient.ReplaceStickRule(ctx, op.BackendName, op.Index, params, apiStickRule)
+	resp, err := apiClient.ReplaceStickRule(ctx, op.BackendName, op.Index, params, *apiStickRule)
 	if err != nil {
 		return fmt.Errorf("failed to update stick rule in backend '%s': %w", op.BackendName, err)
 	}

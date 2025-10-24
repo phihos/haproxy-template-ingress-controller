@@ -6,13 +6,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityHTTPAfterRule defines the priority for HTTP after response rule operations.
@@ -64,13 +64,9 @@ func (op *CreateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Conte
 	apiClient := c.Client()
 
 	// Convert models.HTTPAfterResponseRule to dataplaneapi.HttpAfterResponseRule using JSON marshaling
-	var apiRule dataplaneapi.HttpAfterResponseRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP after response rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP after response rule: %w", err)
+	apiRule := transform.ToAPIHTTPAfterResponseRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP after response rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -79,7 +75,7 @@ func (op *CreateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Conte
 	}
 
 	// Call the CreateHTTPAfterResponseRuleBackend API
-	resp, err := apiClient.CreateHTTPAfterResponseRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := apiClient.CreateHTTPAfterResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP after response rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -206,13 +202,9 @@ func (op *UpdateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Conte
 	apiClient := c.Client()
 
 	// Convert models.HTTPAfterResponseRule to dataplaneapi.HttpAfterResponseRule using JSON marshaling
-	var apiRule dataplaneapi.HttpAfterResponseRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP after response rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP after response rule: %w", err)
+	apiRule := transform.ToAPIHTTPAfterResponseRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP after response rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -221,7 +213,7 @@ func (op *UpdateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Conte
 	}
 
 	// Call the ReplaceHTTPAfterResponseRuleBackend API
-	resp, err := apiClient.ReplaceHTTPAfterResponseRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := apiClient.ReplaceHTTPAfterResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP after response rule in backend '%s': %w", op.BackendName, err)
 	}

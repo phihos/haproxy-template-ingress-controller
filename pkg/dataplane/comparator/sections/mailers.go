@@ -3,13 +3,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityMailers defines priority for mailers sections.
@@ -59,13 +59,9 @@ func (op *CreateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 	apiClient := c.Client()
 
 	// Convert models.MailersSection to dataplaneapi.MailersSection using JSON marshaling
-	var apiMailers dataplaneapi.MailersSection
-	data, err := json.Marshal(op.Mailers)
-	if err != nil {
-		return fmt.Errorf("failed to marshal mailers section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiMailers); err != nil {
-		return fmt.Errorf("failed to unmarshal mailers section: %w", err)
+	apiMailers := transform.ToAPIMailersSection(op.Mailers)
+	if apiMailers == nil {
+		return fmt.Errorf("failed to transform mailers section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -82,7 +78,7 @@ func (op *CreateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the CreateMailersSection API
-	resp, err := apiClient.CreateMailersSection(ctx, params, apiMailers)
+	resp, err := apiClient.CreateMailersSection(ctx, params, *apiMailers)
 	if err != nil {
 		return fmt.Errorf("failed to create mailers section '%s': %w", op.Mailers.Name, err)
 	}
@@ -219,13 +215,9 @@ func (op *UpdateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 	apiClient := c.Client()
 
 	// Convert models.MailersSection to dataplaneapi.MailersSection using JSON marshaling
-	var apiMailers dataplaneapi.MailersSection
-	data, err := json.Marshal(op.Mailers)
-	if err != nil {
-		return fmt.Errorf("failed to marshal mailers section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiMailers); err != nil {
-		return fmt.Errorf("failed to unmarshal mailers section: %w", err)
+	apiMailers := transform.ToAPIMailersSection(op.Mailers)
+	if apiMailers == nil {
+		return fmt.Errorf("failed to transform mailers section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -242,7 +234,7 @@ func (op *UpdateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the EditMailersSection API
-	resp, err := apiClient.EditMailersSection(ctx, op.Mailers.Name, params, apiMailers)
+	resp, err := apiClient.EditMailersSection(ctx, op.Mailers.Name, params, *apiMailers)
 	if err != nil {
 		return fmt.Errorf("failed to update mailers section '%s': %w", op.Mailers.Name, err)
 	}

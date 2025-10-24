@@ -2,7 +2,6 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -10,6 +9,7 @@ import (
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -64,13 +64,9 @@ func (op *CreateNameserverOperation) Execute(ctx context.Context, c *client.Data
 	apiClient := c.Client()
 
 	// Convert models.Nameserver to dataplaneapi.Nameserver using JSON marshaling
-	var apiNameserver dataplaneapi.Nameserver
-	data, err := json.Marshal(op.Nameserver)
-	if err != nil {
-		return fmt.Errorf("failed to marshal nameserver: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiNameserver); err != nil {
-		return fmt.Errorf("failed to unmarshal nameserver: %w", err)
+	apiNameserver := transform.ToAPINameserver(op.Nameserver)
+	if apiNameserver == nil {
+		return fmt.Errorf("failed to transform nameserver")
 	}
 
 	// Prepare parameters and execute with transaction ID or version
@@ -79,16 +75,17 @@ func (op *CreateNameserverOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	var resp *http.Response
+	var err error
 
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.CreateNameserver(ctx, params, apiNameserver)
+		resp, err = apiClient.CreateNameserver(ctx, params, *apiNameserver)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.CreateNameserver(ctx, params, apiNameserver)
+			return apiClient.CreateNameserver(ctx, params, *apiNameserver)
 		})
 	}
 
@@ -243,13 +240,9 @@ func (op *UpdateNameserverOperation) Execute(ctx context.Context, c *client.Data
 	apiClient := c.Client()
 
 	// Convert models.Nameserver to dataplaneapi.Nameserver using JSON marshaling
-	var apiNameserver dataplaneapi.Nameserver
-	data, err := json.Marshal(op.Nameserver)
-	if err != nil {
-		return fmt.Errorf("failed to marshal nameserver: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiNameserver); err != nil {
-		return fmt.Errorf("failed to unmarshal nameserver: %w", err)
+	apiNameserver := transform.ToAPINameserver(op.Nameserver)
+	if apiNameserver == nil {
+		return fmt.Errorf("failed to transform nameserver")
 	}
 
 	// Prepare parameters and execute with transaction ID or version
@@ -260,16 +253,17 @@ func (op *UpdateNameserverOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	var resp *http.Response
+	var err error
 
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.ReplaceNameserver(ctx, op.Nameserver.Name, params, apiNameserver)
+		resp, err = apiClient.ReplaceNameserver(ctx, op.Nameserver.Name, params, *apiNameserver)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.ReplaceNameserver(ctx, op.Nameserver.Name, params, apiNameserver)
+			return apiClient.ReplaceNameserver(ctx, op.Nameserver.Name, params, *apiNameserver)
 		})
 	}
 

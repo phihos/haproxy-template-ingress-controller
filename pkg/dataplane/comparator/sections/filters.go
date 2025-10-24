@@ -6,13 +6,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityFilter defines the priority for filter operations.
@@ -64,13 +64,9 @@ func (op *CreateFilterFrontendOperation) Execute(ctx context.Context, c *client.
 	apiClient := c.Client()
 
 	// Convert models.Filter to dataplaneapi.Filter using JSON marshaling
-	var apiFilter dataplaneapi.Filter
-	data, err := json.Marshal(op.Filter)
-	if err != nil {
-		return fmt.Errorf("failed to marshal filter: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFilter); err != nil {
-		return fmt.Errorf("failed to unmarshal filter: %w", err)
+	apiFilter := transform.ToAPIFilter(op.Filter)
+	if apiFilter == nil {
+		return fmt.Errorf("failed to transform filter")
 	}
 
 	// Prepare parameters with transaction ID
@@ -79,7 +75,7 @@ func (op *CreateFilterFrontendOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the CreateFilterFrontend API
-	resp, err := apiClient.CreateFilterFrontend(ctx, op.FrontendName, op.Index, params, apiFilter)
+	resp, err := apiClient.CreateFilterFrontend(ctx, op.FrontendName, op.Index, params, *apiFilter)
 	if err != nil {
 		return fmt.Errorf("failed to create filter in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -208,13 +204,9 @@ func (op *UpdateFilterFrontendOperation) Execute(ctx context.Context, c *client.
 	apiClient := c.Client()
 
 	// Convert models.Filter to dataplaneapi.Filter using JSON marshaling
-	var apiFilter dataplaneapi.Filter
-	data, err := json.Marshal(op.Filter)
-	if err != nil {
-		return fmt.Errorf("failed to marshal filter: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFilter); err != nil {
-		return fmt.Errorf("failed to unmarshal filter: %w", err)
+	apiFilter := transform.ToAPIFilter(op.Filter)
+	if apiFilter == nil {
+		return fmt.Errorf("failed to transform filter")
 	}
 
 	// Prepare parameters with transaction ID
@@ -223,7 +215,7 @@ func (op *UpdateFilterFrontendOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the ReplaceFilterFrontend API
-	resp, err := apiClient.ReplaceFilterFrontend(ctx, op.FrontendName, op.Index, params, apiFilter)
+	resp, err := apiClient.ReplaceFilterFrontend(ctx, op.FrontendName, op.Index, params, *apiFilter)
 	if err != nil {
 		return fmt.Errorf("failed to update filter in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -288,13 +280,9 @@ func (op *CreateFilterBackendOperation) Execute(ctx context.Context, c *client.D
 	apiClient := c.Client()
 
 	// Convert models.Filter to dataplaneapi.Filter using JSON marshaling
-	var apiFilter dataplaneapi.Filter
-	data, err := json.Marshal(op.Filter)
-	if err != nil {
-		return fmt.Errorf("failed to marshal filter: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFilter); err != nil {
-		return fmt.Errorf("failed to unmarshal filter: %w", err)
+	apiFilter := transform.ToAPIFilter(op.Filter)
+	if apiFilter == nil {
+		return fmt.Errorf("failed to transform filter")
 	}
 
 	// Prepare parameters with transaction ID
@@ -303,7 +291,7 @@ func (op *CreateFilterBackendOperation) Execute(ctx context.Context, c *client.D
 	}
 
 	// Call the CreateFilterBackend API
-	resp, err := apiClient.CreateFilterBackend(ctx, op.BackendName, op.Index, params, apiFilter)
+	resp, err := apiClient.CreateFilterBackend(ctx, op.BackendName, op.Index, params, *apiFilter)
 	if err != nil {
 		return fmt.Errorf("failed to create filter in backend '%s': %w", op.BackendName, err)
 	}
@@ -432,13 +420,9 @@ func (op *UpdateFilterBackendOperation) Execute(ctx context.Context, c *client.D
 	apiClient := c.Client()
 
 	// Convert models.Filter to dataplaneapi.Filter using JSON marshaling
-	var apiFilter dataplaneapi.Filter
-	data, err := json.Marshal(op.Filter)
-	if err != nil {
-		return fmt.Errorf("failed to marshal filter: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFilter); err != nil {
-		return fmt.Errorf("failed to unmarshal filter: %w", err)
+	apiFilter := transform.ToAPIFilter(op.Filter)
+	if apiFilter == nil {
+		return fmt.Errorf("failed to transform filter")
 	}
 
 	// Prepare parameters with transaction ID
@@ -447,7 +431,7 @@ func (op *UpdateFilterBackendOperation) Execute(ctx context.Context, c *client.D
 	}
 
 	// Call the ReplaceFilterBackend API
-	resp, err := apiClient.ReplaceFilterBackend(ctx, op.BackendName, op.Index, params, apiFilter)
+	resp, err := apiClient.ReplaceFilterBackend(ctx, op.BackendName, op.Index, params, *apiFilter)
 	if err != nil {
 		return fmt.Errorf("failed to update filter in backend '%s': %w", op.BackendName, err)
 	}

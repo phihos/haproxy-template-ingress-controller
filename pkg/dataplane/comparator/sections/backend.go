@@ -4,13 +4,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // OperationType represents the type of configuration operation.
@@ -76,15 +76,10 @@ func (op *CreateBackendOperation) Execute(ctx context.Context, c *client.Datapla
 
 	apiClient := c.Client()
 
-	// Convert models.Backend to dataplaneapi.Backend using JSON marshaling
-	// This is necessary because they are incompatible types
-	var apiBackend dataplaneapi.Backend
-	data, err := json.Marshal(op.Backend)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backend: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiBackend); err != nil {
-		return fmt.Errorf("failed to unmarshal backend: %w", err)
+	// Convert models.Backend to dataplaneapi.Backend using transform package
+	apiBackend := transform.ToAPIBackend(op.Backend)
+	if apiBackend == nil {
+		return fmt.Errorf("failed to transform backend")
 	}
 
 	// Prepare parameters with transaction ID
@@ -93,7 +88,7 @@ func (op *CreateBackendOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the CreateBackend API
-	resp, err := apiClient.CreateBackend(ctx, params, apiBackend)
+	resp, err := apiClient.CreateBackend(ctx, params, *apiBackend)
 	if err != nil {
 		return fmt.Errorf("failed to create backend '%s': %w", op.Backend.Name, err)
 	}
@@ -223,14 +218,10 @@ func (op *UpdateBackendOperation) Execute(ctx context.Context, c *client.Datapla
 
 	apiClient := c.Client()
 
-	// Convert models.Backend to dataplaneapi.Backend using JSON marshaling
-	var apiBackend dataplaneapi.Backend
-	data, err := json.Marshal(op.Backend)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backend: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiBackend); err != nil {
-		return fmt.Errorf("failed to unmarshal backend: %w", err)
+	// Convert models.Backend to dataplaneapi.Backend using transform package
+	apiBackend := transform.ToAPIBackend(op.Backend)
+	if apiBackend == nil {
+		return fmt.Errorf("failed to transform backend")
 	}
 
 	// Prepare parameters with transaction ID
@@ -239,7 +230,7 @@ func (op *UpdateBackendOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the ReplaceBackend API
-	resp, err := apiClient.ReplaceBackend(ctx, op.Backend.Name, params, apiBackend)
+	resp, err := apiClient.ReplaceBackend(ctx, op.Backend.Name, params, *apiBackend)
 	if err != nil {
 		return fmt.Errorf("failed to update backend '%s': %w", op.Backend.Name, err)
 	}

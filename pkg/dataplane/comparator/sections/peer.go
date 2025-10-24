@@ -3,13 +3,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityPeer defines priority for peer sections.
@@ -59,13 +59,9 @@ func (op *CreatePeerOperation) Execute(ctx context.Context, c *client.DataplaneC
 	apiClient := c.Client()
 
 	// Convert models.PeerSection to dataplaneapi.PeerSection using JSON marshaling
-	var apiPeer dataplaneapi.PeerSection
-	data, err := json.Marshal(op.Peer)
-	if err != nil {
-		return fmt.Errorf("failed to marshal peer section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiPeer); err != nil {
-		return fmt.Errorf("failed to unmarshal peer section: %w", err)
+	apiPeer := transform.ToAPIPeerSection(op.Peer)
+	if apiPeer == nil {
+		return fmt.Errorf("failed to transform peer section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -82,7 +78,7 @@ func (op *CreatePeerOperation) Execute(ctx context.Context, c *client.DataplaneC
 	}
 
 	// Call the CreatePeer API
-	resp, err := apiClient.CreatePeer(ctx, params, apiPeer)
+	resp, err := apiClient.CreatePeer(ctx, params, *apiPeer)
 	if err != nil {
 		return fmt.Errorf("failed to create peer section '%s': %w", op.Peer.Name, err)
 	}

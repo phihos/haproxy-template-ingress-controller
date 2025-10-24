@@ -2,7 +2,6 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -10,6 +9,7 @@ import (
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -64,13 +64,9 @@ func (op *CreatePeerEntryOperation) Execute(ctx context.Context, c *client.Datap
 	apiClient := c.Client()
 
 	// Convert models.PeerEntry to dataplaneapi.PeerEntry using JSON marshaling
-	var apiPeerEntry dataplaneapi.PeerEntry
-	data, err := json.Marshal(op.PeerEntry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal peer entry: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiPeerEntry); err != nil {
-		return fmt.Errorf("failed to unmarshal peer entry: %w", err)
+	apiPeerEntry := transform.ToAPIPeerEntry(op.PeerEntry)
+	if apiPeerEntry == nil {
+		return fmt.Errorf("failed to transform peer entry")
 	}
 
 	// Prepare parameters and execute with transaction ID or version
@@ -79,16 +75,17 @@ func (op *CreatePeerEntryOperation) Execute(ctx context.Context, c *client.Datap
 	}
 
 	var resp *http.Response
+	var err error
 
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.CreatePeerEntry(ctx, params, apiPeerEntry)
+		resp, err = apiClient.CreatePeerEntry(ctx, params, *apiPeerEntry)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.CreatePeerEntry(ctx, params, apiPeerEntry)
+			return apiClient.CreatePeerEntry(ctx, params, *apiPeerEntry)
 		})
 	}
 
@@ -243,13 +240,9 @@ func (op *UpdatePeerEntryOperation) Execute(ctx context.Context, c *client.Datap
 	apiClient := c.Client()
 
 	// Convert models.PeerEntry to dataplaneapi.PeerEntry using JSON marshaling
-	var apiPeerEntry dataplaneapi.PeerEntry
-	data, err := json.Marshal(op.PeerEntry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal peer entry: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiPeerEntry); err != nil {
-		return fmt.Errorf("failed to unmarshal peer entry: %w", err)
+	apiPeerEntry := transform.ToAPIPeerEntry(op.PeerEntry)
+	if apiPeerEntry == nil {
+		return fmt.Errorf("failed to transform peer entry")
 	}
 
 	// Prepare parameters and execute with transaction ID or version
@@ -260,16 +253,17 @@ func (op *UpdatePeerEntryOperation) Execute(ctx context.Context, c *client.Datap
 	}
 
 	var resp *http.Response
+	var err error
 
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.ReplacePeerEntry(ctx, op.PeerEntry.Name, params, apiPeerEntry)
+		resp, err = apiClient.ReplacePeerEntry(ctx, op.PeerEntry.Name, params, *apiPeerEntry)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.ReplacePeerEntry(ctx, op.PeerEntry.Name, params, apiPeerEntry)
+			return apiClient.ReplacePeerEntry(ctx, op.PeerEntry.Name, params, *apiPeerEntry)
 		})
 	}
 

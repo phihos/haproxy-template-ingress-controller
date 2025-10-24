@@ -634,7 +634,7 @@ metadata:
   annotations:
     haproxy.org/auth-type: "basic-auth"
     haproxy.org/auth-secret: "echo-auth-secret"
-    haproxy.org/auth-realm: "Echo Server Protected"
+    haproxy.org/auth-realm: "Echo-Server-Protected"
 spec:
   ingressClassName: haproxy-template-ic
   rules:

@@ -6,13 +6,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityTCPCheck defines the priority for TCP check operations.
@@ -64,13 +64,9 @@ func (op *CreateTCPCheckBackendOperation) Execute(ctx context.Context, c *client
 	apiClient := c.Client()
 
 	// Convert models.TCPCheck to dataplaneapi.TcpCheck using JSON marshaling
-	var apiTCPCheck dataplaneapi.TcpCheck
-	data, err := json.Marshal(op.TCPCheck)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TCP check: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiTCPCheck); err != nil {
-		return fmt.Errorf("failed to unmarshal TCP check: %w", err)
+	apiTCPCheck := transform.ToAPITCPCheck(op.TCPCheck)
+	if apiTCPCheck == nil {
+		return fmt.Errorf("failed to transform TCP check")
 	}
 
 	// Prepare parameters with transaction ID
@@ -79,7 +75,7 @@ func (op *CreateTCPCheckBackendOperation) Execute(ctx context.Context, c *client
 	}
 
 	// Call the CreateTCPCheckBackend API
-	resp, err := apiClient.CreateTCPCheckBackend(ctx, op.BackendName, op.Index, params, apiTCPCheck)
+	resp, err := apiClient.CreateTCPCheckBackend(ctx, op.BackendName, op.Index, params, *apiTCPCheck)
 	if err != nil {
 		return fmt.Errorf("failed to create TCP check in backend '%s': %w", op.BackendName, err)
 	}
@@ -206,13 +202,9 @@ func (op *UpdateTCPCheckBackendOperation) Execute(ctx context.Context, c *client
 	apiClient := c.Client()
 
 	// Convert models.TCPCheck to dataplaneapi.TcpCheck using JSON marshaling
-	var apiTCPCheck dataplaneapi.TcpCheck
-	data, err := json.Marshal(op.TCPCheck)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TCP check: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiTCPCheck); err != nil {
-		return fmt.Errorf("failed to unmarshal TCP check: %w", err)
+	apiTCPCheck := transform.ToAPITCPCheck(op.TCPCheck)
+	if apiTCPCheck == nil {
+		return fmt.Errorf("failed to transform TCP check")
 	}
 
 	// Prepare parameters with transaction ID
@@ -221,7 +213,7 @@ func (op *UpdateTCPCheckBackendOperation) Execute(ctx context.Context, c *client
 	}
 
 	// Call the ReplaceTCPCheckBackend API
-	resp, err := apiClient.ReplaceTCPCheckBackend(ctx, op.BackendName, op.Index, params, apiTCPCheck)
+	resp, err := apiClient.ReplaceTCPCheckBackend(ctx, op.BackendName, op.Index, params, *apiTCPCheck)
 	if err != nil {
 		return fmt.Errorf("failed to update TCP check in backend '%s': %w", op.BackendName, err)
 	}

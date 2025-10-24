@@ -3,13 +3,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityRing defines priority for ring sections.
@@ -58,14 +58,10 @@ func (op *CreateRingOperation) Execute(ctx context.Context, c *client.DataplaneC
 
 	apiClient := c.Client()
 
-	// Convert models.Ring to dataplaneapi.Ring using JSON marshaling
-	var apiRing dataplaneapi.Ring
-	data, err := json.Marshal(op.Ring)
-	if err != nil {
-		return fmt.Errorf("failed to marshal ring section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRing); err != nil {
-		return fmt.Errorf("failed to unmarshal ring section: %w", err)
+	// Convert models.Ring to dataplaneapi.Ring using transform package
+	apiRing := transform.ToAPIRing(op.Ring)
+	if apiRing == nil {
+		return fmt.Errorf("failed to transform ring section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -82,7 +78,7 @@ func (op *CreateRingOperation) Execute(ctx context.Context, c *client.DataplaneC
 	}
 
 	// Call the CreateRing API
-	resp, err := apiClient.CreateRing(ctx, params, apiRing)
+	resp, err := apiClient.CreateRing(ctx, params, *apiRing)
 	if err != nil {
 		return fmt.Errorf("failed to create ring section '%s': %w", op.Ring.Name, err)
 	}
@@ -218,14 +214,10 @@ func (op *UpdateRingOperation) Execute(ctx context.Context, c *client.DataplaneC
 
 	apiClient := c.Client()
 
-	// Convert models.Ring to dataplaneapi.Ring using JSON marshaling
-	var apiRing dataplaneapi.Ring
-	data, err := json.Marshal(op.Ring)
-	if err != nil {
-		return fmt.Errorf("failed to marshal ring section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRing); err != nil {
-		return fmt.Errorf("failed to unmarshal ring section: %w", err)
+	// Convert models.Ring to dataplaneapi.Ring using transform package
+	apiRing := transform.ToAPIRing(op.Ring)
+	if apiRing == nil {
+		return fmt.Errorf("failed to transform ring section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -242,7 +234,7 @@ func (op *UpdateRingOperation) Execute(ctx context.Context, c *client.DataplaneC
 	}
 
 	// Call the ReplaceRing API
-	resp, err := apiClient.ReplaceRing(ctx, op.Ring.Name, params, apiRing)
+	resp, err := apiClient.ReplaceRing(ctx, op.Ring.Name, params, *apiRing)
 	if err != nil {
 		return fmt.Errorf("failed to update ring section '%s': %w", op.Ring.Name, err)
 	}

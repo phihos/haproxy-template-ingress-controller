@@ -4,13 +4,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -60,13 +60,9 @@ func (op *CreateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 	apiClient := c.Client()
 
 	// Convert models.HTTPRequestRule to dataplaneapi.HttpRequestRule using JSON marshaling
-	var apiRule dataplaneapi.HttpRequestRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP request rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP request rule: %w", err)
+	apiRule := transform.ToAPIHTTPRequestRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP request rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -75,7 +71,7 @@ func (op *CreateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 	}
 
 	// Call the CreateHTTPRequestRuleFrontend API
-	resp, err := apiClient.CreateHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, apiRule)
+	resp, err := apiClient.CreateHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -204,13 +200,9 @@ func (op *UpdateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 	apiClient := c.Client()
 
 	// Convert models.HTTPRequestRule to dataplaneapi.HttpRequestRule using JSON marshaling
-	var apiRule dataplaneapi.HttpRequestRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP request rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP request rule: %w", err)
+	apiRule := transform.ToAPIHTTPRequestRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP request rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -219,7 +211,7 @@ func (op *UpdateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 	}
 
 	// Call the ReplaceHTTPRequestRuleFrontend API
-	resp, err := apiClient.ReplaceHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, apiRule)
+	resp, err := apiClient.ReplaceHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP request rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -284,13 +276,9 @@ func (op *CreateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 	apiClient := c.Client()
 
 	// Convert models.HTTPRequestRule to dataplaneapi.HttpRequestRule using JSON marshaling
-	var apiRule dataplaneapi.HttpRequestRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP request rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP request rule: %w", err)
+	apiRule := transform.ToAPIHTTPRequestRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP request rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -299,7 +287,7 @@ func (op *CreateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 	}
 
 	// Call the CreateHTTPRequestRuleBackend API
-	resp, err := apiClient.CreateHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := apiClient.CreateHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -428,13 +416,9 @@ func (op *UpdateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 	apiClient := c.Client()
 
 	// Convert models.HTTPRequestRule to dataplaneapi.HttpRequestRule using JSON marshaling
-	var apiRule dataplaneapi.HttpRequestRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP request rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP request rule: %w", err)
+	apiRule := transform.ToAPIHTTPRequestRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP request rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -443,7 +427,7 @@ func (op *UpdateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 	}
 
 	// Call the ReplaceHTTPRequestRuleBackend API
-	resp, err := apiClient.ReplaceHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := apiClient.ReplaceHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP request rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -508,13 +492,9 @@ func (op *CreateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 	apiClient := c.Client()
 
 	// Convert models.HTTPResponseRule to dataplaneapi.HttpResponseRule using JSON marshaling
-	var apiRule dataplaneapi.HttpResponseRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP response rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP response rule: %w", err)
+	apiRule := transform.ToAPIHTTPResponseRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP response rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -523,7 +503,7 @@ func (op *CreateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 	}
 
 	// Call the CreateHTTPResponseRuleFrontend API
-	resp, err := apiClient.CreateHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params, apiRule)
+	resp, err := apiClient.CreateHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP response rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -652,13 +632,9 @@ func (op *UpdateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 	apiClient := c.Client()
 
 	// Convert models.HTTPResponseRule to dataplaneapi.HttpResponseRule using JSON marshaling
-	var apiRule dataplaneapi.HttpResponseRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP response rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP response rule: %w", err)
+	apiRule := transform.ToAPIHTTPResponseRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP response rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -667,7 +643,7 @@ func (op *UpdateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 	}
 
 	// Call the ReplaceHTTPResponseRuleFrontend API
-	resp, err := apiClient.ReplaceHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params, apiRule)
+	resp, err := apiClient.ReplaceHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP response rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -732,13 +708,9 @@ func (op *CreateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 	apiClient := c.Client()
 
 	// Convert models.HTTPResponseRule to dataplaneapi.HttpResponseRule using JSON marshaling
-	var apiRule dataplaneapi.HttpResponseRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP response rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP response rule: %w", err)
+	apiRule := transform.ToAPIHTTPResponseRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP response rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -747,7 +719,7 @@ func (op *CreateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 	}
 
 	// Call the CreateHTTPResponseRuleBackend API
-	resp, err := apiClient.CreateHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := apiClient.CreateHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP response rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -876,13 +848,9 @@ func (op *UpdateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 	apiClient := c.Client()
 
 	// Convert models.HTTPResponseRule to dataplaneapi.HttpResponseRule using JSON marshaling
-	var apiRule dataplaneapi.HttpResponseRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal HTTP response rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal HTTP response rule: %w", err)
+	apiRule := transform.ToAPIHTTPResponseRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform HTTP response rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -891,7 +859,7 @@ func (op *UpdateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 	}
 
 	// Call the ReplaceHTTPResponseRuleBackend API
-	resp, err := apiClient.ReplaceHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := apiClient.ReplaceHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP response rule in backend '%s': %w", op.BackendName, err)
 	}

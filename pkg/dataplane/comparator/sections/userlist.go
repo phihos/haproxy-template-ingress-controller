@@ -3,13 +3,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityUserlist defines priority for userlist sections.
@@ -58,14 +58,10 @@ func (op *CreateUserlistOperation) Execute(ctx context.Context, c *client.Datapl
 
 	apiClient := c.Client()
 
-	// Convert models.Userlist to dataplaneapi.Userlist using JSON marshaling
-	var apiUserlist dataplaneapi.Userlist
-	data, err := json.Marshal(op.Userlist)
-	if err != nil {
-		return fmt.Errorf("failed to marshal userlist section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiUserlist); err != nil {
-		return fmt.Errorf("failed to unmarshal userlist section: %w", err)
+	// Convert models.Userlist to dataplaneapi.Userlist using transform package
+	apiUserlist := transform.ToAPIUserlist(op.Userlist)
+	if apiUserlist == nil {
+		return fmt.Errorf("failed to transform userlist section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -82,7 +78,7 @@ func (op *CreateUserlistOperation) Execute(ctx context.Context, c *client.Datapl
 	}
 
 	// Call the CreateUserlist API
-	resp, err := apiClient.CreateUserlist(ctx, params, apiUserlist)
+	resp, err := apiClient.CreateUserlist(ctx, params, *apiUserlist)
 	if err != nil {
 		return fmt.Errorf("failed to create userlist section '%s': %w", op.Userlist.Name, err)
 	}

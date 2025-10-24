@@ -3,13 +3,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityLogForward defines priority for log-forward sections.
@@ -57,14 +57,10 @@ func (op *CreateLogForwardOperation) Execute(ctx context.Context, c *client.Data
 
 	apiClient := c.Client()
 
-	// Convert models.LogForward to dataplaneapi.LogForward using JSON marshaling
-	var apiLogForward dataplaneapi.LogForward
-	data, err := json.Marshal(op.LogForward)
-	if err != nil {
-		return fmt.Errorf("failed to marshal log-forward section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiLogForward); err != nil {
-		return fmt.Errorf("failed to unmarshal log-forward section: %w", err)
+	// Convert models.LogForward to dataplaneapi.LogForward using transform package
+	apiLogForward := transform.ToAPILogForward(op.LogForward)
+	if apiLogForward == nil {
+		return fmt.Errorf("failed to transform log-forward section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -81,7 +77,7 @@ func (op *CreateLogForwardOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the CreateLogForward API
-	resp, err := apiClient.CreateLogForward(ctx, params, apiLogForward)
+	resp, err := apiClient.CreateLogForward(ctx, params, *apiLogForward)
 	if err != nil {
 		return fmt.Errorf("failed to create log-forward section '%s': %w", op.LogForward.Name, err)
 	}
@@ -217,14 +213,10 @@ func (op *UpdateLogForwardOperation) Execute(ctx context.Context, c *client.Data
 
 	apiClient := c.Client()
 
-	// Convert models.LogForward to dataplaneapi.LogForward using JSON marshaling
-	var apiLogForward dataplaneapi.LogForward
-	data, err := json.Marshal(op.LogForward)
-	if err != nil {
-		return fmt.Errorf("failed to marshal log-forward section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiLogForward); err != nil {
-		return fmt.Errorf("failed to unmarshal log-forward section: %w", err)
+	// Convert models.LogForward to dataplaneapi.LogForward using transform package
+	apiLogForward := transform.ToAPILogForward(op.LogForward)
+	if apiLogForward == nil {
+		return fmt.Errorf("failed to transform log-forward section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -241,7 +233,7 @@ func (op *UpdateLogForwardOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the ReplaceLogForward API
-	resp, err := apiClient.ReplaceLogForward(ctx, op.LogForward.Name, params, apiLogForward)
+	resp, err := apiClient.ReplaceLogForward(ctx, op.LogForward.Name, params, *apiLogForward)
 	if err != nil {
 		return fmt.Errorf("failed to update log-forward section '%s': %w", op.LogForward.Name, err)
 	}

@@ -659,6 +659,7 @@ func (p *Parser) extractUserlists() ([]*models.Userlist, error) {
 	userlists := make([]*models.Userlist, 0, len(sections))
 	for _, sectionName := range sections {
 		userlist := &models.Userlist{}
+		userlist.Name = sectionName
 
 		// Parse userlist base section
 		if err := configuration.ParseSection(&userlist.UserlistBase, parser.UserList, sectionName, p.parser); err != nil {

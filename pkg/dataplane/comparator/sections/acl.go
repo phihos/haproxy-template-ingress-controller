@@ -4,13 +4,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -59,14 +59,10 @@ func (op *CreateACLFrontendOperation) Execute(ctx context.Context, c *client.Dat
 
 	apiClient := c.Client()
 
-	// Convert models.ACL to dataplaneapi.Acl using JSON marshaling
-	var apiACL dataplaneapi.Acl
-	data, err := json.Marshal(op.ACL)
-	if err != nil {
-		return fmt.Errorf("failed to marshal ACL: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiACL); err != nil {
-		return fmt.Errorf("failed to unmarshal ACL: %w", err)
+	// Convert models.ACL to dataplaneapi.Acl using transform package
+	apiACL := transform.ToAPIACL(op.ACL)
+	if apiACL == nil {
+		return fmt.Errorf("failed to transform ACL")
 	}
 
 	// Prepare parameters with transaction ID
@@ -75,7 +71,7 @@ func (op *CreateACLFrontendOperation) Execute(ctx context.Context, c *client.Dat
 	}
 
 	// Call the CreateAclFrontend API
-	resp, err := apiClient.CreateAclFrontend(ctx, op.FrontendName, op.Index, params, apiACL)
+	resp, err := apiClient.CreateAclFrontend(ctx, op.FrontendName, op.Index, params, *apiACL)
 	if err != nil {
 		return fmt.Errorf("failed to create ACL in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -203,14 +199,10 @@ func (op *UpdateACLFrontendOperation) Execute(ctx context.Context, c *client.Dat
 
 	apiClient := c.Client()
 
-	// Convert models.ACL to dataplaneapi.Acl using JSON marshaling
-	var apiACL dataplaneapi.Acl
-	data, err := json.Marshal(op.ACL)
-	if err != nil {
-		return fmt.Errorf("failed to marshal ACL: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiACL); err != nil {
-		return fmt.Errorf("failed to unmarshal ACL: %w", err)
+	// Convert models.ACL to dataplaneapi.Acl using transform package
+	apiACL := transform.ToAPIACL(op.ACL)
+	if apiACL == nil {
+		return fmt.Errorf("failed to transform ACL")
 	}
 
 	// Prepare parameters with transaction ID
@@ -219,7 +211,7 @@ func (op *UpdateACLFrontendOperation) Execute(ctx context.Context, c *client.Dat
 	}
 
 	// Call the ReplaceAclFrontend API
-	resp, err := apiClient.ReplaceAclFrontend(ctx, op.FrontendName, op.Index, params, apiACL)
+	resp, err := apiClient.ReplaceAclFrontend(ctx, op.FrontendName, op.Index, params, *apiACL)
 	if err != nil {
 		return fmt.Errorf("failed to update ACL in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -283,14 +275,10 @@ func (op *CreateACLBackendOperation) Execute(ctx context.Context, c *client.Data
 
 	apiClient := c.Client()
 
-	// Convert models.ACL to dataplaneapi.Acl using JSON marshaling
-	var apiACL dataplaneapi.Acl
-	data, err := json.Marshal(op.ACL)
-	if err != nil {
-		return fmt.Errorf("failed to marshal ACL: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiACL); err != nil {
-		return fmt.Errorf("failed to unmarshal ACL: %w", err)
+	// Convert models.ACL to dataplaneapi.Acl using transform package
+	apiACL := transform.ToAPIACL(op.ACL)
+	if apiACL == nil {
+		return fmt.Errorf("failed to transform ACL")
 	}
 
 	// Prepare parameters with transaction ID
@@ -299,7 +287,7 @@ func (op *CreateACLBackendOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the CreateAclBackend API
-	resp, err := apiClient.CreateAclBackend(ctx, op.BackendName, op.Index, params, apiACL)
+	resp, err := apiClient.CreateAclBackend(ctx, op.BackendName, op.Index, params, *apiACL)
 	if err != nil {
 		return fmt.Errorf("failed to create ACL in backend '%s': %w", op.BackendName, err)
 	}
@@ -427,14 +415,10 @@ func (op *UpdateACLBackendOperation) Execute(ctx context.Context, c *client.Data
 
 	apiClient := c.Client()
 
-	// Convert models.ACL to dataplaneapi.Acl using JSON marshaling
-	var apiACL dataplaneapi.Acl
-	data, err := json.Marshal(op.ACL)
-	if err != nil {
-		return fmt.Errorf("failed to marshal ACL: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiACL); err != nil {
-		return fmt.Errorf("failed to unmarshal ACL: %w", err)
+	// Convert models.ACL to dataplaneapi.Acl using transform package
+	apiACL := transform.ToAPIACL(op.ACL)
+	if apiACL == nil {
+		return fmt.Errorf("failed to transform ACL")
 	}
 
 	// Prepare parameters with transaction ID
@@ -443,7 +427,7 @@ func (op *UpdateACLBackendOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the ReplaceAclBackend API
-	resp, err := apiClient.ReplaceAclBackend(ctx, op.BackendName, op.Index, params, apiACL)
+	resp, err := apiClient.ReplaceAclBackend(ctx, op.BackendName, op.Index, params, *apiACL)
 	if err != nil {
 		return fmt.Errorf("failed to update ACL in backend '%s': %w", op.BackendName, err)
 	}
