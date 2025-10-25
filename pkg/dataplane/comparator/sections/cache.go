@@ -55,8 +55,6 @@ func (op *CreateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 		return fmt.Errorf("cache section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.Cache to dataplaneapi.Cache using transform package
 	apiCache := transform.ToAPICache(op.Cache)
 	if apiCache == nil {
@@ -77,7 +75,7 @@ func (op *CreateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 	}
 
 	// Call the CreateCache API
-	resp, err := apiClient.CreateCache(ctx, params, *apiCache)
+	resp, err := c.Client().CreateCache(ctx, params, *apiCache)
 	if err != nil {
 		return fmt.Errorf("failed to create cache section '%s': %w", *op.Cache.Name, err)
 	}
@@ -136,8 +134,6 @@ func (op *DeleteCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 		return fmt.Errorf("cache section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID or version
 	params := &dataplaneapi.DeleteCacheParams{}
 	if transactionID != "" {
@@ -152,7 +148,7 @@ func (op *DeleteCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 	}
 
 	// Call the DeleteCache API
-	resp, err := apiClient.DeleteCache(ctx, *op.Cache.Name, params)
+	resp, err := c.Client().DeleteCache(ctx, *op.Cache.Name, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete cache section '%s': %w", *op.Cache.Name, err)
 	}
@@ -211,8 +207,6 @@ func (op *UpdateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 		return fmt.Errorf("cache section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.Cache to dataplaneapi.Cache using transform package
 	apiCache := transform.ToAPICache(op.Cache)
 	if apiCache == nil {
@@ -233,7 +227,7 @@ func (op *UpdateCacheOperation) Execute(ctx context.Context, c *client.Dataplane
 	}
 
 	// Call the ReplaceCache API
-	resp, err := apiClient.ReplaceCache(ctx, *op.Cache.Name, params, *apiCache)
+	resp, err := c.Client().ReplaceCache(ctx, *op.Cache.Name, params, *apiCache)
 	if err != nil {
 		return fmt.Errorf("failed to update cache section '%s': %w", *op.Cache.Name, err)
 	}

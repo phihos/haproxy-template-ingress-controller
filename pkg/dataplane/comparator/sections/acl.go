@@ -50,14 +50,10 @@ func (op *CreateACLFrontendOperation) Priority() int {
 }
 
 // Execute creates the ACL via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other ACL operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateACLFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.ACL == nil {
 		return fmt.Errorf("ACL is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.ACL to dataplaneapi.Acl using transform package
 	apiACL := transform.ToAPIACL(op.ACL)
@@ -71,7 +67,7 @@ func (op *CreateACLFrontendOperation) Execute(ctx context.Context, c *client.Dat
 	}
 
 	// Call the CreateAclFrontend API
-	resp, err := apiClient.CreateAclFrontend(ctx, op.FrontendName, op.Index, params, *apiACL)
+	resp, err := c.Client().CreateAclFrontend(ctx, op.FrontendName, op.Index, params, *apiACL)
 	if err != nil {
 		return fmt.Errorf("failed to create ACL in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -127,15 +123,13 @@ func (op *DeleteACLFrontendOperation) Priority() int {
 
 // Execute deletes the ACL via the Dataplane API.
 func (op *DeleteACLFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteAclFrontendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteAclFrontend API
-	resp, err := apiClient.DeleteAclFrontend(ctx, op.FrontendName, op.Index, params)
+	resp, err := c.Client().DeleteAclFrontend(ctx, op.FrontendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete ACL from frontend '%s': %w", op.FrontendName, err)
 	}
@@ -190,14 +184,10 @@ func (op *UpdateACLFrontendOperation) Priority() int {
 }
 
 // Execute updates the ACL via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other ACL operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateACLFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.ACL == nil {
 		return fmt.Errorf("ACL is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.ACL to dataplaneapi.Acl using transform package
 	apiACL := transform.ToAPIACL(op.ACL)
@@ -211,7 +201,7 @@ func (op *UpdateACLFrontendOperation) Execute(ctx context.Context, c *client.Dat
 	}
 
 	// Call the ReplaceAclFrontend API
-	resp, err := apiClient.ReplaceAclFrontend(ctx, op.FrontendName, op.Index, params, *apiACL)
+	resp, err := c.Client().ReplaceAclFrontend(ctx, op.FrontendName, op.Index, params, *apiACL)
 	if err != nil {
 		return fmt.Errorf("failed to update ACL in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -266,14 +256,10 @@ func (op *CreateACLBackendOperation) Priority() int {
 }
 
 // Execute creates the ACL via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other ACL operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateACLBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.ACL == nil {
 		return fmt.Errorf("ACL is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.ACL to dataplaneapi.Acl using transform package
 	apiACL := transform.ToAPIACL(op.ACL)
@@ -287,7 +273,7 @@ func (op *CreateACLBackendOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the CreateAclBackend API
-	resp, err := apiClient.CreateAclBackend(ctx, op.BackendName, op.Index, params, *apiACL)
+	resp, err := c.Client().CreateAclBackend(ctx, op.BackendName, op.Index, params, *apiACL)
 	if err != nil {
 		return fmt.Errorf("failed to create ACL in backend '%s': %w", op.BackendName, err)
 	}
@@ -343,15 +329,13 @@ func (op *DeleteACLBackendOperation) Priority() int {
 
 // Execute deletes the ACL via the Dataplane API.
 func (op *DeleteACLBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteAclBackendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteAclBackend API
-	resp, err := apiClient.DeleteAclBackend(ctx, op.BackendName, op.Index, params)
+	resp, err := c.Client().DeleteAclBackend(ctx, op.BackendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete ACL from backend '%s': %w", op.BackendName, err)
 	}
@@ -406,14 +390,10 @@ func (op *UpdateACLBackendOperation) Priority() int {
 }
 
 // Execute updates the ACL via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other ACL operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateACLBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.ACL == nil {
 		return fmt.Errorf("ACL is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.ACL to dataplaneapi.Acl using transform package
 	apiACL := transform.ToAPIACL(op.ACL)
@@ -427,7 +407,7 @@ func (op *UpdateACLBackendOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the ReplaceAclBackend API
-	resp, err := apiClient.ReplaceAclBackend(ctx, op.BackendName, op.Index, params, *apiACL)
+	resp, err := c.Client().ReplaceAclBackend(ctx, op.BackendName, op.Index, params, *apiACL)
 	if err != nil {
 		return fmt.Errorf("failed to update ACL in backend '%s': %w", op.BackendName, err)
 	}

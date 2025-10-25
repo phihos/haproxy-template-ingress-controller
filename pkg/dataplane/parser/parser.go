@@ -504,8 +504,6 @@ func (p *Parser) extractPeers() ([]*models.PeerSection, error) {
 }
 
 // extractResolvers extracts all resolvers sections using client-native's ParseResolverSection.
-//
-//nolint:dupl // Similar pattern to extractMailers but handles different type (Resolver vs MailersSection)
 func (p *Parser) extractResolvers() ([]*models.Resolver, error) {
 	sections, err := p.parser.SectionsGet(parser.Resolvers)
 	if err != nil {
@@ -541,8 +539,6 @@ func (p *Parser) extractResolvers() ([]*models.Resolver, error) {
 }
 
 // extractMailers extracts all mailers sections using client-native's ParseMailersSection.
-//
-//nolint:dupl // Similar pattern to extractResolvers but handles different type (MailersSection vs Resolver)
 func (p *Parser) extractMailers() ([]*models.MailersSection, error) {
 	sections, err := p.parser.SectionsGet(parser.Mailers)
 	if err != nil {

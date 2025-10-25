@@ -1,4 +1,3 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -52,55 +51,21 @@ func (op *CreateUserOperation) Priority() int {
 
 // Execute creates the user via the Dataplane API.
 func (op *CreateUserOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.User == nil {
-		return fmt.Errorf("user is nil")
-	}
-	if op.User.Username == "" {
-		return fmt.Errorf("username is empty")
-	}
-	if op.UserlistName == "" {
-		return fmt.Errorf("userlist name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.User to dataplaneapi.User using transform package
-	apiUser := transform.ToAPIUser(op.User)
-	if apiUser == nil {
-		return fmt.Errorf("failed to transform user")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.CreateUserParams{
-		Userlist: op.UserlistName,
-	}
-
-	var resp *http.Response
-	var err error
-
-	if transactionID != "" {
-		// Transaction path: use transaction ID
-		params.TransactionId = &transactionID
-		resp, err = apiClient.CreateUser(ctx, params, *apiUser)
-	} else {
-		// Runtime API path: use version with automatic retry on conflicts
-		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
-			params.Version = &version
-			return apiClient.CreateUser(ctx, params, *apiUser)
-		})
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to create user '%s' in userlist '%s': %w", op.User.Username, op.UserlistName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("user creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateChildHelper(
+		ctx, c, transactionID, op.User, op.UserlistName,
+		func(m *models.User) string { return m.Username },
+		transform.ToAPIUser,
+		func(parent string) *dataplaneapi.CreateUserParams {
+			return &dataplaneapi.CreateUserParams{Userlist: parent}
+		},
+		func(p *dataplaneapi.CreateUserParams, tid *string) { p.TransactionId = tid },
+		func(p *dataplaneapi.CreateUserParams, v *int) { p.Version = v },
+		func(ctx context.Context, params *dataplaneapi.CreateUserParams, apiModel dataplaneapi.User) (*http.Response, error) {
+			return c.Client().CreateUser(ctx, params, apiModel)
+		},
+		"user",
+		"userlist",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -147,55 +112,21 @@ func (op *ReplaceUserOperation) Priority() int {
 
 // Execute replaces the user via the Dataplane API.
 func (op *ReplaceUserOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.User == nil {
-		return fmt.Errorf("user is nil")
-	}
-	if op.User.Username == "" {
-		return fmt.Errorf("username is empty")
-	}
-	if op.UserlistName == "" {
-		return fmt.Errorf("userlist name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.User to dataplaneapi.User using transform package
-	apiUser := transform.ToAPIUser(op.User)
-	if apiUser == nil {
-		return fmt.Errorf("failed to transform user")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.ReplaceUserParams{
-		Userlist: op.UserlistName,
-	}
-
-	var resp *http.Response
-	var err error
-
-	if transactionID != "" {
-		// Transaction path: use transaction ID
-		params.TransactionId = &transactionID
-		resp, err = apiClient.ReplaceUser(ctx, op.User.Username, params, *apiUser)
-	} else {
-		// Runtime API path: use version with automatic retry on conflicts
-		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
-			params.Version = &version
-			return apiClient.ReplaceUser(ctx, op.User.Username, params, *apiUser)
-		})
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to replace user '%s' in userlist '%s': %w", op.User.Username, op.UserlistName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("user replacement failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeReplaceChildHelper(
+		ctx, c, transactionID, op.User, op.UserlistName,
+		func(m *models.User) string { return m.Username },
+		transform.ToAPIUser,
+		func(parent string) *dataplaneapi.ReplaceUserParams {
+			return &dataplaneapi.ReplaceUserParams{Userlist: parent}
+		},
+		func(p *dataplaneapi.ReplaceUserParams, tid *string) { p.TransactionId = tid },
+		func(p *dataplaneapi.ReplaceUserParams, v *int) { p.Version = v },
+		func(ctx context.Context, name string, params *dataplaneapi.ReplaceUserParams, apiModel dataplaneapi.User) (*http.Response, error) {
+			return c.Client().ReplaceUser(ctx, name, params, apiModel)
+		},
+		"user",
+		"userlist",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -241,52 +172,21 @@ func (op *DeleteUserOperation) Priority() int {
 }
 
 // Execute deletes the user via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other section operation Execute methods - each handles different API endpoints and contexts
 func (op *DeleteUserOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.User == nil {
-		return fmt.Errorf("user is nil")
-	}
-	if op.User.Username == "" {
-		return fmt.Errorf("username is empty")
-	}
-	if op.UserlistName == "" {
-		return fmt.Errorf("userlist name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.DeleteUserParams{
-		Userlist: op.UserlistName,
-	}
-
-	var resp *http.Response
-	var err error
-
-	if transactionID != "" {
-		// Transaction path: use transaction ID
-		params.TransactionId = &transactionID
-		resp, err = apiClient.DeleteUser(ctx, op.User.Username, params)
-	} else {
-		// Runtime API path: use version with automatic retry on conflicts
-		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
-			params.Version = &version
-			return apiClient.DeleteUser(ctx, op.User.Username, params)
-		})
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to delete user '%s' from userlist '%s': %w", op.User.Username, op.UserlistName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("user deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteChildHelper(
+		ctx, c, transactionID, op.User, op.UserlistName,
+		func(m *models.User) string { return m.Username },
+		func(parent string) *dataplaneapi.DeleteUserParams {
+			return &dataplaneapi.DeleteUserParams{Userlist: parent}
+		},
+		func(p *dataplaneapi.DeleteUserParams, tid *string) { p.TransactionId = tid },
+		func(p *dataplaneapi.DeleteUserParams, v *int) { p.Version = v },
+		func(ctx context.Context, name string, params *dataplaneapi.DeleteUserParams) (*http.Response, error) {
+			return c.Client().DeleteUser(ctx, name, params)
+		},
+		"user",
+		"userlist",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

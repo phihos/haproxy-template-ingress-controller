@@ -56,8 +56,6 @@ func (op *CreateServerTemplateOperation) Execute(ctx context.Context, c *client.
 		return fmt.Errorf("backend name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.ServerTemplate to dataplaneapi.ServerTemplate using JSON marshaling
 	apiServerTemplate := transform.ToAPIServerTemplate(op.ServerTemplate)
 	if apiServerTemplate == nil {
@@ -78,7 +76,7 @@ func (op *CreateServerTemplateOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the CreateServerTemplate API
-	resp, err := apiClient.CreateServerTemplate(ctx, op.BackendName, params, *apiServerTemplate)
+	resp, err := c.Client().CreateServerTemplate(ctx, op.BackendName, params, *apiServerTemplate)
 	if err != nil {
 		return fmt.Errorf("failed to create server template '%s' in backend '%s': %w", op.ServerTemplate.Prefix, op.BackendName, err)
 	}
@@ -142,8 +140,6 @@ func (op *DeleteServerTemplateOperation) Execute(ctx context.Context, c *client.
 		return fmt.Errorf("backend name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID or version
 	params := &dataplaneapi.DeleteServerTemplateParams{}
 	if transactionID != "" {
@@ -158,7 +154,7 @@ func (op *DeleteServerTemplateOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the DeleteServerTemplate API
-	resp, err := apiClient.DeleteServerTemplate(ctx, op.BackendName, op.ServerTemplate.Prefix, params)
+	resp, err := c.Client().DeleteServerTemplate(ctx, op.BackendName, op.ServerTemplate.Prefix, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete server template '%s' from backend '%s': %w", op.ServerTemplate.Prefix, op.BackendName, err)
 	}
@@ -222,8 +218,6 @@ func (op *UpdateServerTemplateOperation) Execute(ctx context.Context, c *client.
 		return fmt.Errorf("backend name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.ServerTemplate to dataplaneapi.ServerTemplate using JSON marshaling
 	apiServerTemplate := transform.ToAPIServerTemplate(op.ServerTemplate)
 	if apiServerTemplate == nil {
@@ -244,7 +238,7 @@ func (op *UpdateServerTemplateOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the ReplaceServerTemplate API
-	resp, err := apiClient.ReplaceServerTemplate(ctx, op.BackendName, op.ServerTemplate.Prefix, params, *apiServerTemplate)
+	resp, err := c.Client().ReplaceServerTemplate(ctx, op.BackendName, op.ServerTemplate.Prefix, params, *apiServerTemplate)
 	if err != nil {
 		return fmt.Errorf("failed to update server template '%s' in backend '%s': %w", op.ServerTemplate.Prefix, op.BackendName, err)
 	}

@@ -481,8 +481,6 @@ func convertDiffSummary(summary *comparator.DiffSummary) DiffDetails {
 
 // syncGeneralFilesPreConfig handles general file comparison and pre-config sync.
 // It returns the file diff for later use in post-config deletion.
-//
-//nolint:dupl // Similar pattern to SSL and Map file sync - each handles different file types and APIs
 func (o *orchestrator) syncGeneralFilesPreConfig(ctx context.Context, generalFiles []auxiliaryfiles.GeneralFile) (*auxiliaryfiles.FileDiff, error) {
 	if len(generalFiles) == 0 {
 		return &auxiliaryfiles.FileDiff{}, nil
@@ -540,8 +538,6 @@ func (o *orchestrator) syncGeneralFilesPreConfig(ctx context.Context, generalFil
 
 // syncSSLCertificatesPreConfig handles SSL certificate comparison and pre-config sync.
 // It returns the SSL diff for later use in post-config deletion.
-//
-//nolint:dupl // Similar pattern to general file and Map sync - each handles different file types and APIs
 func (o *orchestrator) syncSSLCertificatesPreConfig(ctx context.Context, sslCertificates []auxiliaryfiles.SSLCertificate) (*auxiliaryfiles.SSLCertificateDiff, error) {
 	if len(sslCertificates) == 0 {
 		return &auxiliaryfiles.SSLCertificateDiff{}, nil
@@ -599,8 +595,6 @@ func (o *orchestrator) syncSSLCertificatesPreConfig(ctx context.Context, sslCert
 
 // syncMapFilesPreConfig handles map file comparison and pre-config sync.
 // It returns the map diff for later use in post-config deletion.
-//
-//nolint:dupl // Similar pattern to general file and SSL sync - each handles different file types and APIs
 func (o *orchestrator) syncMapFilesPreConfig(ctx context.Context, mapFiles []auxiliaryfiles.MapFile) (*auxiliaryfiles.MapFileDiff, error) {
 	if len(mapFiles) == 0 {
 		return &auxiliaryfiles.MapFileDiff{}, nil

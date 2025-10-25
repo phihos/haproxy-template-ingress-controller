@@ -1,4 +1,3 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -55,8 +54,6 @@ func (op *CreateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("fcgi-app section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.FCGIApp to dataplaneapi.FcgiApp using transform package
 	apiFCGIApp := transform.ToAPIFCGIApp(op.FCGIApp)
 	if apiFCGIApp == nil {
@@ -77,7 +74,7 @@ func (op *CreateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the CreateFCGIApp API
-	resp, err := apiClient.CreateFCGIApp(ctx, params, *apiFCGIApp)
+	resp, err := c.Client().CreateFCGIApp(ctx, params, *apiFCGIApp)
 	if err != nil {
 		return fmt.Errorf("failed to create fcgi-app section '%s': %w", op.FCGIApp.Name, err)
 	}
@@ -136,8 +133,6 @@ func (op *DeleteFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("fcgi-app section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID or version
 	params := &dataplaneapi.DeleteFCGIAppParams{}
 	if transactionID != "" {
@@ -152,7 +147,7 @@ func (op *DeleteFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the DeleteFCGIApp API
-	resp, err := apiClient.DeleteFCGIApp(ctx, op.FCGIApp.Name, params)
+	resp, err := c.Client().DeleteFCGIApp(ctx, op.FCGIApp.Name, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete fcgi-app section '%s': %w", op.FCGIApp.Name, err)
 	}
@@ -211,8 +206,6 @@ func (op *UpdateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("fcgi-app section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.FCGIApp to dataplaneapi.FcgiApp using transform package
 	apiFCGIApp := transform.ToAPIFCGIApp(op.FCGIApp)
 	if apiFCGIApp == nil {
@@ -233,7 +226,7 @@ func (op *UpdateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the ReplaceFCGIApp API
-	resp, err := apiClient.ReplaceFCGIApp(ctx, op.FCGIApp.Name, params, *apiFCGIApp)
+	resp, err := c.Client().ReplaceFCGIApp(ctx, op.FCGIApp.Name, params, *apiFCGIApp)
 	if err != nil {
 		return fmt.Errorf("failed to update fcgi-app section '%s': %w", op.FCGIApp.Name, err)
 	}

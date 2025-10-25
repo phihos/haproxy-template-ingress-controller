@@ -1,12 +1,11 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
-//
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -53,40 +52,20 @@ func (op *CreateTCPCheckBackendOperation) Priority() int {
 	return PriorityTCPCheck
 }
 
-// Execute creates the TCP check via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
+// Execute creates the tcp check via the Dataplane API.
 func (op *CreateTCPCheckBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.TCPCheck == nil {
-		return fmt.Errorf("TCP check is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.TCPCheck to dataplaneapi.TcpCheck using JSON marshaling
-	apiTCPCheck := transform.ToAPITCPCheck(op.TCPCheck)
-	if apiTCPCheck == nil {
-		return fmt.Errorf("failed to transform TCP check")
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.CreateTCPCheckBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the CreateTCPCheckBackend API
-	resp, err := apiClient.CreateTCPCheckBackend(ctx, op.BackendName, op.Index, params, *apiTCPCheck)
-	if err != nil {
-		return fmt.Errorf("failed to create TCP check in backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("TCP check creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateIndexedRuleHelper(
+		ctx, transactionID, op.TCPCheck, op.BackendName, op.Index,
+		transform.ToAPITCPCheck,
+		func(txID string) *dataplaneapi.CreateTCPCheckBackendParams {
+			return &dataplaneapi.CreateTCPCheckBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.CreateTCPCheckBackendParams, apiModel dataplaneapi.TcpCheck) (*http.Response, error) {
+			return c.Client().CreateTCPCheckBackend(ctx, parent, idx, params, apiModel)
+		},
+		"tcp check",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -129,28 +108,19 @@ func (op *DeleteTCPCheckBackendOperation) Priority() int {
 	return PriorityTCPCheck
 }
 
-// Execute deletes the TCP check via the Dataplane API.
+// Execute deletes the tcp check via the Dataplane API.
 func (op *DeleteTCPCheckBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.DeleteTCPCheckBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the DeleteTCPCheckBackend API
-	resp, err := apiClient.DeleteTCPCheckBackend(ctx, op.BackendName, op.Index, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete TCP check from backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("TCP check deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteIndexedRuleHelper(
+		ctx, transactionID, op.BackendName, op.Index,
+		func(txID string) *dataplaneapi.DeleteTCPCheckBackendParams {
+			return &dataplaneapi.DeleteTCPCheckBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.DeleteTCPCheckBackendParams) (*http.Response, error) {
+			return c.Client().DeleteTCPCheckBackend(ctx, parent, idx, params)
+		},
+		"tcp check",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -193,38 +163,20 @@ func (op *UpdateTCPCheckBackendOperation) Priority() int {
 	return PriorityTCPCheck
 }
 
-// Execute updates the TCP check via the Dataplane API.
+// Execute updates the tcp check via the Dataplane API.
 func (op *UpdateTCPCheckBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.TCPCheck == nil {
-		return fmt.Errorf("TCP check is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.TCPCheck to dataplaneapi.TcpCheck using JSON marshaling
-	apiTCPCheck := transform.ToAPITCPCheck(op.TCPCheck)
-	if apiTCPCheck == nil {
-		return fmt.Errorf("failed to transform TCP check")
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.ReplaceTCPCheckBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the ReplaceTCPCheckBackend API
-	resp, err := apiClient.ReplaceTCPCheckBackend(ctx, op.BackendName, op.Index, params, *apiTCPCheck)
-	if err != nil {
-		return fmt.Errorf("failed to update TCP check in backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("TCP check update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeReplaceIndexedRuleHelper(
+		ctx, transactionID, op.TCPCheck, op.BackendName, op.Index,
+		transform.ToAPITCPCheck,
+		func(txID string) *dataplaneapi.ReplaceTCPCheckBackendParams {
+			return &dataplaneapi.ReplaceTCPCheckBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.ReplaceTCPCheckBackendParams, apiModel dataplaneapi.TcpCheck) (*http.Response, error) {
+			return c.Client().ReplaceTCPCheckBackend(ctx, parent, idx, params, apiModel)
+		},
+		"tcp check",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

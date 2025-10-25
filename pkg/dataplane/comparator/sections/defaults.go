@@ -1,7 +1,5 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
-//
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 // Section operation files follow similar patterns - each implements type-specific HAProxy API wrappers
@@ -9,6 +7,7 @@ package sections
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -50,40 +49,18 @@ func (op *CreateDefaultsOperation) Priority() int {
 
 // Execute creates the defaults section via the Dataplane API.
 func (op *CreateDefaultsOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Defaults == nil {
-		return fmt.Errorf("defaults section is nil")
-	}
-	if op.Defaults.Name == "" {
-		return fmt.Errorf("defaults section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Defaults to dataplaneapi.Defaults using JSON marshaling
-	// This is necessary because they are incompatible types
-	apiDefaults := transform.ToAPIDefaults(op.Defaults)
-	if apiDefaults == nil {
-		return fmt.Errorf("failed to transform defaults section")
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.CreateDefaultsSectionParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the CreateDefaultsSection API
-	resp, err := apiClient.CreateDefaultsSection(ctx, params, *apiDefaults)
-	if err != nil {
-		return fmt.Errorf("failed to create defaults section '%s': %w", op.Defaults.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("defaults section creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateTransactionOnlyHelper(
+		ctx, transactionID, op.Defaults,
+		func(m *models.Defaults) string { return m.Name },
+		transform.ToAPIDefaults,
+		func(txID string) *dataplaneapi.CreateDefaultsSectionParams {
+			return &dataplaneapi.CreateDefaultsSectionParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, params *dataplaneapi.CreateDefaultsSectionParams, apiModel dataplaneapi.Defaults) (*http.Response, error) {
+			return c.Client().CreateDefaultsSection(ctx, params, apiModel)
+		},
+		"defaults section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -124,33 +101,17 @@ func (op *DeleteDefaultsOperation) Priority() int {
 
 // Execute deletes the defaults section via the Dataplane API.
 func (op *DeleteDefaultsOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Defaults == nil {
-		return fmt.Errorf("defaults section is nil")
-	}
-	if op.Defaults.Name == "" {
-		return fmt.Errorf("defaults section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.DeleteDefaultsSectionParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the DeleteDefaultsSection API
-	resp, err := apiClient.DeleteDefaultsSection(ctx, op.Defaults.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete defaults section '%s': %w", op.Defaults.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("defaults section deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteTransactionOnlyHelper(
+		ctx, transactionID, op.Defaults,
+		func(m *models.Defaults) string { return m.Name },
+		func(txID string) *dataplaneapi.DeleteDefaultsSectionParams {
+			return &dataplaneapi.DeleteDefaultsSectionParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, name string, params *dataplaneapi.DeleteDefaultsSectionParams) (*http.Response, error) {
+			return c.Client().DeleteDefaultsSection(ctx, name, params)
+		},
+		"defaults section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -191,39 +152,18 @@ func (op *UpdateDefaultsOperation) Priority() int {
 
 // Execute updates the defaults section via the Dataplane API.
 func (op *UpdateDefaultsOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Defaults == nil {
-		return fmt.Errorf("defaults section is nil")
-	}
-	if op.Defaults.Name == "" {
-		return fmt.Errorf("defaults section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Defaults to dataplaneapi.Defaults using JSON marshaling
-	apiDefaults := transform.ToAPIDefaults(op.Defaults)
-	if apiDefaults == nil {
-		return fmt.Errorf("failed to transform defaults section")
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.ReplaceDefaultsSectionParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the ReplaceDefaultsSection API
-	resp, err := apiClient.ReplaceDefaultsSection(ctx, op.Defaults.Name, params, *apiDefaults)
-	if err != nil {
-		return fmt.Errorf("failed to update defaults section '%s': %w", op.Defaults.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("defaults section update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeUpdateTransactionOnlyHelper(
+		ctx, transactionID, op.Defaults,
+		func(m *models.Defaults) string { return m.Name },
+		transform.ToAPIDefaults,
+		func(txID string) *dataplaneapi.ReplaceDefaultsSectionParams {
+			return &dataplaneapi.ReplaceDefaultsSectionParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, name string, params *dataplaneapi.ReplaceDefaultsSectionParams, apiModel dataplaneapi.Defaults) (*http.Response, error) {
+			return c.Client().ReplaceDefaultsSection(ctx, name, params, apiModel)
+		},
+		"defaults section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

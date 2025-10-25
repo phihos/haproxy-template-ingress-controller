@@ -302,78 +302,149 @@ func validateFrontendElements(spec *openapi3.T, frontend *models.Frontend) []str
 
 // validateRuleList validates a list of rules using a transform function.
 func validateRuleList(spec *openapi3.T, parentName string, list interface{}, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
 	switch v := list.(type) {
 	case []*models.HTTPRequestRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
-			}
-		}
+		return validateHTTPRequestRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.HTTPRequestRules:
+		return validateHTTPRequestRules(spec, parentName, v, transformFunc, schemaName, typeName)
 	case []*models.HTTPResponseRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
-			}
-		}
+		return validateHTTPResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.HTTPResponseRules:
+		return validateHTTPResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
 	case []*models.TCPRequestRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
-			}
-		}
+		return validateTCPRequestRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.TCPRequestRules:
+		return validateTCPRequestRules(spec, parentName, v, transformFunc, schemaName, typeName)
 	case []*models.TCPResponseRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
-			}
-		}
+		return validateTCPResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.TCPResponseRules:
+		return validateTCPResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
 	case []*models.HTTPAfterResponseRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
-			}
-		}
+		return validateHTTPAfterResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.HTTPAfterResponseRules:
+		return validateHTTPAfterResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
 	case []*models.HTTPErrorRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
-			}
-		}
+		return validateHTTPErrorRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.HTTPErrorRules:
+		return validateHTTPErrorRules(spec, parentName, v, transformFunc, schemaName, typeName)
 	case []*models.ServerSwitchingRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
-			}
-		}
+		return validateServerSwitchingRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.ServerSwitchingRules:
+		return validateServerSwitchingRules(spec, parentName, v, transformFunc, schemaName, typeName)
 	case []*models.StickRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
+		return validateStickRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.StickRules:
+		return validateStickRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case []*models.BackendSwitchingRule:
+		return validateBackendSwitchingRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	case models.BackendSwitchingRules:
+		return validateBackendSwitchingRules(spec, parentName, v, transformFunc, schemaName, typeName)
+	}
+	return nil
+}
+
+func validateHTTPRequestRules(spec *openapi3.T, parentName string, rules []*models.HTTPRequestRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
 			}
 		}
-	case []*models.BackendSwitchingRule:
-		for idx := range v {
-			if apiRule := transformFunc(v[idx]); apiRule != nil {
-				if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-					errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-				}
+	}
+	return errors
+}
+
+func validateHTTPResponseRules(spec *openapi3.T, parentName string, rules []*models.HTTPResponseRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
+			}
+		}
+	}
+	return errors
+}
+
+func validateTCPRequestRules(spec *openapi3.T, parentName string, rules []*models.TCPRequestRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
+			}
+		}
+	}
+	return errors
+}
+
+func validateTCPResponseRules(spec *openapi3.T, parentName string, rules []*models.TCPResponseRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
+			}
+		}
+	}
+	return errors
+}
+
+func validateHTTPAfterResponseRules(spec *openapi3.T, parentName string, rules []*models.HTTPAfterResponseRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
+			}
+		}
+	}
+	return errors
+}
+
+func validateHTTPErrorRules(spec *openapi3.T, parentName string, rules []*models.HTTPErrorRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
+			}
+		}
+	}
+	return errors
+}
+
+func validateServerSwitchingRules(spec *openapi3.T, parentName string, rules []*models.ServerSwitchingRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
+			}
+		}
+	}
+	return errors
+}
+
+func validateStickRules(spec *openapi3.T, parentName string, rules []*models.StickRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
+			}
+		}
+	}
+	return errors
+}
+
+func validateBackendSwitchingRules(spec *openapi3.T, parentName string, rules []*models.BackendSwitchingRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
+	var errors []string
+	for idx := range rules {
+		if apiRule := transformFunc(rules[idx]); apiRule != nil {
+			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
+				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
 			}
 		}
 	}

@@ -51,55 +51,21 @@ func (op *CreatePeerEntryOperation) Priority() int {
 
 // Execute creates the peer entry via the Dataplane API.
 func (op *CreatePeerEntryOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.PeerEntry == nil {
-		return fmt.Errorf("peer entry is nil")
-	}
-	if op.PeerEntry.Name == "" {
-		return fmt.Errorf("peer entry name is empty")
-	}
-	if op.PeersSection == "" {
-		return fmt.Errorf("peers section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.PeerEntry to dataplaneapi.PeerEntry using JSON marshaling
-	apiPeerEntry := transform.ToAPIPeerEntry(op.PeerEntry)
-	if apiPeerEntry == nil {
-		return fmt.Errorf("failed to transform peer entry")
-	}
-
-	// Prepare parameters and execute with transaction ID or version
-	params := &dataplaneapi.CreatePeerEntryParams{
-		PeerSection: op.PeersSection,
-	}
-
-	var resp *http.Response
-	var err error
-
-	if transactionID != "" {
-		// Transaction path: use transaction ID
-		params.TransactionId = &transactionID
-		resp, err = apiClient.CreatePeerEntry(ctx, params, *apiPeerEntry)
-	} else {
-		// Runtime API path: use version with automatic retry on conflicts
-		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
-			params.Version = &version
-			return apiClient.CreatePeerEntry(ctx, params, *apiPeerEntry)
-		})
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to create peer entry '%s' in peers section '%s': %w", op.PeerEntry.Name, op.PeersSection, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("peer entry creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateChildHelper(
+		ctx, c, transactionID, op.PeerEntry, op.PeersSection,
+		func(m *models.PeerEntry) string { return m.Name },
+		transform.ToAPIPeerEntry,
+		func(parent string) *dataplaneapi.CreatePeerEntryParams {
+			return &dataplaneapi.CreatePeerEntryParams{PeerSection: parent}
+		},
+		func(p *dataplaneapi.CreatePeerEntryParams, tid *string) { p.TransactionId = tid },
+		func(p *dataplaneapi.CreatePeerEntryParams, v *int) { p.Version = v },
+		func(ctx context.Context, params *dataplaneapi.CreatePeerEntryParams, apiModel dataplaneapi.PeerEntry) (*http.Response, error) {
+			return c.Client().CreatePeerEntry(ctx, params, apiModel)
+		},
+		"peer entry",
+		"peers section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -142,49 +108,20 @@ func (op *DeletePeerEntryOperation) Priority() int {
 
 // Execute deletes the peer entry via the Dataplane API.
 func (op *DeletePeerEntryOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.PeerEntry == nil {
-		return fmt.Errorf("peer entry is nil")
-	}
-	if op.PeerEntry.Name == "" {
-		return fmt.Errorf("peer entry name is empty")
-	}
-	if op.PeersSection == "" {
-		return fmt.Errorf("peers section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters and execute with transaction ID or version
-	params := &dataplaneapi.DeletePeerEntryParams{
-		PeerSection: op.PeersSection,
-	}
-
-	var resp *http.Response
-	var err error
-
-	if transactionID != "" {
-		// Transaction path: use transaction ID
-		params.TransactionId = &transactionID
-		resp, err = apiClient.DeletePeerEntry(ctx, op.PeerEntry.Name, params)
-	} else {
-		// Runtime API path: use version with automatic retry on conflicts
-		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
-			params.Version = &version
-			return apiClient.DeletePeerEntry(ctx, op.PeerEntry.Name, params)
-		})
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to delete peer entry '%s' from peers section '%s': %w", op.PeerEntry.Name, op.PeersSection, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("peer entry deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteChildHelper(
+		ctx, c, transactionID, op.PeerEntry, op.PeersSection,
+		func(m *models.PeerEntry) string { return m.Name },
+		func(parent string) *dataplaneapi.DeletePeerEntryParams {
+			return &dataplaneapi.DeletePeerEntryParams{PeerSection: parent}
+		},
+		func(p *dataplaneapi.DeletePeerEntryParams, tid *string) { p.TransactionId = tid },
+		func(p *dataplaneapi.DeletePeerEntryParams, v *int) { p.Version = v },
+		func(ctx context.Context, name string, params *dataplaneapi.DeletePeerEntryParams) (*http.Response, error) {
+			return c.Client().DeletePeerEntry(ctx, name, params)
+		},
+		"peer entry",
+		"peers section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -237,8 +174,6 @@ func (op *UpdatePeerEntryOperation) Execute(ctx context.Context, c *client.Datap
 		return fmt.Errorf("peers section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.PeerEntry to dataplaneapi.PeerEntry using JSON marshaling
 	apiPeerEntry := transform.ToAPIPeerEntry(op.PeerEntry)
 	if apiPeerEntry == nil {
@@ -258,12 +193,12 @@ func (op *UpdatePeerEntryOperation) Execute(ctx context.Context, c *client.Datap
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.ReplacePeerEntry(ctx, op.PeerEntry.Name, params, *apiPeerEntry)
+		resp, err = c.Client().ReplacePeerEntry(ctx, op.PeerEntry.Name, params, *apiPeerEntry)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.ReplacePeerEntry(ctx, op.PeerEntry.Name, params, *apiPeerEntry)
+			return c.Client().ReplacePeerEntry(ctx, op.PeerEntry.Name, params, *apiPeerEntry)
 		})
 	}
 

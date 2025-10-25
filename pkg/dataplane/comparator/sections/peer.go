@@ -1,9 +1,9 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -49,47 +49,23 @@ func (op *CreatePeerOperation) Priority() int {
 
 // Execute creates the peer section via the Dataplane API.
 func (op *CreatePeerOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Peer == nil {
-		return fmt.Errorf("peer section is nil")
-	}
-	if op.Peer.Name == "" {
-		return fmt.Errorf("peer section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.PeerSection to dataplaneapi.PeerSection using JSON marshaling
-	apiPeer := transform.ToAPIPeerSection(op.Peer)
-	if apiPeer == nil {
-		return fmt.Errorf("failed to transform peer section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.CreatePeerParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the CreatePeer API
-	resp, err := apiClient.CreatePeer(ctx, params, *apiPeer)
-	if err != nil {
-		return fmt.Errorf("failed to create peer section '%s': %w", op.Peer.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("peer section creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateHelper(
+		ctx, transactionID, op.Peer,
+		func(r *models.PeerSection) string { return r.Name },
+		transform.ToAPIPeerSection,
+		func(ctx context.Context, apiPeer *dataplaneapi.PeerSection, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.CreatePeerParams { return &dataplaneapi.CreatePeerParams{} },
+				func(p *dataplaneapi.CreatePeerParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.CreatePeerParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.CreatePeerParams) (*http.Response, error) {
+					return c.Client().CreatePeer(ctx, params, *apiPeer)
+				},
+			)
+		},
+		"peer section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -130,41 +106,22 @@ func (op *DeletePeerOperation) Priority() int {
 
 // Execute deletes the peer section via the Dataplane API.
 func (op *DeletePeerOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Peer == nil {
-		return fmt.Errorf("peer section is nil")
-	}
-	if op.Peer.Name == "" {
-		return fmt.Errorf("peer section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.DeletePeerParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the DeletePeer API
-	resp, err := apiClient.DeletePeer(ctx, op.Peer.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete peer section '%s': %w", op.Peer.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("peer section deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteHelper(
+		ctx, transactionID, op.Peer,
+		func(r *models.PeerSection) string { return r.Name },
+		func(ctx context.Context, name string, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.DeletePeerParams { return &dataplaneapi.DeletePeerParams{} },
+				func(p *dataplaneapi.DeletePeerParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.DeletePeerParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.DeletePeerParams) (*http.Response, error) {
+					return c.Client().DeletePeer(ctx, name, params)
+				},
+			)
+		},
+		"peer section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

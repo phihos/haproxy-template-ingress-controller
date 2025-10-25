@@ -1,12 +1,11 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
-//
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -54,39 +53,19 @@ func (op *CreateHTTPAfterResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the HTTP after response rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Rule == nil {
-		return fmt.Errorf("HTTP after response rule is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.HTTPAfterResponseRule to dataplaneapi.HttpAfterResponseRule using JSON marshaling
-	apiRule := transform.ToAPIHTTPAfterResponseRule(op.Rule)
-	if apiRule == nil {
-		return fmt.Errorf("failed to transform HTTP after response rule")
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.CreateHTTPAfterResponseRuleBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the CreateHTTPAfterResponseRuleBackend API
-	resp, err := apiClient.CreateHTTPAfterResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
-	if err != nil {
-		return fmt.Errorf("failed to create HTTP after response rule in backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP after response rule creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateIndexedRuleHelper(
+		ctx, transactionID, op.Rule, op.BackendName, op.Index,
+		transform.ToAPIHTTPAfterResponseRule,
+		func(txID string) *dataplaneapi.CreateHTTPAfterResponseRuleBackendParams {
+			return &dataplaneapi.CreateHTTPAfterResponseRuleBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.CreateHTTPAfterResponseRuleBackendParams, apiModel dataplaneapi.HttpAfterResponseRule) (*http.Response, error) {
+			return c.Client().CreateHTTPAfterResponseRuleBackend(ctx, parent, idx, params, apiModel)
+		},
+		"HTTP after response rule",
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -131,26 +110,17 @@ func (op *DeleteHTTPAfterResponseRuleBackendOperation) Priority() int {
 
 // Execute deletes the HTTP after response rule via the Dataplane API.
 func (op *DeleteHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.DeleteHTTPAfterResponseRuleBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the DeleteHTTPAfterResponseRuleBackend API
-	resp, err := apiClient.DeleteHTTPAfterResponseRuleBackend(ctx, op.BackendName, op.Index, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete HTTP after response rule from backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP after response rule deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteIndexedRuleHelper(
+		ctx, transactionID, op.BackendName, op.Index,
+		func(txID string) *dataplaneapi.DeleteHTTPAfterResponseRuleBackendParams {
+			return &dataplaneapi.DeleteHTTPAfterResponseRuleBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.DeleteHTTPAfterResponseRuleBackendParams) (*http.Response, error) {
+			return c.Client().DeleteHTTPAfterResponseRuleBackend(ctx, parent, idx, params)
+		},
+		"HTTP after response rule",
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -195,36 +165,18 @@ func (op *UpdateHTTPAfterResponseRuleBackendOperation) Priority() int {
 
 // Execute updates the HTTP after response rule via the Dataplane API.
 func (op *UpdateHTTPAfterResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Rule == nil {
-		return fmt.Errorf("HTTP after response rule is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.HTTPAfterResponseRule to dataplaneapi.HttpAfterResponseRule using JSON marshaling
-	apiRule := transform.ToAPIHTTPAfterResponseRule(op.Rule)
-	if apiRule == nil {
-		return fmt.Errorf("failed to transform HTTP after response rule")
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.ReplaceHTTPAfterResponseRuleBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the ReplaceHTTPAfterResponseRuleBackend API
-	resp, err := apiClient.ReplaceHTTPAfterResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
-	if err != nil {
-		return fmt.Errorf("failed to update HTTP after response rule in backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP after response rule update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeReplaceIndexedRuleHelper(
+		ctx, transactionID, op.Rule, op.BackendName, op.Index,
+		transform.ToAPIHTTPAfterResponseRule,
+		func(txID string) *dataplaneapi.ReplaceHTTPAfterResponseRuleBackendParams {
+			return &dataplaneapi.ReplaceHTTPAfterResponseRuleBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.ReplaceHTTPAfterResponseRuleBackendParams, apiModel dataplaneapi.HttpAfterResponseRule) (*http.Response, error) {
+			return c.Client().ReplaceHTTPAfterResponseRuleBackend(ctx, parent, idx, params, apiModel)
+		},
+		"HTTP after response rule",
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

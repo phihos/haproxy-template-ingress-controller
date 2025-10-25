@@ -47,8 +47,6 @@ func (op *UpdateGlobalOperation) Execute(ctx context.Context, c *client.Dataplan
 		return fmt.Errorf("global section is nil")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.Global to dataplaneapi.Global using transform package
 	apiGlobal := transform.ToAPIGlobal(op.Global)
 	if apiGlobal == nil {
@@ -61,7 +59,7 @@ func (op *UpdateGlobalOperation) Execute(ctx context.Context, c *client.Dataplan
 	}
 
 	// Call the ReplaceGlobal API
-	resp, err := apiClient.ReplaceGlobal(ctx, params, *apiGlobal)
+	resp, err := c.Client().ReplaceGlobal(ctx, params, *apiGlobal)
 	if err != nil {
 		return fmt.Errorf("failed to update global section: %w", err)
 	}

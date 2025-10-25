@@ -1,7 +1,5 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
-//
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -54,14 +52,10 @@ func (op *CreateFilterFrontendOperation) Priority() int {
 }
 
 // Execute creates the filter via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other filter operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateFilterFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Filter == nil {
 		return fmt.Errorf("filter is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.Filter to dataplaneapi.Filter using JSON marshaling
 	apiFilter := transform.ToAPIFilter(op.Filter)
@@ -75,7 +69,7 @@ func (op *CreateFilterFrontendOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the CreateFilterFrontend API
-	resp, err := apiClient.CreateFilterFrontend(ctx, op.FrontendName, op.Index, params, *apiFilter)
+	resp, err := c.Client().CreateFilterFrontend(ctx, op.FrontendName, op.Index, params, *apiFilter)
 	if err != nil {
 		return fmt.Errorf("failed to create filter in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -131,15 +125,13 @@ func (op *DeleteFilterFrontendOperation) Priority() int {
 
 // Execute deletes the filter via the Dataplane API.
 func (op *DeleteFilterFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteFilterFrontendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteFilterFrontend API
-	resp, err := apiClient.DeleteFilterFrontend(ctx, op.FrontendName, op.Index, params)
+	resp, err := c.Client().DeleteFilterFrontend(ctx, op.FrontendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete filter from frontend '%s': %w", op.FrontendName, err)
 	}
@@ -194,14 +186,10 @@ func (op *UpdateFilterFrontendOperation) Priority() int {
 }
 
 // Execute updates the filter via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other filter operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateFilterFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Filter == nil {
 		return fmt.Errorf("filter is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.Filter to dataplaneapi.Filter using JSON marshaling
 	apiFilter := transform.ToAPIFilter(op.Filter)
@@ -215,7 +203,7 @@ func (op *UpdateFilterFrontendOperation) Execute(ctx context.Context, c *client.
 	}
 
 	// Call the ReplaceFilterFrontend API
-	resp, err := apiClient.ReplaceFilterFrontend(ctx, op.FrontendName, op.Index, params, *apiFilter)
+	resp, err := c.Client().ReplaceFilterFrontend(ctx, op.FrontendName, op.Index, params, *apiFilter)
 	if err != nil {
 		return fmt.Errorf("failed to update filter in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -270,14 +258,10 @@ func (op *CreateFilterBackendOperation) Priority() int {
 }
 
 // Execute creates the filter via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other filter operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateFilterBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Filter == nil {
 		return fmt.Errorf("filter is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.Filter to dataplaneapi.Filter using JSON marshaling
 	apiFilter := transform.ToAPIFilter(op.Filter)
@@ -291,7 +275,7 @@ func (op *CreateFilterBackendOperation) Execute(ctx context.Context, c *client.D
 	}
 
 	// Call the CreateFilterBackend API
-	resp, err := apiClient.CreateFilterBackend(ctx, op.BackendName, op.Index, params, *apiFilter)
+	resp, err := c.Client().CreateFilterBackend(ctx, op.BackendName, op.Index, params, *apiFilter)
 	if err != nil {
 		return fmt.Errorf("failed to create filter in backend '%s': %w", op.BackendName, err)
 	}
@@ -347,15 +331,13 @@ func (op *DeleteFilterBackendOperation) Priority() int {
 
 // Execute deletes the filter via the Dataplane API.
 func (op *DeleteFilterBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteFilterBackendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteFilterBackend API
-	resp, err := apiClient.DeleteFilterBackend(ctx, op.BackendName, op.Index, params)
+	resp, err := c.Client().DeleteFilterBackend(ctx, op.BackendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete filter from backend '%s': %w", op.BackendName, err)
 	}
@@ -410,14 +392,10 @@ func (op *UpdateFilterBackendOperation) Priority() int {
 }
 
 // Execute updates the filter via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other filter operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateFilterBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Filter == nil {
 		return fmt.Errorf("filter is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.Filter to dataplaneapi.Filter using JSON marshaling
 	apiFilter := transform.ToAPIFilter(op.Filter)
@@ -431,7 +409,7 @@ func (op *UpdateFilterBackendOperation) Execute(ctx context.Context, c *client.D
 	}
 
 	// Call the ReplaceFilterBackend API
-	resp, err := apiClient.ReplaceFilterBackend(ctx, op.BackendName, op.Index, params, *apiFilter)
+	resp, err := c.Client().ReplaceFilterBackend(ctx, op.BackendName, op.Index, params, *apiFilter)
 	if err != nil {
 		return fmt.Errorf("failed to update filter in backend '%s': %w", op.BackendName, err)
 	}

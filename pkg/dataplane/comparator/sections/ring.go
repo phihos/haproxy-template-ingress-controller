@@ -1,9 +1,9 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -49,47 +49,23 @@ func (op *CreateRingOperation) Priority() int {
 
 // Execute creates the ring section via the Dataplane API.
 func (op *CreateRingOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Ring == nil {
-		return fmt.Errorf("ring section is nil")
-	}
-	if op.Ring.Name == "" {
-		return fmt.Errorf("ring section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Ring to dataplaneapi.Ring using transform package
-	apiRing := transform.ToAPIRing(op.Ring)
-	if apiRing == nil {
-		return fmt.Errorf("failed to transform ring section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.CreateRingParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the CreateRing API
-	resp, err := apiClient.CreateRing(ctx, params, *apiRing)
-	if err != nil {
-		return fmt.Errorf("failed to create ring section '%s': %w", op.Ring.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("ring section creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateHelper(
+		ctx, transactionID, op.Ring,
+		func(r *models.Ring) string { return r.Name },
+		transform.ToAPIRing,
+		func(ctx context.Context, apiRing *dataplaneapi.Ring, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.CreateRingParams { return &dataplaneapi.CreateRingParams{} },
+				func(p *dataplaneapi.CreateRingParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.CreateRingParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.CreateRingParams) (*http.Response, error) {
+					return c.Client().CreateRing(ctx, params, *apiRing)
+				},
+			)
+		},
+		"ring section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -130,41 +106,22 @@ func (op *DeleteRingOperation) Priority() int {
 
 // Execute deletes the ring section via the Dataplane API.
 func (op *DeleteRingOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Ring == nil {
-		return fmt.Errorf("ring section is nil")
-	}
-	if op.Ring.Name == "" {
-		return fmt.Errorf("ring section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.DeleteRingParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the DeleteRing API
-	resp, err := apiClient.DeleteRing(ctx, op.Ring.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete ring section '%s': %w", op.Ring.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("ring section deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteHelper(
+		ctx, transactionID, op.Ring,
+		func(r *models.Ring) string { return r.Name },
+		func(ctx context.Context, name string, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.DeleteRingParams { return &dataplaneapi.DeleteRingParams{} },
+				func(p *dataplaneapi.DeleteRingParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.DeleteRingParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.DeleteRingParams) (*http.Response, error) {
+					return c.Client().DeleteRing(ctx, name, params)
+				},
+			)
+		},
+		"ring section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -205,47 +162,23 @@ func (op *UpdateRingOperation) Priority() int {
 
 // Execute updates the ring section via the Dataplane API.
 func (op *UpdateRingOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Ring == nil {
-		return fmt.Errorf("ring section is nil")
-	}
-	if op.Ring.Name == "" {
-		return fmt.Errorf("ring section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Ring to dataplaneapi.Ring using transform package
-	apiRing := transform.ToAPIRing(op.Ring)
-	if apiRing == nil {
-		return fmt.Errorf("failed to transform ring section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.ReplaceRingParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the ReplaceRing API
-	resp, err := apiClient.ReplaceRing(ctx, op.Ring.Name, params, *apiRing)
-	if err != nil {
-		return fmt.Errorf("failed to update ring section '%s': %w", op.Ring.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("ring section update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeUpdateHelper(
+		ctx, transactionID, op.Ring,
+		func(r *models.Ring) string { return r.Name },
+		transform.ToAPIRing,
+		func(ctx context.Context, name string, apiRing *dataplaneapi.Ring, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.ReplaceRingParams { return &dataplaneapi.ReplaceRingParams{} },
+				func(p *dataplaneapi.ReplaceRingParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.ReplaceRingParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.ReplaceRingParams) (*http.Response, error) {
+					return c.Client().ReplaceRing(ctx, name, params, *apiRing)
+				},
+			)
+		},
+		"ring section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

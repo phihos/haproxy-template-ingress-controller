@@ -230,8 +230,6 @@ func (c *Comparator) Compare(current, desired *parser.StructuredConfig) (*Config
 //
 // This is a focused implementation that handles the most common use case:
 // backend and server management. It demonstrates the pattern for other sections.
-//
-//nolint:dupl // Similar pattern to compareFrontends but handles different type (Backend vs Frontend)
 func (c *Comparator) compareBackends(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
 	var operations []Operation
 
@@ -549,8 +547,6 @@ func backendsEqualWithoutNestedCollections(b1, b2 *models.Backend) bool {
 }
 
 // compareFrontends compares frontend configurations between current and desired.
-//
-//nolint:dupl // Similar pattern to compareBackends but handles different type (Frontend vs Backend)
 func (c *Comparator) compareFrontends(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
 	var operations []Operation
 
@@ -1040,8 +1036,6 @@ func (c *Comparator) updateTCPRequestRuleOperation(parentType, parentName string
 
 // compareTCPResponseRules compares TCP response rule configurations within a backend.
 // Rules are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to other backend-only rule comparison functions (StickRules, HTTPAfterResponseRules, etc.) - each handles different rule types
 func (c *Comparator) compareTCPResponseRules(parentName string, currentRules, desiredRules models.TCPResponseRules) []Operation {
 	var operations []Operation
 
@@ -1135,8 +1129,6 @@ func (c *Comparator) updateLogTargetOperation(parentType, parentName string, cur
 
 // Stick rules are compared by position since they don't have unique identifiers.
 // Backend-only (frontends do not support stick rules).
-//
-//nolint:dupl // Similar pattern to other backend-only rule comparison functions - each handles different rule types
 func (c *Comparator) compareStickRules(backendName string, currentRules, desiredRules models.StickRules) []Operation {
 	var operations []Operation
 
@@ -1176,8 +1168,6 @@ func (c *Comparator) compareStickRules(backendName string, currentRules, desired
 
 // Rules are compared by position since they don't have unique identifiers.
 // Backend-only (frontends do not support HTTP after response rules).
-//
-//nolint:dupl // Similar pattern to other backend-only rule comparison functions - each handles different rule types
 func (c *Comparator) compareHTTPAfterResponseRules(backendName string, currentRules, desiredRules models.HTTPAfterResponseRules) []Operation {
 	var operations []Operation
 
@@ -1215,8 +1205,6 @@ func (c *Comparator) compareHTTPAfterResponseRules(backendName string, currentRu
 
 // compareBackendSwitchingRules compares backend switching rule configurations within a frontend.
 // Rules are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to other switching/check rule comparison functions - each handles different types
 func (c *Comparator) compareBackendSwitchingRules(frontendName string, currentRules, desiredRules models.BackendSwitchingRules) []Operation {
 	var operations []Operation
 
@@ -1254,8 +1242,6 @@ func (c *Comparator) compareBackendSwitchingRules(frontendName string, currentRu
 
 // compareServerSwitchingRules compares server switching rule configurations within a backend.
 // Rules are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to other switching/check rule comparison functions - each handles different types
 func (c *Comparator) compareServerSwitchingRules(backendName string, currentRules, desiredRules models.ServerSwitchingRules) []Operation {
 	var operations []Operation
 
@@ -1390,8 +1376,6 @@ func (c *Comparator) updateFilterOperation(parentType, parentName string, curren
 
 // compareHTTPChecks compares HTTP check configurations within a backend.
 // HTTP checks are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to compareTCPChecks - both handle check configurations with same logic but different types
 func (c *Comparator) compareHTTPChecks(backendName string, currentChecks, desiredChecks models.HTTPChecks) []Operation {
 	var operations []Operation
 
@@ -1429,8 +1413,6 @@ func (c *Comparator) compareHTTPChecks(backendName string, currentChecks, desire
 
 // compareTCPChecks compares TCP check configurations within a backend.
 // TCP checks are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to compareHTTPChecks and compareCaptures - all handle positioned list comparisons with same logic but different types
 func (c *Comparator) compareTCPChecks(backendName string, currentChecks, desiredChecks models.TCPChecks) []Operation {
 	var operations []Operation
 
@@ -1468,8 +1450,6 @@ func (c *Comparator) compareTCPChecks(backendName string, currentChecks, desired
 
 // compareCaptures compares capture configurations within a frontend.
 // Captures are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to HTTP/TCP checks and other positioned rule comparisons - each handles different types
 func (c *Comparator) compareCaptures(frontendName string, currentCaptures, desiredCaptures models.Captures) []Operation {
 	var operations []Operation
 
@@ -1553,7 +1533,6 @@ func serverTemplatesEqual(t1, t2 *models.ServerTemplate) bool {
 
 // compareHTTPErrors compares http-errors sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (Resolvers, Mailers, Peers, etc.) - each handles different types
 func (c *Comparator) compareHTTPErrors(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -1607,8 +1586,6 @@ func httpErrorsEqual(h1, h2 *models.HTTPErrorsSection) bool {
 }
 
 // compareResolvers compares resolver sections between current and desired configurations.
-//
-//nolint:dupl // Similar pattern to compareMailers/comparePeers - each handles different section types
 func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig) []Operation {
 	operations := make([]Operation, 0, len(desired.Resolvers))
 
@@ -1714,8 +1691,6 @@ func nameserversEqual(n1, n2 *models.Nameserver) bool {
 }
 
 // compareMailers compares mailers sections between current and desired configurations.
-//
-//nolint:dupl // Similar pattern to compareResolvers/comparePeers - each handles different section types
 func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) []Operation {
 	operations := make([]Operation, 0, len(desired.Mailers))
 
@@ -1821,8 +1796,6 @@ func mailerEntriesEqual(e1, e2 *models.MailerEntry) bool {
 }
 
 // comparePeers compares peer sections between current and desired configurations.
-//
-//nolint:dupl // Similar pattern to compareResolvers/compareMailers - each handles different section types
 func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []Operation {
 	operations := make([]Operation, 0, len(desired.Peers))
 
@@ -1981,7 +1954,6 @@ func cacheEqual(c1, c2 *models.Cache) bool {
 
 // compareRings compares ring sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) compareRings(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -2183,7 +2155,6 @@ func (c *Comparator) compareUserlistUsers(userlistName string, current, desired 
 
 // comparePrograms compares program sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) comparePrograms(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -2237,7 +2208,6 @@ func programEqual(p1, p2 *models.Program) bool {
 
 // compareLogForwards compares log-forward sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) compareLogForwards(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -2291,7 +2261,6 @@ func logForwardEqual(l1, l2 *models.LogForward) bool {
 
 // compareFCGIApps compares fcgi-app sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) compareFCGIApps(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -2345,7 +2314,6 @@ func fcgiAppEqual(f1, f2 *models.FCGIApp) bool {
 
 // compareCrtStores compares crt-store sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) compareCrtStores(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 

@@ -430,20 +430,23 @@ func analyzeUserOperations(operations []Operation) (hasCreateUser, hasReplaceUse
 	return
 }
 
+// userlistUserOperationsTestCase defines a test case for userlist user operations.
+type userlistUserOperationsTestCase struct {
+	name              string
+	currentConfig     string
+	desiredConfig     string
+	expectCreateUser  []string // usernames that should be created
+	expectReplaceUser []string // usernames that should be replaced
+	expectDeleteUser  []string // usernames that should be deleted
+	expectUserlistOps bool     // whether userlist-level operations are expected
+}
+
 // TestCompare_UserlistUserOperations tests fine-grained user operations within userlists.
 // This test verifies that when users are added, modified, or removed from a userlist,
 // the comparator generates appropriate CreateUser, ReplaceUser, and DeleteUser operations
 // rather than recreating the entire userlist.
 func TestCompare_UserlistUserOperations(t *testing.T) {
-	tests := []struct {
-		name                string
-		currentConfig       string
-		desiredConfig       string
-		expectCreateUser    []string // usernames that should be created
-		expectReplaceUser   []string // usernames that should be replaced
-		expectDeleteUser    []string // usernames that should be deleted
-		expectUserlistOps   bool     // whether userlist-level operations are expected
-	}{
+	tests := []userlistUserOperationsTestCase{
 		{
 			name: "add new user to existing userlist",
 			currentConfig: `
@@ -544,105 +547,107 @@ userlist auth_users
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Parse configs
-			p, err := parser.New()
-			if err != nil {
-				t.Fatalf("Failed to create parser: %v", err)
-			}
+			current, desired := parseTestConfigs(t, tt.currentConfig, tt.desiredConfig)
 
-			current, err := p.ParseFromString(tt.currentConfig)
-			if err != nil {
-				t.Fatalf("Failed to parse current config: %v", err)
-			}
-
-			desired, err := p.ParseFromString(tt.desiredConfig)
-			if err != nil {
-				t.Fatalf("Failed to parse desired config: %v", err)
-			}
-
-			// Run comparator
 			comp := New()
 			diff, err := comp.Compare(current, desired)
 			if err != nil {
 				t.Fatalf("Compare() failed: %v", err)
 			}
 
-			// Collect user operations
-			createUsers := make(map[string]bool)
-			replaceUsers := make(map[string]bool)
-			deleteUsers := make(map[string]bool)
-			hasUserlistOps := false
-
-			for _, op := range diff.Operations {
-				switch op.Section() {
-				case "user":
-					switch op.Type() {
-					case sections.OperationCreate:
-						// Extract username from operation description
-						desc := op.Describe()
-						for _, username := range tt.expectCreateUser {
-							if stringContains(desc, username) {
-								createUsers[username] = true
-							}
-						}
-					case sections.OperationUpdate:
-						desc := op.Describe()
-						for _, username := range tt.expectReplaceUser {
-							if stringContains(desc, username) {
-								replaceUsers[username] = true
-							}
-						}
-					case sections.OperationDelete:
-						desc := op.Describe()
-						for _, username := range tt.expectDeleteUser {
-							if stringContains(desc, username) {
-								deleteUsers[username] = true
-							}
-						}
-					}
-				case "userlist":
-					hasUserlistOps = true
-				}
-			}
-
-			// Verify expected CreateUser operations
-			for _, username := range tt.expectCreateUser {
-				if !createUsers[username] {
-					t.Errorf("Expected CreateUser operation for %q, but not found", username)
-					t.Log("Operations generated:")
-					for i, op := range diff.Operations {
-						t.Logf("  %d: %v %s - %s", i, op.Type(), op.Section(), op.Describe())
-					}
-				}
-			}
-
-			// Verify expected ReplaceUser operations
-			for _, username := range tt.expectReplaceUser {
-				if !replaceUsers[username] {
-					t.Errorf("Expected ReplaceUser operation for %q, but not found", username)
-				}
-			}
-
-			// Verify expected DeleteUser operations
-			for _, username := range tt.expectDeleteUser {
-				if !deleteUsers[username] {
-					t.Errorf("Expected DeleteUser operation for %q, but not found", username)
-				}
-			}
-
-			// Verify userlist-level operations expectation
-			if hasUserlistOps != tt.expectUserlistOps {
-				if tt.expectUserlistOps {
-					t.Error("Expected userlist-level operations, but none found")
-				} else {
-					t.Error("Did not expect userlist-level operations, but found some")
-					t.Log("Operations generated:")
-					for i, op := range diff.Operations {
-						t.Logf("  %d: %v %s - %s", i, op.Type(), op.Section(), op.Describe())
-					}
-				}
-			}
+			verifyUserOperationsDetailed(t, diff.Operations, &tt)
 		})
+	}
+}
+
+func verifyUserOperationsDetailed(t *testing.T, operations []Operation, tt *userlistUserOperationsTestCase) {
+	t.Helper()
+
+	createUsers, replaceUsers, deleteUsers, hasUserlistOps := collectUserOpsFromDescriptions(operations, tt)
+
+	verifyUserCreates(t, operations, createUsers, tt.expectCreateUser)
+	verifyUserReplaces(t, replaceUsers, tt.expectReplaceUser)
+	verifyUserDeletes(t, deleteUsers, tt.expectDeleteUser)
+	verifyUserlistOpsMatch(t, operations, hasUserlistOps, tt.expectUserlistOps)
+}
+
+func collectUserOpsFromDescriptions(operations []Operation, tt *userlistUserOperationsTestCase) (createUsers, replaceUsers, deleteUsers map[string]bool, hasUserlistOps bool) {
+	createUsers = make(map[string]bool)
+	replaceUsers = make(map[string]bool)
+	deleteUsers = make(map[string]bool)
+
+	for _, op := range operations {
+		if op.Section() == "user" {
+			desc := op.Describe()
+			matchUsersByType(op.Type(), desc, createUsers, replaceUsers, deleteUsers, tt)
+		} else if op.Section() == "userlist" {
+			hasUserlistOps = true
+		}
+	}
+
+	return
+}
+
+func matchUsersByType(opType sections.OperationType, desc string, createUsers, replaceUsers, deleteUsers map[string]bool, tt *userlistUserOperationsTestCase) {
+	switch opType {
+	case sections.OperationCreate:
+		for _, username := range tt.expectCreateUser {
+			if stringContains(desc, username) {
+				createUsers[username] = true
+			}
+		}
+	case sections.OperationUpdate:
+		for _, username := range tt.expectReplaceUser {
+			if stringContains(desc, username) {
+				replaceUsers[username] = true
+			}
+		}
+	case sections.OperationDelete:
+		for _, username := range tt.expectDeleteUser {
+			if stringContains(desc, username) {
+				deleteUsers[username] = true
+			}
+		}
+	}
+}
+
+func verifyUserCreates(t *testing.T, operations []Operation, createUsers map[string]bool, expected []string) {
+	t.Helper()
+	for _, username := range expected {
+		if !createUsers[username] {
+			t.Errorf("Expected CreateUser operation for %q, but not found", username)
+			logOperations(t, operations)
+		}
+	}
+}
+
+func verifyUserReplaces(t *testing.T, replaceUsers map[string]bool, expected []string) {
+	t.Helper()
+	for _, username := range expected {
+		if !replaceUsers[username] {
+			t.Errorf("Expected ReplaceUser operation for %q, but not found", username)
+		}
+	}
+}
+
+func verifyUserDeletes(t *testing.T, deleteUsers map[string]bool, expected []string) {
+	t.Helper()
+	for _, username := range expected {
+		if !deleteUsers[username] {
+			t.Errorf("Expected DeleteUser operation for %q, but not found", username)
+		}
+	}
+}
+
+func verifyUserlistOpsMatch(t *testing.T, operations []Operation, hasUserlistOps, expectUserlistOps bool) {
+	t.Helper()
+	if hasUserlistOps != expectUserlistOps {
+		if expectUserlistOps {
+			t.Error("Expected userlist-level operations, but none found")
+		} else {
+			t.Error("Did not expect userlist-level operations, but found some")
+			logOperations(t, operations)
+		}
 	}
 }
 

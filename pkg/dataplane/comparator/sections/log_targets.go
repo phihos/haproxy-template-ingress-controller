@@ -52,14 +52,10 @@ func (op *CreateLogTargetFrontendOperation) Priority() int {
 }
 
 // Execute creates the log target via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other log target operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateLogTargetFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.LogTarget == nil {
 		return fmt.Errorf("log target is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.LogTarget to dataplaneapi.LogTarget using JSON marshaling
 	apiLogTarget := transform.ToAPILogTarget(op.LogTarget)
@@ -73,7 +69,7 @@ func (op *CreateLogTargetFrontendOperation) Execute(ctx context.Context, c *clie
 	}
 
 	// Call the CreateLogTargetFrontend API
-	resp, err := apiClient.CreateLogTargetFrontend(ctx, op.FrontendName, op.Index, params, *apiLogTarget)
+	resp, err := c.Client().CreateLogTargetFrontend(ctx, op.FrontendName, op.Index, params, *apiLogTarget)
 	if err != nil {
 		return fmt.Errorf("failed to create log target in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -129,15 +125,13 @@ func (op *DeleteLogTargetFrontendOperation) Priority() int {
 
 // Execute deletes the log target via the Dataplane API.
 func (op *DeleteLogTargetFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteLogTargetFrontendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteLogTargetFrontend API
-	resp, err := apiClient.DeleteLogTargetFrontend(ctx, op.FrontendName, op.Index, params)
+	resp, err := c.Client().DeleteLogTargetFrontend(ctx, op.FrontendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete log target from frontend '%s': %w", op.FrontendName, err)
 	}
@@ -192,14 +186,10 @@ func (op *UpdateLogTargetFrontendOperation) Priority() int {
 }
 
 // Execute updates the log target via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other log target operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateLogTargetFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.LogTarget == nil {
 		return fmt.Errorf("log target is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.LogTarget to dataplaneapi.LogTarget using JSON marshaling
 	apiLogTarget := transform.ToAPILogTarget(op.LogTarget)
@@ -213,7 +203,7 @@ func (op *UpdateLogTargetFrontendOperation) Execute(ctx context.Context, c *clie
 	}
 
 	// Call the ReplaceLogTargetFrontend API
-	resp, err := apiClient.ReplaceLogTargetFrontend(ctx, op.FrontendName, op.Index, params, *apiLogTarget)
+	resp, err := c.Client().ReplaceLogTargetFrontend(ctx, op.FrontendName, op.Index, params, *apiLogTarget)
 	if err != nil {
 		return fmt.Errorf("failed to update log target in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -268,14 +258,10 @@ func (op *CreateLogTargetBackendOperation) Priority() int {
 }
 
 // Execute creates the log target via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other log target operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateLogTargetBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.LogTarget == nil {
 		return fmt.Errorf("log target is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.LogTarget to dataplaneapi.LogTarget using JSON marshaling
 	apiLogTarget := transform.ToAPILogTarget(op.LogTarget)
@@ -289,7 +275,7 @@ func (op *CreateLogTargetBackendOperation) Execute(ctx context.Context, c *clien
 	}
 
 	// Call the CreateLogTargetBackend API
-	resp, err := apiClient.CreateLogTargetBackend(ctx, op.BackendName, op.Index, params, *apiLogTarget)
+	resp, err := c.Client().CreateLogTargetBackend(ctx, op.BackendName, op.Index, params, *apiLogTarget)
 	if err != nil {
 		return fmt.Errorf("failed to create log target in backend '%s': %w", op.BackendName, err)
 	}
@@ -345,15 +331,13 @@ func (op *DeleteLogTargetBackendOperation) Priority() int {
 
 // Execute deletes the log target via the Dataplane API.
 func (op *DeleteLogTargetBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteLogTargetBackendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteLogTargetBackend API
-	resp, err := apiClient.DeleteLogTargetBackend(ctx, op.BackendName, op.Index, params)
+	resp, err := c.Client().DeleteLogTargetBackend(ctx, op.BackendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete log target from backend '%s': %w", op.BackendName, err)
 	}
@@ -408,14 +392,10 @@ func (op *UpdateLogTargetBackendOperation) Priority() int {
 }
 
 // Execute updates the log target via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other log target operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateLogTargetBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.LogTarget == nil {
 		return fmt.Errorf("log target is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.LogTarget to dataplaneapi.LogTarget using JSON marshaling
 	apiLogTarget := transform.ToAPILogTarget(op.LogTarget)
@@ -429,7 +409,7 @@ func (op *UpdateLogTargetBackendOperation) Execute(ctx context.Context, c *clien
 	}
 
 	// Call the ReplaceLogTargetBackend API
-	resp, err := apiClient.ReplaceLogTargetBackend(ctx, op.BackendName, op.Index, params, *apiLogTarget)
+	resp, err := c.Client().ReplaceLogTargetBackend(ctx, op.BackendName, op.Index, params, *apiLogTarget)
 	if err != nil {
 		return fmt.Errorf("failed to update log target in backend '%s': %w", op.BackendName, err)
 	}

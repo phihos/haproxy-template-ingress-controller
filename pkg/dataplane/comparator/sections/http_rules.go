@@ -50,14 +50,10 @@ func (op *CreateHTTPRequestRuleFrontendOperation) Priority() int {
 }
 
 // Execute creates the HTTP request rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP request rule is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.HTTPRequestRule to dataplaneapi.HttpRequestRule using JSON marshaling
 	apiRule := transform.ToAPIHTTPRequestRule(op.Rule)
@@ -71,7 +67,7 @@ func (op *CreateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 	}
 
 	// Call the CreateHTTPRequestRuleFrontend API
-	resp, err := apiClient.CreateHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
+	resp, err := c.Client().CreateHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -127,15 +123,13 @@ func (op *DeleteHTTPRequestRuleFrontendOperation) Priority() int {
 
 // Execute deletes the HTTP request rule via the Dataplane API.
 func (op *DeleteHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteHTTPRequestRuleFrontendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteHTTPRequestRuleFrontend API
-	resp, err := apiClient.DeleteHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params)
+	resp, err := c.Client().DeleteHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete HTTP request rule from frontend '%s': %w", op.FrontendName, err)
 	}
@@ -190,14 +184,10 @@ func (op *UpdateHTTPRequestRuleFrontendOperation) Priority() int {
 }
 
 // Execute updates the HTTP request rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP request rule is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.HTTPRequestRule to dataplaneapi.HttpRequestRule using JSON marshaling
 	apiRule := transform.ToAPIHTTPRequestRule(op.Rule)
@@ -211,7 +201,7 @@ func (op *UpdateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 	}
 
 	// Call the ReplaceHTTPRequestRuleFrontend API
-	resp, err := apiClient.ReplaceHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
+	resp, err := c.Client().ReplaceHTTPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP request rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -266,14 +256,10 @@ func (op *CreateHTTPRequestRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the HTTP request rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP request rule is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.HTTPRequestRule to dataplaneapi.HttpRequestRule using JSON marshaling
 	apiRule := transform.ToAPIHTTPRequestRule(op.Rule)
@@ -287,7 +273,7 @@ func (op *CreateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 	}
 
 	// Call the CreateHTTPRequestRuleBackend API
-	resp, err := apiClient.CreateHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
+	resp, err := c.Client().CreateHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -343,15 +329,13 @@ func (op *DeleteHTTPRequestRuleBackendOperation) Priority() int {
 
 // Execute deletes the HTTP request rule via the Dataplane API.
 func (op *DeleteHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteHTTPRequestRuleBackendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteHTTPRequestRuleBackend API
-	resp, err := apiClient.DeleteHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params)
+	resp, err := c.Client().DeleteHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete HTTP request rule from backend '%s': %w", op.BackendName, err)
 	}
@@ -406,14 +390,10 @@ func (op *UpdateHTTPRequestRuleBackendOperation) Priority() int {
 }
 
 // Execute updates the HTTP request rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP request rule is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.HTTPRequestRule to dataplaneapi.HttpRequestRule using JSON marshaling
 	apiRule := transform.ToAPIHTTPRequestRule(op.Rule)
@@ -427,7 +407,7 @@ func (op *UpdateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 	}
 
 	// Call the ReplaceHTTPRequestRuleBackend API
-	resp, err := apiClient.ReplaceHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
+	resp, err := c.Client().ReplaceHTTPRequestRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP request rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -482,14 +462,10 @@ func (op *CreateHTTPResponseRuleFrontendOperation) Priority() int {
 }
 
 // Execute creates the HTTP response rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP response rule is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.HTTPResponseRule to dataplaneapi.HttpResponseRule using JSON marshaling
 	apiRule := transform.ToAPIHTTPResponseRule(op.Rule)
@@ -503,7 +479,7 @@ func (op *CreateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 	}
 
 	// Call the CreateHTTPResponseRuleFrontend API
-	resp, err := apiClient.CreateHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
+	resp, err := c.Client().CreateHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP response rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -559,15 +535,13 @@ func (op *DeleteHTTPResponseRuleFrontendOperation) Priority() int {
 
 // Execute deletes the HTTP response rule via the Dataplane API.
 func (op *DeleteHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteHTTPResponseRuleFrontendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteHTTPResponseRuleFrontend API
-	resp, err := apiClient.DeleteHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params)
+	resp, err := c.Client().DeleteHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete HTTP response rule from frontend '%s': %w", op.FrontendName, err)
 	}
@@ -622,14 +596,10 @@ func (op *UpdateHTTPResponseRuleFrontendOperation) Priority() int {
 }
 
 // Execute updates the HTTP response rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP response rule is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.HTTPResponseRule to dataplaneapi.HttpResponseRule using JSON marshaling
 	apiRule := transform.ToAPIHTTPResponseRule(op.Rule)
@@ -643,7 +613,7 @@ func (op *UpdateHTTPResponseRuleFrontendOperation) Execute(ctx context.Context, 
 	}
 
 	// Call the ReplaceHTTPResponseRuleFrontend API
-	resp, err := apiClient.ReplaceHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
+	resp, err := c.Client().ReplaceHTTPResponseRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP response rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -698,14 +668,10 @@ func (op *CreateHTTPResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the HTTP response rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP response rule is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.HTTPResponseRule to dataplaneapi.HttpResponseRule using JSON marshaling
 	apiRule := transform.ToAPIHTTPResponseRule(op.Rule)
@@ -719,7 +685,7 @@ func (op *CreateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 	}
 
 	// Call the CreateHTTPResponseRuleBackend API
-	resp, err := apiClient.CreateHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
+	resp, err := c.Client().CreateHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP response rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -775,15 +741,13 @@ func (op *DeleteHTTPResponseRuleBackendOperation) Priority() int {
 
 // Execute deletes the HTTP response rule via the Dataplane API.
 func (op *DeleteHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteHTTPResponseRuleBackendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteHTTPResponseRuleBackend API
-	resp, err := apiClient.DeleteHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params)
+	resp, err := c.Client().DeleteHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete HTTP response rule from backend '%s': %w", op.BackendName, err)
 	}
@@ -838,14 +802,10 @@ func (op *UpdateHTTPResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute updates the HTTP response rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other HTTP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("HTTP response rule is nil")
 	}
-
-	apiClient := c.Client()
 
 	// Convert models.HTTPResponseRule to dataplaneapi.HttpResponseRule using JSON marshaling
 	apiRule := transform.ToAPIHTTPResponseRule(op.Rule)
@@ -859,7 +819,7 @@ func (op *UpdateHTTPResponseRuleBackendOperation) Execute(ctx context.Context, c
 	}
 
 	// Call the ReplaceHTTPResponseRuleBackend API
-	resp, err := apiClient.ReplaceHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
+	resp, err := c.Client().ReplaceHTTPResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update HTTP response rule in backend '%s': %w", op.BackendName, err)
 	}

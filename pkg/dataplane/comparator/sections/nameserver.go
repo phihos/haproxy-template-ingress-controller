@@ -61,8 +61,6 @@ func (op *CreateNameserverOperation) Execute(ctx context.Context, c *client.Data
 		return fmt.Errorf("resolvers section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.Nameserver to dataplaneapi.Nameserver using JSON marshaling
 	apiNameserver := transform.ToAPINameserver(op.Nameserver)
 	if apiNameserver == nil {
@@ -80,12 +78,12 @@ func (op *CreateNameserverOperation) Execute(ctx context.Context, c *client.Data
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.CreateNameserver(ctx, params, *apiNameserver)
+		resp, err = c.Client().CreateNameserver(ctx, params, *apiNameserver)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.CreateNameserver(ctx, params, *apiNameserver)
+			return c.Client().CreateNameserver(ctx, params, *apiNameserver)
 		})
 	}
 
@@ -152,8 +150,6 @@ func (op *DeleteNameserverOperation) Execute(ctx context.Context, c *client.Data
 		return fmt.Errorf("resolvers section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Prepare parameters and execute with transaction ID or version
 	params := &dataplaneapi.DeleteNameserverParams{
 		Resolver: op.ResolversSection,
@@ -165,12 +161,12 @@ func (op *DeleteNameserverOperation) Execute(ctx context.Context, c *client.Data
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.DeleteNameserver(ctx, op.Nameserver.Name, params)
+		resp, err = c.Client().DeleteNameserver(ctx, op.Nameserver.Name, params)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.DeleteNameserver(ctx, op.Nameserver.Name, params)
+			return c.Client().DeleteNameserver(ctx, op.Nameserver.Name, params)
 		})
 	}
 
@@ -237,8 +233,6 @@ func (op *UpdateNameserverOperation) Execute(ctx context.Context, c *client.Data
 		return fmt.Errorf("resolvers section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.Nameserver to dataplaneapi.Nameserver using JSON marshaling
 	apiNameserver := transform.ToAPINameserver(op.Nameserver)
 	if apiNameserver == nil {
@@ -258,12 +252,12 @@ func (op *UpdateNameserverOperation) Execute(ctx context.Context, c *client.Data
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.ReplaceNameserver(ctx, op.Nameserver.Name, params, *apiNameserver)
+		resp, err = c.Client().ReplaceNameserver(ctx, op.Nameserver.Name, params, *apiNameserver)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.ReplaceNameserver(ctx, op.Nameserver.Name, params, *apiNameserver)
+			return c.Client().ReplaceNameserver(ctx, op.Nameserver.Name, params, *apiNameserver)
 		})
 	}
 

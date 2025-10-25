@@ -57,8 +57,6 @@ func (op *CreateServerOperation) Execute(ctx context.Context, c *client.Dataplan
 		return fmt.Errorf("backend name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.Server to dataplaneapi.Server using transform package
 	apiServer := transform.ToAPIServer(op.Server)
 	if apiServer == nil {
@@ -74,12 +72,12 @@ func (op *CreateServerOperation) Execute(ctx context.Context, c *client.Dataplan
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.CreateServerBackend(ctx, op.BackendName, params, *apiServer)
+		resp, err = c.Client().CreateServerBackend(ctx, op.BackendName, params, *apiServer)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.CreateServerBackend(ctx, op.BackendName, params, *apiServer)
+			return c.Client().CreateServerBackend(ctx, op.BackendName, params, *apiServer)
 		})
 	}
 
@@ -146,8 +144,6 @@ func (op *DeleteServerOperation) Execute(ctx context.Context, c *client.Dataplan
 		return fmt.Errorf("backend name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Prepare parameters and execute with transaction ID or version
 	params := &dataplaneapi.DeleteServerBackendParams{}
 
@@ -157,12 +153,12 @@ func (op *DeleteServerOperation) Execute(ctx context.Context, c *client.Dataplan
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.DeleteServerBackend(ctx, op.BackendName, op.Server.Name, params)
+		resp, err = c.Client().DeleteServerBackend(ctx, op.BackendName, op.Server.Name, params)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.DeleteServerBackend(ctx, op.BackendName, op.Server.Name, params)
+			return c.Client().DeleteServerBackend(ctx, op.BackendName, op.Server.Name, params)
 		})
 	}
 
@@ -229,8 +225,6 @@ func (op *UpdateServerOperation) Execute(ctx context.Context, c *client.Dataplan
 		return fmt.Errorf("backend name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.Server to dataplaneapi.Server using transform package
 	apiServer := transform.ToAPIServer(op.Server)
 	if apiServer == nil {
@@ -248,12 +242,12 @@ func (op *UpdateServerOperation) Execute(ctx context.Context, c *client.Dataplan
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.ReplaceServerBackend(ctx, op.BackendName, op.Server.Name, params, *apiServer)
+		resp, err = c.Client().ReplaceServerBackend(ctx, op.BackendName, op.Server.Name, params, *apiServer)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.ReplaceServerBackend(ctx, op.BackendName, op.Server.Name, params, *apiServer)
+			return c.Client().ReplaceServerBackend(ctx, op.BackendName, op.Server.Name, params, *apiServer)
 		})
 	}
 

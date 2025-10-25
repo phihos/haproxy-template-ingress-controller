@@ -1,4 +1,3 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -56,8 +55,6 @@ func (op *CreateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("mailers section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.MailersSection to dataplaneapi.MailersSection using JSON marshaling
 	apiMailers := transform.ToAPIMailersSection(op.Mailers)
 	if apiMailers == nil {
@@ -78,7 +75,7 @@ func (op *CreateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the CreateMailersSection API
-	resp, err := apiClient.CreateMailersSection(ctx, params, *apiMailers)
+	resp, err := c.Client().CreateMailersSection(ctx, params, *apiMailers)
 	if err != nil {
 		return fmt.Errorf("failed to create mailers section '%s': %w", op.Mailers.Name, err)
 	}
@@ -137,8 +134,6 @@ func (op *DeleteMailersOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("mailers section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID or version
 	params := &dataplaneapi.DeleteMailersSectionParams{}
 	if transactionID != "" {
@@ -153,7 +148,7 @@ func (op *DeleteMailersOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the DeleteMailersSection API
-	resp, err := apiClient.DeleteMailersSection(ctx, op.Mailers.Name, params)
+	resp, err := c.Client().DeleteMailersSection(ctx, op.Mailers.Name, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete mailers section '%s': %w", op.Mailers.Name, err)
 	}
@@ -212,8 +207,6 @@ func (op *UpdateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("mailers section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.MailersSection to dataplaneapi.MailersSection using JSON marshaling
 	apiMailers := transform.ToAPIMailersSection(op.Mailers)
 	if apiMailers == nil {
@@ -234,7 +227,7 @@ func (op *UpdateMailersOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the EditMailersSection API
-	resp, err := apiClient.EditMailersSection(ctx, op.Mailers.Name, params, *apiMailers)
+	resp, err := c.Client().EditMailersSection(ctx, op.Mailers.Name, params, *apiMailers)
 	if err != nil {
 		return fmt.Errorf("failed to update mailers section '%s': %w", op.Mailers.Name, err)
 	}

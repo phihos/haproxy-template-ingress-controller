@@ -1,9 +1,9 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -49,47 +49,23 @@ func (op *CreateResolverOperation) Priority() int {
 
 // Execute creates the resolver section via the Dataplane API.
 func (op *CreateResolverOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Resolver == nil {
-		return fmt.Errorf("resolver section is nil")
-	}
-	if op.Resolver.Name == "" {
-		return fmt.Errorf("resolver section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Resolver to dataplaneapi.Resolver using transform package
-	apiResolver := transform.ToAPIResolver(op.Resolver)
-	if apiResolver == nil {
-		return fmt.Errorf("failed to transform resolver section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.CreateResolverParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the CreateResolver API
-	resp, err := apiClient.CreateResolver(ctx, params, *apiResolver)
-	if err != nil {
-		return fmt.Errorf("failed to create resolver section '%s': %w", op.Resolver.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("resolver section creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateHelper(
+		ctx, transactionID, op.Resolver,
+		func(r *models.Resolver) string { return r.Name },
+		transform.ToAPIResolver,
+		func(ctx context.Context, apiResolver *dataplaneapi.Resolver, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.CreateResolverParams { return &dataplaneapi.CreateResolverParams{} },
+				func(p *dataplaneapi.CreateResolverParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.CreateResolverParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.CreateResolverParams) (*http.Response, error) {
+					return c.Client().CreateResolver(ctx, params, *apiResolver)
+				},
+			)
+		},
+		"resolver section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -130,41 +106,22 @@ func (op *DeleteResolverOperation) Priority() int {
 
 // Execute deletes the resolver section via the Dataplane API.
 func (op *DeleteResolverOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Resolver == nil {
-		return fmt.Errorf("resolver section is nil")
-	}
-	if op.Resolver.Name == "" {
-		return fmt.Errorf("resolver section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.DeleteResolverParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the DeleteResolver API
-	resp, err := apiClient.DeleteResolver(ctx, op.Resolver.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete resolver section '%s': %w", op.Resolver.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("resolver section deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteHelper(
+		ctx, transactionID, op.Resolver,
+		func(r *models.Resolver) string { return r.Name },
+		func(ctx context.Context, name string, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.DeleteResolverParams { return &dataplaneapi.DeleteResolverParams{} },
+				func(p *dataplaneapi.DeleteResolverParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.DeleteResolverParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.DeleteResolverParams) (*http.Response, error) {
+					return c.Client().DeleteResolver(ctx, name, params)
+				},
+			)
+		},
+		"resolver section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -205,47 +162,23 @@ func (op *UpdateResolverOperation) Priority() int {
 
 // Execute updates the resolver section via the Dataplane API.
 func (op *UpdateResolverOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Resolver == nil {
-		return fmt.Errorf("resolver section is nil")
-	}
-	if op.Resolver.Name == "" {
-		return fmt.Errorf("resolver section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Resolver to dataplaneapi.Resolver using transform package
-	apiResolver := transform.ToAPIResolver(op.Resolver)
-	if apiResolver == nil {
-		return fmt.Errorf("failed to transform resolver section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.ReplaceResolverParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the ReplaceResolver API
-	resp, err := apiClient.ReplaceResolver(ctx, op.Resolver.Name, params, *apiResolver)
-	if err != nil {
-		return fmt.Errorf("failed to update resolver section '%s': %w", op.Resolver.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("resolver section update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeUpdateHelper(
+		ctx, transactionID, op.Resolver,
+		func(r *models.Resolver) string { return r.Name },
+		transform.ToAPIResolver,
+		func(ctx context.Context, name string, apiResolver *dataplaneapi.Resolver, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.ReplaceResolverParams { return &dataplaneapi.ReplaceResolverParams{} },
+				func(p *dataplaneapi.ReplaceResolverParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.ReplaceResolverParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.ReplaceResolverParams) (*http.Response, error) {
+					return c.Client().ReplaceResolver(ctx, name, params, *apiResolver)
+				},
+			)
+		},
+		"resolver section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

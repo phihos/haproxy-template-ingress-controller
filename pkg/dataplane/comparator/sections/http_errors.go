@@ -1,4 +1,3 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
@@ -57,8 +56,6 @@ func (op *CreateHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 		return fmt.Errorf("http-errors section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.HTTPErrorsSection to dataplaneapi.HttpErrorsSection using transform package
 	apiHTTPErrors := transform.ToAPIHTTPErrorsSection(op.HTTPErrors)
 	if apiHTTPErrors == nil {
@@ -79,7 +76,7 @@ func (op *CreateHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the CreateHTTPErrorsSection API
-	resp, err := apiClient.CreateHTTPErrorsSection(ctx, params, *apiHTTPErrors)
+	resp, err := c.Client().CreateHTTPErrorsSection(ctx, params, *apiHTTPErrors)
 	if err != nil {
 		return fmt.Errorf("failed to create http-errors section '%s': %w", op.HTTPErrors.Name, err)
 	}
@@ -138,8 +135,6 @@ func (op *DeleteHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 		return fmt.Errorf("http-errors section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID or version
 	params := &dataplaneapi.DeleteHTTPErrorsSectionParams{}
 	if transactionID != "" {
@@ -154,7 +149,7 @@ func (op *DeleteHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the DeleteHTTPErrorsSection API
-	resp, err := apiClient.DeleteHTTPErrorsSection(ctx, op.HTTPErrors.Name, params)
+	resp, err := c.Client().DeleteHTTPErrorsSection(ctx, op.HTTPErrors.Name, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete http-errors section '%s': %w", op.HTTPErrors.Name, err)
 	}
@@ -213,8 +208,6 @@ func (op *UpdateHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 		return fmt.Errorf("http-errors section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.HTTPErrorsSection to dataplaneapi.HttpErrorsSection using transform package
 	apiHTTPErrors := transform.ToAPIHTTPErrorsSection(op.HTTPErrors)
 	if apiHTTPErrors == nil {
@@ -235,7 +228,7 @@ func (op *UpdateHTTPErrorsOperation) Execute(ctx context.Context, c *client.Data
 	}
 
 	// Call the ReplaceHTTPErrorsSection API
-	resp, err := apiClient.ReplaceHTTPErrorsSection(ctx, op.HTTPErrors.Name, params, *apiHTTPErrors)
+	resp, err := c.Client().ReplaceHTTPErrorsSection(ctx, op.HTTPErrors.Name, params, *apiHTTPErrors)
 	if err != nil {
 		return fmt.Errorf("failed to update http-errors section '%s': %w", op.HTTPErrors.Name, err)
 	}

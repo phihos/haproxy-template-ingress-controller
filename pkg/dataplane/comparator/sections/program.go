@@ -1,9 +1,9 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -49,47 +49,23 @@ func (op *CreateProgramOperation) Priority() int {
 
 // Execute creates the program section via the Dataplane API.
 func (op *CreateProgramOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Program == nil {
-		return fmt.Errorf("program section is nil")
-	}
-	if op.Program.Name == "" {
-		return fmt.Errorf("program section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Program to dataplaneapi.Program using transform package
-	apiProgram := transform.ToAPIProgram(op.Program)
-	if apiProgram == nil {
-		return fmt.Errorf("failed to transform program section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.CreateProgramParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the CreateProgram API
-	resp, err := apiClient.CreateProgram(ctx, params, *apiProgram)
-	if err != nil {
-		return fmt.Errorf("failed to create program section '%s': %w", op.Program.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("program section creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateHelper(
+		ctx, transactionID, op.Program,
+		func(r *models.Program) string { return r.Name },
+		transform.ToAPIProgram,
+		func(ctx context.Context, apiProgram *dataplaneapi.Program, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.CreateProgramParams { return &dataplaneapi.CreateProgramParams{} },
+				func(p *dataplaneapi.CreateProgramParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.CreateProgramParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.CreateProgramParams) (*http.Response, error) {
+					return c.Client().CreateProgram(ctx, params, *apiProgram)
+				},
+			)
+		},
+		"program section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -130,41 +106,22 @@ func (op *DeleteProgramOperation) Priority() int {
 
 // Execute deletes the program section via the Dataplane API.
 func (op *DeleteProgramOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Program == nil {
-		return fmt.Errorf("program section is nil")
-	}
-	if op.Program.Name == "" {
-		return fmt.Errorf("program section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.DeleteProgramParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the DeleteProgram API
-	resp, err := apiClient.DeleteProgram(ctx, op.Program.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete program section '%s': %w", op.Program.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("program section deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteHelper(
+		ctx, transactionID, op.Program,
+		func(r *models.Program) string { return r.Name },
+		func(ctx context.Context, name string, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.DeleteProgramParams { return &dataplaneapi.DeleteProgramParams{} },
+				func(p *dataplaneapi.DeleteProgramParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.DeleteProgramParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.DeleteProgramParams) (*http.Response, error) {
+					return c.Client().DeleteProgram(ctx, name, params)
+				},
+			)
+		},
+		"program section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -205,47 +162,23 @@ func (op *UpdateProgramOperation) Priority() int {
 
 // Execute updates the program section via the Dataplane API.
 func (op *UpdateProgramOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Program == nil {
-		return fmt.Errorf("program section is nil")
-	}
-	if op.Program.Name == "" {
-		return fmt.Errorf("program section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Program to dataplaneapi.Program using transform package
-	apiProgram := transform.ToAPIProgram(op.Program)
-	if apiProgram == nil {
-		return fmt.Errorf("failed to transform program section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.ReplaceProgramParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the ReplaceProgram API
-	resp, err := apiClient.ReplaceProgram(ctx, op.Program.Name, params, *apiProgram)
-	if err != nil {
-		return fmt.Errorf("failed to update program section '%s': %w", op.Program.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("program section update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeUpdateHelper(
+		ctx, transactionID, op.Program,
+		func(r *models.Program) string { return r.Name },
+		transform.ToAPIProgram,
+		func(ctx context.Context, name string, apiProgram *dataplaneapi.Program, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.ReplaceProgramParams { return &dataplaneapi.ReplaceProgramParams{} },
+				func(p *dataplaneapi.ReplaceProgramParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.ReplaceProgramParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.ReplaceProgramParams) (*http.Response, error) {
+					return c.Client().ReplaceProgram(ctx, name, params, *apiProgram)
+				},
+			)
+		},
+		"program section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

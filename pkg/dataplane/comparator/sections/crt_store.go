@@ -1,9 +1,9 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -48,47 +48,23 @@ func (op *CreateCrtStoreOperation) Priority() int {
 
 // Execute creates the crt-store section via the Dataplane API.
 func (op *CreateCrtStoreOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.CrtStore == nil {
-		return fmt.Errorf("crt-store section is nil")
-	}
-	if op.CrtStore.Name == "" {
-		return fmt.Errorf("crt-store section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.CrtStore to dataplaneapi.CrtStore using transform package
-	apiCrtStore := transform.ToAPICrtStore(op.CrtStore)
-	if apiCrtStore == nil {
-		return fmt.Errorf("failed to transform crt-store section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.CreateCrtStoreParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the CreateCrtStore API
-	resp, err := apiClient.CreateCrtStore(ctx, params, *apiCrtStore)
-	if err != nil {
-		return fmt.Errorf("failed to create crt-store section '%s': %w", op.CrtStore.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("crt-store section creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateHelper(
+		ctx, transactionID, op.CrtStore,
+		func(r *models.CrtStore) string { return r.Name },
+		transform.ToAPICrtStore,
+		func(ctx context.Context, apiCrtStore *dataplaneapi.CrtStore, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.CreateCrtStoreParams { return &dataplaneapi.CreateCrtStoreParams{} },
+				func(p *dataplaneapi.CreateCrtStoreParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.CreateCrtStoreParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.CreateCrtStoreParams) (*http.Response, error) {
+					return c.Client().CreateCrtStore(ctx, params, *apiCrtStore)
+				},
+			)
+		},
+		"crt-store section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -129,41 +105,22 @@ func (op *DeleteCrtStoreOperation) Priority() int {
 
 // Execute deletes the crt-store section via the Dataplane API.
 func (op *DeleteCrtStoreOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.CrtStore == nil {
-		return fmt.Errorf("crt-store section is nil")
-	}
-	if op.CrtStore.Name == "" {
-		return fmt.Errorf("crt-store section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.DeleteCrtStoreParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the DeleteCrtStore API
-	resp, err := apiClient.DeleteCrtStore(ctx, op.CrtStore.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete crt-store section '%s': %w", op.CrtStore.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("crt-store section deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteHelper(
+		ctx, transactionID, op.CrtStore,
+		func(r *models.CrtStore) string { return r.Name },
+		func(ctx context.Context, name string, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.DeleteCrtStoreParams { return &dataplaneapi.DeleteCrtStoreParams{} },
+				func(p *dataplaneapi.DeleteCrtStoreParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.DeleteCrtStoreParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.DeleteCrtStoreParams) (*http.Response, error) {
+					return c.Client().DeleteCrtStore(ctx, name, params)
+				},
+			)
+		},
+		"crt-store section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -204,47 +161,23 @@ func (op *UpdateCrtStoreOperation) Priority() int {
 
 // Execute updates the crt-store section via the Dataplane API.
 func (op *UpdateCrtStoreOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.CrtStore == nil {
-		return fmt.Errorf("crt-store section is nil")
-	}
-	if op.CrtStore.Name == "" {
-		return fmt.Errorf("crt-store section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.CrtStore to dataplaneapi.CrtStore using transform package
-	apiCrtStore := transform.ToAPICrtStore(op.CrtStore)
-	if apiCrtStore == nil {
-		return fmt.Errorf("failed to transform crt-store section")
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.EditCrtStoreParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the EditCrtStore API (note: uses Edit, not Replace)
-	resp, err := apiClient.EditCrtStore(ctx, op.CrtStore.Name, params, *apiCrtStore)
-	if err != nil {
-		return fmt.Errorf("failed to update crt-store section '%s': %w", op.CrtStore.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("crt-store section update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeUpdateHelper(
+		ctx, transactionID, op.CrtStore,
+		func(r *models.CrtStore) string { return r.Name },
+		transform.ToAPICrtStore,
+		func(ctx context.Context, name string, apiCrtStore *dataplaneapi.CrtStore, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.EditCrtStoreParams { return &dataplaneapi.EditCrtStoreParams{} },
+				func(p *dataplaneapi.EditCrtStoreParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.EditCrtStoreParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.EditCrtStoreParams) (*http.Response, error) {
+					return c.Client().EditCrtStore(ctx, name, params, *apiCrtStore)
+				},
+			)
+		},
+		"crt-store section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

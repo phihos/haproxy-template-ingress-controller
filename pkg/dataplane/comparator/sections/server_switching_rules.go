@@ -1,12 +1,11 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
-//
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -54,39 +53,19 @@ func (op *CreateServerSwitchingRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the server switching rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateServerSwitchingRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Rule == nil {
-		return fmt.Errorf("server switching rule is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.ServerSwitchingRule to dataplaneapi.ServerSwitchingRule using JSON marshaling
-	apiRule := transform.ToAPIServerSwitchingRule(op.Rule)
-	if apiRule == nil {
-		return fmt.Errorf("failed to transform server switching rule")
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.CreateServerSwitchingRuleParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the CreateServerSwitchingRule API
-	resp, err := apiClient.CreateServerSwitchingRule(ctx, op.BackendName, op.Index, params, *apiRule)
-	if err != nil {
-		return fmt.Errorf("failed to create server switching rule in backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server switching rule creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateIndexedRuleHelper(
+		ctx, transactionID, op.Rule, op.BackendName, op.Index,
+		transform.ToAPIServerSwitchingRule,
+		func(txID string) *dataplaneapi.CreateServerSwitchingRuleParams {
+			return &dataplaneapi.CreateServerSwitchingRuleParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.CreateServerSwitchingRuleParams, apiModel dataplaneapi.ServerSwitchingRule) (*http.Response, error) {
+			return c.Client().CreateServerSwitchingRule(ctx, parent, idx, params, apiModel)
+		},
+		"server switching rule",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -131,26 +110,17 @@ func (op *DeleteServerSwitchingRuleBackendOperation) Priority() int {
 
 // Execute deletes the server switching rule via the Dataplane API.
 func (op *DeleteServerSwitchingRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.DeleteServerSwitchingRuleParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the DeleteServerSwitchingRule API
-	resp, err := apiClient.DeleteServerSwitchingRule(ctx, op.BackendName, op.Index, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete server switching rule from backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server switching rule deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteIndexedRuleHelper(
+		ctx, transactionID, op.BackendName, op.Index,
+		func(txID string) *dataplaneapi.DeleteServerSwitchingRuleParams {
+			return &dataplaneapi.DeleteServerSwitchingRuleParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.DeleteServerSwitchingRuleParams) (*http.Response, error) {
+			return c.Client().DeleteServerSwitchingRule(ctx, parent, idx, params)
+		},
+		"server switching rule",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -195,36 +165,18 @@ func (op *UpdateServerSwitchingRuleBackendOperation) Priority() int {
 
 // Execute updates the server switching rule via the Dataplane API.
 func (op *UpdateServerSwitchingRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Rule == nil {
-		return fmt.Errorf("server switching rule is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.ServerSwitchingRule to dataplaneapi.ServerSwitchingRule using JSON marshaling
-	apiRule := transform.ToAPIServerSwitchingRule(op.Rule)
-	if apiRule == nil {
-		return fmt.Errorf("failed to transform server switching rule")
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.ReplaceServerSwitchingRuleParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the ReplaceServerSwitchingRule API
-	resp, err := apiClient.ReplaceServerSwitchingRule(ctx, op.BackendName, op.Index, params, *apiRule)
-	if err != nil {
-		return fmt.Errorf("failed to update server switching rule in backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server switching rule update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeReplaceIndexedRuleHelper(
+		ctx, transactionID, op.Rule, op.BackendName, op.Index,
+		transform.ToAPIServerSwitchingRule,
+		func(txID string) *dataplaneapi.ReplaceServerSwitchingRuleParams {
+			return &dataplaneapi.ReplaceServerSwitchingRuleParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.ReplaceServerSwitchingRuleParams, apiModel dataplaneapi.ServerSwitchingRule) (*http.Response, error) {
+			return c.Client().ReplaceServerSwitchingRule(ctx, parent, idx, params, apiModel)
+		},
+		"server switching rule",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
