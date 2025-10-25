@@ -119,7 +119,7 @@ func New(
 	// Create a watcher for each resource type (including auto-injected haproxy-pods)
 	for resourceTypeName, watchedResource := range resourcesWithHAProxyPods {
 		// Convert APIVersion/Kind to GVR
-		gvr, err := toGVR(watchedResource)
+		gvr, err := toGVR(&watchedResource)
 		if err != nil {
 			return nil, fmt.Errorf("invalid resource %q: %w", resourceTypeName, err)
 		}
@@ -135,6 +135,11 @@ func New(
 			}
 		}
 
+		// Calculate cache TTL as slightly over 2x drift prevention interval
+		// This allows one rendering cycle to fail while still keeping resources cached
+		driftInterval := cfg.Dataplane.GetDriftPreventionInterval()
+		cacheTTL := driftInterval * 22 / 10 // 2.2x drift interval
+
 		// Create watcher configuration
 		watcherConfig := &types.WatcherConfig{
 			GVR:              gvr,
@@ -142,7 +147,8 @@ func New(
 			LabelSelector:    labelSelector,
 			IndexBy:          watchedResource.IndexBy,
 			IgnoreFields:     ignoreFields,
-			StoreType:        types.StoreTypeMemory,
+			StoreType:        determineStoreType(watchedResource.Store),
+			CacheTTL:         cacheTTL,
 			DebounceInterval: 0, // Use default (500ms)
 
 			// OnChange publishes ResourceIndexUpdatedEvent
@@ -304,6 +310,17 @@ func (r *ResourceWatcherComponent) AllSynced() bool {
 // Helper Functions
 // -----------------------------------------------------------------------------
 
+// determineStoreType returns the appropriate store type based on the configuration.
+// Supported values:
+//   - "on-demand": Uses CachedStore for memory-efficient storage with API-backed retrieval
+//   - "full" or empty: Uses MemoryStore for fast in-memory storage (default)
+func determineStoreType(storeConfig string) types.StoreType {
+	if storeConfig == "on-demand" {
+		return types.StoreTypeCached
+	}
+	return types.StoreTypeMemory // Default to full in-memory store
+}
+
 // determineNamespace returns the appropriate namespace for a resource watcher.
 // HAProxy pods ("haproxy-pods") are scoped to the controller namespace for security.
 // All other resources are watched cluster-wide.
@@ -315,7 +332,7 @@ func determineNamespace(resourceTypeName string, k8sClient *client.Client) strin
 }
 
 // toGVR converts a WatchedResource configuration to a GroupVersionResource.
-func toGVR(wr coreconfig.WatchedResource) (schema.GroupVersionResource, error) {
+func toGVR(wr *coreconfig.WatchedResource) (schema.GroupVersionResource, error) {
 	if wr.APIVersion == "" {
 		return schema.GroupVersionResource{}, fmt.Errorf("api_version is required")
 	}

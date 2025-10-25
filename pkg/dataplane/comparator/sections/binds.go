@@ -43,13 +43,11 @@ func (op *CreateBindFrontendOperation) Priority() int {
 }
 
 func (op *CreateBindFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	params := &dataplaneapi.CreateBindFrontendParams{
 		TransactionId: &transactionID,
 	}
 
-	resp, err := apiClient.CreateBindFrontend(ctx, op.FrontendName, params, *op.Bind)
+	resp, err := c.Client().CreateBindFrontend(ctx, op.FrontendName, params, *op.Bind)
 	if err != nil {
 		return fmt.Errorf("failed to create bind '%s' in frontend '%s': %w", op.BindName, op.FrontendName, err)
 	}
@@ -115,13 +113,11 @@ func (op *DeleteBindFrontendOperation) Priority() int {
 }
 
 func (op *DeleteBindFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	params := &dataplaneapi.DeleteBindFrontendParams{
 		TransactionId: &transactionID,
 	}
 
-	resp, err := apiClient.DeleteBindFrontend(ctx, op.FrontendName, op.BindName, params)
+	resp, err := c.Client().DeleteBindFrontend(ctx, op.FrontendName, op.BindName, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete bind '%s' from frontend '%s': %w", op.BindName, op.FrontendName, err)
 	}
@@ -191,13 +187,11 @@ func (op *UpdateBindFrontendOperation) Priority() int {
 }
 
 func (op *UpdateBindFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	params := &dataplaneapi.ReplaceBindFrontendParams{
 		TransactionId: &transactionID,
 	}
 
-	resp, err := apiClient.ReplaceBindFrontend(ctx, op.FrontendName, op.BindName, params, *op.Bind)
+	resp, err := c.Client().ReplaceBindFrontend(ctx, op.FrontendName, op.BindName, params, *op.Bind)
 	if err != nil {
 		return fmt.Errorf("failed to update bind '%s' in frontend '%s': %w", op.BindName, op.FrontendName, err)
 	}

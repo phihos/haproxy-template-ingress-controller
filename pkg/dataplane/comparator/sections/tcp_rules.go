@@ -4,13 +4,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -50,23 +50,15 @@ func (op *CreateTCPRequestRuleFrontendOperation) Priority() int {
 }
 
 // Execute creates the TCP request rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP request rule is nil")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.TCPRequestRule to dataplaneapi.TcpRequestRule using JSON marshaling
-	var apiRule dataplaneapi.TcpRequestRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TCP request rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal TCP request rule: %w", err)
+	apiRule := transform.ToAPITCPRequestRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform TCP request rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -75,7 +67,7 @@ func (op *CreateTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c 
 	}
 
 	// Call the CreateTCPRequestRuleFrontend API
-	resp, err := apiClient.CreateTCPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, apiRule)
+	resp, err := c.Client().CreateTCPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create TCP request rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -131,15 +123,13 @@ func (op *DeleteTCPRequestRuleFrontendOperation) Priority() int {
 
 // Execute deletes the TCP request rule via the Dataplane API.
 func (op *DeleteTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteTCPRequestRuleFrontendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteTCPRequestRuleFrontend API
-	resp, err := apiClient.DeleteTCPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params)
+	resp, err := c.Client().DeleteTCPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete TCP request rule from frontend '%s': %w", op.FrontendName, err)
 	}
@@ -194,23 +184,15 @@ func (op *UpdateTCPRequestRuleFrontendOperation) Priority() int {
 }
 
 // Execute updates the TCP request rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP request rule is nil")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.TCPRequestRule to dataplaneapi.TcpRequestRule using JSON marshaling
-	var apiRule dataplaneapi.TcpRequestRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TCP request rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal TCP request rule: %w", err)
+	apiRule := transform.ToAPITCPRequestRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform TCP request rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -219,7 +201,7 @@ func (op *UpdateTCPRequestRuleFrontendOperation) Execute(ctx context.Context, c 
 	}
 
 	// Call the ReplaceTCPRequestRuleFrontend API
-	resp, err := apiClient.ReplaceTCPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, apiRule)
+	resp, err := c.Client().ReplaceTCPRequestRuleFrontend(ctx, op.FrontendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update TCP request rule in frontend '%s': %w", op.FrontendName, err)
 	}
@@ -274,23 +256,15 @@ func (op *CreateTCPRequestRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the TCP request rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP request rule is nil")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.TCPRequestRule to dataplaneapi.TcpRequestRule using JSON marshaling
-	var apiRule dataplaneapi.TcpRequestRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TCP request rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal TCP request rule: %w", err)
+	apiRule := transform.ToAPITCPRequestRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform TCP request rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -299,7 +273,7 @@ func (op *CreateTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *
 	}
 
 	// Call the CreateTCPRequestRuleBackend API
-	resp, err := apiClient.CreateTCPRequestRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := c.Client().CreateTCPRequestRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create TCP request rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -355,15 +329,13 @@ func (op *DeleteTCPRequestRuleBackendOperation) Priority() int {
 
 // Execute deletes the TCP request rule via the Dataplane API.
 func (op *DeleteTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteTCPRequestRuleBackendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteTCPRequestRuleBackend API
-	resp, err := apiClient.DeleteTCPRequestRuleBackend(ctx, op.BackendName, op.Index, params)
+	resp, err := c.Client().DeleteTCPRequestRuleBackend(ctx, op.BackendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete TCP request rule from backend '%s': %w", op.BackendName, err)
 	}
@@ -418,23 +390,15 @@ func (op *UpdateTCPRequestRuleBackendOperation) Priority() int {
 }
 
 // Execute updates the TCP request rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP request rule is nil")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.TCPRequestRule to dataplaneapi.TcpRequestRule using JSON marshaling
-	var apiRule dataplaneapi.TcpRequestRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TCP request rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal TCP request rule: %w", err)
+	apiRule := transform.ToAPITCPRequestRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform TCP request rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -443,7 +407,7 @@ func (op *UpdateTCPRequestRuleBackendOperation) Execute(ctx context.Context, c *
 	}
 
 	// Call the ReplaceTCPRequestRuleBackend API
-	resp, err := apiClient.ReplaceTCPRequestRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := c.Client().ReplaceTCPRequestRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update TCP request rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -498,23 +462,15 @@ func (op *CreateTCPResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the TCP response rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateTCPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP response rule is nil")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.TCPResponseRule to dataplaneapi.TcpResponseRule using JSON marshaling
-	var apiRule dataplaneapi.TcpResponseRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TCP response rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal TCP response rule: %w", err)
+	apiRule := transform.ToAPITCPResponseRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform TCP response rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -523,7 +479,7 @@ func (op *CreateTCPResponseRuleBackendOperation) Execute(ctx context.Context, c 
 	}
 
 	// Call the CreateTCPResponseRuleBackend API
-	resp, err := apiClient.CreateTCPResponseRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := c.Client().CreateTCPResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to create TCP response rule in backend '%s': %w", op.BackendName, err)
 	}
@@ -579,15 +535,13 @@ func (op *DeleteTCPResponseRuleBackendOperation) Priority() int {
 
 // Execute deletes the TCP response rule via the Dataplane API.
 func (op *DeleteTCPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID
 	params := &dataplaneapi.DeleteTCPResponseRuleBackendParams{
 		TransactionId: &transactionID,
 	}
 
 	// Call the DeleteTCPResponseRuleBackend API
-	resp, err := apiClient.DeleteTCPResponseRuleBackend(ctx, op.BackendName, op.Index, params)
+	resp, err := c.Client().DeleteTCPResponseRuleBackend(ctx, op.BackendName, op.Index, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete TCP response rule from backend '%s': %w", op.BackendName, err)
 	}
@@ -642,23 +596,15 @@ func (op *UpdateTCPResponseRuleBackendOperation) Priority() int {
 }
 
 // Execute updates the TCP response rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other TCP rule operation Execute methods - each handles different API endpoints and contexts
 func (op *UpdateTCPResponseRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
 	if op.Rule == nil {
 		return fmt.Errorf("TCP response rule is nil")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.TCPResponseRule to dataplaneapi.TcpResponseRule using JSON marshaling
-	var apiRule dataplaneapi.TcpResponseRule
-	data, err := json.Marshal(op.Rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TCP response rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiRule); err != nil {
-		return fmt.Errorf("failed to unmarshal TCP response rule: %w", err)
+	apiRule := transform.ToAPITCPResponseRule(op.Rule)
+	if apiRule == nil {
+		return fmt.Errorf("failed to transform TCP response rule")
 	}
 
 	// Prepare parameters with transaction ID
@@ -667,7 +613,7 @@ func (op *UpdateTCPResponseRuleBackendOperation) Execute(ctx context.Context, c 
 	}
 
 	// Call the ReplaceTCPResponseRuleBackend API
-	resp, err := apiClient.ReplaceTCPResponseRuleBackend(ctx, op.BackendName, op.Index, params, apiRule)
+	resp, err := c.Client().ReplaceTCPResponseRuleBackend(ctx, op.BackendName, op.Index, params, *apiRule)
 	if err != nil {
 		return fmt.Errorf("failed to update TCP response rule in backend '%s': %w", op.BackendName, err)
 	}

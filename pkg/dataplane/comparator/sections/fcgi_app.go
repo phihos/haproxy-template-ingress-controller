@@ -1,15 +1,14 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityFCGIApp defines priority for fcgi-app sections.
@@ -55,16 +54,10 @@ func (op *CreateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("fcgi-app section name is empty")
 	}
 
-	apiClient := c.Client()
-
-	// Convert models.FCGIApp to dataplaneapi.FcgiApp using JSON marshaling
-	var apiFCGIApp dataplaneapi.FcgiApp
-	data, err := json.Marshal(op.FCGIApp)
-	if err != nil {
-		return fmt.Errorf("failed to marshal fcgi-app section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFCGIApp); err != nil {
-		return fmt.Errorf("failed to unmarshal fcgi-app section: %w", err)
+	// Convert models.FCGIApp to dataplaneapi.FcgiApp using transform package
+	apiFCGIApp := transform.ToAPIFCGIApp(op.FCGIApp)
+	if apiFCGIApp == nil {
+		return fmt.Errorf("failed to transform fcgi-app section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -81,7 +74,7 @@ func (op *CreateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the CreateFCGIApp API
-	resp, err := apiClient.CreateFCGIApp(ctx, params, apiFCGIApp)
+	resp, err := c.Client().CreateFCGIApp(ctx, params, *apiFCGIApp)
 	if err != nil {
 		return fmt.Errorf("failed to create fcgi-app section '%s': %w", op.FCGIApp.Name, err)
 	}
@@ -140,8 +133,6 @@ func (op *DeleteFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("fcgi-app section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Prepare parameters with transaction ID or version
 	params := &dataplaneapi.DeleteFCGIAppParams{}
 	if transactionID != "" {
@@ -156,7 +147,7 @@ func (op *DeleteFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the DeleteFCGIApp API
-	resp, err := apiClient.DeleteFCGIApp(ctx, op.FCGIApp.Name, params)
+	resp, err := c.Client().DeleteFCGIApp(ctx, op.FCGIApp.Name, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete fcgi-app section '%s': %w", op.FCGIApp.Name, err)
 	}
@@ -215,16 +206,10 @@ func (op *UpdateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 		return fmt.Errorf("fcgi-app section name is empty")
 	}
 
-	apiClient := c.Client()
-
-	// Convert models.FCGIApp to dataplaneapi.FcgiApp using JSON marshaling
-	var apiFCGIApp dataplaneapi.FcgiApp
-	data, err := json.Marshal(op.FCGIApp)
-	if err != nil {
-		return fmt.Errorf("failed to marshal fcgi-app section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFCGIApp); err != nil {
-		return fmt.Errorf("failed to unmarshal fcgi-app section: %w", err)
+	// Convert models.FCGIApp to dataplaneapi.FcgiApp using transform package
+	apiFCGIApp := transform.ToAPIFCGIApp(op.FCGIApp)
+	if apiFCGIApp == nil {
+		return fmt.Errorf("failed to transform fcgi-app section")
 	}
 
 	// Prepare parameters with transaction ID or version
@@ -241,7 +226,7 @@ func (op *UpdateFCGIAppOperation) Execute(ctx context.Context, c *client.Datapla
 	}
 
 	// Call the ReplaceFCGIApp API
-	resp, err := apiClient.ReplaceFCGIApp(ctx, op.FCGIApp.Name, params, apiFCGIApp)
+	resp, err := c.Client().ReplaceFCGIApp(ctx, op.FCGIApp.Name, params, *apiFCGIApp)
 	if err != nil {
 		return fmt.Errorf("failed to update fcgi-app section '%s': %w", op.FCGIApp.Name, err)
 	}

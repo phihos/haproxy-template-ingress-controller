@@ -2,7 +2,6 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -10,6 +9,7 @@ import (
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -51,58 +51,21 @@ func (op *CreateMailerEntryOperation) Priority() int {
 
 // Execute creates the mailer entry via the Dataplane API.
 func (op *CreateMailerEntryOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.MailerEntry == nil {
-		return fmt.Errorf("mailer entry is nil")
-	}
-	if op.MailerEntry.Name == "" {
-		return fmt.Errorf("mailer entry name is empty")
-	}
-	if op.MailersSection == "" {
-		return fmt.Errorf("mailers section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.MailerEntry to dataplaneapi.MailerEntry using JSON marshaling
-	var apiMailerEntry dataplaneapi.MailerEntry
-	data, err := json.Marshal(op.MailerEntry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal mailer entry: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiMailerEntry); err != nil {
-		return fmt.Errorf("failed to unmarshal mailer entry: %w", err)
-	}
-
-	// Prepare parameters and execute with transaction ID or version
-	params := &dataplaneapi.CreateMailerEntryParams{
-		MailersSection: op.MailersSection,
-	}
-
-	var resp *http.Response
-
-	if transactionID != "" {
-		// Transaction path: use transaction ID
-		params.TransactionId = &transactionID
-		resp, err = apiClient.CreateMailerEntry(ctx, params, apiMailerEntry)
-	} else {
-		// Runtime API path: use version with automatic retry on conflicts
-		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
-			params.Version = &version
-			return apiClient.CreateMailerEntry(ctx, params, apiMailerEntry)
-		})
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to create mailer entry '%s' in mailers section '%s': %w", op.MailerEntry.Name, op.MailersSection, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("mailer entry creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateChildHelper(
+		ctx, c, transactionID, op.MailerEntry, op.MailersSection,
+		func(m *models.MailerEntry) string { return m.Name },
+		transform.ToAPIMailerEntry,
+		func(parent string) *dataplaneapi.CreateMailerEntryParams {
+			return &dataplaneapi.CreateMailerEntryParams{MailersSection: parent}
+		},
+		func(p *dataplaneapi.CreateMailerEntryParams, tid *string) { p.TransactionId = tid },
+		func(p *dataplaneapi.CreateMailerEntryParams, v *int) { p.Version = v },
+		func(ctx context.Context, params *dataplaneapi.CreateMailerEntryParams, apiModel dataplaneapi.MailerEntry) (*http.Response, error) {
+			return c.Client().CreateMailerEntry(ctx, params, apiModel)
+		},
+		"mailer entry",
+		"mailers section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -145,49 +108,20 @@ func (op *DeleteMailerEntryOperation) Priority() int {
 
 // Execute deletes the mailer entry via the Dataplane API.
 func (op *DeleteMailerEntryOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.MailerEntry == nil {
-		return fmt.Errorf("mailer entry is nil")
-	}
-	if op.MailerEntry.Name == "" {
-		return fmt.Errorf("mailer entry name is empty")
-	}
-	if op.MailersSection == "" {
-		return fmt.Errorf("mailers section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters and execute with transaction ID or version
-	params := &dataplaneapi.DeleteMailerEntryParams{
-		MailersSection: op.MailersSection,
-	}
-
-	var resp *http.Response
-	var err error
-
-	if transactionID != "" {
-		// Transaction path: use transaction ID
-		params.TransactionId = &transactionID
-		resp, err = apiClient.DeleteMailerEntry(ctx, op.MailerEntry.Name, params)
-	} else {
-		// Runtime API path: use version with automatic retry on conflicts
-		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
-			params.Version = &version
-			return apiClient.DeleteMailerEntry(ctx, op.MailerEntry.Name, params)
-		})
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to delete mailer entry '%s' from mailers section '%s': %w", op.MailerEntry.Name, op.MailersSection, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("mailer entry deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteChildHelper(
+		ctx, c, transactionID, op.MailerEntry, op.MailersSection,
+		func(m *models.MailerEntry) string { return m.Name },
+		func(parent string) *dataplaneapi.DeleteMailerEntryParams {
+			return &dataplaneapi.DeleteMailerEntryParams{MailersSection: parent}
+		},
+		func(p *dataplaneapi.DeleteMailerEntryParams, tid *string) { p.TransactionId = tid },
+		func(p *dataplaneapi.DeleteMailerEntryParams, v *int) { p.Version = v },
+		func(ctx context.Context, name string, params *dataplaneapi.DeleteMailerEntryParams) (*http.Response, error) {
+			return c.Client().DeleteMailerEntry(ctx, name, params)
+		},
+		"mailer entry",
+		"mailers section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -240,16 +174,10 @@ func (op *UpdateMailerEntryOperation) Execute(ctx context.Context, c *client.Dat
 		return fmt.Errorf("mailers section name is empty")
 	}
 
-	apiClient := c.Client()
-
 	// Convert models.MailerEntry to dataplaneapi.MailerEntry using JSON marshaling
-	var apiMailerEntry dataplaneapi.MailerEntry
-	data, err := json.Marshal(op.MailerEntry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal mailer entry: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiMailerEntry); err != nil {
-		return fmt.Errorf("failed to unmarshal mailer entry: %w", err)
+	apiMailerEntry := transform.ToAPIMailerEntry(op.MailerEntry)
+	if apiMailerEntry == nil {
+		return fmt.Errorf("failed to transform mailer entry")
 	}
 
 	// Prepare parameters and execute with transaction ID or version
@@ -260,16 +188,17 @@ func (op *UpdateMailerEntryOperation) Execute(ctx context.Context, c *client.Dat
 	}
 
 	var resp *http.Response
+	var err error
 
 	if transactionID != "" {
 		// Transaction path: use transaction ID
 		params.TransactionId = &transactionID
-		resp, err = apiClient.ReplaceMailerEntry(ctx, op.MailerEntry.Name, params, apiMailerEntry)
+		resp, err = c.Client().ReplaceMailerEntry(ctx, op.MailerEntry.Name, params, *apiMailerEntry)
 	} else {
 		// Runtime API path: use version with automatic retry on conflicts
 		resp, err = client.ExecuteWithVersion(ctx, c, func(ctx context.Context, version int) (*http.Response, error) {
 			params.Version = &version
-			return apiClient.ReplaceMailerEntry(ctx, op.MailerEntry.Name, params, apiMailerEntry)
+			return c.Client().ReplaceMailerEntry(ctx, op.MailerEntry.Name, params, *apiMailerEntry)
 		})
 	}
 

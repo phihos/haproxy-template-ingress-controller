@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
@@ -50,6 +51,10 @@ type Config struct {
 
 	// HTTPClient allows injecting a custom HTTP client (useful for testing)
 	HTTPClient *http.Client
+
+	// Logger for logging request/response details on errors (optional)
+	// If nil, slog.Default() will be used
+	Logger *slog.Logger
 }
 
 // New creates a new DataplaneClient with the provided configuration.
@@ -61,7 +66,7 @@ type Config struct {
 //	    Username: "admin",
 //	    Password: "password",
 //	})
-func New(cfg Config) (*DataplaneClient, error) {
+func New(cfg *Config) (*DataplaneClient, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
@@ -80,14 +85,23 @@ func New(cfg Config) (*DataplaneClient, error) {
 		return nil
 	}
 
+	// Get base HTTP client (either provided or default)
+	baseClient := cfg.HTTPClient
+	if baseClient == nil {
+		baseClient = &http.Client{}
+	}
+
+	// Wrap the client's transport with logging middleware for 422 error debugging
+	wrappedTransport := newLoggingRoundTripper(baseClient.Transport, cfg.Logger)
+	loggingClient := &http.Client{
+		Transport: wrappedTransport,
+		Timeout:   baseClient.Timeout,
+	}
+
 	// Configure options for generated client
 	opts := []dataplaneapi.ClientOption{
 		dataplaneapi.WithRequestEditorFn(authEditor),
-	}
-
-	// Add custom HTTP client if provided
-	if cfg.HTTPClient != nil {
-		opts = append(opts, dataplaneapi.WithHTTPClient(cfg.HTTPClient))
+		dataplaneapi.WithHTTPClient(loggingClient),
 	}
 
 	// Create generated client
@@ -120,12 +134,13 @@ func (c *DataplaneClient) BaseURL() string {
 
 // NewFromEndpoint creates a new DataplaneClient from an Endpoint.
 // This is a convenience function for creating a client with default options.
-func NewFromEndpoint(endpoint Endpoint) (*DataplaneClient, error) {
-	return New(Config{
+func NewFromEndpoint(endpoint Endpoint, logger *slog.Logger) (*DataplaneClient, error) {
+	return New(&Config{
 		BaseURL:  endpoint.URL,
 		Username: endpoint.Username,
 		Password: endpoint.Password,
 		PodName:  endpoint.PodName,
+		Logger:   logger,
 	})
 }
 

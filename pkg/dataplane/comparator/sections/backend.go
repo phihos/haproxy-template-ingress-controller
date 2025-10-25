@@ -4,13 +4,14 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // OperationType represents the type of configuration operation.
@@ -67,44 +68,18 @@ func (op *CreateBackendOperation) Priority() int {
 
 // Execute creates the backend via the Dataplane API.
 func (op *CreateBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Backend == nil {
-		return fmt.Errorf("backend is nil")
-	}
-	if op.Backend.Name == "" {
-		return fmt.Errorf("backend name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Backend to dataplaneapi.Backend using JSON marshaling
-	// This is necessary because they are incompatible types
-	var apiBackend dataplaneapi.Backend
-	data, err := json.Marshal(op.Backend)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backend: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiBackend); err != nil {
-		return fmt.Errorf("failed to unmarshal backend: %w", err)
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.CreateBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the CreateBackend API
-	resp, err := apiClient.CreateBackend(ctx, params, apiBackend)
-	if err != nil {
-		return fmt.Errorf("failed to create backend '%s': %w", op.Backend.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("backend creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateTransactionOnlyHelper(
+		ctx, transactionID, op.Backend,
+		func(m *models.Backend) string { return m.Name },
+		transform.ToAPIBackend,
+		func(txID string) *dataplaneapi.CreateBackendParams {
+			return &dataplaneapi.CreateBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, params *dataplaneapi.CreateBackendParams, apiModel dataplaneapi.Backend) (*http.Response, error) {
+			return c.Client().CreateBackend(ctx, params, apiModel)
+		},
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -145,33 +120,17 @@ func (op *DeleteBackendOperation) Priority() int {
 
 // Execute deletes the backend via the Dataplane API.
 func (op *DeleteBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Backend == nil {
-		return fmt.Errorf("backend is nil")
-	}
-	if op.Backend.Name == "" {
-		return fmt.Errorf("backend name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.DeleteBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the DeleteBackend API
-	resp, err := apiClient.DeleteBackend(ctx, op.Backend.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete backend '%s': %w", op.Backend.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("backend deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteTransactionOnlyHelper(
+		ctx, transactionID, op.Backend,
+		func(m *models.Backend) string { return m.Name },
+		func(txID string) *dataplaneapi.DeleteBackendParams {
+			return &dataplaneapi.DeleteBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, name string, params *dataplaneapi.DeleteBackendParams) (*http.Response, error) {
+			return c.Client().DeleteBackend(ctx, name, params)
+		},
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -211,46 +170,19 @@ func (op *UpdateBackendOperation) Priority() int {
 }
 
 // Execute updates the backend via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to frontend/defaults operations - each handles different section types
 func (op *UpdateBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Backend == nil {
-		return fmt.Errorf("backend is nil")
-	}
-	if op.Backend.Name == "" {
-		return fmt.Errorf("backend name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Backend to dataplaneapi.Backend using JSON marshaling
-	var apiBackend dataplaneapi.Backend
-	data, err := json.Marshal(op.Backend)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backend: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiBackend); err != nil {
-		return fmt.Errorf("failed to unmarshal backend: %w", err)
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.ReplaceBackendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the ReplaceBackend API
-	resp, err := apiClient.ReplaceBackend(ctx, op.Backend.Name, params, apiBackend)
-	if err != nil {
-		return fmt.Errorf("failed to update backend '%s': %w", op.Backend.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("backend update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeUpdateTransactionOnlyHelper(
+		ctx, transactionID, op.Backend,
+		func(m *models.Backend) string { return m.Name },
+		transform.ToAPIBackend,
+		func(txID string) *dataplaneapi.ReplaceBackendParams {
+			return &dataplaneapi.ReplaceBackendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, name string, params *dataplaneapi.ReplaceBackendParams, apiModel dataplaneapi.Backend) (*http.Response, error) {
+			return c.Client().ReplaceBackend(ctx, name, params, apiModel)
+		},
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

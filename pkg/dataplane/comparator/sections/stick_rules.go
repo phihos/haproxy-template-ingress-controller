@@ -1,18 +1,17 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
-//
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityStickRule defines the priority for stick rule operations.
@@ -54,43 +53,19 @@ func (op *CreateStickRuleBackendOperation) Priority() int {
 }
 
 // Execute creates the stick rule via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateStickRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.StickRule == nil {
-		return fmt.Errorf("stick rule is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.StickRule to dataplaneapi.StickRule using JSON marshaling
-	var apiStickRule dataplaneapi.StickRule
-	data, err := json.Marshal(op.StickRule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal stick rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiStickRule); err != nil {
-		return fmt.Errorf("failed to unmarshal stick rule: %w", err)
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.CreateStickRuleParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the CreateStickRule API
-	resp, err := apiClient.CreateStickRule(ctx, op.BackendName, op.Index, params, apiStickRule)
-	if err != nil {
-		return fmt.Errorf("failed to create stick rule in backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("stick rule creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateIndexedRuleHelper(
+		ctx, transactionID, op.StickRule, op.BackendName, op.Index,
+		transform.ToAPIStickRule,
+		func(txID string) *dataplaneapi.CreateStickRuleParams {
+			return &dataplaneapi.CreateStickRuleParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.CreateStickRuleParams, apiModel dataplaneapi.StickRule) (*http.Response, error) {
+			return c.Client().CreateStickRule(ctx, parent, idx, params, apiModel)
+		},
+		"stick rule",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -135,26 +110,17 @@ func (op *DeleteStickRuleBackendOperation) Priority() int {
 
 // Execute deletes the stick rule via the Dataplane API.
 func (op *DeleteStickRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.DeleteStickRuleParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the DeleteStickRule API
-	resp, err := apiClient.DeleteStickRule(ctx, op.BackendName, op.Index, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete stick rule from backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("stick rule deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteIndexedRuleHelper(
+		ctx, transactionID, op.BackendName, op.Index,
+		func(txID string) *dataplaneapi.DeleteStickRuleParams {
+			return &dataplaneapi.DeleteStickRuleParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.DeleteStickRuleParams) (*http.Response, error) {
+			return c.Client().DeleteStickRule(ctx, parent, idx, params)
+		},
+		"stick rule",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -199,40 +165,18 @@ func (op *UpdateStickRuleBackendOperation) Priority() int {
 
 // Execute updates the stick rule via the Dataplane API.
 func (op *UpdateStickRuleBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.StickRule == nil {
-		return fmt.Errorf("stick rule is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.StickRule to dataplaneapi.StickRule using JSON marshaling
-	var apiStickRule dataplaneapi.StickRule
-	data, err := json.Marshal(op.StickRule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal stick rule: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiStickRule); err != nil {
-		return fmt.Errorf("failed to unmarshal stick rule: %w", err)
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.ReplaceStickRuleParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the ReplaceStickRule API
-	resp, err := apiClient.ReplaceStickRule(ctx, op.BackendName, op.Index, params, apiStickRule)
-	if err != nil {
-		return fmt.Errorf("failed to update stick rule in backend '%s': %w", op.BackendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("stick rule update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeReplaceIndexedRuleHelper(
+		ctx, transactionID, op.StickRule, op.BackendName, op.Index,
+		transform.ToAPIStickRule,
+		func(txID string) *dataplaneapi.ReplaceStickRuleParams {
+			return &dataplaneapi.ReplaceStickRuleParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.ReplaceStickRuleParams, apiModel dataplaneapi.StickRule) (*http.Response, error) {
+			return c.Client().ReplaceStickRule(ctx, parent, idx, params, apiModel)
+		},
+		"stick rule",
+		"backend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

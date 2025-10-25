@@ -614,16 +614,57 @@ spec:
                 name: ${ECHO_APP_NAME}
                 port:
                   number: 80
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: echo-auth-secret
+type: Opaque
+data:
+  # Pre-generated SHA-512 encrypted passwords for development testing
+  # admin:admin (encrypted with openssl passwd -6)
+  admin: JDYkMVd3c2YxNmprcDBkMVBpTyRkS3FHUTF0SW0uOGF1VlJIcVA3dVcuMVV5dVNtZ3YveEc3dEFiOXdZNzc1REw3ZGE0N0hIeVB4ZllDS1BMTktZclJvMHRNQWQyQk1YUHBDd2Z5ZW03MA==
+  # user:password (encrypted with openssl passwd -6)
+  user: JDYkbkdxOHJ1T2kyd3l4MUtyZyQ1a2d1azEzb2tKWmpzZ2Z2c3JqdmkvOVoxQjZIbDRUcGVvdkpzb2lQeHA2eGRKWUpha21wUmIwSUVHb1ZUSC8zRzZrLmRMRzBuVUNMWEZnMEhTRTJ5MA==
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-server-auth
+  annotations:
+    haproxy.org/auth-type: "basic-auth"
+    haproxy.org/auth-secret: "echo-auth-secret"
+    haproxy.org/auth-realm: "Echo-Server-Protected"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-auth.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ${ECHO_APP_NAME}
+                port:
+                  number: 80
 EOF
 
 	log INFO "Waiting for Echo Server deployment to become ready..."
 	kubectl -n "${ECHO_NAMESPACE}" rollout status deployment/${ECHO_APP_NAME} --timeout=120s >/dev/null
 	ok "Echo Server is ready."
 
-	ok "Echo Server deployed with Ingress resource."
-	echo "The Ingress for 'echo.localdev.me' is now being handled by haproxy-template-ic."
-	echo "Traffic will be routed through the production HAProxy instances on port 30080."
-	echo "Test with: curl -H 'Host: echo.localdev.me' http://localhost:30080"
+	ok "Echo Server deployed with Ingress resources."
+	echo "Public Ingress (no auth): echo.localdev.me"
+	echo "Protected Ingress (basic auth): echo-auth.localdev.me"
+	echo ""
+	echo "Test public endpoint:"
+	echo "  curl -H 'Host: echo.localdev.me' http://localhost:30080"
+	echo ""
+	echo "Test protected endpoint:"
+	echo "  curl -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Should return 401"
+	echo "  curl -u admin:admin -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Should succeed"
+	echo "  curl -u user:password -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Should succeed"
 }
 
 # Development convenience functions
@@ -922,8 +963,20 @@ post_deploy_tips() {
 
 	ok "🧪 Testing the Ingress Controller:"
 	echo "  - Quick test: $0 test"
-	echo "  - Manual test: curl -H 'Host: echo.localdev.me' http://localhost:30080"
-	echo "  - Browser test: Add '127.0.0.1 echo.localdev.me' to /etc/hosts, visit http://echo.localdev.me:30080"
+	echo
+	echo "  Public endpoint (no auth):"
+	echo "    curl -H 'Host: echo.localdev.me' http://localhost:30080"
+	echo
+	echo "  Protected endpoint (basic auth):"
+	echo "    curl -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Returns 401"
+	echo "    curl -u admin:admin -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Succeeds"
+	echo "    curl -u user:password -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Succeeds"
+	echo
+	echo "  Browser test:"
+	echo "    Add to /etc/hosts: 127.0.0.1 echo.localdev.me echo-auth.localdev.me"
+	echo "    Visit: http://echo.localdev.me:30080 (no auth)"
+	echo "    Visit: http://echo-auth.localdev.me:30080 (credentials: admin/admin or user/password)"
+	echo
 	echo "  - Port forwarding: $0 port-forward"
 	echo
 

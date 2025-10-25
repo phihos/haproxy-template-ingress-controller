@@ -77,13 +77,25 @@ controller:
       secrets:
         api_version: v1
         kind: Secret
-        index_by: ["metadata.namespace", "type"]
+        store: on-demand
+        index_by: ["metadata.namespace", "metadata.name"]
 
     template_snippets:
       backend-name:
         name: backend-name
         template: >-
           {{- " " -}}ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+
+      auth-userlist-name:
+        name: auth-userlist-name
+        template: >-
+          {%- macro get_userlist_name(auth_secret, namespace) -%}
+          {%- if "/" in auth_secret -%}
+          auth_{{ auth_secret.split("/")[0] }}_{{ auth_secret.split("/")[1] }}
+          {%- else -%}
+          auth_{{ namespace }}_{{ auth_secret }}
+          {%- endif -%}
+          {%- endmacro -%}
 
       backend-servers:
         name: backend-servers
@@ -94,7 +106,7 @@ controller:
           {#- Collect active endpoints using O(1) indexed lookup #}
           {#- Use namespace() to maintain list across loop scopes #}
           {%- set ns = namespace(active_endpoints=[]) %}
-          {%- for endpoint_slice in resources.endpoints.Get(service_name) %}
+          {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
             {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
               {%- for address in (endpoint.addresses | default([])) %}
                 {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint.targetRef.name, 'address': address, 'port': port}] %}
@@ -151,6 +163,7 @@ controller:
             option httpchk GET {{ path.path | default('/') }}
             default-server check
             {%- filter indent(2, first=True) %}
+            {% include "backend-annotations" %}
             {% include "backend-servers" %}
             {%- endfilter %}
           {%- endif %}
@@ -159,6 +172,91 @@ controller:
           {%- endfor %}
           {%- endif %}
           {%- endfor %}
+
+      top-level-annotations:
+        name: top-level-annotations
+        priority: 100
+        template: |
+          {#- Orchestrator snippet that includes all top-level annotation snippets #}
+          {#- Top-level snippets generate HAProxy elements like userlist sections #}
+          {#- Usage: {% include "top-level-annotations" %} in haproxy.cfg #}
+          {%- set matching = template_snippets | glob_match("top-level-annotation-*") %}
+          {%- for snippet_name in matching %}
+          {%- include snippet_name -%}
+          {%- endfor %}
+
+      backend-annotations:
+        name: backend-annotations
+        priority: 100
+        template: |
+          {#- Orchestrator snippet that includes all backend annotation snippets #}
+          {#- Backend snippets generate per-backend directives like http-request auth #}
+          {#- Usage: {% include "backend-annotations" %} in backend definitions #}
+          {%- set matching = template_snippets | glob_match("backend-annotation-*") %}
+          {%- for snippet_name in matching %}
+          {%- include snippet_name -%}
+          {%- endfor %}
+
+      top-level-annotation-haproxytech-auth:
+        name: top-level-annotation-haproxytech-auth
+        priority: 500
+        template: |
+          {#- Generate userlist sections for basic authentication #}
+          {#- Reads credentials from secrets referenced by haproxy.org/auth-secret annotation #}
+          {%- set ns = namespace(processed_userlists=[]) %}
+          {%- for ingress in resources.ingresses.List() %}
+            {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
+            {%- if auth_type == "basic-auth" %}
+              {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
+              {%- if auth_secret %}
+                {#- Generate userlist name using macro #}
+                {%- include "auth-userlist-name" -%}
+                {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
+
+                {#- Only process each userlist once #}
+                {%- if userlist_name not in ns.processed_userlists %}
+                  {%- set ns.processed_userlists = ns.processed_userlists + [userlist_name] %}
+
+                  {#- Parse secret reference for fetching #}
+                  {%- if "/" in auth_secret %}
+                    {%- set secret_namespace = auth_secret.split("/")[0] %}
+                    {%- set secret_name = auth_secret.split("/")[1] %}
+                  {%- else %}
+                    {%- set secret_namespace = ingress.metadata.namespace %}
+                    {%- set secret_name = auth_secret %}
+                  {%- endif %}
+
+                  {#- Fetch secret from store #}
+                  {%- set secret = resources.secrets.GetSingle(secret_namespace, secret_name) %}
+                  {%- if secret %}
+
+          userlist {{ userlist_name }}
+                    {%- for username in secret.data | default({}) %}
+            user {{ username }} password {{ secret.data[username] | b64decode }}
+                    {%- endfor %}
+                  {%- endif %}
+                {%- endif %}
+              {%- endif %}
+            {%- endif %}
+          {%- endfor %}
+
+      backend-annotation-haproxytech-auth:
+        name: backend-annotation-haproxytech-auth
+        priority: 500
+        template: |
+          {#- Generate http-request auth directives for backends requiring authentication #}
+          {#- Uses userlist created by top-level-annotation-haproxytech-auth #}
+          {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
+          {%- if auth_type == "basic-auth" %}
+            {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
+            {%- set auth_realm = ingress.metadata.annotations["haproxy.org/auth-realm"] | default("Restricted Area") %}
+            {%- if auth_secret %}
+              {#- Generate userlist name using macro #}
+              {%- include "auth-userlist-name" -%}
+              {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
+          http-request auth realm "{{ auth_realm }}" unless { http_auth({{ userlist_name }}) }
+            {%- endif %}
+          {%- endif %}
 
     # IMPORTANT: Use the get_path filter to resolve file paths automatically.
     #
@@ -176,8 +274,8 @@ controller:
           {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
           {%- set host_without_asterisk = rule.host | replace('*', '', 1) %}
           {{ host_without_asterisk }} {{ host_without_asterisk }}
-          {%- endfor %}
-          {%- endfor %}
+          {% endfor %}
+          {% endfor %}
 
       path-exact.map:
         template: |
@@ -314,6 +412,9 @@ controller:
             errorfile 502 {{ "502.http" | get_path("file") }}
             errorfile 503 {{ "503.http" | get_path("file") }}
             errorfile 504 {{ "504.http" | get_path("file") }}
+
+        {#- Include top-level annotation snippets (e.g., userlist sections) #}
+        {% include "top-level-annotations" %}
 
         frontend status
             bind *:8404

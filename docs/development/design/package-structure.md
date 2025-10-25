@@ -19,6 +19,7 @@ haproxy-template-ic/
 │   │   ├── discovery/       # HAProxy endpoint discovery
 │   │   ├── parser/          # Config parser using client-native
 │   │   ├── synchronizer/    # Operation execution logic
+│   │   ├── transform/       # Model transformation (client-native ↔ Dataplane API)
 │   │   ├── types/           # Public types (Endpoint, SyncOptions, etc.)
 │   │   ├── config.go        # Public types (Endpoint, SyncOptions)
 │   │   ├── dataplane.go     # Public API (Client, Sync, DryRun, Diff)
@@ -145,6 +146,7 @@ haproxy-template-ic/
 - `pkg/dataplane` (validator.go): Pure validation functions implementing two-phase HAProxy configuration validation: Phase 1 (syntax validation using client-native parser) and Phase 2 (semantic validation using haproxy binary with -c flag). Writes auxiliary files to actual HAProxy directories (with mutex locking to prevent concurrent writes) to validate file references exactly as the Dataplane API does. Requires ValidationPaths parameter matching Dataplane API resource configuration. Provides ValidateConfiguration(mainConfig, auxFiles, paths) as pure function with no event dependencies.
 - `pkg/dataplane/comparator`: Performs fine-grained section-by-section comparison to generate minimal change operations
 - `pkg/dataplane/comparator/sections`: Section-specific comparison logic for all HAProxy config sections (global, defaults, frontends, backends, servers, ACLs, rules, binds, filters, checks, etc.)
+- `pkg/dataplane/transform`: Converts client-native parser models to Dataplane API models using JSON marshaling. Provides 35+ type-specific transformation functions (ToAPIACL, ToAPIBackend, ToAPIFrontend, etc.) that eliminate ~77 duplicate inline conversions previously scattered across comparator sections. Uses generic `transform[T]` function for nil-safe JSON-based type conversion. Performance: ~10µs per transformation, acceptable for reconciliation workflow.
 - `pkg/dataplane/discovery`: HAProxy endpoint discovery utilities for identifying dataplane API endpoints
 - `pkg/dataplane/synchronizer`: Executes operations with transaction management and retry logic
 - `pkg/dataplane/auxiliaryfiles`: Manages auxiliary files (general files, SSL certificates, map files) with 3-phase sync: pre-config (create/update), config sync, post-config (delete)

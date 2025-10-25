@@ -93,7 +93,9 @@ func New(
 
 	// Register custom filters
 	filters := map[string]templating.FilterFunc{
-		"get_path": pathResolver.GetPath,
+		"get_path":   pathResolver.GetPath,
+		"glob_match": templating.GlobMatch,
+		"b64decode":  templating.B64Decode,
 	}
 
 	// Pre-compile all templates with custom filters

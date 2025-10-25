@@ -4,13 +4,13 @@ package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // UpdateGlobalOperation represents updating the global section.
@@ -47,17 +47,10 @@ func (op *UpdateGlobalOperation) Execute(ctx context.Context, c *client.Dataplan
 		return fmt.Errorf("global section is nil")
 	}
 
-	apiClient := c.Client()
-
-	// Convert models.Global to dataplaneapi.Global using JSON marshaling
-	// This is necessary because they are incompatible types
-	var apiGlobal dataplaneapi.Global
-	data, err := json.Marshal(op.Global)
-	if err != nil {
-		return fmt.Errorf("failed to marshal global section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiGlobal); err != nil {
-		return fmt.Errorf("failed to unmarshal global section: %w", err)
+	// Convert models.Global to dataplaneapi.Global using transform package
+	apiGlobal := transform.ToAPIGlobal(op.Global)
+	if apiGlobal == nil {
+		return fmt.Errorf("failed to transform global section")
 	}
 
 	// Prepare parameters with transaction ID
@@ -66,7 +59,7 @@ func (op *UpdateGlobalOperation) Execute(ctx context.Context, c *client.Dataplan
 	}
 
 	// Call the ReplaceGlobal API
-	resp, err := apiClient.ReplaceGlobal(ctx, params, apiGlobal)
+	resp, err := c.Client().ReplaceGlobal(ctx, params, *apiGlobal)
 	if err != nil {
 		return fmt.Errorf("failed to update global section: %w", err)
 	}

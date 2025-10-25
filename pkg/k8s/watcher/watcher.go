@@ -115,6 +115,7 @@ func New(cfg types.WatcherConfig, k8sClient *client.Client, logger *slog.Logger)
 			GVR:       cfg.GVR,
 			Namespace: cfg.Namespace,
 			Indexer:   idx,
+			Logger:    logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cached store: %w", err)

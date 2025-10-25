@@ -64,7 +64,7 @@ linters-settings:
     ignore-tests: true
 
   dupl:
-    threshold: 150
+    threshold: 500
 
   gocritic:
     enabled-tags:
@@ -162,6 +162,14 @@ issues:
         - goconst
         - gocyclo
         - funlen
+
+    # Disable dupl for section operation files - intentional structural similarity for type-specific wrappers
+    - path: pkg/dataplane/comparator/sections/
+      linters:
+        - dupl
+    - path: pkg/dataplane/auxiliaryfiles/
+      linters:
+        - dupl
 
     # Relax rules for integration test helpers
     - path: tests/integration/

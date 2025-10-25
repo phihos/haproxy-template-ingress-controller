@@ -430,6 +430,128 @@ func TestValidationError_Unwrap(t *testing.T) {
 	}
 }
 
+// TestValidateConfiguration_BackendHTTPRequestRuleInvalidAuthRealm tests validation of
+// backend HTTP request rules with invalid auth_realm patterns (e.g., containing spaces).
+// This test demonstrates the bug where backend rules are not validated against the OpenAPI schema.
+func TestValidateConfiguration_BackendHTTPRequestRuleInvalidAuthRealm(t *testing.T) {
+	// Config with backend http-request auth rule having auth_realm with spaces
+	// OpenAPI spec pattern for auth_realm is: ^[^\s]+" (no spaces allowed)
+	config := `
+global
+    daemon
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+userlist auth_users
+    user admin password $5$rounds=10000$saltysalt$hashedpassword
+
+frontend http-in
+    bind :80
+    default_backend protected
+
+backend protected
+    http-request auth realm "Echo-Server Protected" unless { http_auth(auth_users) }
+    server s1 127.0.0.1:8080
+`
+
+	auxFiles := &AuxiliaryFiles{}
+
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
+	if err == nil {
+		t.Fatal("ValidateConfiguration() should fail on backend http-request rule with invalid auth_realm (contains spaces)")
+	}
+
+	// Verify it's a validation error
+	valErr, ok := err.(*ValidationError)
+	if !ok {
+		t.Fatalf("Expected *ValidationError, got %T", err)
+	}
+
+	// Verify it's a schema phase error
+	if valErr.Phase != "schema" {
+		t.Errorf("Expected phase='schema', got: %q", valErr.Phase)
+	}
+
+	// Verify error message mentions auth_realm and the backend
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "auth_realm") {
+		t.Errorf("Expected error message to contain 'auth_realm', got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "backend") && !strings.Contains(errMsg, "protected") {
+		t.Errorf("Expected error message to mention backend 'protected', got: %s", errMsg)
+	}
+}
+
+// TestValidateConfiguration_FrontendTCPRequestRuleValidation tests comprehensive validation
+// of frontend TCP request rules to ensure all rule types are validated.
+func TestValidateConfiguration_FrontendTCPRequestRuleValidation(t *testing.T) {
+	// Valid config with TCP request rule - should pass
+	config := `
+global
+    daemon
+
+defaults
+    mode tcp
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend tcp-in
+    bind :3306
+    mode tcp
+    tcp-request connection accept
+    default_backend mysql-servers
+
+backend mysql-servers
+    mode tcp
+    server mysql1 127.0.0.1:3307
+`
+
+	auxFiles := &AuxiliaryFiles{}
+
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
+	if err != nil {
+		t.Fatalf("ValidateConfiguration() should pass on valid TCP request rules: %v", err)
+	}
+}
+
+// TestValidateConfiguration_BackendServerTemplateValidation tests validation
+// of server templates in backends.
+func TestValidateConfiguration_BackendServerTemplateValidation(t *testing.T) {
+	// Valid config with server template - should pass
+	config := `
+global
+    daemon
+
+defaults
+    mode http
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+resolvers mydns
+    nameserver dns1 127.0.0.1:53
+
+frontend http-in
+    bind :80
+    default_backend dynamic-servers
+
+backend dynamic-servers
+    server-template srv 1-3 example.com:8080 check resolvers mydns
+`
+
+	auxFiles := &AuxiliaryFiles{}
+
+	err := ValidateConfiguration(config, auxFiles, testValidationPaths(t))
+	if err != nil {
+		t.Fatalf("ValidateConfiguration() should pass on valid server templates: %v", err)
+	}
+}
+
 // TestValidationError_Error tests error message formatting.
 func TestValidationError_Error(t *testing.T) {
 	tests := []struct {

@@ -1,14 +1,13 @@
 package comparator
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/haproxytech/client-native/v6/models"
 
-	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/comparator/sections"
 	"haproxy-template-ic/pkg/dataplane/parser"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -231,8 +230,6 @@ func (c *Comparator) Compare(current, desired *parser.StructuredConfig) (*Config
 //
 // This is a focused implementation that handles the most common use case:
 // backend and server management. It demonstrates the pattern for other sections.
-//
-//nolint:dupl // Similar pattern to compareFrontends but handles different type (Backend vs Frontend)
 func (c *Comparator) compareBackends(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
 	var operations []Operation
 
@@ -550,8 +547,6 @@ func backendsEqualWithoutNestedCollections(b1, b2 *models.Backend) bool {
 }
 
 // compareFrontends compares frontend configurations between current and desired.
-//
-//nolint:dupl // Similar pattern to compareBackends but handles different type (Frontend vs Backend)
 func (c *Comparator) compareFrontends(current, desired *parser.StructuredConfig, summary *DiffSummary) []Operation {
 	var operations []Operation
 
@@ -1041,8 +1036,6 @@ func (c *Comparator) updateTCPRequestRuleOperation(parentType, parentName string
 
 // compareTCPResponseRules compares TCP response rule configurations within a backend.
 // Rules are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to other backend-only rule comparison functions (StickRules, HTTPAfterResponseRules, etc.) - each handles different rule types
 func (c *Comparator) compareTCPResponseRules(parentName string, currentRules, desiredRules models.TCPResponseRules) []Operation {
 	var operations []Operation
 
@@ -1136,8 +1129,6 @@ func (c *Comparator) updateLogTargetOperation(parentType, parentName string, cur
 
 // Stick rules are compared by position since they don't have unique identifiers.
 // Backend-only (frontends do not support stick rules).
-//
-//nolint:dupl // Similar pattern to other backend-only rule comparison functions - each handles different rule types
 func (c *Comparator) compareStickRules(backendName string, currentRules, desiredRules models.StickRules) []Operation {
 	var operations []Operation
 
@@ -1177,8 +1168,6 @@ func (c *Comparator) compareStickRules(backendName string, currentRules, desired
 
 // Rules are compared by position since they don't have unique identifiers.
 // Backend-only (frontends do not support HTTP after response rules).
-//
-//nolint:dupl // Similar pattern to other backend-only rule comparison functions - each handles different rule types
 func (c *Comparator) compareHTTPAfterResponseRules(backendName string, currentRules, desiredRules models.HTTPAfterResponseRules) []Operation {
 	var operations []Operation
 
@@ -1216,8 +1205,6 @@ func (c *Comparator) compareHTTPAfterResponseRules(backendName string, currentRu
 
 // compareBackendSwitchingRules compares backend switching rule configurations within a frontend.
 // Rules are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to other switching/check rule comparison functions - each handles different types
 func (c *Comparator) compareBackendSwitchingRules(frontendName string, currentRules, desiredRules models.BackendSwitchingRules) []Operation {
 	var operations []Operation
 
@@ -1255,8 +1242,6 @@ func (c *Comparator) compareBackendSwitchingRules(frontendName string, currentRu
 
 // compareServerSwitchingRules compares server switching rule configurations within a backend.
 // Rules are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to other switching/check rule comparison functions - each handles different types
 func (c *Comparator) compareServerSwitchingRules(backendName string, currentRules, desiredRules models.ServerSwitchingRules) []Operation {
 	var operations []Operation
 
@@ -1302,7 +1287,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 		if _, exists := currentBinds[name]; !exists {
 			bind := desiredBinds[name]
 			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := convertToAPIBind(&bind)
+			apiBind := transform.ToAPIBind(&bind)
 			operations = append(operations, sections.NewCreateBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
@@ -1312,7 +1297,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 		if _, exists := desiredBinds[name]; !exists {
 			bind := currentBinds[name]
 			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := convertToAPIBind(&bind)
+			apiBind := transform.ToAPIBind(&bind)
 			operations = append(operations, sections.NewDeleteBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
@@ -1327,33 +1312,12 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 		// Compare using built-in Equal() method
 		if !currentBind.Equal(desiredBind) {
 			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := convertToAPIBind(&desiredBind)
+			apiBind := transform.ToAPIBind(&desiredBind)
 			operations = append(operations, sections.NewUpdateBindFrontendOperation(frontendName, name, apiBind))
 		}
 	}
 
 	return operations
-}
-
-// convertToAPIBind converts a models.Bind to dataplaneapi.Bind using JSON marshaling.
-func convertToAPIBind(modelBind *models.Bind) *dataplaneapi.Bind {
-	if modelBind == nil {
-		return nil
-	}
-
-	data, err := json.Marshal(modelBind)
-	if err != nil {
-		// This should never happen with valid models.Bind
-		return nil
-	}
-
-	var apiBind dataplaneapi.Bind
-	if err := json.Unmarshal(data, &apiBind); err != nil {
-		// This should never happen with valid JSON
-		return nil
-	}
-
-	return &apiBind
 }
 
 // compareFilters compares filter configurations within a frontend or backend.
@@ -1412,8 +1376,6 @@ func (c *Comparator) updateFilterOperation(parentType, parentName string, curren
 
 // compareHTTPChecks compares HTTP check configurations within a backend.
 // HTTP checks are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to compareTCPChecks - both handle check configurations with same logic but different types
 func (c *Comparator) compareHTTPChecks(backendName string, currentChecks, desiredChecks models.HTTPChecks) []Operation {
 	var operations []Operation
 
@@ -1451,8 +1413,6 @@ func (c *Comparator) compareHTTPChecks(backendName string, currentChecks, desire
 
 // compareTCPChecks compares TCP check configurations within a backend.
 // TCP checks are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to compareHTTPChecks and compareCaptures - all handle positioned list comparisons with same logic but different types
 func (c *Comparator) compareTCPChecks(backendName string, currentChecks, desiredChecks models.TCPChecks) []Operation {
 	var operations []Operation
 
@@ -1490,8 +1450,6 @@ func (c *Comparator) compareTCPChecks(backendName string, currentChecks, desired
 
 // compareCaptures compares capture configurations within a frontend.
 // Captures are compared by position since they don't have unique identifiers.
-//
-//nolint:dupl // Similar pattern to HTTP/TCP checks and other positioned rule comparisons - each handles different types
 func (c *Comparator) compareCaptures(frontendName string, currentCaptures, desiredCaptures models.Captures) []Operation {
 	var operations []Operation
 
@@ -1575,7 +1533,6 @@ func serverTemplatesEqual(t1, t2 *models.ServerTemplate) bool {
 
 // compareHTTPErrors compares http-errors sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (Resolvers, Mailers, Peers, etc.) - each handles different types
 func (c *Comparator) compareHTTPErrors(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -1629,8 +1586,6 @@ func httpErrorsEqual(h1, h2 *models.HTTPErrorsSection) bool {
 }
 
 // compareResolvers compares resolver sections between current and desired configurations.
-//
-//nolint:dupl // Similar pattern to compareMailers/comparePeers - each handles different section types
 func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig) []Operation {
 	operations := make([]Operation, 0, len(desired.Resolvers))
 
@@ -1736,8 +1691,6 @@ func nameserversEqual(n1, n2 *models.Nameserver) bool {
 }
 
 // compareMailers compares mailers sections between current and desired configurations.
-//
-//nolint:dupl // Similar pattern to compareResolvers/comparePeers - each handles different section types
 func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) []Operation {
 	operations := make([]Operation, 0, len(desired.Mailers))
 
@@ -1843,8 +1796,6 @@ func mailerEntriesEqual(e1, e2 *models.MailerEntry) bool {
 }
 
 // comparePeers compares peer sections between current and desired configurations.
-//
-//nolint:dupl // Similar pattern to compareResolvers/compareMailers - each handles different section types
 func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []Operation {
 	operations := make([]Operation, 0, len(desired.Peers))
 
@@ -2003,7 +1954,6 @@ func cacheEqual(c1, c2 *models.Cache) bool {
 
 // compareRings compares ring sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) compareRings(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -2057,60 +2007,154 @@ func ringEqual(r1, r2 *models.Ring) bool {
 
 // compareUserlists compares userlist sections between current and desired configurations.
 func (c *Comparator) compareUserlists(current, desired *parser.StructuredConfig) []Operation {
+	currentMap := buildUserlistMap(current.Userlists)
+	desiredMap := buildUserlistMap(desired.Userlists)
+
 	var operations []Operation
+	operations = append(operations, c.findAddedUserlists(desiredMap, currentMap)...)
+	operations = append(operations, findDeletedUserlists(currentMap, desiredMap)...)
+	operations = append(operations, c.findModifiedUserlists(currentMap, desiredMap)...)
 
-	// Convert slices to maps for easier comparison by Name
-	currentMap := make(map[string]*models.Userlist)
-	for i := range current.Userlists {
-		userlist := current.Userlists[i]
+	return operations
+}
+
+// buildUserlistMap converts a userlist slice to a map for comparison.
+func buildUserlistMap(userlists []*models.Userlist) map[string]*models.Userlist {
+	userlistMap := make(map[string]*models.Userlist)
+	for i := range userlists {
+		userlist := userlists[i]
 		if userlist.Name != "" {
-			currentMap[userlist.Name] = userlist
+			userlistMap[userlist.Name] = userlist
 		}
 	}
+	return userlistMap
+}
 
-	desiredMap := make(map[string]*models.Userlist)
-	for i := range desired.Userlists {
-		userlist := desired.Userlists[i]
-		if userlist.Name != "" {
-			desiredMap[userlist.Name] = userlist
-		}
-	}
-
-	// Find added userlist sections
-	for name, userlist := range desiredMap {
-		if _, exists := currentMap[name]; !exists {
+// findAddedUserlists identifies userlist sections that need to be created.
+func (c *Comparator) findAddedUserlists(desired, current map[string]*models.Userlist) []Operation {
+	var operations []Operation
+	for name, userlist := range desired {
+		if _, exists := current[name]; !exists {
 			operations = append(operations, sections.NewCreateUserlistOperation(userlist))
+			// Explicitly create each user (Dataplane API may not persist users from request body)
+			for _, user := range userlist.Users {
+				userCopy := user
+				operations = append(operations, sections.NewCreateUserOperation(name, &userCopy))
+			}
 		}
 	}
+	return operations
+}
 
-	// Find deleted userlist sections
-	for name, userlist := range currentMap {
-		if _, exists := desiredMap[name]; !exists {
+// findDeletedUserlists identifies userlist sections that need to be removed.
+func findDeletedUserlists(current, desired map[string]*models.Userlist) []Operation {
+	var operations []Operation
+	for name, userlist := range current {
+		if _, exists := desired[name]; !exists {
 			operations = append(operations, sections.NewDeleteUserlistOperation(userlist))
 		}
 	}
+	return operations
+}
 
-	// Find modified userlist sections
-	// Note: UserList API doesn't support updates, so we delete and recreate
-	for name, desiredUserlist := range desiredMap {
-		if currentUserlist, exists := currentMap[name]; exists {
-			if !userlistEqual(currentUserlist, desiredUserlist) {
-				operations = append(operations, sections.NewDeleteUserlistOperation(currentUserlist), sections.NewCreateUserlistOperation(desiredUserlist))
-			}
+// findModifiedUserlists identifies userlist sections that have changed.
+func (c *Comparator) findModifiedUserlists(current, desired map[string]*models.Userlist) []Operation {
+	var operations []Operation
+	for name, desiredUserlist := range desired {
+		currentUserlist, exists := current[name]
+		if !exists {
+			continue
+		}
+
+		if userlistMetadataChanged(currentUserlist, desiredUserlist) {
+			// Recreate entire userlist if metadata changed
+			operations = append(operations,
+				sections.NewDeleteUserlistOperation(currentUserlist),
+				sections.NewCreateUserlistOperation(desiredUserlist))
+		} else {
+			// Compare users for fine-grained operations
+			userOps := c.compareUserlistUsers(name, currentUserlist, desiredUserlist)
+			operations = append(operations, userOps...)
+		}
+	}
+	return operations
+}
+
+// userlistMetadataChanged checks if userlist metadata (excluding users and groups) has changed.
+func userlistMetadataChanged(current, desired *models.Userlist) bool {
+	// Compare metadata fields (currently only Name is in UserlistBase)
+	// Users and Groups are compared separately for fine-grained operations
+	// For now, we only check if there are other structural changes
+	// If groups are present and different, that requires recreating the userlist
+	if !groupsEqual(current.Groups, desired.Groups) {
+		return true
+	}
+
+	return false
+}
+
+// groupsEqual compares two group maps for equality.
+func groupsEqual(g1, g2 map[string]models.Group) bool {
+	if len(g1) != len(g2) {
+		return false
+	}
+
+	for name, group1 := range g1 {
+		group2, exists := g2[name]
+		if !exists {
+			return false
+		}
+		if !group1.Equal(group2) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// compareUserlistUsers compares users within a userlist and generates fine-grained user operations.
+func (c *Comparator) compareUserlistUsers(userlistName string, current, desired *models.Userlist) []Operation {
+	var operations []Operation
+
+	// Get user maps (they are not pointers in client-native models)
+	currentUsers := current.Users
+	desiredUsers := desired.Users
+
+	// Find added users
+	for username, user := range desiredUsers {
+		if _, exists := currentUsers[username]; !exists {
+			userCopy := user
+			operations = append(operations, sections.NewCreateUserOperation(userlistName, &userCopy))
+		}
+	}
+
+	// Find deleted users
+	for username, user := range currentUsers {
+		if _, exists := desiredUsers[username]; !exists {
+			userCopy := user
+			operations = append(operations, sections.NewDeleteUserOperation(userlistName, &userCopy))
+		}
+	}
+
+	// Find modified users
+	for username, desiredUser := range desiredUsers {
+		currentUser, exists := currentUsers[username]
+		if !exists {
+			continue
+		}
+
+		// Compare user attributes (password, groups, etc.)
+		if !currentUser.Equal(desiredUser) {
+			userCopy := desiredUser
+			operations = append(operations, sections.NewReplaceUserOperation(userlistName, &userCopy))
 		}
 	}
 
 	return operations
 }
 
-// userlistEqual compares two userlist sections for equality.
-func userlistEqual(u1, u2 *models.Userlist) bool {
-	return u1.Equal(*u2)
-}
-
 // comparePrograms compares program sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) comparePrograms(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -2164,7 +2208,6 @@ func programEqual(p1, p2 *models.Program) bool {
 
 // compareLogForwards compares log-forward sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) compareLogForwards(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -2218,7 +2261,6 @@ func logForwardEqual(l1, l2 *models.LogForward) bool {
 
 // compareFCGIApps compares fcgi-app sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) compareFCGIApps(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 
@@ -2272,7 +2314,6 @@ func fcgiAppEqual(f1, f2 *models.FCGIApp) bool {
 
 // compareCrtStores compares crt-store sections between current and desired configurations.
 
-//nolint:dupl // Similar pattern to other section comparison functions (HTTPErrors, Resolvers, Mailers, etc.) - each handles different types
 func (c *Comparator) compareCrtStores(current, desired *parser.StructuredConfig) []Operation {
 	var operations []Operation
 

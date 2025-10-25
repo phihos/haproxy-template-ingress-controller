@@ -153,7 +153,10 @@ spec:
                   reload_strategy: custom
               log_targets:
                 - log_to: stdout
-                  log_level: info
+                  log_level: trace
+                  log_types:
+                  - access
+                  - app
               EOF
 
               # Start Dataplane API

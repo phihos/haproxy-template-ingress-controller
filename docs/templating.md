@@ -122,7 +122,7 @@ SSL certificates (`ssl_certificates`) generate SSL/TLS certificate files from Ku
 ssl_certificates:
   example-com.pem:
     template: |
-      {%- for secret in resources.secrets.Get("default", "kubernetes.io/tls") %}
+      {%- for secret in resources.secrets.Fetch("default", "kubernetes.io/tls") %}
       {%- if secret.metadata.name == "example-com-tls" %}
       {{ secret.data.tls_crt | b64decode }}
       {{ secret.data.tls_key | b64decode }}
@@ -152,7 +152,7 @@ template_snippets:
   backend-servers:
     name: backend-servers
     template: |
-      {%- for endpoint_slice in resources.endpoints.Get(service_name) %}
+      {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
       {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
       {%- for address in (endpoint.addresses | default([])) %}
       server {{ endpoint.targetRef.name }} {{ address }}:{{ port }} check
@@ -263,6 +263,50 @@ bind *:443 ssl crt {{ cert_name | get_path("cert") }}
 
 The filter uses the paths configured in `dataplane.maps_dir`, `dataplane.ssl_certs_dir`, and `dataplane.general_storage_dir` from your controller configuration.
 
+**Custom filter - glob_match:**
+
+The `glob_match` filter filters lists of strings using glob patterns with `*` (match any characters) and `?` (match single character) wildcards.
+
+```jinja2
+{# Filter template snippet names by pattern #}
+{% set backend_snippets = template_snippets | glob_match("backend-annotation-*") %}
+{% for snippet_name in backend_snippets %}
+  {% include snippet_name %}
+{% endfor %}
+
+{# Filter resource names #}
+{% set prod_ingresses = resources.ingresses.List() | map(attribute='metadata.name') | glob_match("prod-*") %}
+```
+
+**Arguments:**
+- **input** (required): List of strings to filter
+- **pattern** (required): Glob pattern string
+
+**Returns:** List of strings matching the pattern
+
+**Custom filter - b64decode:**
+
+The `b64decode` filter decodes base64-encoded strings. This is essential for accessing Kubernetes Secret data, as Kubernetes automatically base64-encodes all secret values.
+
+```jinja2
+{# Decode secret data #}
+{% set secret = resources.secrets.GetSingle("default", "my-secret") %}
+{% if secret %}
+  password: {{ secret.data.password | b64decode }}
+{% endif %}
+
+{# Decode credentials for HAProxy userlist #}
+userlist auth_users
+{% for username in secret.data %}
+  user {{ username }} password {{ secret.data[username] | b64decode }}
+{% endfor %}
+```
+
+**Arguments:**
+- **input** (required): Base64-encoded string
+
+**Returns:** Decoded plaintext string
+
 For the complete list of built-in filters, see [Gonja filters](https://github.com/nikolalohinski/gonja#filters).
 
 ### Functions
@@ -335,13 +379,13 @@ watched_resources:
 
 ```jinja2
 {# Get specific ingress by namespace and name #}
-{% for ingress in resources.ingresses.Get("default", "my-ingress") %}
+{% for ingress in resources.ingresses.Fetch("default", "my-ingress") %}
   {# Usually returns 0 or 1 items #}
 {% endfor %}
 
 {# Get all endpoint slices for a service #}
 {% set service_name = path.backend.service.name %}
-{% for endpoint_slice in resources.endpoints.Get(service_name) %}
+{% for endpoint_slice in resources.endpoints.Fetch(service_name) %}
   {# Returns all endpoint slices labeled with this service name #}
 {% endfor %}
 ```
@@ -377,6 +421,114 @@ index_by: ["metadata.namespace", "type"]
 > [!TIP]
 > Escape dots in JSONPath expressions for labels: `kubernetes\\.io/service-name`
 
+## Authentication Annotations
+
+The controller provides built-in support for HAProxy basic authentication through Ingress annotations. When you add authentication annotations to an Ingress, the controller automatically generates HAProxy userlist sections and configures `http-request auth` directives.
+
+### Basic Authentication
+
+Use these annotations on Ingress resources to enable HTTP basic authentication:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: protected-app
+  annotations:
+    haproxy.org/auth-type: "basic-auth"
+    haproxy.org/auth-secret: "my-auth-secret"
+    haproxy.org/auth-realm: "Protected Application"
+spec:
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-service
+                port:
+                  number: 80
+```
+
+**Annotations:**
+- `haproxy.org/auth-type`: Authentication type (currently only `"basic-auth"` is supported)
+- `haproxy.org/auth-secret`: Name of the Kubernetes Secret containing credentials (format: `"secret-name"` or `"namespace/secret-name"`)
+- `haproxy.org/auth-realm`: HTTP authentication realm displayed to users (optional, defaults to `"Restricted Area"`)
+
+### Creating Authentication Secrets
+
+Secrets must contain username-password pairs where values are **base64-encoded crypt(3) SHA-512 password hashes**.
+
+**Generate password hashes:**
+
+```bash
+# Generate SHA-512 hash and encode for Kubernetes
+HASH=$(openssl passwd -6 mypassword)
+kubectl create secret generic my-auth-secret \
+  --from-literal=admin=$(echo -n "$HASH" | base64 -w0) \
+  --from-literal=user=$(echo -n "$HASH" | base64 -w0)
+```
+
+**Secret structure:**
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-auth-secret
+type: Opaque
+data:
+  # Each key is a username, value is base64-encoded password hash
+  admin: JDYkMVd3c2YxNmprcDBkMVBpTyRkS3FHUTF0SW0uOGF1VlJIcVA3dVcuMVV5dVNtZ3YveEc3dEFiOXdZNzc1REw3ZGE0N0hIeVB4ZllDS1BMTktZclJvMHRNQWQyQk1YUHBDd2Z5ZW03MA==
+  user: JDYkbkdxOHJ1T2kyd3l4MUtyZyQ1a2d1azEzb2tKWmpzZ2Z2c3JqdmkvOVoxQjZIbDRUcGVvdkpzb2lQeHA2eGRKWUpha21wUmIwSUVHb1ZUSC8zRzZrLmRMRzBuVUNMWEZnMEhTRTJ5MA==
+```
+
+### Secret Sharing
+
+Multiple Ingress resources can reference the same authentication secret. The controller automatically deduplicates userlist generation, so the HAProxy userlist is created only once regardless of how many Ingresses use it.
+
+```yaml
+# First ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app1
+  annotations:
+    haproxy.org/auth-type: "basic-auth"
+    haproxy.org/auth-secret: "shared-auth"  # Shared secret
+    haproxy.org/auth-realm: "App 1"
+# ...
+
+---
+# Second ingress using same secret
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app2
+  annotations:
+    haproxy.org/auth-type: "basic-auth"
+    haproxy.org/auth-secret: "shared-auth"  # Same secret
+    haproxy.org/auth-realm: "App 2"
+# ...
+```
+
+### On-Demand Secret Access
+
+Authentication secrets are fetched on-demand during template rendering. You must configure the secrets store with `store: on-demand` in your `watched_resources`:
+
+```yaml
+watched_resources:
+  secrets:
+    api_version: v1
+    kind: Secret
+    store: on-demand
+    index_by: ["metadata.namespace", "metadata.name"]
+```
+
+This allows the controller to fetch only the secrets referenced by Ingress annotations rather than watching all secrets in the cluster.
+
 ## Tips & Tricks
 
 These patterns solve common challenges when templating HAProxy configurations.
@@ -394,7 +546,7 @@ These patterns solve common challenges when templating HAProxy configurations.
 
 {# Collect active endpoints #}
 {%- set ns = namespace(active_endpoints=[]) %}
-{%- for endpoint_slice in resources.endpoints.Get(service_name) %}
+{%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
   {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
     {%- for address in (endpoint.addresses | default([])) %}
       {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint.targetRef.name, 'address': address, 'port': port}] %}
@@ -451,7 +603,7 @@ You can implement automatic slot doubling when all slots are filled:
   {# Step 3: Look up endpoint slices for this service #}
   backend ing_{{ ingress.metadata.name }}_{{ service_name }}
       balance roundrobin
-      {%- for endpoint_slice in resources.endpoints.Get(service_name) %}
+      {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
       {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
       {%- for address in (endpoint.addresses | default([])) %}
       server {{ endpoint.targetRef.name }} {{ address }}:{{ port }} check
@@ -473,7 +625,7 @@ You can implement automatic slot doubling when all slots are filled:
 {% for service in resources.services.List() %}
   {% set service_name = service.metadata.name %}
   {# Look up endpoints #}
-  {% for endpoint_slice in resources.endpoints.Get(service_name) %}
+  {% for endpoint_slice in resources.endpoints.Fetch(service_name) %}
     {# Process endpoints #}
   {% endfor %}
 {% endfor %}
@@ -487,7 +639,7 @@ You can implement automatic slot doubling when all slots are filled:
       {% set secret_name = tls.secretName %}
       {% set namespace = ingress.metadata.namespace %}
       {# Look up TLS secret #}
-      {% for secret in resources.secrets.Get(namespace, secret_name) %}
+      {% for secret in resources.secrets.Fetch(namespace, secret_name) %}
         {# Use cert data: secret.data.tls_crt | b64decode #}
       {% endfor %}
     {% endfor %}
@@ -555,7 +707,7 @@ Jinja2/Gonja scoping rules prevent modifying variables inside loops. Use `namesp
 {% set ns = namespace(active_endpoints=[]) %}
 
 {# Append items inside loops #}
-{% for endpoint_slice in resources.endpoints.Get(service_name) %}
+{% for endpoint_slice in resources.endpoints.Fetch(service_name) %}
   {% for endpoint in (endpoint_slice.endpoints | default([])) %}
     {% for address in (endpoint.addresses | default([])) %}
       {% set ns.active_endpoints = ns.active_endpoints + [{'address': address, 'port': port}] %}
@@ -762,7 +914,7 @@ template_snippets:
 
       {# Collect active endpoints using indexed lookup #}
       {%- set ns = namespace(active_endpoints=[]) %}
-      {%- for endpoint_slice in resources.endpoints.Get(service_name) %}
+      {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
         {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
           {%- for address in (endpoint.addresses | default([])) %}
             {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint.targetRef.name, 'address': address, 'port': port}] %}

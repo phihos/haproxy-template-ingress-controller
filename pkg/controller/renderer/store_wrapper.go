@@ -87,11 +87,12 @@ func (w *StoreWrapper) List() []interface{} {
 	return unwrapped
 }
 
-// Get performs O(1) indexed lookup using the provided keys.
+// Fetch performs O(1) indexed lookup using the provided keys.
 //
-// This method enables efficient lookups in templates:
+// This method enables efficient lookups in templates and supports non-unique index keys
+// by returning all resources matching the provided keys:
 //
-//	{% for endpoint_slice in resources.endpoints.Get(service_name) %}
+//	{% for endpoint_slice in resources.endpoints.Fetch(service_name) %}
 //	  {{ endpoint_slice.metadata.name }}
 //	{% endfor %}
 //
@@ -102,20 +103,22 @@ func (w *StoreWrapper) List() []interface{} {
 //
 // Then you can look them up with:
 //
-//	resources.endpoints.Get("my-service")
+//	resources.endpoints.Fetch("my-service")
+//
+// This will return ALL EndpointSlices for that service (typically multiple).
 //
 // If an error occurs, it's logged and an empty slice is returned.
-func (w *StoreWrapper) Get(keys ...string) []interface{} {
+func (w *StoreWrapper) Fetch(keys ...string) []interface{} {
 	items, err := w.store.Get(keys...)
 	if err != nil {
-		w.logger.Warn("failed to get indexed resources from store",
+		w.logger.Warn("failed to fetch indexed resources from store",
 			"resource_type", w.resourceType,
 			"keys", keys,
 			"error", err)
 		return []interface{}{}
 	}
 
-	w.logger.Info("store get called",
+	w.logger.Info("store fetch called",
 		"resource_type", w.resourceType,
 		"keys", keys,
 		"found_count", len(items))
@@ -127,6 +130,54 @@ func (w *StoreWrapper) Get(keys ...string) []interface{} {
 	}
 
 	return unwrapped
+}
+
+// GetSingle performs O(1) indexed lookup and expects exactly one matching resource.
+//
+// This method is useful when you know the index keys uniquely identify a resource:
+//
+//	{% set ingress = resources.ingresses.GetSingle("default", "my-ingress") %}
+//	{% if ingress %}
+//	  {{ ingress.metadata.name }}
+//	{% endif %}
+//
+// Returns:
+//   - nil if no resources match (this is NOT an error - allows templates to check existence)
+//   - The single matching resource if exactly one matches
+//   - nil + logs error if multiple resources match (ambiguous lookup)
+//
+// If an error occurs during the store operation, it's logged and nil is returned.
+func (w *StoreWrapper) GetSingle(keys ...string) interface{} {
+	items, err := w.store.Get(keys...)
+	if err != nil {
+		w.logger.Warn("failed to get single resource from store",
+			"resource_type", w.resourceType,
+			"keys", keys,
+			"error", err)
+		return nil
+	}
+
+	w.logger.Info("store GetSingle called",
+		"resource_type", w.resourceType,
+		"keys", keys,
+		"found_count", len(items))
+
+	if len(items) == 0 {
+		// No resources found - this is valid, not an error
+		return nil
+	}
+
+	if len(items) > 1 {
+		// Ambiguous lookup - multiple resources match
+		w.logger.Error("GetSingle found multiple resources (ambiguous lookup)",
+			"resource_type", w.resourceType,
+			"keys", keys,
+			"count", len(items))
+		return nil
+	}
+
+	// Exactly one resource found
+	return unwrapUnstructured(items[0])
 }
 
 // unwrapUnstructured extracts the underlying data map from unstructured.Unstructured.

@@ -234,10 +234,13 @@ type WatcherConfig struct {
 	// CacheTTL sets the cache duration for StoreTypeCached.
 	// Ignored for other store types.
 	//
-	// Cache entries are invalidated on resource updates, so this primarily
-	// affects deleted resources and controls memory pressure.
+	// Cache entries are invalidated on resource updates. The TTL is reset
+	// on every Get() access, implementing LRU-like behavior based on access time.
+	// This ensures frequently accessed resources remain cached even if the original
+	// TTL would have expired.
 	//
-	// Default: 2m10s (slightly more than 2 reconciliation cycles)
+	// Default: 2.2x drift prevention interval (allows one rendering cycle to fail
+	// while still keeping resources cached)
 	CacheTTL time.Duration
 
 	// DebounceInterval sets the minimum time between OnChange callback invocations.
@@ -283,6 +286,9 @@ type WatcherConfig struct {
 // SetDefaults applies default values to unset configuration fields.
 func (c *WatcherConfig) SetDefaults() {
 	if c.CacheTTL == 0 {
+		// Default TTL: 2.2x the default drift prevention interval (60s)
+		// This results in ~132s, allowing one rendering cycle to fail
+		// while still keeping resources cached
 		c.CacheTTL = 2*time.Minute + 10*time.Second
 	}
 	if c.DebounceInterval == 0 {

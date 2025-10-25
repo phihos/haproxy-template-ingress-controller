@@ -31,6 +31,7 @@ pkg/dataplane/
 │   └── sections/        # 30+ section-specific comparators
 ├── parser/              # Config parsing using client-native
 ├── synchronizer/        # Operation execution with retries
+├── transform/           # Model transformation (client-native ↔ Dataplane API)
 ├── types/               # Public types (Endpoint, SyncOptions)
 ├── config.go            # Public configuration types
 ├── dataplane.go         # Public API (Sync, DryRun, Diff)
@@ -234,6 +235,80 @@ func (c *MyCustomSectionComparator) Compare(current, desired *models.MyCustomSec
 // Register in comparator/comparator.go
 comparators["mycustomsection"] = &MyCustomSectionComparator{}
 ```
+
+### transform/ - Model Transformation
+
+Converts client-native parser models to Dataplane API models using JSON marshaling:
+
+```go
+// Transform client-native model to API model
+import "haproxy-template-ic/pkg/dataplane/transform"
+
+// Client-native model from parser
+clientACL := &models.ACL{
+    ACLName:   "is_api",
+    Criterion: "path_beg",
+    Value:     "/api",
+}
+
+// Transform to Dataplane API model
+apiACL := transform.ToAPIACL(clientACL)
+
+// Now apiACL is *dataplaneapi.Acl, ready for API calls
+err := client.CreateACL(tx, apiACL)
+```
+
+**Why this package exists:**
+
+Before the transform package, every section comparator had inline conversions:
+
+```go
+// Old approach (duplicated 77 times)
+data, _ := json.Marshal(clientModel)
+var apiModel dataplaneapi.ACL
+json.Unmarshal(data, &apiModel)
+```
+
+Now we have centralized, tested transformations:
+
+```go
+// New approach
+apiModel := transform.ToAPIACL(clientModel)
+```
+
+**Design:**
+- Generic `transform[T]` function handles JSON marshaling/unmarshaling
+- 35+ type-specific wrapper functions for each HAProxy section
+- Nil-safe (returns nil for nil input)
+- Performance: ~10µs per transformation (acceptable for reconciliation)
+
+**When to modify:**
+- Adding support for new HAProxy configuration sections
+- Client-native or Dataplane API models change structure
+- Fixing transformation bugs
+
+**Usage in comparators:**
+
+```go
+// comparator/sections/backend.go
+func (c *BackendComparator) Compare(current, desired *models.Backend) []Operation {
+    // Transform to API models for comparison
+    currentAPI := transform.ToAPIBackend(current)
+    desiredAPI := transform.ToAPIBackend(desired)
+
+    // Compare and generate operations
+    if !reflect.DeepEqual(currentAPI, desiredAPI) {
+        return []Operation{{
+            Type:     OperationUpdate,
+            Resource: desiredAPI,
+        }}
+    }
+
+    return nil
+}
+```
+
+See `pkg/dataplane/transform/README.md` for complete API reference and `pkg/dataplane/transform/CLAUDE.md` for development context.
 
 ### synchronizer/ - Operation Execution
 

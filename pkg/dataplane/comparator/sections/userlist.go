@@ -1,15 +1,15 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityUserlist defines priority for userlist sections.
@@ -49,51 +49,23 @@ func (op *CreateUserlistOperation) Priority() int {
 
 // Execute creates the userlist section via the Dataplane API.
 func (op *CreateUserlistOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Userlist == nil {
-		return fmt.Errorf("userlist section is nil")
-	}
-	if op.Userlist.Name == "" {
-		return fmt.Errorf("userlist section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Userlist to dataplaneapi.Userlist using JSON marshaling
-	var apiUserlist dataplaneapi.Userlist
-	data, err := json.Marshal(op.Userlist)
-	if err != nil {
-		return fmt.Errorf("failed to marshal userlist section: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiUserlist); err != nil {
-		return fmt.Errorf("failed to unmarshal userlist section: %w", err)
-	}
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.CreateUserlistParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the CreateUserlist API
-	resp, err := apiClient.CreateUserlist(ctx, params, apiUserlist)
-	if err != nil {
-		return fmt.Errorf("failed to create userlist section '%s': %w", op.Userlist.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("userlist section creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateHelper(
+		ctx, transactionID, op.Userlist,
+		func(r *models.Userlist) string { return r.Name },
+		transform.ToAPIUserlist,
+		func(ctx context.Context, apiUserlist *dataplaneapi.Userlist, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.CreateUserlistParams { return &dataplaneapi.CreateUserlistParams{} },
+				func(p *dataplaneapi.CreateUserlistParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.CreateUserlistParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.CreateUserlistParams) (*http.Response, error) {
+					return c.Client().CreateUserlist(ctx, params, *apiUserlist)
+				},
+			)
+		},
+		"userlist section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -133,44 +105,23 @@ func (op *DeleteUserlistOperation) Priority() int {
 }
 
 // Execute deletes the userlist section via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other section operation Execute methods - each handles different API endpoints and contexts
 func (op *DeleteUserlistOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Userlist == nil {
-		return fmt.Errorf("userlist section is nil")
-	}
-	if op.Userlist.Name == "" {
-		return fmt.Errorf("userlist section name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID or version
-	params := &dataplaneapi.DeleteUserlistParams{}
-	if transactionID != "" {
-		params.TransactionId = &transactionID
-	} else {
-		v, err := c.GetVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-		version := int(v)
-		params.Version = &version
-	}
-
-	// Call the DeleteUserlist API
-	resp, err := apiClient.DeleteUserlist(ctx, op.Userlist.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete userlist section '%s': %w", op.Userlist.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("userlist section deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteHelper(
+		ctx, transactionID, op.Userlist,
+		func(r *models.Userlist) string { return r.Name },
+		func(ctx context.Context, name string, txID string) (*http.Response, error) {
+			return wrapAPICallWithVersionOrTransaction(
+				ctx, c, txID,
+				func() *dataplaneapi.DeleteUserlistParams { return &dataplaneapi.DeleteUserlistParams{} },
+				func(p *dataplaneapi.DeleteUserlistParams, tid *string) { p.TransactionId = tid },
+				func(p *dataplaneapi.DeleteUserlistParams, v *int) { p.Version = v },
+				func(ctx context.Context, params *dataplaneapi.DeleteUserlistParams) (*http.Response, error) {
+					return c.Client().DeleteUserlist(ctx, name, params)
+				},
+			)
+		},
+		"userlist section",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

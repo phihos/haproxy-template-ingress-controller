@@ -1,17 +1,17 @@
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 // Section operation files follow similar patterns - each implements type-specific HAProxy API wrappers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 const (
@@ -47,43 +47,18 @@ func (op *CreateFrontendOperation) Priority() int {
 
 // Execute creates the frontend via the Dataplane API.
 func (op *CreateFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Frontend == nil {
-		return fmt.Errorf("frontend is nil")
-	}
-	if op.Frontend.Name == "" {
-		return fmt.Errorf("frontend name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Frontend to dataplaneapi.Frontend using JSON marshaling
-	var apiFrontend dataplaneapi.Frontend
-	data, err := json.Marshal(op.Frontend)
-	if err != nil {
-		return fmt.Errorf("failed to marshal frontend: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFrontend); err != nil {
-		return fmt.Errorf("failed to unmarshal frontend: %w", err)
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.CreateFrontendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the CreateFrontend API
-	resp, err := apiClient.CreateFrontend(ctx, params, apiFrontend)
-	if err != nil {
-		return fmt.Errorf("failed to create frontend '%s': %w", op.Frontend.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("frontend creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateTransactionOnlyHelper(
+		ctx, transactionID, op.Frontend,
+		func(m *models.Frontend) string { return m.Name },
+		transform.ToAPIFrontend,
+		func(txID string) *dataplaneapi.CreateFrontendParams {
+			return &dataplaneapi.CreateFrontendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, params *dataplaneapi.CreateFrontendParams, apiModel dataplaneapi.Frontend) (*http.Response, error) {
+			return c.Client().CreateFrontend(ctx, params, apiModel)
+		},
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -124,33 +99,17 @@ func (op *DeleteFrontendOperation) Priority() int {
 
 // Execute deletes the frontend via the Dataplane API.
 func (op *DeleteFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Frontend == nil {
-		return fmt.Errorf("frontend is nil")
-	}
-	if op.Frontend.Name == "" {
-		return fmt.Errorf("frontend name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.DeleteFrontendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the DeleteFrontend API
-	resp, err := apiClient.DeleteFrontend(ctx, op.Frontend.Name, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete frontend '%s': %w", op.Frontend.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("frontend deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteTransactionOnlyHelper(
+		ctx, transactionID, op.Frontend,
+		func(m *models.Frontend) string { return m.Name },
+		func(txID string) *dataplaneapi.DeleteFrontendParams {
+			return &dataplaneapi.DeleteFrontendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, name string, params *dataplaneapi.DeleteFrontendParams) (*http.Response, error) {
+			return c.Client().DeleteFrontend(ctx, name, params)
+		},
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -191,43 +150,18 @@ func (op *UpdateFrontendOperation) Priority() int {
 
 // Execute updates the frontend via the Dataplane API.
 func (op *UpdateFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Frontend == nil {
-		return fmt.Errorf("frontend is nil")
-	}
-	if op.Frontend.Name == "" {
-		return fmt.Errorf("frontend name is empty")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Frontend to dataplaneapi.Frontend using JSON marshaling
-	var apiFrontend dataplaneapi.Frontend
-	data, err := json.Marshal(op.Frontend)
-	if err != nil {
-		return fmt.Errorf("failed to marshal frontend: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiFrontend); err != nil {
-		return fmt.Errorf("failed to unmarshal frontend: %w", err)
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.ReplaceFrontendParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the ReplaceFrontend API
-	resp, err := apiClient.ReplaceFrontend(ctx, op.Frontend.Name, params, apiFrontend)
-	if err != nil {
-		return fmt.Errorf("failed to update frontend '%s': %w", op.Frontend.Name, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("frontend update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeUpdateTransactionOnlyHelper(
+		ctx, transactionID, op.Frontend,
+		func(m *models.Frontend) string { return m.Name },
+		transform.ToAPIFrontend,
+		func(txID string) *dataplaneapi.ReplaceFrontendParams {
+			return &dataplaneapi.ReplaceFrontendParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, name string, params *dataplaneapi.ReplaceFrontendParams, apiModel dataplaneapi.Frontend) (*http.Response, error) {
+			return c.Client().ReplaceFrontend(ctx, name, params, apiModel)
+		},
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.

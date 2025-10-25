@@ -1,18 +1,17 @@
 // Package sections contains section-specific comparison logic and operations
 // for HAProxy configuration elements.
-//
-//nolint:dupl // Section operation files follow similar patterns - type-specific HAProxy API wrappers
 package sections
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/haproxytech/client-native/v6/models"
 
 	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // PriorityCapture defines the priority for capture operations.
@@ -54,43 +53,19 @@ func (op *CreateCaptureFrontendOperation) Priority() int {
 }
 
 // Execute creates the capture via the Dataplane API.
-//
-//nolint:dupl // Similar pattern to other operation Execute methods - each handles different API endpoints and contexts
 func (op *CreateCaptureFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Capture == nil {
-		return fmt.Errorf("capture is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Capture to dataplaneapi.Capture using JSON marshaling
-	var apiCapture dataplaneapi.Capture
-	data, err := json.Marshal(op.Capture)
-	if err != nil {
-		return fmt.Errorf("failed to marshal capture: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiCapture); err != nil {
-		return fmt.Errorf("failed to unmarshal capture: %w", err)
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.CreateDeclareCaptureParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the CreateDeclareCapture API
-	resp, err := apiClient.CreateDeclareCapture(ctx, op.FrontendName, op.Index, params, apiCapture)
-	if err != nil {
-		return fmt.Errorf("failed to create capture in frontend '%s': %w", op.FrontendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("capture creation failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeCreateIndexedRuleHelper(
+		ctx, transactionID, op.Capture, op.FrontendName, op.Index,
+		transform.ToAPICapture,
+		func(txID string) *dataplaneapi.CreateDeclareCaptureParams {
+			return &dataplaneapi.CreateDeclareCaptureParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.CreateDeclareCaptureParams, apiModel dataplaneapi.Capture) (*http.Response, error) {
+			return c.Client().CreateDeclareCapture(ctx, parent, idx, params, apiModel)
+		},
+		"capture",
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -135,26 +110,17 @@ func (op *DeleteCaptureFrontendOperation) Priority() int {
 
 // Execute deletes the capture via the Dataplane API.
 func (op *DeleteCaptureFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	apiClient := c.Client()
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.DeleteDeclareCaptureParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the DeleteDeclareCapture API
-	resp, err := apiClient.DeleteDeclareCapture(ctx, op.FrontendName, op.Index, params)
-	if err != nil {
-		return fmt.Errorf("failed to delete capture from frontend '%s': %w", op.FrontendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("capture deletion failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeDeleteIndexedRuleHelper(
+		ctx, transactionID, op.FrontendName, op.Index,
+		func(txID string) *dataplaneapi.DeleteDeclareCaptureParams {
+			return &dataplaneapi.DeleteDeclareCaptureParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.DeleteDeclareCaptureParams) (*http.Response, error) {
+			return c.Client().DeleteDeclareCapture(ctx, parent, idx, params)
+		},
+		"capture",
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
@@ -199,40 +165,18 @@ func (op *UpdateCaptureFrontendOperation) Priority() int {
 
 // Execute updates the capture via the Dataplane API.
 func (op *UpdateCaptureFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
-	if op.Capture == nil {
-		return fmt.Errorf("capture is nil")
-	}
-
-	apiClient := c.Client()
-
-	// Convert models.Capture to dataplaneapi.Capture using JSON marshaling
-	var apiCapture dataplaneapi.Capture
-	data, err := json.Marshal(op.Capture)
-	if err != nil {
-		return fmt.Errorf("failed to marshal capture: %w", err)
-	}
-	if err := json.Unmarshal(data, &apiCapture); err != nil {
-		return fmt.Errorf("failed to unmarshal capture: %w", err)
-	}
-
-	// Prepare parameters with transaction ID
-	params := &dataplaneapi.ReplaceDeclareCaptureParams{
-		TransactionId: &transactionID,
-	}
-
-	// Call the ReplaceDeclareCapture API
-	resp, err := apiClient.ReplaceDeclareCapture(ctx, op.FrontendName, op.Index, params, apiCapture)
-	if err != nil {
-		return fmt.Errorf("failed to update capture in frontend '%s': %w", op.FrontendName, err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("capture update failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return executeReplaceIndexedRuleHelper(
+		ctx, transactionID, op.Capture, op.FrontendName, op.Index,
+		transform.ToAPICapture,
+		func(txID string) *dataplaneapi.ReplaceDeclareCaptureParams {
+			return &dataplaneapi.ReplaceDeclareCaptureParams{TransactionId: &txID}
+		},
+		func(ctx context.Context, parent string, idx int, params *dataplaneapi.ReplaceDeclareCaptureParams, apiModel dataplaneapi.Capture) (*http.Response, error) {
+			return c.Client().ReplaceDeclareCapture(ctx, parent, idx, params, apiModel)
+		},
+		"capture",
+		"frontend",
+	)
 }
 
 // Describe returns a human-readable description of this operation.
