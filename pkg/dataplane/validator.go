@@ -703,7 +703,12 @@ func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths Valida
 
 // clearValidationDirectories removes all files from validation directories.
 // This ensures no pre-existing files interfere with validation.
+// It clears both the traditional validation directories (for absolute/simple paths)
+// and subdirectories in the config directory (for relative paths with subdirectories).
 func clearValidationDirectories(paths ValidationPaths) error {
+	configDir := filepath.Dir(paths.ConfigFile)
+
+	// Clear traditional validation directories (for absolute paths and simple filenames)
 	dirs := []string{
 		paths.MapsDir,
 		paths.SSLCertsDir,
@@ -730,34 +735,97 @@ func clearValidationDirectories(paths ValidationPaths) error {
 		}
 	}
 
+	// Clear config directory (for relative paths)
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create config directory %s: %w", configDir, err)
+	}
+
+	// Remove subdirectories that might contain auxiliary files (maps/, certs/, etc.)
+	entries, err := os.ReadDir(configDir)
+	if err != nil {
+		return fmt.Errorf("failed to read config directory %s: %w", configDir, err)
+	}
+
+	for _, entry := range entries {
+		// Only remove directories, not files (leave config file alone if it exists)
+		if !entry.IsDir() {
+			continue
+		}
+
+		path := filepath.Join(configDir, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("failed to remove %s: %w", path, err)
+		}
+	}
+
+	// Remove old config file if it exists
+	if err := os.Remove(paths.ConfigFile); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove old config file: %w", err)
+	}
+
+	return nil
+}
+
+// resolveAuxiliaryFilePath determines the full path for an auxiliary file.
+// It handles three cases:
+// - Absolute paths: used as-is.
+// - Relative paths with subdirectories (e.g., "maps/hosts.map"): resolved relative to config directory.
+// - Simple filenames: written to the specified fallback directory.
+func resolveAuxiliaryFilePath(filePath, configDir, fallbackDir string) string {
+	if filepath.IsAbs(filePath) {
+		// Absolute path - use as is
+		return filePath
+	}
+
+	if strings.Contains(filePath, string(filepath.Separator)) {
+		// Relative path with subdirectory - resolve relative to config directory
+		return filepath.Join(configDir, filePath)
+	}
+
+	// Just a filename - write to fallback directory
+	return filepath.Join(fallbackDir, filePath)
+}
+
+// writeFileWithDir writes a file to disk, creating parent directories if needed.
+func writeFileWithDir(path, content, fileType string) error {
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("failed to create directory for %s: %w", fileType, err)
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", fileType, err)
+	}
+
 	return nil
 }
 
 // writeAuxiliaryFiles writes all auxiliary files to their respective directories.
 func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+	configDir := filepath.Dir(paths.ConfigFile)
+
 	// Write map files
 	for _, mapFile := range auxFiles.MapFiles {
-		filename := filepath.Base(mapFile.Path)
-		mapPath := filepath.Join(paths.MapsDir, filename)
-		if err := os.WriteFile(mapPath, []byte(mapFile.Content), 0o600); err != nil {
-			return fmt.Errorf("failed to write map file %s: %w", filename, err)
+		mapPath := resolveAuxiliaryFilePath(mapFile.Path, configDir, paths.MapsDir)
+		if err := writeFileWithDir(mapPath, mapFile.Content, "map file "+mapFile.Path); err != nil {
+			return err
 		}
 	}
 
 	// Write general files
 	for _, file := range auxFiles.GeneralFiles {
-		filePath := filepath.Join(paths.GeneralStorageDir, file.Filename)
-		if err := os.WriteFile(filePath, []byte(file.Content), 0o600); err != nil {
-			return fmt.Errorf("failed to write general file %s: %w", file.Filename, err)
+		filePath := resolveAuxiliaryFilePath(file.Filename, configDir, paths.GeneralStorageDir)
+		if err := writeFileWithDir(filePath, file.Content, "general file "+file.Filename); err != nil {
+			return err
 		}
 	}
 
 	// Write SSL certificates
 	for _, cert := range auxFiles.SSLCertificates {
-		filename := filepath.Base(cert.Path)
-		certPath := filepath.Join(paths.SSLCertsDir, filename)
-		if err := os.WriteFile(certPath, []byte(cert.Content), 0o600); err != nil {
-			return fmt.Errorf("failed to write SSL certificate %s: %w", filename, err)
+		certPath := resolveAuxiliaryFilePath(cert.Path, configDir, paths.SSLCertsDir)
+		if err := writeFileWithDir(certPath, cert.Content, "SSL certificate "+cert.Path); err != nil {
+			return err
 		}
 	}
 
