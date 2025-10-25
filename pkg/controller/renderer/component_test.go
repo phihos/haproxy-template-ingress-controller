@@ -615,7 +615,7 @@ func TestBuildRenderingContext(t *testing.T) {
 	// Verify ingresses store wrapper
 	ingressesWrapper, ok := resources["ingresses"].(*StoreWrapper)
 	require.True(t, ok, "ingresses should be a StoreWrapper")
-	assert.Equal(t, "ingresses", ingressesWrapper.resourceType)
+	assert.Equal(t, "ingresses", ingressesWrapper.ResourceType)
 
 	// Verify ingresses content via List()
 	ingresses := ingressesWrapper.List()
@@ -624,7 +624,7 @@ func TestBuildRenderingContext(t *testing.T) {
 	// Verify services store wrapper
 	servicesWrapper, ok := resources["services"].(*StoreWrapper)
 	require.True(t, ok, "services should be a StoreWrapper")
-	assert.Equal(t, "services", servicesWrapper.resourceType)
+	assert.Equal(t, "services", servicesWrapper.ResourceType)
 
 	// Verify services content via List()
 	services := servicesWrapper.List()

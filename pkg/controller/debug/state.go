@@ -32,6 +32,29 @@ import (
 	"haproxy-template-ic/pkg/dataplane"
 )
 
+// WebhookServerInfo contains information about the webhook HTTPS server.
+type WebhookServerInfo struct {
+	Running   bool      `json:"running"`
+	Port      int       `json:"port"`
+	Path      string    `json:"path"`
+	StartTime time.Time `json:"start_time,omitempty"`
+}
+
+// WebhookCertInfo contains information about webhook certificates.
+type WebhookCertInfo struct {
+	ValidUntil    time.Time `json:"valid_until"`
+	LastRotation  time.Time `json:"last_rotation,omitempty"`
+	DaysRemaining int       `json:"days_remaining"`
+}
+
+// WebhookValidationStats contains aggregated webhook validation statistics.
+type WebhookValidationStats struct {
+	TotalRequests int64 `json:"total_requests"`
+	Allowed       int64 `json:"allowed"`
+	Denied        int64 `json:"denied"`
+	Errors        int64 `json:"errors"`
+}
+
 // StateProvider provides access to controller internal state.
 //
 // This interface is implemented by the controller to expose its state
@@ -106,6 +129,33 @@ type StateProvider interface {
 	// Example:
 	//   resources, err := provider.GetResourcesByType("ingresses")
 	GetResourcesByType(resourceType string) ([]interface{}, error)
+
+	// GetWebhookServerInfo returns information about the webhook HTTPS server.
+	//
+	// Returns error if webhook is not configured or not yet started.
+	//
+	// Example return:
+	//   info: &WebhookServerInfo{Running: true, Port: 9443, Path: "/validate"}
+	//   error: nil
+	GetWebhookServerInfo() (*WebhookServerInfo, error)
+
+	// GetWebhookCertificateInfo returns information about webhook certificates.
+	//
+	// Returns error if webhook is not configured or certificates not yet generated.
+	//
+	// Example return:
+	//   info: &WebhookCertInfo{ValidUntil: 2026-01-15, LastRotation: 2025-01-15}
+	//   error: nil
+	GetWebhookCertificateInfo() (*WebhookCertInfo, error)
+
+	// GetWebhookValidationStats returns aggregated validation statistics.
+	//
+	// Returns error if webhook is not configured.
+	//
+	// Example return:
+	//   stats: &WebhookValidationStats{TotalRequests: 100, Allowed: 95, Denied: 3, Errors: 2}
+	//   error: nil
+	GetWebhookValidationStats() (*WebhookValidationStats, error)
 }
 
 // ComponentStatus represents the status of a controller component.

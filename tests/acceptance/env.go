@@ -27,13 +27,13 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/pkg/env"
-
-	corev1 "k8s.io/api/core/v1"
 )
 
 // namespaceContextKey is a type-safe key for storing namespace in context.
@@ -193,4 +193,39 @@ func DumpPodLogs(ctx context.Context, t *testing.T, restConfig *rest.Config, pod
 	}
 
 	t.Logf("=== End of pod logs ===")
+}
+
+// WaitForWebhookConfiguration waits for a ValidatingWebhookConfiguration to exist in the cluster.
+// This is useful when testing webhook functionality - the controller creates the configuration
+// dynamically, so tests must wait for it to appear before attempting webhook validation.
+func WaitForWebhookConfiguration(ctx context.Context, restConfig *rest.Config, name string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Create Kubernetes clientset
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for ValidatingWebhookConfiguration %s", name)
+
+		case <-ticker.C:
+			_, err := clientset.AdmissionregistrationV1().
+				ValidatingWebhookConfigurations().
+				Get(ctx, name, metav1.GetOptions{})
+
+			if err == nil {
+				// Found the webhook configuration
+				return nil
+			}
+			// Keep waiting if not found yet
+		}
+	}
 }

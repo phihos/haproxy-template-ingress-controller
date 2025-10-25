@@ -21,8 +21,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // InitialConfigYAML is the initial controller configuration.
@@ -101,6 +103,97 @@ watched_resources:
     index_by:
       - metadata.namespace
       - metadata.name
+`
+
+// WebhookEnabledConfigYAML is the controller configuration with webhook validation enabled.
+const WebhookEnabledConfigYAML = `
+pod_selector:
+  match_labels:
+    app: haproxy
+    component: loadbalancer
+
+controller:
+  healthz_port: 8080
+  metrics_port: 9090
+
+haproxy_config:
+  template: |
+    global
+      maxconn 2000
+
+    defaults
+      mode http
+      timeout connect 5000ms
+      timeout client 50000ms
+      timeout server 50000ms
+
+    frontend test-frontend
+      bind :8080
+      {%- for ingress in resources.ingresses.List() %}
+      {%- for rule in ingress.spec.rules %}
+      {%- for path in rule.http.paths %}
+      {%- if path.backend.service %}
+      use_backend {% include "backend-name" %} if { path_beg {{ path.path }} }
+      {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+      {%- endfor %}
+      default_backend test-backend
+
+    {%- for ingress in resources.ingresses.List() %}
+    {%- for rule in ingress.spec.rules %}
+    {%- for path in rule.http.paths %}
+    {%- if path.backend.service %}
+
+    backend {% include "backend-name" %}
+      {%- include "backend-annotation-haproxytech-auth" %}
+      server test-server 127.0.0.1:8080
+    {%- endif %}
+    {%- endfor %}
+    {%- endfor %}
+    {%- endfor %}
+
+    backend test-backend
+      server test-server 127.0.0.1:9999
+
+watched_resources:
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    enable_validation_webhook: true
+    index_by:
+      - metadata.namespace
+      - metadata.name
+  services:
+    api_version: v1
+    kind: Service
+    index_by:
+      - metadata.namespace
+      - metadata.name
+  secrets:
+    api_version: v1
+    kind: Secret
+    store: on-demand
+    index_by:
+      - metadata.namespace
+      - metadata.name
+
+template_snippets:
+  backend-name:
+    name: backend-name
+    template: >-
+      {{- " " -}}ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+
+  backend-annotation-haproxytech-auth:
+    name: backend-annotation-haproxytech-auth
+    priority: 500
+    template: |
+      {#- Generate http-request auth directives for backends requiring authentication #}
+      {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
+      {%- if auth_type == "basic-auth" %}
+        {%- set auth_realm = ingress.metadata.annotations["haproxy.org/auth-realm"] | default("Protected") %}
+      http-request auth realm "{{ auth_realm }}"
+      {%- endif %}
 `
 
 // NewConfigMap creates a ConfigMap with the given configuration.
@@ -211,6 +304,16 @@ func NewClusterRole(name, namespace string) *rbacv1.ClusterRole {
 				Resources: []string{"ingresses"},
 				Verbs:     []string{"get", "watch", "list"},
 			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"services", "secrets"},
+				Verbs:     []string{"get", "watch", "list"},
+			},
+			{
+				APIGroups: []string{"admissionregistration.k8s.io"},
+				Resources: []string{"validatingwebhookconfigurations"},
+				Verbs:     []string{"create", "update", "get", "list", "watch", "delete"},
+			},
 		},
 	}
 }
@@ -290,12 +393,133 @@ func NewControllerDeployment(namespace, configMapName, secretName, serviceAccoun
 									Name:  "VERBOSE",
 									Value: "2", // DEBUG level
 								},
+								{
+									Name:  "WEBHOOK_SERVICE_NAME",
+									Value: "haproxy-template-ic-webhook",
+								},
 							},
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "debug",
 									ContainerPort: debugPort,
 									Protocol:      corev1.ProtocolTCP,
+								},
+								{
+									Name:          "webhook",
+									ContainerPort: 9443,
+									Protocol:      corev1.ProtocolTCP,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// NewWebhookService creates a Service for webhook endpoint.
+// The service routes traffic from the Kubernetes API server to the controller's webhook server.
+func NewWebhookService(namespace, serviceName string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      serviceName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app": ControllerDeploymentName,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{
+				{
+					Name:       "webhook",
+					Port:       443,
+					TargetPort: intstr.FromInt(9443),
+					Protocol:   corev1.ProtocolTCP,
+				},
+			},
+			Selector: map[string]string{
+				"app": ControllerDeploymentName,
+			},
+		},
+	}
+}
+
+// NewValidIngress creates an Ingress with valid auth annotations.
+// This Ingress should pass webhook validation.
+func NewValidIngress(namespace, name string) *networkingv1.Ingress {
+	pathType := networkingv1.PathTypePrefix
+
+	return &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"haproxy.org/auth-type":  "basic-auth",
+				"haproxy.org/auth-realm": "Protected", // Valid: no whitespace
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: "example.com",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "test-service",
+											Port: networkingv1.ServiceBackendPort{
+												Number: 80,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// NewInvalidIngress creates an Ingress with invalid auth annotations.
+// This Ingress should be rejected by webhook validation because auth_realm contains whitespace.
+func NewInvalidIngress(namespace, name string) *networkingv1.Ingress {
+	pathType := networkingv1.PathTypePrefix
+
+	return &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"haproxy.org/auth-type":  "basic-auth",
+				"haproxy.org/auth-realm": "Invalid With Spaces", // Invalid: contains whitespace
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: "example.com",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "test-service",
+											Port: networkingv1.ServiceBackendPort{
+												Number: 80,
+											},
+										},
+									},
 								},
 							},
 						},

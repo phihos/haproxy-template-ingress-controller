@@ -98,8 +98,13 @@ func New(
 		"b64decode":  templating.B64Decode,
 	}
 
-	// Pre-compile all templates with custom filters
-	engine, err := templating.NewWithFilters(templating.EngineTypeGonja, templates, filters)
+	// Register custom global functions
+	functions := map[string]templating.GlobalFunc{
+		"fail": failFunction,
+	}
+
+	// Pre-compile all templates with custom filters and functions
+	engine, err := templating.NewWithFiltersAndFunctions(templating.EngineTypeGonja, templates, filters, functions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create template engine: %w", err)
 	}
@@ -295,4 +300,30 @@ func extractTemplates(cfg *config.Config) map[string]string {
 	}
 
 	return templates
+}
+
+// failFunction is a global function that causes template rendering to fail with a custom error message.
+// This is useful for template-level validation where we want to provide clear error messages
+// when required resources are missing or invalid.
+//
+// Usage in templates:
+//
+//	{% if secret is none %}
+//	  {{ fail("Secret 'namespace/name' referenced by annotation 'haproxy.org/auth-secret' does not exist") }}
+//	{% endif %}
+func failFunction(args ...interface{}) (interface{}, error) {
+	// Validate arguments
+	if len(args) != 1 {
+		return nil, fmt.Errorf("fail() requires exactly one string argument, got %d arguments", len(args))
+	}
+
+	message, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("fail() argument must be a string, got %T", args[0])
+	}
+
+	// Return error with the custom message
+	// This will cause template rendering to fail and propagate the error
+	// through the validation webhook to the user
+	return nil, fmt.Errorf("%s", message)
 }

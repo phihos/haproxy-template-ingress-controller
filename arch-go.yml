@@ -17,6 +17,7 @@ dependenciesRules:
         - "**.pkg.k8s.**"
         - "**.pkg.metrics.**"
         - "**.pkg.templating.**"
+        - "**.pkg.webhook.**"
         - "**.codegen.**"
 
   # Rule 2: core packages should NOT depend on other top-level packages
@@ -28,6 +29,7 @@ dependenciesRules:
         - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
         - "**.pkg.templating.**"
+        - "**.pkg.webhook.**"
 
   # Rule 3: dataplane packages should NOT depend on other top-level packages
   - package: "**.pkg.dataplane.**"
@@ -39,6 +41,7 @@ dependenciesRules:
         - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
         - "**.pkg.templating.**"
+        - "**.pkg.webhook.**"
 
   # Rule 4: events package should NOT depend on other top-level packages
   - package: "**.pkg.events.**"
@@ -50,6 +53,7 @@ dependenciesRules:
         - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
         - "**.pkg.templating.**"
+        - "**.pkg.webhook.**"
 
   # Rule 5: introspection package should NOT depend on other top-level packages (pure infrastructure)
   - package: "**.pkg.introspection.**"
@@ -61,6 +65,7 @@ dependenciesRules:
         - "**.pkg.events.**"
         - "**.pkg.k8s.**"
         - "**.pkg.templating.**"
+        - "**.pkg.webhook.**"
 
   # Rule 6: k8s packages should NOT depend on other top-level packages
   - package: "**.pkg.k8s.**"
@@ -72,6 +77,7 @@ dependenciesRules:
         - "**.pkg.events.**"
         - "**.pkg.introspection.**"
         - "**.pkg.templating.**"
+        - "**.pkg.webhook.**"
 
   # Rule 7: templating package should NOT depend on other top-level packages
   - package: "**.pkg.templating.**"
@@ -83,6 +89,7 @@ dependenciesRules:
         - "**.pkg.events.**"
         - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
+        - "**.pkg.webhook.**"
 
   # Rule 8: cmd packages can depend on all internal packages (composition root)
   - package: "**.cmd.**"
@@ -127,4 +134,18 @@ dependenciesRules:
         - "**.pkg.events.**"
         - "**.pkg.introspection.**"
         - "**.pkg.k8s.**"
+        - "**.pkg.templating.**"
+        - "**.pkg.webhook.**"
+
+  # Rule 13: webhook package should NOT depend on other top-level packages (pure library)
+  - package: "**.pkg.webhook.**"
+    shouldNotDependsOn:
+      internal:
+        - "**.pkg.controller.**"
+        - "**.pkg.core.**"
+        - "**.pkg.dataplane.**"
+        - "**.pkg.events.**"
+        - "**.pkg.introspection.**"
+        - "**.pkg.k8s.**"
+        - "**.pkg.metrics.**"
         - "**.pkg.templating.**"

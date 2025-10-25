@@ -18,4 +18,9 @@ rules:
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["get", "list", "watch"]
+  # Webhook configuration resources
+  # Always grant permissions to allow dynamic webhook management via ConfigMap
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations"]
+    verbs: ["get", "create", "update", "patch", "delete"]
 {{- end }}

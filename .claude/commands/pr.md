@@ -4,9 +4,25 @@ Create a new pull request or update an existing PR for the current branch.
 
 Usage: `/pr`
 
+## CRITICAL: Commit ALL Modified Files
+
+**IMPORTANT**: When the user runs `/pr`, they expect ALL modified files in the working tree to be committed and pushed, not just a subset. This includes:
+
+- All staged files (`git status` shows files with `M` prefix)
+- All unstaged files (modified but not staged)
+- All untracked files that are part of the feature (if relevant)
+
+**DO NOT** selectively stage only "your" files or files you think are related to the current feature. The user is explicitly requesting to commit EVERYTHING in the current branch state.
+
+**Before creating/updating PR:**
+1. Run `git status` to see ALL changes
+2. Run `git add .` to stage ALL changes (or `git add -A` for comprehensive staging)
+3. Commit with descriptive message covering all changes
+4. Push to remote
+
 ## What this does
 
-1. Commits and pushes ALL changes in the current branch to the remote repository
+1. Commits and pushes ALL changes in the current branch to the remote repository (see above)
 2. Checks if a PR already exists for the current branch
 3. If PR exists:
    - Updates the existing PR with any new commits

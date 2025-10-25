@@ -111,12 +111,14 @@ func (ec *EventCommentator) determineLogLevel(eventType string) slog.Level {
 		events.EventTypeTemplateRenderFailed,
 		events.EventTypeValidationFailed,
 		events.EventTypeInstanceDeploymentFailed,
-		events.EventTypeStorageSyncFailed:
+		events.EventTypeStorageSyncFailed,
+		events.EventTypeWebhookValidationError:
 		return slog.LevelError
 
 	// Warn level - invalid states
 	case events.EventTypeConfigInvalid,
-		events.EventTypeCredentialsInvalid:
+		events.EventTypeCredentialsInvalid,
+		events.EventTypeWebhookValidationDenied:
 		return slog.LevelWarn
 
 	// Info level - lifecycle and completion events
@@ -126,7 +128,12 @@ func (ec *EventCommentator) determineLogLevel(eventType string) slog.Level {
 		events.EventTypeIndexSynchronized,
 		events.EventTypeReconciliationCompleted,
 		events.EventTypeValidationCompleted,
-		events.EventTypeDeploymentCompleted:
+		events.EventTypeDeploymentCompleted,
+		events.EventTypeWebhookServerStarted,
+		events.EventTypeWebhookServerStopped,
+		events.EventTypeWebhookCertificatesGenerated,
+		events.EventTypeWebhookCertificatesRotated,
+		events.EventTypeWebhookConfigurationCreated:
 		return slog.LevelInfo
 
 	// Debug level - everything else (detailed operational events)
@@ -397,6 +404,95 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 	case *events.HAProxyPodRemovedEvent:
 		return "HAProxy pod removed from cluster",
 			attrs
+
+	// Webhook Events
+	case *events.WebhookServerStartedEvent:
+		return fmt.Sprintf("Webhook server started on port %d at %s", e.Port, e.Path),
+			append(attrs, "port", e.Port, "path", e.Path)
+
+	case *events.WebhookServerStoppedEvent:
+		return fmt.Sprintf("Webhook server stopped: %s", e.Reason),
+			append(attrs, "reason", e.Reason)
+
+	case *events.WebhookCertificatesGeneratedEvent:
+		daysValid := int(time.Until(e.ValidUntil).Hours() / 24)
+		return fmt.Sprintf("Webhook TLS certificates generated (valid for %d days until %s)",
+				daysValid, e.ValidUntil.Format("2006-01-02")),
+			append(attrs, "valid_until", e.ValidUntil, "days_valid", daysValid)
+
+	case *events.WebhookCertificatesRotatedEvent:
+		oldDaysRemaining := int(time.Until(e.OldValidUntil).Hours() / 24)
+		newDaysValid := int(time.Until(e.NewValidUntil).Hours() / 24)
+		return fmt.Sprintf("Webhook certificates rotated (%d days remaining → %d days valid)",
+				oldDaysRemaining, newDaysValid),
+			append(attrs,
+				"old_valid_until", e.OldValidUntil,
+				"new_valid_until", e.NewValidUntil,
+				"old_days_remaining", oldDaysRemaining,
+				"new_days_valid", newDaysValid)
+
+	case *events.WebhookConfigurationCreatedEvent:
+		return fmt.Sprintf("Webhook configuration '%s' created with %d validation rules",
+				e.Name, e.RuleCount),
+			append(attrs, "name", e.Name, "rule_count", e.RuleCount)
+
+	case *events.WebhookConfigurationUpdatedEvent:
+		return fmt.Sprintf("Webhook configuration '%s' updated with %d validation rules",
+				e.Name, e.RuleCount),
+			append(attrs, "name", e.Name, "rule_count", e.RuleCount)
+
+	case *events.WebhookValidationRequestEvent:
+		resourceRef := fmt.Sprintf("%s/%s", e.Namespace, e.Name)
+		if e.Namespace == "" {
+			resourceRef = e.Name
+		}
+		return fmt.Sprintf("Webhook validation request: %s %s %s",
+				e.Operation, e.Kind, resourceRef),
+			append(attrs,
+				"request_uid", e.RequestUID,
+				"kind", e.Kind,
+				"name", e.Name,
+				"namespace", e.Namespace,
+				"operation", e.Operation)
+
+	case *events.WebhookValidationAllowedEvent:
+		resourceRef := fmt.Sprintf("%s/%s", e.Namespace, e.Name)
+		if e.Namespace == "" {
+			resourceRef = e.Name
+		}
+		return fmt.Sprintf("Webhook validation allowed: %s %s", e.Kind, resourceRef),
+			append(attrs,
+				"request_uid", e.RequestUID,
+				"kind", e.Kind,
+				"name", e.Name,
+				"namespace", e.Namespace)
+
+	case *events.WebhookValidationDeniedEvent:
+		resourceRef := fmt.Sprintf("%s/%s", e.Namespace, e.Name)
+		if e.Namespace == "" {
+			resourceRef = e.Name
+		}
+		// Truncate long reasons for log readability
+		reason := e.Reason
+		if len(reason) > maxErrorPreviewLength {
+			reason = reason[:maxErrorPreviewLength-3] + "..."
+		}
+		return fmt.Sprintf("Webhook validation denied: %s %s - %s",
+				e.Kind, resourceRef, reason),
+			append(attrs,
+				"request_uid", e.RequestUID,
+				"kind", e.Kind,
+				"name", e.Name,
+				"namespace", e.Namespace,
+				"reason", e.Reason)
+
+	case *events.WebhookValidationErrorEvent:
+		return fmt.Sprintf("Webhook validation error for %s: %s",
+				e.Kind, e.Error),
+			append(attrs,
+				"request_uid", e.RequestUID,
+				"kind", e.Kind,
+				"error", e.Error)
 
 	default:
 		// Fallback for unknown event types

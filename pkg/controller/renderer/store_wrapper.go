@@ -31,13 +31,13 @@ import (
 //   - List() results are unwrapped once on first call and cached for the reconciliation
 //   - Get() results are unwrapped on-demand (typically small result sets)
 type StoreWrapper struct {
-	store        types.Store
-	resourceType string
-	logger       *slog.Logger
+	Store        types.Store
+	ResourceType string
+	Logger       *slog.Logger
 
 	// Lazy cache for List() results
-	cachedList []interface{}
-	listCached bool
+	CachedList []interface{}
+	ListCached bool
 }
 
 // List returns all resources in the store.
@@ -54,24 +54,24 @@ type StoreWrapper struct {
 // If an error occurs, it's logged and an empty slice is returned.
 func (w *StoreWrapper) List() []interface{} {
 	// Return cached result if already unwrapped
-	if w.listCached {
-		w.logger.Debug("returning cached list",
-			"resource_type", w.resourceType,
-			"count", len(w.cachedList))
-		return w.cachedList
+	if w.ListCached {
+		w.Logger.Debug("returning cached list",
+			"resource_type", w.ResourceType,
+			"count", len(w.CachedList))
+		return w.CachedList
 	}
 
 	// First call - fetch from store
-	items, err := w.store.List()
+	items, err := w.Store.List()
 	if err != nil {
-		w.logger.Warn("failed to list resources from store",
-			"resource_type", w.resourceType,
+		w.Logger.Warn("failed to list resources from store",
+			"resource_type", w.ResourceType,
 			"error", err)
 		return []interface{}{}
 	}
 
-	w.logger.Info("unwrapping and caching list",
-		"resource_type", w.resourceType,
+	w.Logger.Info("unwrapping and caching list",
+		"resource_type", w.ResourceType,
 		"count", len(items))
 
 	// Unwrap unstructured resources to maps for template access
@@ -81,8 +81,8 @@ func (w *StoreWrapper) List() []interface{} {
 	}
 
 	// Cache for subsequent calls
-	w.cachedList = unwrapped
-	w.listCached = true
+	w.CachedList = unwrapped
+	w.ListCached = true
 
 	return unwrapped
 }
@@ -109,17 +109,17 @@ func (w *StoreWrapper) List() []interface{} {
 //
 // If an error occurs, it's logged and an empty slice is returned.
 func (w *StoreWrapper) Fetch(keys ...string) []interface{} {
-	items, err := w.store.Get(keys...)
+	items, err := w.Store.Get(keys...)
 	if err != nil {
-		w.logger.Warn("failed to fetch indexed resources from store",
-			"resource_type", w.resourceType,
+		w.Logger.Warn("failed to fetch indexed resources from store",
+			"resource_type", w.ResourceType,
 			"keys", keys,
 			"error", err)
 		return []interface{}{}
 	}
 
-	w.logger.Info("store fetch called",
-		"resource_type", w.resourceType,
+	w.Logger.Info("store fetch called",
+		"resource_type", w.ResourceType,
 		"keys", keys,
 		"found_count", len(items))
 
@@ -148,17 +148,17 @@ func (w *StoreWrapper) Fetch(keys ...string) []interface{} {
 //
 // If an error occurs during the store operation, it's logged and nil is returned.
 func (w *StoreWrapper) GetSingle(keys ...string) interface{} {
-	items, err := w.store.Get(keys...)
+	items, err := w.Store.Get(keys...)
 	if err != nil {
-		w.logger.Warn("failed to get single resource from store",
-			"resource_type", w.resourceType,
+		w.Logger.Warn("failed to get single resource from store",
+			"resource_type", w.ResourceType,
 			"keys", keys,
 			"error", err)
 		return nil
 	}
 
-	w.logger.Info("store GetSingle called",
-		"resource_type", w.resourceType,
+	w.Logger.Info("store GetSingle called",
+		"resource_type", w.ResourceType,
 		"keys", keys,
 		"found_count", len(items))
 
@@ -169,8 +169,8 @@ func (w *StoreWrapper) GetSingle(keys ...string) interface{} {
 
 	if len(items) > 1 {
 		// Ambiguous lookup - multiple resources match
-		w.logger.Error("GetSingle found multiple resources (ambiguous lookup)",
-			"resource_type", w.resourceType,
+		w.Logger.Error("GetSingle found multiple resources (ambiguous lookup)",
+			"resource_type", w.ResourceType,
 			"keys", keys,
 			"count", len(items))
 		return nil
@@ -185,6 +185,9 @@ func (w *StoreWrapper) GetSingle(keys ...string) interface{} {
 // Templates need to access resource fields like ingress.spec.rules, but Kubernetes
 // resources are stored as unstructured.Unstructured objects. This function converts
 // them to plain maps so templates can access fields naturally.
+//
+// It also converts float64 values without fractional parts to int64 for better
+// template rendering (e.g., port 80.0 becomes 80 instead of rendering as "80.0").
 func unwrapUnstructured(resource interface{}) interface{} {
 	// Type assert to interface with UnstructuredContent method
 	type unstructuredInterface interface {
@@ -192,9 +195,58 @@ func unwrapUnstructured(resource interface{}) interface{} {
 	}
 
 	if u, ok := resource.(unstructuredInterface); ok {
-		return u.UnstructuredContent()
+		content := u.UnstructuredContent()
+		return convertFloatsToInts(content)
 	}
 
 	// Not an unstructured object, return as-is
 	return resource
+}
+
+// convertFloatsToInts recursively converts float64 values to int64 where they
+// have no fractional part.
+//
+// This is necessary because JSON unmarshaling converts all numbers to float64
+// when the target type is interface{}. For Kubernetes resources, this causes
+// integer fields like ports (80) to appear as floats (80.0) in templates.
+//
+// The conversion is safe for Kubernetes resources because:
+//   - Integer fields (ports, replicas, counts) won't have fractional parts
+//   - Float fields typically use resource.Quantity (string-based, e.g., "0.5 CPU")
+//   - Converting 3.0 → 3 doesn't break any semantic meaning
+//
+// Examples:
+//   - 80.0 → 80 (port number)
+//   - 3.14 → 3.14 (preserved as-is)
+//   - "string" → "string" (unchanged)
+//   - nested maps/slices processed recursively
+func convertFloatsToInts(data interface{}) interface{} {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		// Recursively process map values
+		result := make(map[string]interface{}, len(v))
+		for k, val := range v {
+			result[k] = convertFloatsToInts(val)
+		}
+		return result
+
+	case []interface{}:
+		// Recursively process slice elements
+		result := make([]interface{}, len(v))
+		for i, val := range v {
+			result[i] = convertFloatsToInts(val)
+		}
+		return result
+
+	case float64:
+		// Convert to int64 if it's a whole number
+		if v == float64(int64(v)) {
+			return int64(v)
+		}
+		return v
+
+	default:
+		// Return other types unchanged
+		return v
+	}
 }

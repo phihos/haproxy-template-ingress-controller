@@ -46,6 +46,13 @@ type Metrics struct {
 	// Event metrics
 	EventSubscribers prometheus.Gauge
 	EventsPublished  prometheus.Counter
+
+	// Webhook metrics
+	WebhookRequestsTotal   *prometheus.CounterVec
+	WebhookRequestDuration prometheus.Histogram
+	WebhookValidationTotal *prometheus.CounterVec
+	WebhookCertExpiry      prometheus.Gauge
+	WebhookCertRotations   prometheus.Counter
 }
 
 // New creates all controller metrics and registers them with the provided registry.
@@ -132,6 +139,36 @@ func New(registry prometheus.Registerer) *Metrics {
 			"haproxy_ic_events_published_total",
 			"Total number of events published",
 		),
+
+		// Webhook metrics
+		WebhookRequestsTotal: pkgmetrics.NewCounterVec(
+			registry,
+			"haproxy_ic_webhook_requests_total",
+			"Total number of webhook admission requests",
+			[]string{"gvk", "result"},
+		),
+		WebhookRequestDuration: pkgmetrics.NewHistogramWithBuckets(
+			registry,
+			"haproxy_ic_webhook_request_duration_seconds",
+			"Time spent processing webhook requests",
+			pkgmetrics.DurationBuckets(),
+		),
+		WebhookValidationTotal: pkgmetrics.NewCounterVec(
+			registry,
+			"haproxy_ic_webhook_validation_total",
+			"Total number of webhook validation results",
+			[]string{"gvk", "result"},
+		),
+		WebhookCertExpiry: pkgmetrics.NewGauge(
+			registry,
+			"haproxy_ic_webhook_cert_expiry_timestamp_seconds",
+			"Timestamp when webhook certificates expire",
+		),
+		WebhookCertRotations: pkgmetrics.NewCounter(
+			registry,
+			"haproxy_ic_webhook_cert_rotations_total",
+			"Total number of webhook certificate rotations",
+		),
 	}
 }
 
@@ -193,4 +230,37 @@ func (m *Metrics) SetEventSubscribers(count int) {
 // Call this for every event published to the EventBus.
 func (m *Metrics) RecordEvent() {
 	m.EventsPublished.Inc()
+}
+
+// RecordWebhookRequest records a webhook admission request.
+//
+// Parameters:
+//   - gvk: The GVK of the resource being validated (e.g., "v1.ConfigMap")
+//   - result: The result of the request ("allowed", "denied", or "error")
+//   - durationSeconds: Time spent processing the request
+func (m *Metrics) RecordWebhookRequest(gvk, result string, durationSeconds float64) {
+	m.WebhookRequestsTotal.WithLabelValues(gvk, result).Inc()
+	m.WebhookRequestDuration.Observe(durationSeconds)
+}
+
+// RecordWebhookValidation records a webhook validation result.
+//
+// Parameters:
+//   - gvk: The GVK of the resource being validated
+//   - result: The validation result ("allowed", "denied", or "error")
+func (m *Metrics) RecordWebhookValidation(gvk, result string) {
+	m.WebhookValidationTotal.WithLabelValues(gvk, result).Inc()
+}
+
+// SetWebhookCertExpiry sets the webhook certificate expiry timestamp.
+//
+// Parameters:
+//   - expiryTime: The time when the certificate expires
+func (m *Metrics) SetWebhookCertExpiry(expiryTime int64) {
+	m.WebhookCertExpiry.Set(float64(expiryTime))
+}
+
+// RecordWebhookCertRotation records a webhook certificate rotation.
+func (m *Metrics) RecordWebhookCertRotation() {
+	m.WebhookCertRotations.Inc()
 }

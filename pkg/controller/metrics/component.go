@@ -99,6 +99,14 @@ func (c *Component) Run(ctx context.Context) error {
 	}
 }
 
+// Metrics returns the underlying Metrics instance for direct access.
+//
+// This allows other components (like webhook) to record metrics directly
+// without going through the event bus.
+func (c *Component) Metrics() *Metrics {
+	return c.metrics
+}
+
 // handleEvent processes individual events and updates corresponding metrics.
 func (c *Component) handleEvent(event pkgevents.Event) {
 	// Record every event for total events metric
