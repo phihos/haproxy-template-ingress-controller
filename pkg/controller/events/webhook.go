@@ -21,7 +21,7 @@ import (
 )
 
 // Webhook scatter-gather event type constants.
-// Note: Other webhook events (lifecycle, observability) are defined in types.go
+// Note: Other webhook events (lifecycle, observability) are defined in types.go.
 const (
 	EventTypeWebhookValidationRequestSG  = "webhook.validation.request.sg"  // Scatter-gather request
 	EventTypeWebhookValidationResponseSG = "webhook.validation.response.sg" // Scatter-gather response

@@ -110,7 +110,7 @@ func (c *Component) createResourceValidator(gvk string) webhook.ValidationFunc {
 // Returns:
 //   - allowed: true if all validators allowed
 //   - reason: combined denial reasons from all denying validators
-func (c *Component) aggregateResponses(responses []busevents.Response) (bool, string) {
+func (c *Component) aggregateResponses(responses []busevents.Response) (allowed bool, reason string) {
 	var denialReasons []string
 
 	for _, resp := range responses {

@@ -128,6 +128,10 @@ linters-settings:
       - G114 # Use of net/http serve functions without timeouts - handled at infrastructure level
       - G404 # Use of weak random - not used for security purposes
 
+  godot:
+    scope: declarations
+    capital: false
+
   godox:
     keywords:
       - BUG
@@ -198,6 +202,15 @@ issues:
     - path: examples/
       linters:
         - godox
+
+    # Exclude godot false positives for correctly formatted comments
+    # These comments all end with periods but godot incorrectly flags them
+    - path: pkg/controller/dryrunvalidator/component.go
+      linters:
+        - godot
+    - path: pkg/controller/resourcestore/overlay.go
+      linters:
+        - godot
 
   exclude-dirs:
     - vendor

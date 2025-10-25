@@ -41,6 +41,7 @@ import (
 	"haproxy-template-ic/pkg/controller/debug"
 	"haproxy-template-ic/pkg/controller/deployer"
 	"haproxy-template-ic/pkg/controller/discovery"
+	dryrunvalidator "haproxy-template-ic/pkg/controller/dryrunvalidator"
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/controller/executor"
 	"haproxy-template-ic/pkg/controller/indextracker"
@@ -51,7 +52,6 @@ import (
 	"haproxy-template-ic/pkg/controller/resourcewatcher"
 	"haproxy-template-ic/pkg/controller/validator"
 	"haproxy-template-ic/pkg/controller/webhook"
-	dryrunvalidator "haproxy-template-ic/pkg/controller/dryrunvalidator"
 	coreconfig "haproxy-template-ic/pkg/core/config"
 	"haproxy-template-ic/pkg/dataplane"
 	busevents "haproxy-template-ic/pkg/events"
@@ -267,7 +267,11 @@ func setupComponents(
 	go templateValidator.Start(iterCtx)
 	go jsonpathValidator.Start(iterCtx)
 	go configChangeHandlerComponent.Start(iterCtx)
-	go basicWebhookValidator.Start(iterCtx)
+	go func() {
+		if err := basicWebhookValidator.Start(iterCtx); err != nil {
+			logger.Error("basicWebhookValidator failed", "error", err)
+		}
+	}()
 	// DryRunValidator started later when config is available (in setupWebhook)
 
 	logger.Debug("All components started")

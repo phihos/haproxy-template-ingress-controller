@@ -60,9 +60,11 @@ func NewOverlayStore(baseStore Store, namespace, name string, obj interface{}, o
 
 // Get retrieves resources matching the provided index keys.
 //
-// This method checks the overlay first:
+// It checks the overlay first and falls back to the base store if needed.
+//
+// Behavior:
 // - If keys match the changed resource: returns the overlay object (or empty for DELETE)
-// - Otherwise: falls back to the base store
+// - Otherwise: falls back to the base store.
 //
 // Performance: O(1) for overlay hit, O(k) for base store where k = number of matches
 func (o *OverlayStore) Get(keys ...string) ([]interface{}, error) {
@@ -86,10 +88,12 @@ func (o *OverlayStore) Get(keys ...string) ([]interface{}, error) {
 
 // List returns all resources with the overlay change applied.
 //
-// This combines resources from the base store with the overlay change:
+// It combines resources from the base store with the overlay modification.
+//
+// Behavior:
 // - For DELETE: excludes the deleted resource
 // - For UPDATE: replaces the resource with the overlay version
-// - FOR CREATE: adds the new resource
+// - FOR CREATE: adds the new resource.
 //
 // Performance: O(n) where n = number of resources in base store
 func (o *OverlayStore) List() ([]interface{}, error) {
@@ -186,12 +190,13 @@ func extractMetadata(resource interface{}) (namespace, name string) {
 		UnstructuredContent() map[string]interface{}
 	}
 
-	if u, ok := resource.(unstructuredInterface); ok {
-		content = u.UnstructuredContent()
-	} else if m, ok := resource.(map[string]interface{}); ok {
+	switch v := resource.(type) {
+	case unstructuredInterface:
+		content = v.UnstructuredContent()
+	case map[string]interface{}:
 		// Already a map (overlay object)
-		content = m
-	} else {
+		content = v
+	default:
 		// Unknown type
 		return "", ""
 	}

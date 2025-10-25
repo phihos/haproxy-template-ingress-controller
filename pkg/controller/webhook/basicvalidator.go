@@ -120,10 +120,7 @@ func (b *BasicValidatorComponent) validateBasicStructure(obj *unstructured.Unstr
 
 	// Check namespace for namespaced resources
 	// Note: GetNamespace() returns empty string for cluster-scoped resources
-	namespace := obj.GetNamespace()
-	if namespace == "" {
-		// This is fine for cluster-scoped resources, we don't enforce namespace
-	}
+	// We don't enforce namespace as it's fine for cluster-scoped resources
 
 	return nil
 }

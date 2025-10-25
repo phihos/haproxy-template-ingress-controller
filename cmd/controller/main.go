@@ -61,11 +61,11 @@ const (
 func main() {
 	// Parse command-line flags
 	var (
-		configMapName        string
-		secretName           string
-		webhookServiceName   string
-		kubeconfig           string
-		debugPort            int
+		configMapName      string
+		secretName         string
+		webhookServiceName string
+		kubeconfig         string
+		debugPort          int
 	)
 
 	flag.StringVar(&configMapName, "configmap-name", "",

@@ -409,20 +409,20 @@ func TestConvertFloatsToInts(t *testing.T) {
 		{
 			name: "map with mixed values",
 			input: map[string]interface{}{
-				"port":        float64(80),
-				"weight":      float64(0.5),
-				"name":        "server1",
-				"enabled":     true,
-				"replicas":    float64(3),
-				"percentile":  float64(99.9),
+				"port":       float64(80),
+				"weight":     float64(0.5),
+				"name":       "server1",
+				"enabled":    true,
+				"replicas":   float64(3),
+				"percentile": float64(99.9),
 			},
 			expected: map[string]interface{}{
-				"port":        int64(80),
-				"weight":      float64(0.5),
-				"name":        "server1",
-				"enabled":     true,
-				"replicas":    int64(3),
-				"percentile":  float64(99.9),
+				"port":       int64(80),
+				"weight":     float64(0.5),
+				"name":       "server1",
+				"enabled":    true,
+				"replicas":   int64(3),
+				"percentile": float64(99.9),
 			},
 		},
 		{
@@ -581,9 +581,9 @@ func TestUnwrapUnstructured_IntegerConversion(t *testing.T) {
 				"namespace": "default",
 			},
 			"spec": map[string]interface{}{
-				"port":     float64(80),   // Should become int64
-				"replicas": float64(3),    // Should become int64
-				"weight":   float64(0.5),  // Should stay float64
+				"port":     float64(80),  // Should become int64
+				"replicas": float64(3),   // Should become int64
+				"weight":   float64(0.5), // Should stay float64
 			},
 		},
 	}

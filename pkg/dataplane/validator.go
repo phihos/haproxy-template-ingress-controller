@@ -835,7 +835,7 @@ func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error 
 // runHAProxyCheck runs haproxy binary with -c flag to validate configuration.
 // The configuration can reference auxiliary files using relative paths
 // (e.g., maps/host.map) which will be resolved relative to the config file directory.
-func runHAProxyCheck(configPath string, configContent string) error {
+func runHAProxyCheck(configPath, configContent string) error {
 	// Find haproxy binary
 	haproxyBin, err := exec.LookPath("haproxy")
 	if err != nil {
@@ -868,29 +868,12 @@ func runHAProxyCheck(configPath string, configContent string) error {
 // HAProxy outputs errors with [ALERT] prefix and line numbers. This function:
 // 1. Captures 3 lines before/after each [ALERT] from HAProxy's output
 // 2. Parses line numbers from [ALERT] messages (e.g., [haproxy.cfg:90])
-// 3. Extracts and shows the corresponding lines from the config file
-func parseHAProxyError(output string, configContent string) string {
+// 3. Extracts and shows the corresponding lines from the config file.
+func parseHAProxyError(output, configContent string) string {
 	lines := strings.Split(output, "\n")
 
 	// Find all meaningful [ALERT] line indices (skip summary alerts)
-	var alertIndices []int
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "[ALERT]") {
-			continue
-		}
-
-		// Skip summary [ALERT] lines
-		lineLower := strings.ToLower(trimmed)
-		if strings.Contains(lineLower, "fatal errors found in configuration") ||
-			strings.Contains(lineLower, "error(s) found in configuration file") {
-			continue
-		}
-
-		alertIndices = append(alertIndices, i)
-	}
-
-	// If no alerts found, return full output
+	alertIndices := findAlertIndices(lines)
 	if len(alertIndices) == 0 {
 		return strings.TrimSpace(output)
 	}
@@ -899,64 +882,108 @@ func parseHAProxyError(output string, configContent string) string {
 	configLines := strings.Split(configContent, "\n")
 
 	// Extract context for each alert
-	var errorBlocks []string
-	for _, alertIdx := range alertIndices {
-		// Calculate context range (3 lines before and after)
-		startIdx := alertIdx - 3
-		if startIdx < 0 {
-			startIdx = 0
-		}
-
-		endIdx := alertIdx + 4 // +4 because we want 3 lines after (inclusive range)
-		if endIdx > len(lines) {
-			endIdx = len(lines)
-		}
-
-		// Build error block with HAProxy output context
-		var block []string
-		alertLine := ""
-		for i := startIdx; i < endIdx; i++ {
-			line := strings.TrimRight(lines[i], " \t\r\n")
-
-			// Skip empty lines and summary lines (case-insensitive)
-			if line == "" {
-				continue
-			}
-			lineLower := strings.ToLower(line)
-			if strings.Contains(lineLower, "fatal errors found in configuration") ||
-				strings.Contains(lineLower, "error(s) found in configuration file") {
-				continue
-			}
-
-			// Add arrow marker for the alert line
-			if i == alertIdx {
-				block = append(block, "→ "+line)
-				alertLine = line
-			} else {
-				block = append(block, "  "+line)
-			}
-		}
-
-		// Try to extract line number from [ALERT] and add config context
-		if alertLine != "" && configContent != "" {
-			if configContext := extractConfigContext(alertLine, configLines); configContext != "" {
-				block = append(block, "")
-				block = append(block, "  Config context:")
-				block = append(block, configContext)
-			}
-		}
-
-		if len(block) > 0 {
-			errorBlocks = append(errorBlocks, strings.Join(block, "\n"))
-		}
-	}
-
+	errorBlocks := extractErrorBlocks(lines, alertIndices, configLines, configContent)
 	if len(errorBlocks) == 0 {
 		return strings.TrimSpace(output)
 	}
 
 	// Join multiple error blocks with blank line separator
 	return strings.Join(errorBlocks, "\n\n")
+}
+
+// findAlertIndices finds all meaningful [ALERT] line indices, skipping summary alerts.
+func findAlertIndices(lines []string) []int {
+	alertIndices := make([]int, 0, 5) // Pre-allocate for typical case of few alerts
+	for i, line := range lines {
+		if isRelevantAlert(line) {
+			alertIndices = append(alertIndices, i)
+		}
+	}
+	return alertIndices
+}
+
+// isRelevantAlert checks if a line contains a relevant alert (not a summary).
+func isRelevantAlert(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "[ALERT]") {
+		return false
+	}
+
+	// Skip summary [ALERT] lines
+	lineLower := strings.ToLower(trimmed)
+	return !strings.Contains(lineLower, "fatal errors found in configuration") &&
+		!strings.Contains(lineLower, "error(s) found in configuration file")
+}
+
+// extractErrorBlocks extracts error context blocks for each alert.
+func extractErrorBlocks(lines []string, alertIndices []int, configLines []string, configContent string) []string {
+	var errorBlocks []string
+	for _, alertIdx := range alertIndices {
+		block := buildErrorBlock(lines, alertIdx, configLines, configContent)
+		if len(block) > 0 {
+			errorBlocks = append(errorBlocks, strings.Join(block, "\n"))
+		}
+	}
+	return errorBlocks
+}
+
+// buildErrorBlock builds a single error context block for an alert.
+func buildErrorBlock(lines []string, alertIdx int, configLines []string, configContent string) []string {
+	startIdx, endIdx := calculateContextRange(alertIdx, len(lines))
+
+	var block []string
+	var alertLine string
+
+	// Build HAProxy output context
+	for i := startIdx; i < endIdx; i++ {
+		line := strings.TrimRight(lines[i], " \t\r\n")
+		if shouldSkipLine(line) {
+			continue
+		}
+
+		// Add arrow marker for the alert line
+		if i == alertIdx {
+			block = append(block, "→ "+line)
+			alertLine = line
+		} else {
+			block = append(block, "  "+line)
+		}
+	}
+
+	// Add config context if available
+	if alertLine != "" && configContent != "" {
+		if configContext := extractConfigContext(alertLine, configLines); configContext != "" {
+			block = append(block, "", "  Config context:", configContext)
+		}
+	}
+
+	return block
+}
+
+// calculateContextRange calculates the start and end indices for context lines (3 before/after).
+func calculateContextRange(alertIdx, totalLines int) (start, end int) {
+	start = alertIdx - 3
+	if start < 0 {
+		start = 0
+	}
+
+	end = alertIdx + 4 // +4 because we want 3 lines after (inclusive range)
+	if end > totalLines {
+		end = totalLines
+	}
+
+	return start, end
+}
+
+// shouldSkipLine checks if a line should be skipped (empty or summary line).
+func shouldSkipLine(line string) bool {
+	if line == "" {
+		return true
+	}
+
+	lineLower := strings.ToLower(line)
+	return strings.Contains(lineLower, "fatal errors found in configuration") ||
+		strings.Contains(lineLower, "error(s) found in configuration file")
 }
 
 // extractConfigContext extracts configuration file context around an error line.

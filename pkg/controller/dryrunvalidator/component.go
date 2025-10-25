@@ -425,10 +425,7 @@ func simplifyValidationError(err error) string {
 	return errStr
 }
 
-// simplifySemanticError extracts HAProxy semantic validation context.
-//
-// Strips redundant wrapping layers to preserve the parseHAProxyError output
-// which already includes context lines (3 before/after [ALERT]).
+// simplifySemanticError extracts HAProxy semantic validation context by stripping redundant wrappers.
 //
 // Input format:
 //
@@ -448,9 +445,7 @@ func simplifySemanticError(errStr string) string {
 	return errStr[idx+len(marker):]
 }
 
-// simplifySchemaError extracts OpenAPI schema validation constraint details.
-//
-// Parses schema validation errors to extract field name, constraint, and value.
+// simplifySchemaError extracts OpenAPI schema validation constraint details by parsing error messages.
 //
 // Input format:
 //
