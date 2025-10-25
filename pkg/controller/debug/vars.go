@@ -233,3 +233,133 @@ func (v *FullStateVar) Get() (interface{}, error) {
 		"snapshot_time": time.Now(),
 	}, nil
 }
+
+// WebhookServerVar exposes webhook server status.
+//
+// Returns a JSON object containing:
+//   - running: whether the webhook server is active
+//   - port: the HTTPS server port
+//   - path: the validation endpoint path
+//   - start_time: when the server started
+//   - uptime_seconds: how long the server has been running
+//
+// Example response:
+//
+//	{
+//	  "running": true,
+//	  "port": 9443,
+//	  "path": "/validate",
+//	  "start_time": "2025-01-15T10:30:45Z",
+//	  "uptime_seconds": 3600
+//	}
+type WebhookServerVar struct {
+	provider StateProvider
+}
+
+// Get implements introspection.Var.
+func (v *WebhookServerVar) Get() (interface{}, error) {
+	info, err := v.provider.GetWebhookServerInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	result := map[string]interface{}{
+		"running":    info.Running,
+		"port":       info.Port,
+		"path":       info.Path,
+		"start_time": info.StartTime,
+	}
+
+	if info.Running && !info.StartTime.IsZero() {
+		result["uptime_seconds"] = int(time.Since(info.StartTime).Seconds())
+	}
+
+	return result, nil
+}
+
+// WebhookCertVar exposes webhook certificate information.
+//
+// Returns a JSON object containing:
+//   - valid_until: certificate expiration timestamp
+//   - days_remaining: days until expiration
+//   - last_rotation: when certificates were last rotated
+//   - expired: whether the certificate has expired
+//
+// Example response:
+//
+//	{
+//	  "valid_until": "2026-01-15T10:30:45Z",
+//	  "days_remaining": 365,
+//	  "last_rotation": "2025-01-15T10:30:45Z",
+//	  "expired": false
+//	}
+type WebhookCertVar struct {
+	provider StateProvider
+}
+
+// Get implements introspection.Var.
+func (v *WebhookCertVar) Get() (interface{}, error) {
+	info, err := v.provider.GetWebhookCertificateInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"valid_until":    info.ValidUntil,
+		"days_remaining": info.DaysRemaining,
+		"last_rotation":  info.LastRotation,
+		"expired":        time.Now().After(info.ValidUntil),
+	}, nil
+}
+
+// WebhookStatsVar exposes webhook validation statistics.
+//
+// Returns a JSON object containing:
+//   - total_requests: total validation requests received
+//   - allowed: number of resources admitted
+//   - denied: number of resources rejected
+//   - errors: number of validation errors
+//   - allow_rate: percentage of requests allowed (0.0 to 1.0)
+//   - deny_rate: percentage of requests denied (0.0 to 1.0)
+//
+// Example response:
+//
+//	{
+//	  "total_requests": 100,
+//	  "allowed": 95,
+//	  "denied": 3,
+//	  "errors": 2,
+//	  "allow_rate": 0.95,
+//	  "deny_rate": 0.03
+//	}
+type WebhookStatsVar struct {
+	provider StateProvider
+}
+
+// Get implements introspection.Var.
+func (v *WebhookStatsVar) Get() (interface{}, error) {
+	stats, err := v.provider.GetWebhookValidationStats()
+	if err != nil {
+		return nil, err
+	}
+
+	result := map[string]interface{}{
+		"total_requests": stats.TotalRequests,
+		"allowed":        stats.Allowed,
+		"denied":         stats.Denied,
+		"errors":         stats.Errors,
+	}
+
+	// Calculate rates if we have requests
+	if stats.TotalRequests > 0 {
+		result["allow_rate"] = float64(stats.Allowed) / float64(stats.TotalRequests)
+		result["deny_rate"] = float64(stats.Denied) / float64(stats.TotalRequests)
+		result["error_rate"] = float64(stats.Errors) / float64(stats.TotalRequests)
+	} else {
+		result["allow_rate"] = 0.0
+		result["deny_rate"] = 0.0
+		result["error_rate"] = 0.0
+	}
+
+	return result, nil
+}

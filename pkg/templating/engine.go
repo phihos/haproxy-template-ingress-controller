@@ -36,6 +36,23 @@ import (
 //	}
 type FilterFunc func(in interface{}, args ...interface{}) (interface{}, error)
 
+// GlobalFunc is a custom global function that can be called from templates.
+// It receives variadic arguments and returns a result or an error.
+//
+// Example:
+//
+//	func fail(args ...interface{}) (interface{}, error) {
+//	    if len(args) != 1 {
+//	        return nil, fmt.Errorf("fail() requires exactly one string argument")
+//	    }
+//	    message, ok := args[0].(string)
+//	    if !ok {
+//	        return nil, fmt.Errorf("fail() argument must be a string")
+//	    }
+//	    return nil, fmt.Errorf(message)
+//	}
+type GlobalFunc func(args ...interface{}) (interface{}, error)
+
 // TemplateEngine provides template compilation and rendering capabilities.
 // It pre-compiles all templates at initialization for optimal runtime performance
 // and early detection of syntax errors.
@@ -54,7 +71,7 @@ type TemplateEngine struct {
 // All templates are compiled during initialization. Returns an error if any
 // template fails to compile or if the engine type is not supported.
 //
-// For custom filters, use NewWithFilters instead.
+// For custom filters or global functions, use NewWithFiltersAndFunctions instead.
 //
 // Example:
 //
@@ -67,11 +84,13 @@ type TemplateEngine struct {
 //	    log.Fatal(err)
 //	}
 func New(engineType EngineType, templates map[string]string) (*TemplateEngine, error) {
-	return NewWithFilters(engineType, templates, nil)
+	return NewWithFiltersAndFunctions(engineType, templates, nil, nil)
 }
 
 // NewWithFilters creates a new TemplateEngine with custom filters.
 // All templates are compiled during initialization with the custom filters registered.
+//
+// For custom global functions, use NewWithFiltersAndFunctions instead.
 //
 // Example:
 //
@@ -87,6 +106,34 @@ func New(engineType EngineType, templates map[string]string) (*TemplateEngine, e
 //	    log.Fatal(err)
 //	}
 func NewWithFilters(engineType EngineType, templates map[string]string, customFilters map[string]FilterFunc) (*TemplateEngine, error) {
+	return NewWithFiltersAndFunctions(engineType, templates, customFilters, nil)
+}
+
+// NewWithFiltersAndFunctions creates a new TemplateEngine with custom filters and global functions.
+// All templates are compiled during initialization with the custom filters and functions registered.
+//
+// Example:
+//
+//	filters := map[string]templating.FilterFunc{
+//	    "get_path": pathResolver.GetPath,
+//	}
+//	functions := map[string]templating.GlobalFunc{
+//	    "fail": func(args ...interface{}) (interface{}, error) {
+//	        if len(args) != 1 {
+//	            return nil, fmt.Errorf("fail() requires exactly one string argument")
+//	        }
+//	        message, ok := args[0].(string)
+//	        if !ok {
+//	            return nil, fmt.Errorf("fail() argument must be a string")
+//	        }
+//	        return nil, fmt.Errorf(message)
+//	    },
+//	}
+//	engine, err := templating.NewWithFiltersAndFunctions(templating.EngineTypeGonja, templates, filters, functions)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+func NewWithFiltersAndFunctions(engineType EngineType, templates map[string]string, customFilters map[string]FilterFunc, customFunctions map[string]GlobalFunc) (*TemplateEngine, error) {
 	// Validate engine type
 	if engineType != EngineTypeGonja {
 		return nil, NewUnsupportedEngineError(engineType)
@@ -139,12 +186,30 @@ func NewWithFilters(engineType EngineType, templates map[string]string, customFi
 		filters = filters.Update(customFilterSet)
 	}
 
+	// Start with builtin global functions and register custom functions
+	globalFunctions := builtins.GlobalFunctions
+
+	// Register custom global functions if provided
+	if len(customFunctions) > 0 {
+		// Create a new context with builtins plus custom functions
+		functionMap := make(map[string]interface{})
+
+		// Add custom functions (wrapped in Gonja's signature)
+		for name, customFunc := range customFunctions {
+			functionMap[name] = wrapGlobalFunction(customFunc)
+		}
+
+		customFunctionContext := exec.NewContext(functionMap)
+		// Update builtin functions with custom ones
+		globalFunctions = globalFunctions.Update(customFunctionContext)
+	}
+
 	environment := &exec.Environment{
 		Filters:           filters,
 		Tests:             builtins.Tests,
 		ControlStructures: builtins.ControlStructures,
 		Methods:           builtins.Methods,
-		Context:           builtins.GlobalFunctions, // Include global functions like range()
+		Context:           globalFunctions, // Include global functions (builtins + custom)
 	}
 
 	// Store raw templates and compile each one through the loader
@@ -265,6 +330,32 @@ func wrapCustomFilter(customFilter FilterFunc) exec.FilterFunction {
 		if err != nil {
 			// Return error wrapped in Value
 			return exec.AsValue(err)
+		}
+
+		// Return result as Value
+		return exec.AsValue(result)
+	}
+}
+
+// wrapGlobalFunction wraps a GlobalFunc into a function callable from Gonja templates.
+// This adapter converts between our simple GlobalFunc interface and the signature
+// expected by Gonja's global function system.
+func wrapGlobalFunction(customFunc GlobalFunc) func(_ *exec.Evaluator, params *exec.VarArgs) *exec.Value {
+	return func(_ *exec.Evaluator, params *exec.VarArgs) *exec.Value {
+		// Extract arguments from VarArgs as interface{} slice
+		var args []interface{}
+		if params != nil && len(params.Args) > 0 {
+			for _, arg := range params.Args {
+				args = append(args, arg.Interface())
+			}
+		}
+
+		// Call the custom global function
+		result, err := customFunc(args...)
+		if err != nil {
+			// Return error wrapped in Value using ErrInvalidCall
+			// This will cause template rendering to fail with the error message
+			return exec.AsValue(exec.ErrInvalidCall(err))
 		}
 
 		// Return result as Value

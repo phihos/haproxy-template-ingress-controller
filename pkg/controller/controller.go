@@ -47,8 +47,11 @@ import (
 	"haproxy-template-ic/pkg/controller/metrics"
 	"haproxy-template-ic/pkg/controller/reconciler"
 	"haproxy-template-ic/pkg/controller/renderer"
+	"haproxy-template-ic/pkg/controller/resourcestore"
 	"haproxy-template-ic/pkg/controller/resourcewatcher"
 	"haproxy-template-ic/pkg/controller/validator"
+	"haproxy-template-ic/pkg/controller/webhook"
+	dryrunvalidator "haproxy-template-ic/pkg/controller/dryrunvalidator"
 	coreconfig "haproxy-template-ic/pkg/core/config"
 	"haproxy-template-ic/pkg/dataplane"
 	busevents "haproxy-template-ic/pkg/events"
@@ -57,6 +60,7 @@ import (
 	"haproxy-template-ic/pkg/k8s/types"
 	"haproxy-template-ic/pkg/k8s/watcher"
 	pkgmetrics "haproxy-template-ic/pkg/metrics"
+	"haproxy-template-ic/pkg/templating"
 )
 
 const (
@@ -80,17 +84,19 @@ const (
 //   - k8sClient: Kubernetes client for API access
 //   - configMapName: Name of the ConfigMap containing the controller configuration
 //   - secretName: Name of the Secret containing HAProxy Dataplane API credentials
+//   - webhookServiceName: Name of the Service for webhook endpoint
 //   - debugPort: Port for debug HTTP server (0 to disable)
 //
 // Returns:
 //   - Error if the controller cannot start or encounters a fatal error
 //   - nil if the context is cancelled (graceful shutdown)
-func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName string, debugPort int) error {
+func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName, webhookServiceName string, debugPort int) error {
 	logger := slog.Default()
 
 	logger.Info("HAProxy Template Ingress Controller starting",
 		"configmap", configMapName,
 		"secret", secretName,
+		"webhook_service", webhookServiceName,
 		"namespace", k8sClient.Namespace())
 
 	// Main reinitialization loop
@@ -101,7 +107,7 @@ func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretNam
 			return nil
 		default:
 			// Run one iteration
-			err := runIteration(ctx, k8sClient, configMapName, secretName, debugPort, logger)
+			err := runIteration(ctx, k8sClient, configMapName, secretName, webhookServiceName, debugPort, logger)
 			if err != nil {
 				// Check if error is context cancellation (graceful shutdown)
 				if ctx.Err() != nil {
@@ -200,6 +206,7 @@ type componentSetup struct {
 	Bus              *busevents.EventBus
 	MetricsComponent *metrics.Component
 	MetricsRegistry  *prometheus.Registry
+	StoreManager     *resourcestore.Manager
 	IterCtx          context.Context
 	Cancel           context.CancelFunc
 	ConfigChangeCh   chan *coreconfig.Config
@@ -220,15 +227,22 @@ func setupComponents(
 	domainMetrics := metrics.New(registry)
 	metricsComponent := metrics.NewComponent(domainMetrics, bus)
 
+	// Create ResourceStoreManager for webhook validation
+	storeManager := resourcestore.NewManager()
+
 	// Create components
 	eventCommentator := commentator.NewEventCommentator(bus, logger, 1000)
 	configLoaderComponent := configloader.NewConfigLoaderComponent(bus, logger)
 	credentialsLoaderComponent := credentialsloader.NewCredentialsLoaderComponent(bus, logger)
 
-	// Create validators
+	// Create config validators (for ConfigMap validation)
 	basicValidator := validator.NewBasicValidator(bus, logger)
 	templateValidator := validator.NewTemplateValidator(bus, logger)
 	jsonpathValidator := validator.NewJSONPathValidator(bus, logger)
+
+	// Create webhook validators (for admission validation)
+	basicWebhookValidator := webhook.NewBasicValidatorComponent(bus, logger)
+	// Note: DryRunValidator created later when config is available (in setupWebhook)
 
 	// Create config change channel for reinitialization signaling
 	configChangeCh := make(chan *coreconfig.Config, 1)
@@ -253,6 +267,8 @@ func setupComponents(
 	go templateValidator.Start(iterCtx)
 	go jsonpathValidator.Start(iterCtx)
 	go configChangeHandlerComponent.Start(iterCtx)
+	go basicWebhookValidator.Start(iterCtx)
+	// DryRunValidator started later when config is available (in setupWebhook)
 
 	logger.Debug("All components started")
 
@@ -260,6 +276,7 @@ func setupComponents(
 		Bus:              bus,
 		MetricsComponent: metricsComponent,
 		MetricsRegistry:  registry,
+		StoreManager:     storeManager,
 		IterCtx:          iterCtx,
 		Cancel:           cancel,
 		ConfigChangeCh:   configChangeCh,
@@ -613,6 +630,127 @@ func startReconciliationComponents(
 		"components", "Reconciler, Renderer, HAProxyValidator, Executor, Discovery, Deployer, DeploymentScheduler, DriftMonitor")
 }
 
+// setupWebhook creates and starts the webhook component if webhook validation is enabled.
+//
+// The webhook component manages admission webhook lifecycle including:
+//   - TLS certificate generation and rotation
+//   - HTTPS webhook server
+//   - Dynamic ValidatingWebhookConfiguration management
+//   - Integration with controller validators (DryRunValidator for semantic validation)
+//
+// This is started before reconciliation components to ensure webhook is ready
+// before any resource validation requests arrive.
+func setupWebhook(
+	iterCtx context.Context,
+	cfg *coreconfig.Config,
+	k8sClient *client.Client,
+	webhookServiceName string,
+	bus *busevents.EventBus,
+	storeManager *resourcestore.Manager,
+	logger *slog.Logger,
+	metricsRecorder webhook.MetricsRecorder,
+	cancel context.CancelFunc,
+) {
+	// Extract webhook rules from config
+	rules := webhook.ExtractWebhookRules(cfg)
+	if len(rules) == 0 {
+		logger.Debug("No webhook rules extracted (webhook enabled but no matching resources)")
+		return
+	}
+
+	logger.Info("Webhook validation enabled",
+		"rule_count", len(rules),
+		"service_name", webhookServiceName)
+
+	// Create DryRunValidator for semantic validation
+	// This requires a template engine for rendering
+	logger.Debug("Creating template engine for dry-run validation")
+
+	// Extract templates (same as Renderer does)
+	templates := make(map[string]string)
+	templates["haproxy.cfg"] = cfg.HAProxyConfig.Template
+	for name, snippet := range cfg.TemplateSnippets {
+		templates[name] = snippet.Template
+	}
+	for name, mapDef := range cfg.Maps {
+		templates[name] = mapDef.Template
+	}
+	for name, fileDef := range cfg.Files {
+		templates[name] = fileDef.Template
+	}
+	for name, certDef := range cfg.SSLCertificates {
+		templates[name] = certDef.Template
+	}
+
+	// Create path resolver for get_path filter
+	pathResolver := &templating.PathResolver{
+		MapsDir:    cfg.Dataplane.MapsDir,
+		SSLDir:     cfg.Dataplane.SSLCertsDir,
+		GeneralDir: cfg.Dataplane.GeneralStorageDir,
+	}
+
+	// Register custom filters
+	filters := map[string]templating.FilterFunc{
+		"get_path":   pathResolver.GetPath,
+		"glob_match": templating.GlobMatch,
+		"b64decode":  templating.B64Decode,
+	}
+
+	// Create template engine
+	engine, err := templating.NewWithFilters(templating.EngineTypeGonja, templates, filters)
+	if err != nil {
+		logger.Error("Failed to create template engine for dry-run validation", "error", err)
+		return
+	}
+
+	// Create validation paths
+	validationPaths := dataplane.ValidationPaths{
+		MapsDir:           cfg.Dataplane.MapsDir,
+		SSLCertsDir:       cfg.Dataplane.SSLCertsDir,
+		GeneralStorageDir: cfg.Dataplane.GeneralStorageDir,
+		ConfigFile:        cfg.Dataplane.ConfigFile,
+	}
+
+	// Create DryRunValidator
+	dryrunValidator := dryrunvalidator.New(bus, storeManager, cfg, engine, validationPaths, logger)
+
+	// Start DryRunValidator before webhook
+	go func() {
+		if err := dryrunValidator.Start(iterCtx); err != nil {
+			logger.Error("dry-run validator failed", "error", err)
+			cancel()
+		}
+	}()
+
+	logger.Info("Dry-run validator started")
+
+	// Create webhook component
+	webhookComponent := webhook.New(
+		k8sClient.Clientset(),
+		bus,
+		logger,
+		&webhook.Config{
+			Namespace:   k8sClient.Namespace(),
+			ServiceName: webhookServiceName,
+			Rules:       rules,
+		},
+		metricsRecorder,
+	)
+
+	// Start webhook component in background
+	go func() {
+		if err := webhookComponent.Start(iterCtx); err != nil {
+			logger.Error("webhook component failed", "error", err)
+			// Don't cancel iteration - webhook is optional
+		}
+	}()
+
+	logger.Info("Webhook component started",
+		"namespace", k8sClient.Namespace(),
+		"service", webhookServiceName,
+		"rules", len(rules))
+}
+
 // setupReconciliation creates and starts the reconciliation components (Stage 5).
 //
 // The Reconciler debounces resource changes and triggers reconciliation events.
@@ -682,6 +820,7 @@ func runIteration(
 	k8sClient *client.Client,
 	configMapName string,
 	secretName string,
+	webhookServiceName string,
 	debugPort int,
 	logger *slog.Logger,
 ) error {
@@ -719,6 +858,14 @@ func runIteration(
 		return err
 	}
 
+	// Register stores with ResourceStoreManager for webhook validation
+	logger.Debug("Registering resource stores with ResourceStoreManager")
+	stores := resourceWatcher.GetAllStores()
+	for resourceType, store := range stores {
+		setup.StoreManager.RegisterStore(resourceType, store)
+		logger.Debug("Registered store", "resource_type", resourceType)
+	}
+
 	// 4. Setup config watchers
 	if err := setupConfigWatchers(
 		setup.IterCtx, k8sClient, configMapName, secretName,
@@ -753,13 +900,21 @@ func runIteration(
 		}
 	}()
 
-	// 6. Start reconciliation components (Stage 5)
+	// 6. Setup webhook if enabled
+	if webhook.HasWebhookEnabled(cfg) {
+		logger.Info("Stage 5.5: Starting webhook component")
+		setupWebhook(setup.IterCtx, cfg, k8sClient, webhookServiceName, setup.Bus, setup.StoreManager, logger, setup.MetricsComponent.Metrics(), setup.Cancel)
+	} else {
+		logger.Debug("Webhook validation disabled (no resources have enable_validation_webhook: true)")
+	}
+
+	// 7. Start reconciliation components (Stage 5)
 	logger.Info("Stage 5: Starting reconciliation components")
 	if err := setupReconciliation(setup.IterCtx, cfg, creds, resourceWatcher, setup.Bus, logger, setup.Cancel); err != nil {
 		return err
 	}
 
-	// 7. Setup debug and metrics infrastructure
+	// 8. Setup debug and metrics infrastructure
 	setupInfrastructureServers(setup.IterCtx, cfg, debugPort, setup, stateCache, logger)
 
 	logger.Info("Controller iteration initialized successfully - entering event loop")

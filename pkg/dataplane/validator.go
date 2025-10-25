@@ -694,7 +694,7 @@ func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths Valida
 	}
 
 	// Run haproxy -c -f <ConfigFile>
-	if err := runHAProxyCheck(paths.ConfigFile); err != nil {
+	if err := runHAProxyCheck(paths.ConfigFile, mainConfig); err != nil {
 		return err
 	}
 
@@ -835,7 +835,7 @@ func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error 
 // runHAProxyCheck runs haproxy binary with -c flag to validate configuration.
 // The configuration can reference auxiliary files using relative paths
 // (e.g., maps/host.map) which will be resolved relative to the config file directory.
-func runHAProxyCheck(configPath string) error {
+func runHAProxyCheck(configPath string, configContent string) error {
 	// Find haproxy binary
 	haproxyBin, err := exec.LookPath("haproxy")
 	if err != nil {
@@ -856,50 +856,183 @@ func runHAProxyCheck(configPath string) error {
 	// Capture both stdout and stderr
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Parse and format HAProxy error output
-		errorMsg := parseHAProxyError(string(output))
+		// Parse and format HAProxy error output with config file context
+		errorMsg := parseHAProxyError(string(output), configContent)
 		return fmt.Errorf("haproxy validation failed: %s", errorMsg)
 	}
 
 	return nil
 }
 
-// parseHAProxyError parses HAProxy's error output to extract meaningful error messages.
-// HAProxy outputs errors with [ALERT] prefix and line numbers.
-func parseHAProxyError(output string) string {
-	var errors []string
+// parseHAProxyError parses HAProxy's error output to extract meaningful error messages with context.
+// HAProxy outputs errors with [ALERT] prefix and line numbers. This function:
+// 1. Captures 3 lines before/after each [ALERT] from HAProxy's output
+// 2. Parses line numbers from [ALERT] messages (e.g., [haproxy.cfg:90])
+// 3. Extracts and shows the corresponding lines from the config file
+func parseHAProxyError(output string, configContent string) string {
+	lines := strings.Split(output, "\n")
 
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	// Find all meaningful [ALERT] line indices (skip summary alerts)
+	var alertIndices []int
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "[ALERT]") {
 			continue
 		}
 
-		// Skip summary lines
-		if strings.Contains(line, "fatal errors found in configuration") ||
-			strings.Contains(line, "error(s) found in configuration file") {
+		// Skip summary [ALERT] lines
+		lineLower := strings.ToLower(trimmed)
+		if strings.Contains(lineLower, "fatal errors found in configuration") ||
+			strings.Contains(lineLower, "error(s) found in configuration file") {
 			continue
 		}
 
-		// Extract [ALERT] messages
-		if strings.HasPrefix(line, "[ALERT]") {
-			// Remove [ALERT] prefix and parsing context for cleaner error
-			msg := strings.TrimPrefix(line, "[ALERT]")
-			msg = strings.TrimSpace(msg)
-
-			// Extract just the error message (after the last colon)
-			parts := strings.Split(msg, ":")
-			if len(parts) > 0 {
-				errorMsg := strings.TrimSpace(parts[len(parts)-1])
-				errors = append(errors, errorMsg)
-			}
-		}
+		alertIndices = append(alertIndices, i)
 	}
 
-	if len(errors) == 0 {
-		// Return full output if we couldn't parse errors
+	// If no alerts found, return full output
+	if len(alertIndices) == 0 {
 		return strings.TrimSpace(output)
 	}
 
-	return strings.Join(errors, "; ")
+	// Split config content into lines for context extraction
+	configLines := strings.Split(configContent, "\n")
+
+	// Extract context for each alert
+	var errorBlocks []string
+	for _, alertIdx := range alertIndices {
+		// Calculate context range (3 lines before and after)
+		startIdx := alertIdx - 3
+		if startIdx < 0 {
+			startIdx = 0
+		}
+
+		endIdx := alertIdx + 4 // +4 because we want 3 lines after (inclusive range)
+		if endIdx > len(lines) {
+			endIdx = len(lines)
+		}
+
+		// Build error block with HAProxy output context
+		var block []string
+		alertLine := ""
+		for i := startIdx; i < endIdx; i++ {
+			line := strings.TrimRight(lines[i], " \t\r\n")
+
+			// Skip empty lines and summary lines (case-insensitive)
+			if line == "" {
+				continue
+			}
+			lineLower := strings.ToLower(line)
+			if strings.Contains(lineLower, "fatal errors found in configuration") ||
+				strings.Contains(lineLower, "error(s) found in configuration file") {
+				continue
+			}
+
+			// Add arrow marker for the alert line
+			if i == alertIdx {
+				block = append(block, "→ "+line)
+				alertLine = line
+			} else {
+				block = append(block, "  "+line)
+			}
+		}
+
+		// Try to extract line number from [ALERT] and add config context
+		if alertLine != "" && configContent != "" {
+			if configContext := extractConfigContext(alertLine, configLines); configContext != "" {
+				block = append(block, "")
+				block = append(block, "  Config context:")
+				block = append(block, configContext)
+			}
+		}
+
+		if len(block) > 0 {
+			errorBlocks = append(errorBlocks, strings.Join(block, "\n"))
+		}
+	}
+
+	if len(errorBlocks) == 0 {
+		return strings.TrimSpace(output)
+	}
+
+	// Join multiple error blocks with blank line separator
+	return strings.Join(errorBlocks, "\n\n")
+}
+
+// extractConfigContext extracts configuration file context around an error line.
+// It parses the line number from an [ALERT] message like "[haproxy.cfg:90]"
+// and returns 3 lines before/after that line with line numbers and an arrow marker.
+func extractConfigContext(alertLine string, configLines []string) string {
+	// Parse line number from [ALERT] message
+	// Format: [ALERT] ... : config : [haproxy.cfg:90] : ...
+	// or: [ALERT] ... : [haproxy.cfg:90] : ...
+
+	// Find [filename:linenum] pattern - look for second [ (after [ALERT])
+	firstBracket := strings.Index(alertLine, "[")
+	if firstBracket == -1 {
+		return ""
+	}
+
+	// Look for second bracket after [ALERT]
+	remaining := alertLine[firstBracket+1:]
+	secondBracket := strings.Index(remaining, "[")
+	if secondBracket == -1 {
+		return ""
+	}
+
+	// Now parse the [filename:line] part
+	fileLinePart := remaining[secondBracket+1:]
+	colonIdx := strings.Index(fileLinePart, ":")
+	if colonIdx == -1 {
+		return ""
+	}
+
+	bracketClose := strings.Index(fileLinePart, "]")
+	if bracketClose == -1 || bracketClose < colonIdx {
+		return ""
+	}
+
+	// Extract line number part (after the colon, before the bracket)
+	lineNumStr := fileLinePart[colonIdx+1 : bracketClose]
+	lineNum := 0
+	if _, err := fmt.Sscanf(lineNumStr, "%d", &lineNum); err != nil {
+		return ""
+	}
+
+	// Convert to 0-based index
+	errorLineIdx := lineNum - 1
+	if errorLineIdx < 0 || errorLineIdx >= len(configLines) {
+		return ""
+	}
+
+	// Calculate context range (3 lines before and after)
+	startIdx := errorLineIdx - 3
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	endIdx := errorLineIdx + 4 // +4 because we want 3 lines after
+	if endIdx > len(configLines) {
+		endIdx = len(configLines)
+	}
+
+	// Build context block with line numbers
+	var contextLines []string
+	for i := startIdx; i < endIdx; i++ {
+		lineContent := configLines[i]
+		lineNumber := i + 1
+
+		var formatted string
+		if i == errorLineIdx {
+			// Error line - add arrow marker
+			formatted = fmt.Sprintf("  %4d → %s", lineNumber, lineContent)
+		} else {
+			formatted = fmt.Sprintf("  %4d   %s", lineNumber, lineContent)
+		}
+
+		// Trim trailing spaces for cleaner output
+		contextLines = append(contextLines, strings.TrimRight(formatted, " "))
+	}
+
+	return strings.Join(contextLines, "\n")
 }

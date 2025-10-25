@@ -51,6 +51,9 @@ const (
 	// #nosec G101 -- This is a Kubernetes resource name, not an actual credential
 	DefaultSecretName = "haproxy-credentials"
 
+	// DefaultWebhookServiceName is the default name for the webhook Service.
+	DefaultWebhookServiceName = "haproxy-template-ic-webhook"
+
 	// DefaultDebugPort is the default port for the debug HTTP server (0 = disabled).
 	DefaultDebugPort = 0
 )
@@ -58,16 +61,19 @@ const (
 func main() {
 	// Parse command-line flags
 	var (
-		configMapName string
-		secretName    string
-		kubeconfig    string
-		debugPort     int
+		configMapName        string
+		secretName           string
+		webhookServiceName   string
+		kubeconfig           string
+		debugPort            int
 	)
 
 	flag.StringVar(&configMapName, "configmap-name", "",
 		"Name of the ConfigMap containing controller configuration (env: CONFIGMAP_NAME)")
 	flag.StringVar(&secretName, "secret-name", "",
 		"Name of the Secret containing HAProxy Dataplane API credentials (env: SECRET_NAME)")
+	flag.StringVar(&webhookServiceName, "webhook-service-name", "",
+		"Name of the Service for webhook endpoint (env: WEBHOOK_SERVICE_NAME)")
 	flag.StringVar(&kubeconfig, "kubeconfig", "",
 		"Path to kubeconfig file (for out-of-cluster development)")
 	flag.IntVar(&debugPort, "debug-port", 0,
@@ -90,6 +96,14 @@ func main() {
 	}
 	if secretName == "" {
 		secretName = DefaultSecretName
+	}
+
+	// Webhook service name
+	if webhookServiceName == "" {
+		webhookServiceName = os.Getenv("WEBHOOK_SERVICE_NAME")
+	}
+	if webhookServiceName == "" {
+		webhookServiceName = DefaultWebhookServiceName
 	}
 
 	// Debug port
@@ -134,6 +148,7 @@ func main() {
 		"version", "v0.1.0",
 		"configmap", configMapName,
 		"secret", secretName,
+		"webhook_service", webhookServiceName,
 		"debug_port", debugPort,
 		"log_level", logLevel.String(),
 		"gomaxprocs", gomaxprocs,
@@ -157,7 +172,7 @@ func main() {
 	defer cancel()
 
 	// Run the controller
-	if err := controller.Run(ctx, k8sClient, configMapName, secretName, debugPort); err != nil {
+	if err := controller.Run(ctx, k8sClient, configMapName, secretName, webhookServiceName, debugPort); err != nil {
 		// Only log error if it's not a graceful shutdown
 		if ctx.Err() == nil {
 			logger.Error("Controller failed", "error", err)

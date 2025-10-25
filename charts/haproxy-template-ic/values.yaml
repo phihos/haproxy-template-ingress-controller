@@ -66,6 +66,7 @@ controller:
         api_version: networking.k8s.io/v1
         kind: Ingress
         index_by: ["metadata.namespace", "metadata.name"]
+        enable_validation_webhook: true
       services:
         api_version: v1
         kind: Service
@@ -234,6 +235,8 @@ controller:
                     {%- for username in secret.data | default({}) %}
             user {{ username }} password {{ secret.data[username] | b64decode }}
                     {%- endfor %}
+                  {%- else %}
+                    {{- fail("Secret '" ~ secret_namespace ~ "/" ~ secret_name ~ "' referenced by annotation 'haproxy.org/auth-secret' does not exist. Please create the secret or update the annotation.") -}}
                   {%- endif %}
                 {%- endif %}
               {%- endif %}
@@ -446,6 +449,20 @@ controller:
         backend default_backend
             http-request return status 404
         {%+ if false +%}{%+ endif +%}
+
+# Webhook configuration
+# Kubernetes admission webhook for resource validation
+webhook:
+  # Enable webhook validation
+  enabled: true
+
+  # Webhook HTTPS server port (inside container)
+  port: 9443
+
+  # Service configuration for webhook endpoint
+  service:
+    # Service port (exposed to Kubernetes API server)
+    port: 443
 
 # Dataplane API credentials
 credentials:
@@ -679,6 +696,16 @@ networkPolicy:
       ports:
         - port: 8080  # Healthz
           protocol: TCP
+
+    # Allow Kubernetes API server to call webhook
+    # IMPORTANT: Enable this when webhook is enabled with NetworkPolicy
+    webhook:
+      enabled: true  # Automatically enabled when webhook.enabled is true
+      # Allow from all sources (API server nodes)
+      # The Kubernetes API server needs to reach the webhook endpoint
+      from:
+        - podSelector: {}
+        - namespaceSelector: {}
 
     # Additional custom ingress rules
     additionalRules: []

@@ -55,9 +55,9 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 		c.logger.Info("wrapping store for rendering context",
 			"resource_type", resourceTypeName)
 		resources[resourceTypeName] = &StoreWrapper{
-			store:        store,
-			resourceType: resourceTypeName,
-			logger:       c.logger,
+			Store:        store,
+			ResourceType: resourceTypeName,
+			Logger:       c.logger,
 		}
 	}
 

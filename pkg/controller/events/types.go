@@ -105,6 +105,18 @@ const (
 	EventTypeSecretResourceChanged = "secret.resource.changed"
 	EventTypeCredentialsUpdated    = "credentials.updated"
 	EventTypeCredentialsInvalid    = "credentials.invalid"
+
+	// Webhook event types.
+	EventTypeWebhookServerStarted         = "webhook.server.started"
+	EventTypeWebhookServerStopped         = "webhook.server.stopped"
+	EventTypeWebhookCertificatesGenerated = "webhook.certificates.generated"
+	EventTypeWebhookCertificatesRotated   = "webhook.certificates.rotated"
+	EventTypeWebhookConfigurationCreated  = "webhook.configuration.created"
+	EventTypeWebhookConfigurationUpdated  = "webhook.configuration.updated"
+	EventTypeWebhookValidationRequest     = "webhook.validation.request"
+	EventTypeWebhookValidationAllowed     = "webhook.validation.allowed"
+	EventTypeWebhookValidationDenied      = "webhook.validation.denied"
+	EventTypeWebhookValidationError       = "webhook.validation.error"
 )
 
 // -----------------------------------------------------------------------------
@@ -1047,3 +1059,225 @@ func NewCredentialsInvalidEvent(secretVersion, errMsg string) *CredentialsInvali
 
 func (e *CredentialsInvalidEvent) EventType() string    { return EventTypeCredentialsInvalid }
 func (e *CredentialsInvalidEvent) Timestamp() time.Time { return e.timestamp }
+
+// -----------------------------------------------------------------------------
+// Webhook Events.
+// -----------------------------------------------------------------------------
+
+// WebhookServerStartedEvent is published when the webhook HTTPS server starts.
+type WebhookServerStartedEvent struct {
+	Port      int
+	Path      string
+	timestamp time.Time
+}
+
+// NewWebhookServerStartedEvent creates a new WebhookServerStartedEvent.
+func NewWebhookServerStartedEvent(port int, path string) *WebhookServerStartedEvent {
+	return &WebhookServerStartedEvent{
+		Port:      port,
+		Path:      path,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *WebhookServerStartedEvent) EventType() string    { return EventTypeWebhookServerStarted }
+func (e *WebhookServerStartedEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookServerStoppedEvent is published when the webhook HTTPS server stops.
+type WebhookServerStoppedEvent struct {
+	Reason    string
+	timestamp time.Time
+}
+
+// NewWebhookServerStoppedEvent creates a new WebhookServerStoppedEvent.
+func NewWebhookServerStoppedEvent(reason string) *WebhookServerStoppedEvent {
+	return &WebhookServerStoppedEvent{
+		Reason:    reason,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *WebhookServerStoppedEvent) EventType() string    { return EventTypeWebhookServerStopped }
+func (e *WebhookServerStoppedEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookCertificatesGeneratedEvent is published when webhook certificates are generated.
+type WebhookCertificatesGeneratedEvent struct {
+	ValidUntil time.Time
+	timestamp  time.Time
+}
+
+// NewWebhookCertificatesGeneratedEvent creates a new WebhookCertificatesGeneratedEvent.
+func NewWebhookCertificatesGeneratedEvent(validUntil time.Time) *WebhookCertificatesGeneratedEvent {
+	return &WebhookCertificatesGeneratedEvent{
+		ValidUntil: validUntil,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *WebhookCertificatesGeneratedEvent) EventType() string {
+	return EventTypeWebhookCertificatesGenerated
+}
+func (e *WebhookCertificatesGeneratedEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookCertificatesRotatedEvent is published when webhook certificates are rotated.
+type WebhookCertificatesRotatedEvent struct {
+	OldValidUntil time.Time
+	NewValidUntil time.Time
+	timestamp     time.Time
+}
+
+// NewWebhookCertificatesRotatedEvent creates a new WebhookCertificatesRotatedEvent.
+func NewWebhookCertificatesRotatedEvent(oldValidUntil, newValidUntil time.Time) *WebhookCertificatesRotatedEvent {
+	return &WebhookCertificatesRotatedEvent{
+		OldValidUntil: oldValidUntil,
+		NewValidUntil: newValidUntil,
+		timestamp:     time.Now(),
+	}
+}
+
+func (e *WebhookCertificatesRotatedEvent) EventType() string {
+	return EventTypeWebhookCertificatesRotated
+}
+func (e *WebhookCertificatesRotatedEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookConfigurationCreatedEvent is published when ValidatingWebhookConfiguration is created.
+type WebhookConfigurationCreatedEvent struct {
+	Name      string
+	RuleCount int
+	timestamp time.Time
+}
+
+// NewWebhookConfigurationCreatedEvent creates a new WebhookConfigurationCreatedEvent.
+func NewWebhookConfigurationCreatedEvent(name string, ruleCount int) *WebhookConfigurationCreatedEvent {
+	return &WebhookConfigurationCreatedEvent{
+		Name:      name,
+		RuleCount: ruleCount,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *WebhookConfigurationCreatedEvent) EventType() string {
+	return EventTypeWebhookConfigurationCreated
+}
+func (e *WebhookConfigurationCreatedEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookConfigurationUpdatedEvent is published when ValidatingWebhookConfiguration is updated.
+type WebhookConfigurationUpdatedEvent struct {
+	Name      string
+	RuleCount int
+	timestamp time.Time
+}
+
+// NewWebhookConfigurationUpdatedEvent creates a new WebhookConfigurationUpdatedEvent.
+func NewWebhookConfigurationUpdatedEvent(name string, ruleCount int) *WebhookConfigurationUpdatedEvent {
+	return &WebhookConfigurationUpdatedEvent{
+		Name:      name,
+		RuleCount: ruleCount,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *WebhookConfigurationUpdatedEvent) EventType() string {
+	return EventTypeWebhookConfigurationUpdated
+}
+func (e *WebhookConfigurationUpdatedEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookValidationRequestEvent is published when an admission request is received.
+type WebhookValidationRequestEvent struct {
+	RequestUID string
+	Kind       string
+	Name       string
+	Namespace  string
+	Operation  string
+	timestamp  time.Time
+}
+
+// NewWebhookValidationRequestEvent creates a new WebhookValidationRequestEvent.
+func NewWebhookValidationRequestEvent(requestUID, kind, name, namespace, operation string) *WebhookValidationRequestEvent {
+	return &WebhookValidationRequestEvent{
+		RequestUID: requestUID,
+		Kind:       kind,
+		Name:       name,
+		Namespace:  namespace,
+		Operation:  operation,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *WebhookValidationRequestEvent) EventType() string {
+	return EventTypeWebhookValidationRequest
+}
+func (e *WebhookValidationRequestEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookValidationAllowedEvent is published when a resource is admitted.
+type WebhookValidationAllowedEvent struct {
+	RequestUID string
+	Kind       string
+	Name       string
+	Namespace  string
+	timestamp  time.Time
+}
+
+// NewWebhookValidationAllowedEvent creates a new WebhookValidationAllowedEvent.
+func NewWebhookValidationAllowedEvent(requestUID, kind, name, namespace string) *WebhookValidationAllowedEvent {
+	return &WebhookValidationAllowedEvent{
+		RequestUID: requestUID,
+		Kind:       kind,
+		Name:       name,
+		Namespace:  namespace,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *WebhookValidationAllowedEvent) EventType() string {
+	return EventTypeWebhookValidationAllowed
+}
+func (e *WebhookValidationAllowedEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookValidationDeniedEvent is published when a resource is denied.
+type WebhookValidationDeniedEvent struct {
+	RequestUID string
+	Kind       string
+	Name       string
+	Namespace  string
+	Reason     string
+	timestamp  time.Time
+}
+
+// NewWebhookValidationDeniedEvent creates a new WebhookValidationDeniedEvent.
+func NewWebhookValidationDeniedEvent(requestUID, kind, name, namespace, reason string) *WebhookValidationDeniedEvent {
+	return &WebhookValidationDeniedEvent{
+		RequestUID: requestUID,
+		Kind:       kind,
+		Name:       name,
+		Namespace:  namespace,
+		Reason:     reason,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *WebhookValidationDeniedEvent) EventType() string {
+	return EventTypeWebhookValidationDenied
+}
+func (e *WebhookValidationDeniedEvent) Timestamp() time.Time { return e.timestamp }
+
+// WebhookValidationErrorEvent is published when validation encounters an error.
+type WebhookValidationErrorEvent struct {
+	RequestUID string
+	Kind       string
+	Error      string
+	timestamp  time.Time
+}
+
+// NewWebhookValidationErrorEvent creates a new WebhookValidationErrorEvent.
+func NewWebhookValidationErrorEvent(requestUID, kind, errorMsg string) *WebhookValidationErrorEvent {
+	return &WebhookValidationErrorEvent{
+		RequestUID: requestUID,
+		Kind:       kind,
+		Error:      errorMsg,
+		timestamp:  time.Now(),
+	}
+}
+
+func (e *WebhookValidationErrorEvent) EventType() string    { return EventTypeWebhookValidationError }
+func (e *WebhookValidationErrorEvent) Timestamp() time.Time { return e.timestamp }

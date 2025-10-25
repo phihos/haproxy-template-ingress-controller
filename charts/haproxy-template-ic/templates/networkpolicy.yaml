@@ -97,6 +97,15 @@ spec:
         {{- end }}
     {{- end }}
 
+    {{- if and .Values.webhook.enabled .Values.networkPolicy.ingress.webhook.enabled }}
+    # Allow Kubernetes API server to call webhook
+    - from:
+        {{- toYaml .Values.networkPolicy.ingress.webhook.from | nindent 8 }}
+      ports:
+        - port: {{ .Values.webhook.port }}
+          protocol: TCP
+    {{- end }}
+
     {{- with .Values.networkPolicy.ingress.additionalRules }}
     # Additional ingress rules
     {{- toYaml . | nindent 4 }}
