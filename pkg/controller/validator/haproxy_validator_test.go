@@ -365,7 +365,8 @@ backend servers
 	bus.Publish(events.NewReconciliationTriggeredEvent("first"))
 
 	// Wait for first validation
-	timeout1 := time.After(2 * time.Second)
+	// Use longer timeout for race detector (which makes execution 2-10x slower)
+	timeout1 := time.After(10 * time.Second)
 	receivedFirst := false
 
 Loop1:
@@ -387,7 +388,8 @@ Loop1:
 	bus.Publish(events.NewReconciliationTriggeredEvent("second"))
 
 	// Wait for second validation
-	timeout2 := time.After(2 * time.Second)
+	// Use longer timeout for race detector (which makes execution 2-10x slower)
+	timeout2 := time.After(10 * time.Second)
 	var secondValidation *events.ValidationCompletedEvent
 
 Loop2:
