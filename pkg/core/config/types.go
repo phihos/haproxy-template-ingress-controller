@@ -144,8 +144,9 @@ type WatchedResource struct {
 	// APIVersion is the Kubernetes API version (e.g., "networking.k8s.io/v1").
 	APIVersion string `yaml:"api_version"`
 
-	// Kind is the Kubernetes resource kind (e.g., "Ingress").
-	Kind string `yaml:"kind"`
+	// Resources is the plural form of the Kubernetes resource type (e.g., "ingresses", "services").
+	// This is the name used in RBAC rules and API paths.
+	Resources string `yaml:"resources"`
 
 	// EnableValidationWebhook enables admission webhook validation for this resource.
 	// Default: false

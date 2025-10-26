@@ -128,12 +128,7 @@ func (ec *EventCommentator) determineLogLevel(eventType string) slog.Level {
 		events.EventTypeIndexSynchronized,
 		events.EventTypeReconciliationCompleted,
 		events.EventTypeValidationCompleted,
-		events.EventTypeDeploymentCompleted,
-		events.EventTypeWebhookServerStarted,
-		events.EventTypeWebhookServerStopped,
-		events.EventTypeWebhookCertificatesGenerated,
-		events.EventTypeWebhookCertificatesRotated,
-		events.EventTypeWebhookConfigurationCreated:
+		events.EventTypeDeploymentCompleted:
 		return slog.LevelInfo
 
 	// Debug level - everything else (detailed operational events)
@@ -244,6 +239,15 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 		return fmt.Sprintf("Configuration validation failed with %d errors across %d validators%s",
 				errorCount, len(e.ValidationErrors), detailMsg),
 			append(attrs, "version", e.Version, "validator_count", len(e.ValidationErrors), "error_count", errorCount)
+
+	// Webhook Certificate Events
+	case *events.CertResourceChangedEvent:
+		return "Webhook certificate Secret changed",
+			attrs
+
+	case *events.CertParsedEvent:
+		return fmt.Sprintf("Webhook certificates parsed successfully (version %s)", e.Version),
+			append(attrs, "version", e.Version, "cert_size", len(e.CertPEM), "key_size", len(e.KeyPEM))
 
 	// Resource Events
 	case *events.ResourceIndexUpdatedEvent:
@@ -405,42 +409,7 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 		return "HAProxy pod removed from cluster",
 			attrs
 
-	// Webhook Events
-	case *events.WebhookServerStartedEvent:
-		return fmt.Sprintf("Webhook server started on port %d at %s", e.Port, e.Path),
-			append(attrs, "port", e.Port, "path", e.Path)
-
-	case *events.WebhookServerStoppedEvent:
-		return fmt.Sprintf("Webhook server stopped: %s", e.Reason),
-			append(attrs, "reason", e.Reason)
-
-	case *events.WebhookCertificatesGeneratedEvent:
-		daysValid := int(time.Until(e.ValidUntil).Hours() / 24)
-		return fmt.Sprintf("Webhook TLS certificates generated (valid for %d days until %s)",
-				daysValid, e.ValidUntil.Format("2006-01-02")),
-			append(attrs, "valid_until", e.ValidUntil, "days_valid", daysValid)
-
-	case *events.WebhookCertificatesRotatedEvent:
-		oldDaysRemaining := int(time.Until(e.OldValidUntil).Hours() / 24)
-		newDaysValid := int(time.Until(e.NewValidUntil).Hours() / 24)
-		return fmt.Sprintf("Webhook certificates rotated (%d days remaining → %d days valid)",
-				oldDaysRemaining, newDaysValid),
-			append(attrs,
-				"old_valid_until", e.OldValidUntil,
-				"new_valid_until", e.NewValidUntil,
-				"old_days_remaining", oldDaysRemaining,
-				"new_days_valid", newDaysValid)
-
-	case *events.WebhookConfigurationCreatedEvent:
-		return fmt.Sprintf("Webhook configuration '%s' created with %d validation rules",
-				e.Name, e.RuleCount),
-			append(attrs, "name", e.Name, "rule_count", e.RuleCount)
-
-	case *events.WebhookConfigurationUpdatedEvent:
-		return fmt.Sprintf("Webhook configuration '%s' updated with %d validation rules",
-				e.Name, e.RuleCount),
-			append(attrs, "name", e.Name, "rule_count", e.RuleCount)
-
+	// Webhook Validation Events
 	case *events.WebhookValidationRequestEvent:
 		resourceRef := fmt.Sprintf("%s/%s", e.Namespace, e.Name)
 		if e.Namespace == "" {

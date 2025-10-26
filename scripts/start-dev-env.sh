@@ -383,6 +383,78 @@ verify_cluster_context() {
 	ok "Context switched to development cluster"
 }
 
+setup_webhook_certificates() {
+    local webhook_enabled
+    local secret_name="${HELM_RELEASE_NAME}-webhook-cert"
+    local certs_dir="/tmp/haproxy-webhook-certs"
+
+    # Check if webhook is enabled in values
+    webhook_enabled=$(grep -A5 "^webhook:" "${ASSETS_DIR}/dev-values.yaml" | grep "enabled:" | head -1 | awk '{print $2}' || echo "false")
+
+    if [[ "$webhook_enabled" != "true" ]]; then
+        debug "Webhook not enabled, skipping certificate setup"
+        return 0
+    fi
+
+    log INFO "Setting up webhook certificates..."
+
+    # Check if Secret already exists with valid certificates
+    if kubectl -n "${CTRL_NAMESPACE}" get secret "$secret_name" >/dev/null 2>&1; then
+        # Check if certificates are still valid (> 7 days remaining)
+        local tls_crt
+        tls_crt=$(kubectl -n "${CTRL_NAMESPACE}" get secret "$secret_name" -o jsonpath='{.data.tls\.crt}' | base64 -d)
+
+        if echo "$tls_crt" | openssl x509 -checkend $((7 * 24 * 3600)) -noout 2>/dev/null; then
+            ok "Existing webhook certificates are still valid"
+
+            # Extract CA bundle for Helm
+            WEBHOOK_CA_BUNDLE=$(kubectl -n "${CTRL_NAMESPACE}" get secret "$secret_name" -o jsonpath='{.data.ca\.crt}')
+            export WEBHOOK_CA_BUNDLE
+            debug "Exported WEBHOOK_CA_BUNDLE from existing Secret"
+            return 0
+        else
+            warn "Existing certificates expire soon, regenerating..."
+            kubectl -n "${CTRL_NAMESPACE}" delete secret "$secret_name" 2>/dev/null || true
+        fi
+    fi
+
+    # Generate new certificates
+    log INFO "Generating self-signed webhook certificates..."
+    "${ASSETS_DIR}/generate-webhook-certs.sh" \
+        "${CTRL_NAMESPACE}" \
+        "${HELM_RELEASE_NAME}-webhook" \
+        "$certs_dir" || {
+        err "Failed to generate webhook certificates"
+        return 1
+    }
+
+    ok "Webhook certificates generated"
+
+    # Create Secret with certificates
+    log INFO "Creating webhook certificate Secret..."
+    kubectl create secret generic "$secret_name" \
+        --from-file=tls.crt="$certs_dir/tls.crt" \
+        --from-file=tls.key="$certs_dir/tls.key" \
+        --from-file=ca.crt="$certs_dir/ca.crt" \
+        --namespace="${CTRL_NAMESPACE}" \
+        --dry-run=client -o yaml | kubectl apply -f - || {
+        err "Failed to create webhook certificate Secret"
+        return 1
+    }
+
+    ok "Webhook certificate Secret created"
+
+    # Export CA bundle for Helm (base64-encoded CA cert)
+    WEBHOOK_CA_BUNDLE=$(cat "$certs_dir/ca-bundle.b64")
+    export WEBHOOK_CA_BUNDLE
+    debug "Exported WEBHOOK_CA_BUNDLE=${WEBHOOK_CA_BUNDLE:0:20}..."
+
+    # Clean up temporary certificates
+    rm -rf "$certs_dir"
+
+    return 0
+}
+
 build_and_load_local_image() {
     # Build image unless --skip-build is set
     if [[ "$SKIP_BUILD" != "true" ]]; then
@@ -508,19 +580,36 @@ deploy_controller() {
         ok "Using existing namespace '${CTRL_NAMESPACE}'"
     fi
 
+    # Setup webhook certificates if webhook is enabled
+    setup_webhook_certificates || {
+        err "Failed to setup webhook certificates"
+        return 1
+    }
+
     log INFO "Deploying haproxy-template-ic to namespace '${CTRL_NAMESPACE}' using Helm..."
     log INFO "Using image tag: ${IMAGE_TAG}"
+
+    # Build Helm command with webhook CA bundle if provided
+    local helm_args=(
+        "${HELM_RELEASE_NAME}"
+        "${REPO_ROOT}/charts/haproxy-template-ic"
+        "--namespace" "${CTRL_NAMESPACE}"
+        "--values" "${ASSETS_DIR}/dev-values.yaml"
+        "--set" "image.tag=${IMAGE_TAG}"
+        "--wait"
+        "--timeout" "${TIMEOUT}s"
+    )
+
+    # Add webhook CA bundle if set
+    if [[ -n "${WEBHOOK_CA_BUNDLE:-}" ]]; then
+        helm_args+=("--set" "webhook.caBundle=${WEBHOOK_CA_BUNDLE}")
+        debug "Added webhook.caBundle to Helm values"
+    fi
 
     # Use helm upgrade --install for idempotent deployment
     # The --wait flag ensures all resources are ready before returning
     # Override image.tag with unique SHA-based tag to force pod restart
-    if helm upgrade --install "${HELM_RELEASE_NAME}" \
-        "${REPO_ROOT}/charts/haproxy-template-ic" \
-        --namespace "${CTRL_NAMESPACE}" \
-        --values "${ASSETS_DIR}/dev-values.yaml" \
-        --set "image.tag=${IMAGE_TAG}" \
-        --wait \
-        --timeout "${TIMEOUT}s" 2>&1 | tee /tmp/helm-output.log; then
+    if helm upgrade --install "${helm_args[@]}" 2>&1 | tee /tmp/helm-output.log; then
         ok "Controller deployed and ready."
     else
         err "Helm deployment failed."
@@ -702,18 +791,35 @@ dev_restart() {
         }
     fi
 
+    # Setup webhook certificates if webhook is enabled
+    setup_webhook_certificates || {
+        err "Failed to setup webhook certificates"
+        return 1
+    }
+
+    # Build Helm command with webhook CA bundle if provided
+    local helm_args=(
+        "${HELM_RELEASE_NAME}"
+        "${REPO_ROOT}/charts/haproxy-template-ic"
+        "--namespace" "${CTRL_NAMESPACE}"
+        "--create-namespace"
+        "--values" "${ASSETS_DIR}/dev-values.yaml"
+        "--set" "image.tag=${IMAGE_TAG}"
+        "--wait"
+        "--timeout" "${TIMEOUT}s"
+    )
+
+    # Add webhook CA bundle if set
+    if [[ -n "${WEBHOOK_CA_BUNDLE:-}" ]]; then
+        helm_args+=("--set" "webhook.caBundle=${WEBHOOK_CA_BUNDLE}")
+        debug "Added webhook.caBundle to Helm values"
+    fi
+
     # Upgrade Helm release to pick up any changes
     # Using --install makes this idempotent (works even if release doesn't exist)
     # Override image.tag with unique SHA-based tag to force pod restart
     log INFO "Upgrading Helm release with image tag: ${IMAGE_TAG}..."
-    helm upgrade --install "${HELM_RELEASE_NAME}" \
-        "${REPO_ROOT}/charts/haproxy-template-ic" \
-        --namespace "${CTRL_NAMESPACE}" \
-        --create-namespace \
-        --values "${ASSETS_DIR}/dev-values.yaml" \
-        --set "image.tag=${IMAGE_TAG}" \
-        --wait \
-        --timeout "${TIMEOUT}s" || {
+    helm upgrade --install "${helm_args[@]}" || {
         warn "Helm upgrade failed, rolling back..."
         helm rollback "${HELM_RELEASE_NAME}" -n "${CTRL_NAMESPACE}" 2>/dev/null || true
         return 1

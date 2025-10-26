@@ -31,9 +31,6 @@ import (
 //   - rendered: Last rendered HAProxy config
 //   - auxfiles: Auxiliary files (SSL, maps, etc.)
 //   - resources: Resource counts by type
-//   - webhook/server: Webhook server status and uptime
-//   - webhook/cert: Webhook certificate info and expiry
-//   - webhook/stats: Webhook validation statistics
 //   - events: Recent events (default: last 100)
 //   - state: Full state dump (use carefully - large response)
 //   - uptime: Time since controller started
@@ -57,11 +54,6 @@ func RegisterVariables(
 	registry.Publish("rendered", &RenderedVar{provider: provider})
 	registry.Publish("auxfiles", &AuxFilesVar{provider: provider})
 	registry.Publish("resources", &ResourcesVar{provider: provider})
-
-	// Webhook variables
-	registry.Publish("webhook/server", &WebhookServerVar{provider: provider})
-	registry.Publish("webhook/cert", &WebhookCertVar{provider: provider})
-	registry.Publish("webhook/stats", &WebhookStatsVar{provider: provider})
 
 	// Events
 	registry.Publish("events", &EventsVar{

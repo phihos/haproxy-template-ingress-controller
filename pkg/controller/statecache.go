@@ -41,7 +41,6 @@ import (
 type StateCache struct {
 	bus             *busevents.EventBus
 	resourceWatcher *resourcewatcher.ResourceWatcherComponent
-	eventChan       <-chan busevents.Event // Event channel from Subscribe()
 
 	// Cached state (thread-safe)
 	mu                   sync.RWMutex
@@ -54,20 +53,24 @@ type StateCache struct {
 	lastAuxFiles         *dataplane.AuxiliaryFiles
 	lastAuxFilesTime     time.Time
 
-	// Webhook state
-	webhookServerRunning bool
-	webhookServerPort    int
-	webhookServerPath    string
-	webhookStartTime     time.Time
-	webhookCertExpiry    time.Time
-	webhookLastRotation  time.Time
-	webhookStatsTotal    int64
-	webhookStatsAllowed  int64
-	webhookStatsDenied   int64
-	webhookStatsErrors   int64
+	// Initialization state (guarded by initOnce)
+	initOnce  sync.Once
+	eventChan <-chan busevents.Event
 }
 
+// Compile-time check that StateCache implements debug.StateProvider interface.
+var _ debug.StateProvider = (*StateCache)(nil)
+
 // NewStateCache creates a new state cache component.
+//
+// The StateCache subscribes to the EventBus when Start() is called and must be started
+// BEFORE bus.Start() to ensure it receives all buffered startup events.
+//
+// Usage:
+//
+//	stateCache := NewStateCache(bus, resourceWatcher)
+//	stateCache.Start(ctx)  // Subscribe immediately, process events in background
+//	bus.Start()            // Release buffered events
 func NewStateCache(bus *busevents.EventBus, resourceWatcher *resourcewatcher.ResourceWatcherComponent) *StateCache {
 	return &StateCache{
 		bus:             bus,
@@ -75,32 +78,24 @@ func NewStateCache(bus *busevents.EventBus, resourceWatcher *resourcewatcher.Res
 	}
 }
 
-// Subscribe registers this StateCache with the EventBus.
+// Start subscribes to the EventBus and begins processing events.
 //
-// This must be called BEFORE bus.Start() to ensure the StateCache
-// receives all events, including buffered startup events.
+// This method:
+// 1. Subscribes to the EventBus (exactly once, thread-safe)
+// 2. Starts the event processing loop
 //
-// Call this synchronously before starting the event bus:
+// IMPORTANT: Call this BEFORE bus.Start() to ensure the StateCache receives all
+// buffered startup events. The subscription happens immediately when this method
+// is called, before the event loop starts.
 //
-//	stateCache := NewStateCache(bus, resourceWatcher)
-//	stateCache.Subscribe()
-//	bus.Start()
-//	go stateCache.Run(ctx)
-func (sc *StateCache) Subscribe() {
-	sc.eventChan = sc.bus.Subscribe(100)
-}
+// This method blocks until the context is cancelled.
+func (sc *StateCache) Start(ctx context.Context) error {
+	// Subscribe to EventBus exactly once (thread-safe)
+	sc.initOnce.Do(func() {
+		sc.eventChan = sc.bus.Subscribe(100)
+	})
 
-// Run begins processing events and updating cached state.
-//
-// This should be called AFTER Subscribe() and bus.Start().
-// Run in a goroutine:
-//
-//	go stateCache.Run(ctx)
-func (sc *StateCache) Run(ctx context.Context) error {
-	if sc.eventChan == nil {
-		panic("StateCache.Subscribe() must be called before Run()")
-	}
-
+	// Event processing loop
 	for {
 		select {
 		case event := <-sc.eventChan:
@@ -110,15 +105,6 @@ func (sc *StateCache) Run(ctx context.Context) error {
 			return nil
 		}
 	}
-}
-
-// Start is a convenience method that calls Subscribe() and Run() together.
-//
-// Deprecated: Use Subscribe() + Run() for proper initialization ordering.
-// This method exists for backward compatibility but should not be used in new code.
-func (sc *StateCache) Start(ctx context.Context) error {
-	sc.Subscribe()
-	return sc.Run(ctx)
 }
 
 // handleEvent processes events and updates cached state.
@@ -161,51 +147,6 @@ func (sc *StateCache) handleEvent(event interface{}) {
 			// Log when type assertion fails for debugging (only if not nil)
 			fmt.Printf("DEBUG: StateCache: TemplateRenderedEvent auxiliary files type assertion failed, got %T\n", e.AuxiliaryFiles)
 		}
-		sc.mu.Unlock()
-
-	// Webhook events
-	case *events.WebhookServerStartedEvent:
-		sc.mu.Lock()
-		sc.webhookServerRunning = true
-		sc.webhookServerPort = e.Port
-		sc.webhookServerPath = e.Path
-		sc.webhookStartTime = time.Now()
-		sc.mu.Unlock()
-
-	case *events.WebhookServerStoppedEvent:
-		sc.mu.Lock()
-		sc.webhookServerRunning = false
-		sc.mu.Unlock()
-
-	case *events.WebhookCertificatesGeneratedEvent:
-		sc.mu.Lock()
-		sc.webhookCertExpiry = e.ValidUntil
-		sc.mu.Unlock()
-
-	case *events.WebhookCertificatesRotatedEvent:
-		sc.mu.Lock()
-		sc.webhookCertExpiry = e.NewValidUntil
-		sc.webhookLastRotation = time.Now()
-		sc.mu.Unlock()
-
-	case *events.WebhookValidationRequestEvent:
-		sc.mu.Lock()
-		sc.webhookStatsTotal++
-		sc.mu.Unlock()
-
-	case *events.WebhookValidationAllowedEvent:
-		sc.mu.Lock()
-		sc.webhookStatsAllowed++
-		sc.mu.Unlock()
-
-	case *events.WebhookValidationDeniedEvent:
-		sc.mu.Lock()
-		sc.webhookStatsDenied++
-		sc.mu.Unlock()
-
-	case *events.WebhookValidationErrorEvent:
-		sc.mu.Lock()
-		sc.webhookStatsErrors++
 		sc.mu.Unlock()
 	}
 }
@@ -292,59 +233,4 @@ func (sc *StateCache) GetResourcesByType(resourceType string) ([]interface{}, er
 	}
 
 	return store.List()
-}
-
-// GetWebhookServerInfo implements debug.StateProvider.
-func (sc *StateCache) GetWebhookServerInfo() (*debug.WebhookServerInfo, error) {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
-
-	// Check if webhook was ever started
-	if sc.webhookServerPort == 0 {
-		return nil, fmt.Errorf("webhook not configured")
-	}
-
-	return &debug.WebhookServerInfo{
-		Running:   sc.webhookServerRunning,
-		Port:      sc.webhookServerPort,
-		Path:      sc.webhookServerPath,
-		StartTime: sc.webhookStartTime,
-	}, nil
-}
-
-// GetWebhookCertificateInfo implements debug.StateProvider.
-func (sc *StateCache) GetWebhookCertificateInfo() (*debug.WebhookCertInfo, error) {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
-
-	// Check if webhook certificates were generated
-	if sc.webhookCertExpiry.IsZero() {
-		return nil, fmt.Errorf("webhook certificates not generated yet")
-	}
-
-	daysRemaining := int(time.Until(sc.webhookCertExpiry).Hours() / 24)
-
-	return &debug.WebhookCertInfo{
-		ValidUntil:    sc.webhookCertExpiry,
-		LastRotation:  sc.webhookLastRotation,
-		DaysRemaining: daysRemaining,
-	}, nil
-}
-
-// GetWebhookValidationStats implements debug.StateProvider.
-func (sc *StateCache) GetWebhookValidationStats() (*debug.WebhookValidationStats, error) {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
-
-	// Check if webhook is configured (port set)
-	if sc.webhookServerPort == 0 {
-		return nil, fmt.Errorf("webhook not configured")
-	}
-
-	return &debug.WebhookValidationStats{
-		TotalRequests: sc.webhookStatsTotal,
-		Allowed:       sc.webhookStatsAllowed,
-		Denied:        sc.webhookStatsDenied,
-		Errors:        sc.webhookStatsErrors,
-	}, nil
 }

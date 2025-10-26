@@ -134,11 +134,15 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 	// Validate configuration using dataplane package
 	err := dataplane.ValidateConfiguration(event.HAProxyConfig, auxiliaryFiles, v.validationPaths)
 	if err != nil {
+		// Simplify error message for user-facing output
+		// Keep full error in logs for debugging
+		simplified := dataplane.SimplifyValidationError(err)
+
 		v.logger.Error("HAProxy configuration validation failed",
-			"error", err)
+			"error", simplified)
 
 		v.publishValidationFailure(
-			[]string{err.Error()},
+			[]string{simplified},
 			time.Since(startTime).Milliseconds(),
 		)
 		return

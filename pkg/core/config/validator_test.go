@@ -21,7 +21,7 @@ func TestValidateStructure_Success(t *testing.T) {
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},
@@ -99,7 +99,7 @@ func TestValidateOperatorConfig_InvalidHealthzPort(t *testing.T) {
 				WatchedResources: map[string]WatchedResource{
 					"ingresses": {
 						APIVersion: "networking.k8s.io/v1",
-						Kind:       "Ingress",
+						Resources:  "ingresses",
 						IndexBy:    []string{"metadata.namespace"},
 					},
 				},
@@ -127,7 +127,7 @@ func TestValidateOperatorConfig_InvalidMetricsPort(t *testing.T) {
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},
@@ -153,7 +153,7 @@ func TestValidateOperatorConfig_SamePort(t *testing.T) {
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},
@@ -192,7 +192,7 @@ func TestValidateLoggingConfig_InvalidVerbose(t *testing.T) {
 				WatchedResources: map[string]WatchedResource{
 					"ingresses": {
 						APIVersion: "networking.k8s.io/v1",
-						Kind:       "Ingress",
+						Resources:  "ingresses",
 						IndexBy:    []string{"metadata.namespace"},
 					},
 				},
@@ -240,7 +240,7 @@ func TestValidateWatchedResource_MissingAPIVersion(t *testing.T) {
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},
@@ -266,7 +266,7 @@ func TestValidateWatchedResource_MissingKind(t *testing.T) {
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "",
+				Resources:  "",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},
@@ -277,7 +277,7 @@ func TestValidateWatchedResource_MissingKind(t *testing.T) {
 
 	err := ValidateStructure(cfg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "kind")
+	assert.Contains(t, err.Error(), "resources")
 }
 
 func TestValidateWatchedResource_EmptyIndexBy(t *testing.T) {
@@ -292,7 +292,7 @@ func TestValidateWatchedResource_EmptyIndexBy(t *testing.T) {
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy:    []string{},
 			},
 		},
@@ -318,7 +318,7 @@ func TestValidateWatchedResource_EmptyIndexByElement(t *testing.T) {
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy:    []string{"metadata.namespace", ""},
 			},
 		},
@@ -344,7 +344,7 @@ func TestValidateHAProxyConfig_EmptyTemplate(t *testing.T) {
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},

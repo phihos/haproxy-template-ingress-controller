@@ -16,6 +16,7 @@ package metrics
 
 import (
 	"context"
+	"sync"
 
 	"haproxy-template-ic/pkg/controller/events"
 	pkgevents "haproxy-template-ic/pkg/events"
@@ -30,14 +31,17 @@ import (
 // When the iteration ends (context cancelled), the component stops and
 // the metrics it was updating become eligible for garbage collection.
 //
-// Lifecycle: NewComponent() → Start() → Run()
-//   - Start() must be called before eventBus.Start()
-//   - Run() must be called after eventBus.Start()
+// Lifecycle: NewComponent() → Start(ctx)
+//   - Start() must be called (in a goroutine) before eventBus.Start()
+//   - This ensures the component receives all buffered startup events
 type Component struct {
 	metrics        *Metrics
 	eventBus       *pkgevents.EventBus
-	eventChan      <-chan pkgevents.Event // Pre-subscribed event channel
-	resourceCounts map[string]int         // Tracks current resource counts
+	resourceCounts map[string]int // Tracks current resource counts
+
+	// Initialization state (guarded by initOnce)
+	initOnce  sync.Once
+	eventChan <-chan pkgevents.Event
 }
 
 // NewComponent creates a new metrics component that listens to events.
@@ -46,20 +50,13 @@ type Component struct {
 //   - metrics: The Metrics instance to update (created with metrics.New)
 //   - eventBus: The EventBus to subscribe to for events
 //
-// Lifecycle:
-//  1. component := NewComponent(metrics, eventBus)
-//  2. component.Start()           // Subscribe to event bus
-//  3. eventBus.Start()             // Start event bus (releases buffered events)
-//  4. go component.Run(ctx)        // Process events
-//
-// Example:
+// Usage:
 //
 //	registry := prometheus.NewRegistry()
 //	metrics := metrics.New(registry)
 //	component := NewComponent(metrics, eventBus)
-//	component.Start()
-//	eventBus.Start()
-//	go component.Run(ctx)
+//	go component.Start(ctx)  // Subscribe and process events in background
+//	eventBus.Start()         // Release buffered events
 func NewComponent(metrics *Metrics, eventBus *pkgevents.EventBus) *Component {
 	return &Component{
 		metrics:        metrics,
@@ -68,27 +65,24 @@ func NewComponent(metrics *Metrics, eventBus *pkgevents.EventBus) *Component {
 	}
 }
 
-// Start subscribes to the event bus.
+// Start subscribes to the EventBus and begins processing events.
 //
-// This method must be called before eventBus.Start() to ensure the component
-// receives all events including any buffered events that are replayed.
+// This method:
+// 1. Subscribes to the EventBus (exactly once, thread-safe)
+// 2. Starts the event processing loop
 //
-// This is a synchronous operation that completes immediately.
-func (c *Component) Start() {
-	c.eventChan = c.eventBus.Subscribe(200) // Large buffer for high-frequency metrics
-}
+// IMPORTANT: Call this (in a goroutine) BEFORE bus.Start() to ensure the component
+// receives all buffered startup events. The subscription happens immediately when
+// this method is called, before the event loop starts.
+//
+// This method blocks until the context is cancelled.
+func (c *Component) Start(ctx context.Context) error {
+	// Subscribe to EventBus exactly once (thread-safe)
+	c.initOnce.Do(func() {
+		c.eventChan = c.eventBus.Subscribe(200) // Large buffer for high-frequency metrics
+	})
 
-// Run starts the metrics component event loop.
-//
-// This method blocks until the context is cancelled. It should be run
-// in a goroutine alongside other controller components.
-//
-// IMPORTANT: Start() must be called before Run(), otherwise this will panic.
-func (c *Component) Run(ctx context.Context) error {
-	if c.eventChan == nil {
-		panic("Component.Start() must be called before Run()")
-	}
-
+	// Event processing loop
 	for {
 		select {
 		case event := <-c.eventChan:

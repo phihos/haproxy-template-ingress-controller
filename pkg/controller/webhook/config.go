@@ -37,7 +37,7 @@ import (
 func ExtractWebhookRules(cfg *config.Config) []webhook.WebhookRule {
 	rules := make([]webhook.WebhookRule, 0, len(cfg.WatchedResources))
 
-	for resourceName, resource := range cfg.WatchedResources {
+	for _, resource := range cfg.WatchedResources {
 		if !resource.EnableValidationWebhook {
 			continue
 		}
@@ -46,13 +46,12 @@ func ExtractWebhookRules(cfg *config.Config) []webhook.WebhookRule {
 		apiGroup, apiVersion := parseAPIVersion(resource.APIVersion)
 
 		// Create webhook rule
-		// Use resourceName (map key) which is already plural (e.g., "ingresses", "services")
-		// Use resource.Kind for validator registration (singular, TitleCase)
+		// Use resource.Resources which is the plural form (e.g., "ingresses", "services")
+		// Kind is not needed here - the webhook server gets it from AdmissionRequest at runtime
 		rule := webhook.WebhookRule{
 			APIGroups:   []string{apiGroup},
 			APIVersions: []string{apiVersion},
-			Resources:   []string{resourceName},
-			Kind:        resource.Kind,
+			Resources:   []string{resource.Resources},
 
 			// Default to CREATE and UPDATE operations
 			Operations: []admissionv1.OperationType{

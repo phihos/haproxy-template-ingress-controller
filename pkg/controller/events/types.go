@@ -106,17 +106,16 @@ const (
 	EventTypeCredentialsUpdated    = "credentials.updated"
 	EventTypeCredentialsInvalid    = "credentials.invalid"
 
-	// Webhook event types.
-	EventTypeWebhookServerStarted         = "webhook.server.started"
-	EventTypeWebhookServerStopped         = "webhook.server.stopped"
-	EventTypeWebhookCertificatesGenerated = "webhook.certificates.generated"
-	EventTypeWebhookCertificatesRotated   = "webhook.certificates.rotated"
-	EventTypeWebhookConfigurationCreated  = "webhook.configuration.created"
-	EventTypeWebhookConfigurationUpdated  = "webhook.configuration.updated"
-	EventTypeWebhookValidationRequest     = "webhook.validation.request"
-	EventTypeWebhookValidationAllowed     = "webhook.validation.allowed"
-	EventTypeWebhookValidationDenied      = "webhook.validation.denied"
-	EventTypeWebhookValidationError       = "webhook.validation.error"
+	// Webhook certificate event types.
+	EventTypeCertResourceChanged = "cert.resource.changed"
+	EventTypeCertParsed          = "cert.parsed"
+
+	// Webhook validation event types (observability only).
+	// Note: Scatter-gather request/response events are in webhook.go.
+	EventTypeWebhookValidationRequest = "webhook.validation.request"
+	EventTypeWebhookValidationAllowed = "webhook.validation.allowed"
+	EventTypeWebhookValidationDenied  = "webhook.validation.denied"
+	EventTypeWebhookValidationError   = "webhook.validation.error"
 )
 
 // -----------------------------------------------------------------------------
@@ -1061,126 +1060,64 @@ func (e *CredentialsInvalidEvent) EventType() string    { return EventTypeCreden
 func (e *CredentialsInvalidEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
-// Webhook Events.
+// Webhook Certificate Events
 // -----------------------------------------------------------------------------
 
-// WebhookServerStartedEvent is published when the webhook HTTPS server starts.
-type WebhookServerStartedEvent struct {
-	Port      int
-	Path      string
+// CertResourceChangedEvent is published when the webhook certificate Secret changes.
+//
+// This event is published by the resource watcher when the Secret resource
+// is created, updated, or modified.
+type CertResourceChangedEvent struct {
+	Resource interface{} // *unstructured.Unstructured
+
 	timestamp time.Time
 }
 
-// NewWebhookServerStartedEvent creates a new WebhookServerStartedEvent.
-func NewWebhookServerStartedEvent(port int, path string) *WebhookServerStartedEvent {
-	return &WebhookServerStartedEvent{
-		Port:      port,
-		Path:      path,
+// NewCertResourceChangedEvent creates a new CertResourceChangedEvent.
+func NewCertResourceChangedEvent(resource interface{}) *CertResourceChangedEvent {
+	return &CertResourceChangedEvent{
+		Resource:  resource,
 		timestamp: time.Now(),
 	}
 }
 
-func (e *WebhookServerStartedEvent) EventType() string    { return EventTypeWebhookServerStarted }
-func (e *WebhookServerStartedEvent) Timestamp() time.Time { return e.timestamp }
+func (e *CertResourceChangedEvent) EventType() string    { return EventTypeCertResourceChanged }
+func (e *CertResourceChangedEvent) Timestamp() time.Time { return e.timestamp }
 
-// WebhookServerStoppedEvent is published when the webhook HTTPS server stops.
-type WebhookServerStoppedEvent struct {
-	Reason    string
+// CertParsedEvent is published when webhook certificates are successfully extracted and parsed.
+//
+// The controller will use these certificates to initialize the webhook server.
+type CertParsedEvent struct {
+	CertPEM []byte
+	KeyPEM  []byte
+	Version string // Secret resourceVersion
+
 	timestamp time.Time
 }
 
-// NewWebhookServerStoppedEvent creates a new WebhookServerStoppedEvent.
-func NewWebhookServerStoppedEvent(reason string) *WebhookServerStoppedEvent {
-	return &WebhookServerStoppedEvent{
-		Reason:    reason,
+// NewCertParsedEvent creates a new CertParsedEvent.
+func NewCertParsedEvent(certPEM, keyPEM []byte, version string) *CertParsedEvent {
+	// Defensive copy of byte slices
+	certCopy := make([]byte, len(certPEM))
+	copy(certCopy, certPEM)
+
+	keyCopy := make([]byte, len(keyPEM))
+	copy(keyCopy, keyPEM)
+
+	return &CertParsedEvent{
+		CertPEM:   certCopy,
+		KeyPEM:    keyCopy,
+		Version:   version,
 		timestamp: time.Now(),
 	}
 }
 
-func (e *WebhookServerStoppedEvent) EventType() string    { return EventTypeWebhookServerStopped }
-func (e *WebhookServerStoppedEvent) Timestamp() time.Time { return e.timestamp }
+func (e *CertParsedEvent) EventType() string    { return EventTypeCertParsed }
+func (e *CertParsedEvent) Timestamp() time.Time { return e.timestamp }
 
-// WebhookCertificatesGeneratedEvent is published when webhook certificates are generated.
-type WebhookCertificatesGeneratedEvent struct {
-	ValidUntil time.Time
-	timestamp  time.Time
-}
-
-// NewWebhookCertificatesGeneratedEvent creates a new WebhookCertificatesGeneratedEvent.
-func NewWebhookCertificatesGeneratedEvent(validUntil time.Time) *WebhookCertificatesGeneratedEvent {
-	return &WebhookCertificatesGeneratedEvent{
-		ValidUntil: validUntil,
-		timestamp:  time.Now(),
-	}
-}
-
-func (e *WebhookCertificatesGeneratedEvent) EventType() string {
-	return EventTypeWebhookCertificatesGenerated
-}
-func (e *WebhookCertificatesGeneratedEvent) Timestamp() time.Time { return e.timestamp }
-
-// WebhookCertificatesRotatedEvent is published when webhook certificates are rotated.
-type WebhookCertificatesRotatedEvent struct {
-	OldValidUntil time.Time
-	NewValidUntil time.Time
-	timestamp     time.Time
-}
-
-// NewWebhookCertificatesRotatedEvent creates a new WebhookCertificatesRotatedEvent.
-func NewWebhookCertificatesRotatedEvent(oldValidUntil, newValidUntil time.Time) *WebhookCertificatesRotatedEvent {
-	return &WebhookCertificatesRotatedEvent{
-		OldValidUntil: oldValidUntil,
-		NewValidUntil: newValidUntil,
-		timestamp:     time.Now(),
-	}
-}
-
-func (e *WebhookCertificatesRotatedEvent) EventType() string {
-	return EventTypeWebhookCertificatesRotated
-}
-func (e *WebhookCertificatesRotatedEvent) Timestamp() time.Time { return e.timestamp }
-
-// WebhookConfigurationCreatedEvent is published when ValidatingWebhookConfiguration is created.
-type WebhookConfigurationCreatedEvent struct {
-	Name      string
-	RuleCount int
-	timestamp time.Time
-}
-
-// NewWebhookConfigurationCreatedEvent creates a new WebhookConfigurationCreatedEvent.
-func NewWebhookConfigurationCreatedEvent(name string, ruleCount int) *WebhookConfigurationCreatedEvent {
-	return &WebhookConfigurationCreatedEvent{
-		Name:      name,
-		RuleCount: ruleCount,
-		timestamp: time.Now(),
-	}
-}
-
-func (e *WebhookConfigurationCreatedEvent) EventType() string {
-	return EventTypeWebhookConfigurationCreated
-}
-func (e *WebhookConfigurationCreatedEvent) Timestamp() time.Time { return e.timestamp }
-
-// WebhookConfigurationUpdatedEvent is published when ValidatingWebhookConfiguration is updated.
-type WebhookConfigurationUpdatedEvent struct {
-	Name      string
-	RuleCount int
-	timestamp time.Time
-}
-
-// NewWebhookConfigurationUpdatedEvent creates a new WebhookConfigurationUpdatedEvent.
-func NewWebhookConfigurationUpdatedEvent(name string, ruleCount int) *WebhookConfigurationUpdatedEvent {
-	return &WebhookConfigurationUpdatedEvent{
-		Name:      name,
-		RuleCount: ruleCount,
-		timestamp: time.Now(),
-	}
-}
-
-func (e *WebhookConfigurationUpdatedEvent) EventType() string {
-	return EventTypeWebhookConfigurationUpdated
-}
-func (e *WebhookConfigurationUpdatedEvent) Timestamp() time.Time { return e.timestamp }
+// -----------------------------------------------------------------------------
+// Webhook Validation Events (Observability)
+// -----------------------------------------------------------------------------
 
 // WebhookValidationRequestEvent is published when an admission request is received.
 type WebhookValidationRequestEvent struct {

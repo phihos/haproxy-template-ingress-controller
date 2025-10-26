@@ -113,6 +113,92 @@ func (c *Component) Run(ctx context.Context) error {
 }
 ```
 
+## Utility Components Pattern
+
+Not all dependencies require event coordination. The controller uses both **pure components** and **utility components**:
+
+### Pure Components (Event Adapters Required)
+
+Pure components contain domain business logic and must be wrapped in event adapters:
+
+- `pkg/templating`: Template rendering
+- `pkg/dataplane`: HAProxy synchronization
+- `pkg/k8s`: Kubernetes resource watching
+
+Example - Renderer wraps TemplateEngine:
+
+```go
+// pkg/controller/renderer/component.go
+type Component struct {
+    engine   *templating.TemplateEngine  // Pure component
+    eventBus *events.EventBus
+}
+
+func (c *Component) Run(ctx context.Context) error {
+    // Subscribe to events, call engine methods, publish results
+}
+```
+
+### Utility Components (Direct Calls Allowed)
+
+Utility components provide infrastructure services and can be called directly without events:
+
+- **EventBus**: Event infrastructure (`pkg/events`)
+- **StoreManager**: Resource storage (`pkg/controller/resourcestore`)
+- **Metrics**: Prometheus metrics (`pkg/controller/metrics`)
+- **RestMapper**: Kubernetes API mapping (`k8s.io/apimachinery/pkg/api/meta`)
+
+Example - DryRunValidator calls StoreManager directly:
+
+```go
+// pkg/controller/dryrunvalidator/component.go
+type Component struct {
+    storeManager *resourcestore.Manager  // Utility component
+    engine       *templating.TemplateEngine  // Pure component (but called directly here - acceptable)
+}
+
+func (c *Component) handleValidationRequest(req *events.WebhookValidationRequest) {
+    // Direct utility call - this is acceptable
+    overlayStores, err := c.storeManager.CreateOverlayMap(...)
+
+    // Pure component called directly within same reconciliation context
+    // This is acceptable because we're not coordinating across components
+    haproxyConfig, err := c.engine.Render("haproxy.cfg", context)
+}
+```
+
+### When to Use Direct Calls vs Events
+
+**Direct calls are acceptable for:**
+1. Utility/infrastructure components (StoreManager, Metrics, RestMapper)
+2. Pure components within a single reconciliation context (DryRunValidator renders templates)
+3. Synchronous operations that don't need coordination
+4. Performance-critical paths where event overhead is unacceptable
+
+**Events are required for:**
+1. Cross-component coordination (Reconciler → Executor → Deployer)
+2. Scatter-gather operations (multiple validators responding)
+3. Asynchronous workflows
+4. Observability needs (commentator logs all events)
+
+### Adding New Components
+
+When creating a new component, ask:
+
+1. **Does it contain domain business logic?**
+   - YES → Create as pure component in `pkg/` + event adapter in `pkg/controller/`
+   - NO → Consider if it's infrastructure/utility
+
+2. **Will multiple components need to observe/react to it?**
+   - YES → Use events for coordination
+   - NO → Direct calls may be sufficient
+
+3. **Is it synchronous infrastructure?**
+   - YES → Create as utility component, allow direct calls
+   - NO → Use event-driven pattern
+
+Document the decision in the component's CLAUDE.md file.
+
 ## Sub-Package Guidelines
 
 ### events/ - Domain Event Catalog

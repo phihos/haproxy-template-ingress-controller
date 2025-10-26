@@ -26,7 +26,7 @@ func TestToGVR(t *testing.T) {
 			name: "core resource",
 			wr: coreconfig.WatchedResource{
 				APIVersion: "v1",
-				Kind:       "Service",
+				Resources:  "services",
 			},
 			want: schema.GroupVersionResource{
 				Group:    "",
@@ -38,7 +38,7 @@ func TestToGVR(t *testing.T) {
 			name: "networking resource",
 			wr: coreconfig.WatchedResource{
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 			},
 			want: schema.GroupVersionResource{
 				Group:    "networking.k8s.io",
@@ -50,7 +50,7 @@ func TestToGVR(t *testing.T) {
 			name: "discovery resource",
 			wr: coreconfig.WatchedResource{
 				APIVersion: "discovery.k8s.io/v1",
-				Kind:       "EndpointSlice",
+				Resources:  "endpointslices",
 			},
 			want: schema.GroupVersionResource{
 				Group:    "discovery.k8s.io",
@@ -61,7 +61,7 @@ func TestToGVR(t *testing.T) {
 		{
 			name: "missing api_version",
 			wr: coreconfig.WatchedResource{
-				Kind: "Ingress",
+				Resources: "ingresses",
 			},
 			wantErr: true,
 		},
@@ -121,31 +121,6 @@ func TestParseAPIVersion(t *testing.T) {
 			group, version := parseAPIVersion(tt.apiVersion)
 			assert.Equal(t, tt.wantGroup, group)
 			assert.Equal(t, tt.wantVersion, version)
-		})
-	}
-}
-
-func TestPluralizeKind(t *testing.T) {
-	tests := []struct {
-		kind string
-		want string
-	}{
-		{"Service", "services"},
-		{"Ingress", "ingresses"},
-		{"Pod", "pods"},
-		{"Endpoints", "endpoints"}, // Already plural
-		{"EndpointSlice", "endpointslices"},
-		{"ConfigMap", "configmaps"},
-		{"Secret", "secrets"},
-		{"Deployment", "deployments"},
-		{"StatefulSet", "statefulsets"},
-		{"DaemonSet", "daemonsets"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.kind, func(t *testing.T) {
-			got := pluralizeKind(tt.kind)
-			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -305,7 +280,7 @@ func TestGetStore(t *testing.T) {
 		WatchedResources: map[string]coreconfig.WatchedResource{
 			"services": {
 				APIVersion: "v1",
-				Kind:       "Service",
+				Resources:  "services",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},
@@ -334,12 +309,12 @@ func TestGetAllStores(t *testing.T) {
 		WatchedResources: map[string]coreconfig.WatchedResource{
 			"services": {
 				APIVersion: "v1",
-				Kind:       "Service",
+				Resources:  "services",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 			"pods": {
 				APIVersion: "v1",
-				Kind:       "Pod",
+				Resources:  "pods",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},
@@ -369,12 +344,12 @@ func TestSyncTracking(t *testing.T) {
 		WatchedResources: map[string]coreconfig.WatchedResource{
 			"services": {
 				APIVersion: "v1",
-				Kind:       "Service",
+				Resources:  "services",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 			"pods": {
 				APIVersion: "v1",
-				Kind:       "Pod",
+				Resources:  "pods",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},
@@ -430,7 +405,7 @@ func TestStart(t *testing.T) {
 		WatchedResources: map[string]coreconfig.WatchedResource{
 			"services": {
 				APIVersion: "v1",
-				Kind:       "Service",
+				Resources:  "services",
 				IndexBy:    []string{"metadata.namespace"},
 			},
 		},

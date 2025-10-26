@@ -37,7 +37,7 @@ func TestExtractWebhookRules(t *testing.T) {
 				WatchedResources: map[string]config.WatchedResource{
 					"services": {
 						APIVersion:              "v1",
-						Kind:                    "Service",
+						Resources:               "services",
 						EnableValidationWebhook: false,
 					},
 				},
@@ -50,7 +50,7 @@ func TestExtractWebhookRules(t *testing.T) {
 				WatchedResources: map[string]config.WatchedResource{
 					"ingresses": {
 						APIVersion:              "networking.k8s.io/v1",
-						Kind:                    "Ingress",
+						Resources:               "ingresses",
 						EnableValidationWebhook: true,
 					},
 				},
@@ -61,7 +61,7 @@ func TestExtractWebhookRules(t *testing.T) {
 				assert.Equal(t, []string{"networking.k8s.io"}, rules[0].APIGroups)
 				assert.Equal(t, []string{"v1"}, rules[0].APIVersions)
 				assert.Equal(t, []string{"ingresses"}, rules[0].Resources)
-				assert.Equal(t, "Ingress", rules[0].Kind)
+				// Kind is now resolved at runtime via RESTMapper, not stored in config
 				assert.Equal(t, []admissionv1.OperationType{
 					admissionv1.Create,
 					admissionv1.Update,
@@ -74,7 +74,7 @@ func TestExtractWebhookRules(t *testing.T) {
 				WatchedResources: map[string]config.WatchedResource{
 					"configmaps": {
 						APIVersion:              "v1",
-						Kind:                    "ConfigMap",
+						Resources:               "configmaps",
 						EnableValidationWebhook: true,
 					},
 				},
@@ -85,7 +85,7 @@ func TestExtractWebhookRules(t *testing.T) {
 				assert.Equal(t, []string{""}, rules[0].APIGroups)
 				assert.Equal(t, []string{"v1"}, rules[0].APIVersions)
 				assert.Equal(t, []string{"configmaps"}, rules[0].Resources)
-				assert.Equal(t, "ConfigMap", rules[0].Kind)
+				// Kind is now resolved at runtime via RESTMapper, not stored in config
 			},
 		},
 		{
@@ -94,17 +94,17 @@ func TestExtractWebhookRules(t *testing.T) {
 				WatchedResources: map[string]config.WatchedResource{
 					"ingresses": {
 						APIVersion:              "networking.k8s.io/v1",
-						Kind:                    "Ingress",
+						Resources:               "ingresses",
 						EnableValidationWebhook: true,
 					},
 					"services": {
 						APIVersion:              "v1",
-						Kind:                    "Service",
+						Resources:               "services",
 						EnableValidationWebhook: false,
 					},
 					"secrets": {
 						APIVersion:              "v1",
-						Kind:                    "Secret",
+						Resources:               "secrets",
 						EnableValidationWebhook: true,
 					},
 				},

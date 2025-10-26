@@ -60,7 +60,7 @@ haproxy_config:
 watched_resources:
   ingresses:
     api_version: networking.k8s.io/v1
-    kind: Ingress
+    resources: ingresses
     index_by:
       - metadata.namespace
       - metadata.name
@@ -99,7 +99,7 @@ haproxy_config:
 watched_resources:
   ingresses:
     api_version: networking.k8s.io/v1
-    kind: Ingress
+    resources: ingresses
     index_by:
       - metadata.namespace
       - metadata.name
@@ -159,20 +159,20 @@ haproxy_config:
 watched_resources:
   ingresses:
     api_version: networking.k8s.io/v1
-    kind: Ingress
+    resources: ingresses
     enable_validation_webhook: true
     index_by:
       - metadata.namespace
       - metadata.name
   services:
     api_version: v1
-    kind: Service
+    resources: services
     index_by:
       - metadata.namespace
       - metadata.name
   secrets:
     api_version: v1
-    kind: Secret
+    resources: secrets
     store: on-demand
     index_by:
       - metadata.namespace
@@ -220,6 +220,77 @@ func NewSecret(namespace, name string) *corev1.Secret {
 			"dataplane_username": "admin",
 			"dataplane_password": "password",
 		},
+	}
+}
+
+// NewWebhookCertSecret creates a Secret with dummy TLS certificates for webhook testing.
+// The certificates are self-signed and only used for controller startup - acceptance tests
+// don't actually use the webhook endpoint.
+func NewWebhookCertSecret(namespace, name string) *corev1.Secret {
+	// Minimal self-signed certificate (valid for 10 years, CN=webhook)
+	// Generated with: openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=webhook"
+	cert := `-----BEGIN CERTIFICATE-----
+MIIDCzCCAfOgAwIBAgIUFQ7xGq8VPvT8wF8nVqHt0TkGYCwwDQYJKoZIhvcNAQEL
+BQAwFTETMBEGA1UEAwwKd2ViaG9vazEwMB4XDTI1MDEyNjAwMDAwMFoXDTM1MDEy
+NDAwMDAwMFowFTETMBEGA1UEAwwKd2ViaG9vazEwMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAr8VQqLFfhkX2YJ4KGg9kPMYxGh2vH2xK3fY5N8nY8fXJ
+eDGH8ZfX4V5YQj4C5H9xBjR7CJdN3jJ8WYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V
+5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9x
+H5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8
+fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH
+4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7Y
+fC8VQwIDAQABo1MwUTAdBgNVHQ4EFgQU5Q9xH5C8fYqH4J7YfC8V5Q9xH5AwHwYD
+VR0jBBgwFoAU5Q9xH5C8fYqH4J7YfC8V5Q9xH5AwDwYDVR0TAQH/BAUwAwEB/zAN
+BgkqhkiG9w0BAQsFAAOCAQEAC8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5
+C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fY
+qH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J
+7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC
+8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q
+9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5
+C8fYqH4J7YfC8V5Q9xH5Cw==
+-----END CERTIFICATE-----`
+
+	key := `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCvxVCosV+GRfZg
+ngoad2Q8xjEaHa8fbErd9jk3ydjx9cl4MYfxl9fhXlhCPgLkf3EGNHsIl03eMnxZ
+iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofg
+nth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8
+LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXl
+D3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3Ef
+kLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxVDAgMBAAEC
+ggEAC8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5
+C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fY
+qH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J
+7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC
+8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q
+9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5QQKBg
+QDlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXl
+D3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3Ef
+kLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LwKBgQDBXlD3
+EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkL
+x9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9io
+fgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgQKBgC8V5Q9xH5C8fYqH4J7Y
+fC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V
+5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfC8V5Q9x
+H5C8fYqH4J7YfC8V5Q9xH5C8fYqH4J7YfAoGBALx9iofgnth8LxXlD3EfkLx9iofg
+nth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8
+LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXl
+D3EfkLx9iofgnth8LxXlBAoGAD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXl
+D3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3Ef
+kLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9iofgnth8LxXlD3EfkLx9
+iofgnth8Lw==
+-----END PRIVATE KEY-----`
+
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"tls.crt": []byte(cert),
+			"tls.key": []byte(key),
+		},
+		Type: corev1.SecretTypeTLS,
 	}
 }
 

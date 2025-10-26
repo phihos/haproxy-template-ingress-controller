@@ -115,6 +115,13 @@ func TestConfigMapReload(t *testing.T) {
 			}
 			t.Log("Created controller secret")
 
+			// Create webhook certificate Secret
+			webhookCertSecret := NewWebhookCertSecret(namespace, "haproxy-webhook-certs")
+			if err := client.Resources().Create(ctx, webhookCertSecret); err != nil {
+				t.Fatal("Failed to create webhook cert secret:", err)
+			}
+			t.Log("Created webhook certificate secret")
+
 			// Create controller ConfigMap with initial configuration
 			configMap := NewConfigMap(namespace, ControllerConfigMapName, InitialConfigYAML)
 			if err := client.Resources().Create(ctx, configMap); err != nil {

@@ -14,40 +14,40 @@
 
 // Package webhook provides a pure library for Kubernetes admission webhooks.
 //
-// This package implements HTTPS webhook servers, certificate management,
-// and dynamic webhook configuration without dependencies on other project packages.
-// It can be used in any Kubernetes controller project.
+// This package implements an HTTPS webhook server with flexible validation handlers,
+// without dependencies on other project packages. It can be used in any Kubernetes
+// controller project.
 //
 // The package provides:
 //   - Generic webhook server with configurable validation
-//   - Self-signed certificate generation and rotation
-//   - Dynamic ValidatingWebhookConfiguration management
-//   - AdmissionReview request/response handling
+//   - AdmissionReview v1 request/response handling
+//   - ValidationContext with full admission request details
+//   - Thread-safe concurrent request handling
+//
+// External dependencies required (not provided by this library):
+//   - TLS certificates (from cert-manager, Kubernetes Secret, or Helm)
+//   - ValidatingWebhookConfiguration (via Helm chart or kubectl apply)
 //
 // Example usage:
 //
-//	// Create certificate manager
-//	certMgr := webhook.NewCertificateManager(webhook.CertConfig{
-//	    Namespace:   "default",
-//	    ServiceName: "my-webhook",
-//	})
-//
-//	// Generate certificates
-//	certs, err := certMgr.Generate()
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
+//	// Load certificates from external source (Kubernetes Secret)
+//	secret, err := client.CoreV1().Secrets("default").Get(ctx, "webhook-certs", metav1.GetOptions{})
+//	certPEM := secret.Data["tls.crt"]
+//	keyPEM := secret.Data["tls.key"]
 //
 //	// Create webhook server
-//	server := webhook.NewServer(webhook.ServerConfig{
+//	server := webhook.NewServer(&webhook.ServerConfig{
 //	    Port:     9443,
-//	    CertPEM:  certs.ServerCert,
-//	    KeyPEM:   certs.ServerKey,
+//	    CertPEM:  certPEM,
+//	    KeyPEM:   keyPEM,
 //	})
 //
-//	// Register validator
-//	server.RegisterValidator("v1.Ingress", func(obj interface{}) (bool, string, error) {
-//	    // Validation logic
+//	// Register validator with full context
+//	server.RegisterValidator("networking.k8s.io/v1.Ingress", func(ctx *webhook.ValidationContext) (bool, string, error) {
+//	    // Validation logic with access to operation type and old/new objects
+//	    if ctx.Operation == "UPDATE" && ctx.OldObject != nil {
+//	        // Implement immutability checks
+//	    }
 //	    return true, "", nil
 //	})
 //
@@ -279,11 +279,6 @@ type WebhookRule struct {
 	// Resources that this rule matches (plural, lowercase).
 	// Example: ["ingresses"]
 	Resources []string
-
-	// Kind is the resource kind (singular, TitleCase).
-	// Example: "Ingress", "ConfigMap"
-	// Used for validator registration - must match Kind in AdmissionRequest.
-	Kind string
 
 	// Operations that this rule matches.
 	// Default: ["CREATE", "UPDATE"]
