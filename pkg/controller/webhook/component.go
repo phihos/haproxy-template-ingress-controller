@@ -16,10 +16,11 @@
 // the pure webhook library to the event-driven controller architecture.
 //
 // The webhook component manages the lifecycle of admission webhooks including:
-//   - TLS certificate generation and rotation
 //   - HTTPS webhook server
-//   - Dynamic ValidatingWebhookConfiguration management
 //   - Integration with controller validators
+//
+// Note: TLS certificates are fetched from Kubernetes Secret via API.
+// ValidatingWebhookConfiguration is created by Helm at installation time.
 package webhook
 
 import (
@@ -28,7 +29,8 @@ import (
 	"log/slog"
 	"time"
 
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"haproxy-template-ic/pkg/controller/events"
 	busevents "haproxy-template-ic/pkg/events"
@@ -42,29 +44,22 @@ const (
 	// DefaultWebhookPath is the default URL path for validation requests.
 	DefaultWebhookPath = "/validate"
 
-	// DefaultCertRotationCheckInterval is how often to check if certificates need rotation.
-	DefaultCertRotationCheckInterval = 24 * time.Hour
-
 	// EventBufferSize is the size of the event subscription buffer.
 	EventBufferSize = 50
 )
 
 // Component is the webhook adapter component that manages webhook lifecycle.
 //
-// It coordinates the pure webhook library components (server, certificates, configuration)
-// with the event-driven controller architecture.
+// It coordinates the pure webhook library server with the event-driven controller architecture.
 type Component struct {
 	// Dependencies
-	kubeClient kubernetes.Interface
 	eventBus   *busevents.EventBus
 	logger     *slog.Logger
 	metrics    MetricsRecorder
+	restMapper meta.RESTMapper
 
 	// Webhook library components
-	server       *webhook.Server
-	certManager  *webhook.CertificateManager
-	configMgr    *webhook.ConfigManager
-	certificates *webhook.Certificates
+	server *webhook.Server
 
 	// Configuration
 	config Config
@@ -79,22 +74,10 @@ type Component struct {
 type MetricsRecorder interface {
 	RecordWebhookRequest(gvk, result string, durationSeconds float64)
 	RecordWebhookValidation(gvk, result string)
-	SetWebhookCertExpiry(expiryTime int64)
-	RecordWebhookCertRotation()
 }
 
 // Config configures the webhook component.
 type Config struct {
-	// Namespace is the Kubernetes namespace the controller is deployed in.
-	Namespace string
-
-	// ServiceName is the Kubernetes service name for the webhook endpoint.
-	ServiceName string
-
-	// WebhookConfigName is the name for the ValidatingWebhookConfiguration.
-	// Default: "haproxy-template-ic-webhook"
-	WebhookConfigName string
-
 	// Port is the HTTPS port for the webhook server.
 	// Default: 9443
 	Port int
@@ -103,152 +86,200 @@ type Config struct {
 	// Default: "/validate"
 	Path string
 
-	// CertRotationCheckInterval is how often to check if certificates need rotation.
-	// Default: 24h
-	CertRotationCheckInterval time.Duration
+	// CertPEM is the PEM-encoded TLS certificate.
+	// Fetched from Kubernetes Secret via API.
+	CertPEM []byte
+
+	// KeyPEM is the PEM-encoded TLS private key.
+	// Fetched from Kubernetes Secret via API.
+	KeyPEM []byte
 
 	// Rules defines which resources the webhook validates.
-	// Populated from controller configuration based on enable_validation_webhook flags.
+	// Used for registering validators by GVK.
 	Rules []webhook.WebhookRule
 }
 
 // New creates a new webhook component.
 //
 // Parameters:
-//   - kubeClient: Kubernetes client for webhook configuration management
 //   - eventBus: EventBus for publishing webhook events
 //   - logger: Structured logger
-//   - config: Component configuration
+//   - config: Component configuration (must include CertPEM and KeyPEM)
+//   - restMapper: RESTMapper for resolving resource kinds from GVR
 //   - metrics: Optional metrics recorder (can be nil)
 //
 // Returns:
 //   - A new Component instance ready to be started
-func New(kubeClient kubernetes.Interface, eventBus *busevents.EventBus, logger *slog.Logger, config *Config, metrics MetricsRecorder) *Component {
+func New(eventBus *busevents.EventBus, logger *slog.Logger, config *Config, restMapper meta.RESTMapper, metrics MetricsRecorder) *Component {
 	// Apply defaults
-	if config.WebhookConfigName == "" {
-		config.WebhookConfigName = "haproxy-template-ic-webhook"
-	}
 	if config.Port == 0 {
 		config.Port = DefaultWebhookPort
 	}
 	if config.Path == "" {
 		config.Path = DefaultWebhookPath
 	}
-	if config.CertRotationCheckInterval == 0 {
-		config.CertRotationCheckInterval = DefaultCertRotationCheckInterval
-	}
-
-	// Create certificate manager
-	certManager := webhook.NewCertificateManager(&webhook.CertConfig{
-		Namespace:   config.Namespace,
-		ServiceName: config.ServiceName,
-	})
 
 	return &Component{
-		kubeClient:  kubeClient,
-		eventBus:    eventBus,
-		logger:      logger.With("component", "webhook"),
-		metrics:     metrics,
-		certManager: certManager,
-		config:      *config,
+		eventBus:   eventBus,
+		logger:     logger.With("component", "webhook"),
+		config:     *config,
+		restMapper: restMapper,
+		metrics:    metrics,
 	}
 }
 
-// Start begins the webhook component's lifecycle.
+// Start starts the webhook component.
 //
 // This method:
-//  1. Generates TLS certificates
-//  2. Creates the webhook server
-//  3. Registers validators
-//  4. Creates ValidatingWebhookConfiguration
-//  5. Starts the HTTPS server
-//  6. Monitors certificate rotation
+// 1. Validates TLS certificates from configuration
+// 2. Creates and starts the webhook HTTPS server
+// 3. Publishes lifecycle events
 //
-// The component runs until the context is cancelled.
+// The server continues running until the context is cancelled.
 func (c *Component) Start(ctx context.Context) error {
-	c.logger.Info("Webhook component starting",
-		"namespace", c.config.Namespace,
-		"service", c.config.ServiceName,
-		"port", c.config.Port)
+	c.logger.Info("Starting webhook component",
+		"port", c.config.Port,
+		"path", c.config.Path,
+		"cert_size", len(c.config.CertPEM),
+		"key_size", len(c.config.KeyPEM))
 
-	// Generate initial certificates
-	if err := c.generateCertificates(); err != nil {
-		return fmt.Errorf("failed to generate certificates: %w", err)
+	// Validate certificates are present
+	if len(c.config.CertPEM) == 0 {
+		return fmt.Errorf("TLS certificate is empty")
+	}
+	if len(c.config.KeyPEM) == 0 {
+		return fmt.Errorf("TLS private key is empty")
 	}
 
-	// Create webhook server
-	c.createServer()
+	c.logger.Info("TLS certificates validated successfully",
+		"cert_size", len(c.config.CertPEM),
+		"key_size", len(c.config.KeyPEM))
+
+	// Create webhook server with certificates from configuration
+	c.server = webhook.NewServer(&webhook.ServerConfig{
+		Port:         c.config.Port,
+		Path:         c.config.Path,
+		CertPEM:      c.config.CertPEM,
+		KeyPEM:       c.config.KeyPEM,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	})
 
 	// Register validators
 	c.registerValidators()
 
-	// Create webhook configuration
-	if err := c.createWebhookConfiguration(ctx); err != nil {
-		return fmt.Errorf("failed to create webhook configuration: %w", err)
+	// Create server context
+	c.serverCtx, c.serverCancel = context.WithCancel(ctx)
+
+	// Start server in goroutine
+	serverErrCh := make(chan error, 1)
+	go func() {
+		if err := c.server.Start(c.serverCtx); err != nil {
+			c.logger.Error("Webhook server error", "error", err)
+			serverErrCh <- err
+		}
+	}()
+
+	c.logger.Info("Webhook server started",
+		"port", c.config.Port,
+		"path", c.config.Path)
+
+	// Wait for shutdown or error
+	select {
+	case err := <-serverErrCh:
+		return fmt.Errorf("webhook server failed: %w", err)
+	case <-ctx.Done():
+		c.logger.Info("Webhook component shutting down")
+		c.serverCancel()
+		return nil
 	}
-
-	// Start server in background
-	c.startServer(ctx)
-
-	// Monitor certificate rotation
-	c.monitorCertificateRotation(ctx)
-
-	return nil
 }
 
-// generateCertificates generates initial TLS certificates.
-func (c *Component) generateCertificates() error {
-	c.logger.Info("Generating TLS certificates")
-
-	certs, err := c.certManager.Generate()
-	if err != nil {
-		return err
-	}
-
-	c.certificates = certs
-
-	// Publish event
-	c.eventBus.Publish(events.NewWebhookCertificatesGeneratedEvent(
-		certs.ValidUntil,
-	))
-
-	// Record metrics
-	if c.metrics != nil {
-		c.metrics.SetWebhookCertExpiry(certs.ValidUntil.Unix())
-	}
-
-	c.logger.Info("TLS certificates generated",
-		"valid_until", certs.ValidUntil)
-
-	return nil
-}
-
-// createServer creates the webhook HTTPS server.
-func (c *Component) createServer() {
-	c.server = webhook.NewServer(&webhook.ServerConfig{
-		Port:    c.config.Port,
-		Path:    c.config.Path,
-		CertPEM: c.certificates.ServerCert,
-		KeyPEM:  c.certificates.ServerKey,
-	})
-}
-
-// registerValidators registers validation functions with the webhook server.
+// RegisterValidator registers a validation function for a specific resource type.
 //
-// This bridges webhook ValidationFunc to controller validators via events.
+// This should be called before Start() to register all validators.
+//
+// Parameters:
+//   - gvk: Group/Version.Kind identifier (e.g., "networking.k8s.io/v1.Ingress", "v1.ConfigMap")
+//   - validatorFunc: The validation function to call for this resource type
+func (c *Component) RegisterValidator(gvk string, validatorFunc webhook.ValidationFunc) {
+	if c.server == nil {
+		c.logger.Warn("RegisterValidator called before server created, validator will be registered when server starts")
+		return
+	}
+	c.server.RegisterValidator(gvk, validatorFunc)
+	c.logger.Debug("Validator registered", "gvk", gvk)
+}
+
+// resolveKind uses RESTMapper to convert GVR (Group/Version/Resource) to Kind.
+//
+// This queries the Kubernetes API server's discovery information to get the
+// authoritative mapping from resource names to kinds.
+//
+// Parameters:
+//   - apiGroup: API group (empty string for core resources)
+//   - apiVersion: API version (e.g., "v1", "v1beta1")
+//   - resource: Plural resource name (e.g., "ingresses", "services")
+//
+// Returns:
+//   - kind: Singular kind name (e.g., "Ingress", "Service")
+//   - error: If resolution fails
+func (c *Component) resolveKind(apiGroup, apiVersion, resource string) (string, error) {
+	gvr := schema.GroupVersionResource{
+		Group:    apiGroup,
+		Version:  apiVersion,
+		Resource: resource,
+	}
+
+	c.logger.Debug("Resolving kind from GVR",
+		"group", apiGroup,
+		"version", apiVersion,
+		"resource", resource)
+
+	gvk, err := c.restMapper.KindFor(gvr)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve kind for %v: %w", gvr, err)
+	}
+
+	c.logger.Debug("Resolved kind",
+		"resource", resource,
+		"kind", gvk.Kind)
+
+	return gvk.Kind, nil
+}
+
+// registerValidators registers validators for all configured webhook rules.
+//
+// This is called automatically during Start() after the server is created.
+// It uses RESTMapper to resolve resource names to kinds.
 func (c *Component) registerValidators() {
 	c.logger.Info("Registering validators")
 
 	// For each webhook rule, register a validator
 	for _, rule := range c.config.Rules {
-		// Use Kind (singular) for validator registration, not Resources (plural)
-		// The webhook server receives AdmissionRequests with Kind (e.g., "ConfigMap")
-		// not resource name (e.g., "configmaps")
-		gvk := c.buildGVK(rule.APIGroups[0], rule.APIVersions[0], rule.Kind)
+		// Resolve Kind from Resource using RESTMapper
+		// The webhook server receives AdmissionRequests with Kind (e.g., "Ingress")
+		// but we only have the resources field (e.g., "ingresses")
+		// RESTMapper queries the Kubernetes API to get the authoritative mapping
+		kind, err := c.resolveKind(
+			rule.APIGroups[0],
+			rule.APIVersions[0],
+			rule.Resources[0],
+		)
+		if err != nil {
+			c.logger.Error("Failed to resolve kind, skipping validator registration",
+				"error", err,
+				"api_group", rule.APIGroups[0],
+				"api_version", rule.APIVersions[0],
+				"resource", rule.Resources[0])
+			continue
+		}
+
+		gvk := c.buildGVK(rule.APIGroups[0], rule.APIVersions[0], kind)
 
 		c.logger.Debug("Registering validator",
 			"gvk", gvk,
-			"kind", rule.Kind,
+			"kind", kind,
 			"resources", rule.Resources)
 
 		// Create resource validator
@@ -266,172 +297,109 @@ func (c *Component) buildGVK(apiGroup, version, kind string) string {
 	return fmt.Sprintf("%s/%s.%s", apiGroup, version, kind)
 }
 
-// createWebhookConfiguration creates or updates the ValidatingWebhookConfiguration.
-func (c *Component) createWebhookConfiguration(ctx context.Context) error {
-	c.logger.Info("Creating webhook configuration")
+// createResourceValidator creates a ValidationFunc for a specific GVK.
+//
+// This validator uses the scatter-gather pattern to coordinate multiple
+// validators (BasicValidator, DryRunValidator) via the EventBus.
+//
+// All validators must allow for the resource to be admitted (AND logic).
+func (c *Component) createResourceValidator(gvk string) webhook.ValidationFunc {
+	return func(valCtx *webhook.ValidationContext) (bool, string, error) {
+		start := time.Now()
 
-	c.configMgr = webhook.NewConfigManager(c.kubeClient, &webhook.WebhookConfigSpec{
-		Name:        c.config.WebhookConfigName,
-		Namespace:   c.config.Namespace,
-		ServiceName: c.config.ServiceName,
-		Path:        c.config.Path,
-		CABundle:    c.certificates.CACert,
-		Rules:       c.config.Rules,
-	})
+		c.logger.Debug("Validating resource",
+			"gvk", gvk,
+			"operation", valCtx.Operation,
+			"namespace", valCtx.Namespace,
+			"name", valCtx.Name)
 
-	if err := c.configMgr.CreateOrUpdate(ctx); err != nil {
-		return err
-	}
+		// Create validation request with actual operation from context
+		req := events.NewWebhookValidationRequest(
+			gvk,
+			valCtx.Namespace,
+			valCtx.Name,
+			valCtx.Object,
+			valCtx.Operation,
+		)
 
-	// Publish event
-	c.eventBus.Publish(events.NewWebhookConfigurationCreatedEvent(
-		c.config.WebhookConfigName,
-		len(c.config.Rules),
-	))
+		// Use scatter-gather to collect validation results from all validators
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	c.logger.Info("Webhook configuration created",
-		"name", c.config.WebhookConfigName)
+		result, err := c.eventBus.Request(ctx, req, busevents.RequestOptions{
+			Timeout:            5 * time.Second,
+			ExpectedResponders: []string{"basic", "dryrun"},
+		})
 
-	return nil
-}
+		// Handle timeout or error
+		if err != nil {
+			c.logger.Error("Validation request failed",
+				"gvk", gvk,
+				"operation", valCtx.Operation,
+				"namespace", valCtx.Namespace,
+				"name", valCtx.Name,
+				"error", err)
 
-// startServer starts the webhook HTTPS server in the background.
-func (c *Component) startServer(ctx context.Context) {
-	c.logger.Info("Starting webhook server",
-		"port", c.config.Port,
-		"path", c.config.Path)
+			duration := time.Since(start).Seconds()
+			if c.metrics != nil {
+				c.metrics.RecordWebhookRequest(gvk, "error", duration)
+				c.metrics.RecordWebhookValidation(gvk, "error")
+			}
 
-	// Create cancelable context for server
-	c.serverCtx, c.serverCancel = context.WithCancel(ctx)
-
-	// Start server in goroutine
-	go func() {
-		if err := c.server.Start(c.serverCtx); err != nil && err != context.Canceled {
-			c.logger.Error("Webhook server error", "error", err)
+			return false, "validation timeout or internal error", nil
 		}
-	}()
 
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
+		// Aggregate responses: ALL must allow for overall allow
+		allowed, reason := c.aggregateResponses(result.Responses)
 
-	// Publish event
-	c.eventBus.Publish(events.NewWebhookServerStartedEvent(
-		c.config.Port,
-		c.config.Path,
-	))
+		// Record metrics
+		duration := time.Since(start).Seconds()
+		if c.metrics != nil {
+			resultStr := "allowed"
+			if !allowed {
+				resultStr = "denied"
+			}
+			c.metrics.RecordWebhookRequest(gvk, resultStr, duration)
+			c.metrics.RecordWebhookValidation(gvk, resultStr)
+		}
 
-	c.logger.Info("Webhook server started")
+		c.logger.Info("Validation completed",
+			"gvk", gvk,
+			"operation", valCtx.Operation,
+			"namespace", valCtx.Namespace,
+			"name", valCtx.Name,
+			"allowed", allowed,
+			"reason", reason,
+			"duration_ms", time.Since(start).Milliseconds())
+
+		return allowed, reason, nil
+	}
 }
 
-// monitorCertificateRotation periodically checks if certificates need rotation.
-func (c *Component) monitorCertificateRotation(ctx context.Context) {
-	ticker := time.NewTicker(c.config.CertRotationCheckInterval)
-	defer ticker.Stop()
+// aggregateResponses combines validation responses using AND logic.
+//
+// ANY deny = overall deny, ALL allow = overall allow.
+//
+// Returns:
+//   - allowed: true if all validators allowed
+//   - reason: combined denial reasons from all denying validators
+func (c *Component) aggregateResponses(responses []busevents.Response) (allowed bool, reason string) {
+	var denialReasons []string
 
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				c.checkCertificateRotation(ctx)
-
-			case <-ctx.Done():
-				c.logger.Info("Certificate rotation monitor stopping")
-				return
+	for _, resp := range responses {
+		if valResp, ok := resp.(*events.WebhookValidationResponse); ok {
+			if !valResp.Allowed {
+				// Validator denied - collect reason
+				denialReasons = append(denialReasons, fmt.Sprintf("%s: %s", valResp.ValidatorID, valResp.Reason))
 			}
 		}
-	}()
-}
-
-// checkCertificateRotation checks if certificates need rotation and rotates if needed.
-func (c *Component) checkCertificateRotation(ctx context.Context) {
-	if !c.certManager.NeedsRotation(c.certificates) {
-		c.logger.Debug("Certificates do not need rotation",
-			"valid_until", c.certificates.ValidUntil)
-		return
 	}
 
-	c.logger.Info("Rotating certificates",
-		"valid_until", c.certificates.ValidUntil)
-
-	// Generate new certificates
-	newCerts, err := c.certManager.Generate()
-	if err != nil {
-		c.logger.Error("Certificate rotation failed", "error", err)
-		return
+	// If any validator denied, return denied with combined reasons
+	if len(denialReasons) > 0 {
+		return false, fmt.Sprintf("validation failed: %v", denialReasons)
 	}
 
-	oldValidUntil := c.certificates.ValidUntil
-	c.certificates = newCerts
-
-	// Update webhook configuration with new CA bundle
-	c.configMgr = webhook.NewConfigManager(c.kubeClient, &webhook.WebhookConfigSpec{
-		Name:        c.config.WebhookConfigName,
-		Namespace:   c.config.Namespace,
-		ServiceName: c.config.ServiceName,
-		Path:        c.config.Path,
-		CABundle:    newCerts.CACert,
-		Rules:       c.config.Rules,
-	})
-
-	if err := c.configMgr.CreateOrUpdate(ctx); err != nil {
-		c.logger.Error("Failed to update webhook configuration after rotation", "error", err)
-		return
-	}
-
-	// Restart server with new certificates
-	c.logger.Info("Restarting webhook server with new certificates")
-
-	// Stop old server
-	if c.serverCancel != nil {
-		c.serverCancel()
-	}
-
-	// Create new server with new certificates
-	c.createServer()
-
-	// Re-register validators
-	c.registerValidators()
-
-	// Start new server
-	c.startServer(ctx)
-
-	// Publish event
-	c.eventBus.Publish(events.NewWebhookCertificatesRotatedEvent(
-		oldValidUntil,
-		newCerts.ValidUntil,
-	))
-
-	// Record metrics
-	if c.metrics != nil {
-		c.metrics.RecordWebhookCertRotation()
-		c.metrics.SetWebhookCertExpiry(newCerts.ValidUntil.Unix())
-	}
-
-	c.logger.Info("Certificate rotation completed",
-		"new_valid_until", newCerts.ValidUntil)
-}
-
-// Stop gracefully shuts down the webhook component.
-func (c *Component) Stop(ctx context.Context) error {
-	c.logger.Info("Stopping webhook component")
-
-	// Stop server
-	if c.serverCancel != nil {
-		c.serverCancel()
-	}
-
-	// Delete webhook configuration
-	if c.configMgr != nil {
-		if err := c.configMgr.Delete(ctx); err != nil {
-			c.logger.Error("Failed to delete webhook configuration", "error", err)
-			// Continue with shutdown even if deletion fails
-		}
-	}
-
-	// Publish event
-	c.eventBus.Publish(events.NewWebhookServerStoppedEvent("shutdown"))
-
-	c.logger.Info("Webhook component stopped")
-
-	return nil
+	// All validators allowed
+	return true, ""
 }

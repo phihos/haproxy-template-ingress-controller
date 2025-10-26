@@ -205,10 +205,10 @@ issues:
 
     # Exclude godot false positives for correctly formatted comments
     # These comments all end with periods but godot incorrectly flags them
-    - path: pkg/controller/dryrunvalidator/component.go
+    - path: pkg/controller/resourcestore/overlay.go
       linters:
         - godot
-    - path: pkg/controller/resourcestore/overlay.go
+    - path: pkg/controller/dryrunvalidator/component.go
       linters:
         - godot
 

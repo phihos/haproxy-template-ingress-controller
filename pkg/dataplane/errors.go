@@ -1,6 +1,9 @@
 package dataplane
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // SyncError represents a synchronization failure with actionable context.
 // It provides detailed information about what stage failed and suggestions
@@ -266,4 +269,165 @@ func NewFallbackError(originalErr, fallbackCause error) *SyncError {
 			"Review both the fine-grained sync error and fallback error",
 		},
 	}
+}
+
+// SimplifyValidationError parses HAProxy validation errors and extracts
+// the key information for user-friendly error messages.
+//
+// Handles two types of validation errors:
+//
+//  1. Schema validation errors - OpenAPI spec violations:
+//     Input: "schema validation failed: configuration violates API schema constraints: ... Error at "/field": constraint"
+//     Output: "field constraint (got value)"
+//
+//  2. Semantic validation errors - HAProxy binary validation failures:
+//     Input: "semantic validation failed: configuration has semantic errors: haproxy validation failed: <context>"
+//     Output: "<context>" (preserves parseHAProxyError output with context lines)
+//
+// Returns original error string if parsing fails.
+func SimplifyValidationError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	errStr := err.Error()
+
+	// Try semantic validation error first (preserves context from parseHAProxyError)
+	if strings.Contains(errStr, "semantic validation failed") {
+		return simplifySemanticError(errStr)
+	}
+
+	// Try schema validation error
+	if strings.Contains(errStr, "schema validation failed") {
+		return simplifySchemaError(errStr)
+	}
+
+	// Unknown error type, return as-is
+	return errStr
+}
+
+// simplifySemanticError extracts HAProxy semantic validation context by stripping redundant wrappers.
+//
+// Input format:
+//
+//	"semantic validation failed: configuration has semantic errors: haproxy validation failed: <context>"
+//
+// Output: "<context>" (the parseHAProxyError output).
+func simplifySemanticError(errStr string) string {
+	// Find the last "haproxy validation failed:" which precedes the actual error
+	marker := "haproxy validation failed: "
+	idx := strings.LastIndex(errStr, marker)
+	if idx == -1 {
+		// Can't find marker, return original
+		return errStr
+	}
+
+	// Extract everything after the marker (the parseHAProxyError output)
+	return errStr[idx+len(marker):]
+}
+
+// simplifySchemaError extracts OpenAPI schema validation constraint details by parsing error messages.
+//
+// Input format:
+//
+//	"schema validation failed: ... Error at "/field_name": constraint"
+//	Value: "value"
+//
+// Output: "field_name constraint (got value)".
+func simplifySchemaError(errStr string) string {
+	// Try to extract the "Error at" line which contains the useful information
+	// Format: Error at "/field_name": <constraint description>
+	errorAtIndex := strings.Index(errStr, "Error at \"")
+	if errorAtIndex == -1 {
+		// Can't find "Error at", return original
+		return errStr
+	}
+
+	// Extract from "Error at" to the end of that line
+	remaining := errStr[errorAtIndex:]
+	lines := strings.Split(remaining, "\n")
+	if len(lines) == 0 {
+		return errStr
+	}
+
+	errorLine := lines[0]
+
+	// Parse field name: Error at "/field_name": ...
+	fieldStart := strings.Index(errorLine, "\"/") + 2
+	fieldEnd := strings.Index(errorLine[fieldStart:], "\"")
+	if fieldEnd == -1 {
+		return errStr
+	}
+
+	field := errorLine[fieldStart : fieldStart+fieldEnd]
+
+	// Extract constraint description (after the field name)
+	constraintStart := fieldStart + fieldEnd + 3 // Skip ": "
+	if constraintStart >= len(errorLine) {
+		return errStr
+	}
+
+	constraint := errorLine[constraintStart:]
+
+	// Try to extract value if present
+	// Format: Value:\n  "value"
+	var value string
+	valueIndex := strings.Index(remaining, "Value:\n")
+	if valueIndex != -1 {
+		valueText := remaining[valueIndex+7:] // Skip "Value:\n"
+		valueLines := strings.Split(valueText, "\n")
+		if len(valueLines) > 0 {
+			value = strings.TrimSpace(valueLines[0])
+			// Remove only the outermost quotes (not escaped quotes inside)
+			if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+				value = value[1 : len(value)-1]
+			}
+		}
+	}
+
+	// Build simplified message
+	var simplified string
+	if value != "" {
+		simplified = fmt.Sprintf("%s %s (got %s)", field, constraint, value)
+	} else {
+		simplified = fmt.Sprintf("%s %s", field, constraint)
+	}
+
+	return simplified
+}
+
+// SimplifyRenderingError extracts meaningful error messages from template rendering failures.
+//
+// Handles template-level validation errors from the fail() function which are buried
+// in gonja's execution stack trace.
+//
+// Input format:
+//
+//	"failed to render haproxy.cfg: failed to render template 'haproxy.cfg': unable to execute template: ... invalid call to function 'fail': <message>"
+//
+// Output: "<message>" (the user-provided error message from fail() call)
+//
+// If the error doesn't match this pattern (e.g., syntax errors, missing variables),
+// returns the original error string.
+func SimplifyRenderingError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	errStr := err.Error()
+
+	// Look for the fail() function error pattern
+	// This is the marker that indicates a template-level validation error
+	marker := "invalid call to function 'fail': "
+	idx := strings.Index(errStr, marker)
+	if idx == -1 {
+		// Not a fail() error, return original (could be syntax error, missing variable, etc.)
+		return errStr
+	}
+
+	// Extract everything after the marker (the user-provided message)
+	message := errStr[idx+len(marker):]
+
+	// The message should be the last part of the error chain, but may have trailing whitespace
+	return strings.TrimSpace(message)
 }

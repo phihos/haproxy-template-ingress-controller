@@ -33,6 +33,8 @@ import (
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/restmapper"
 
 	"haproxy-template-ic/pkg/controller/commentator"
 	"haproxy-template-ic/pkg/controller/configchange"
@@ -84,19 +86,19 @@ const (
 //   - k8sClient: Kubernetes client for API access
 //   - configMapName: Name of the ConfigMap containing the controller configuration
 //   - secretName: Name of the Secret containing HAProxy Dataplane API credentials
-//   - webhookServiceName: Name of the Service for webhook endpoint
+//   - webhookCertSecretName: Name of the Secret containing webhook TLS certificates
 //   - debugPort: Port for debug HTTP server (0 to disable)
 //
 // Returns:
 //   - Error if the controller cannot start or encounters a fatal error
 //   - nil if the context is cancelled (graceful shutdown)
-func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName, webhookServiceName string, debugPort int) error {
+func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName, webhookCertSecretName string, debugPort int) error {
 	logger := slog.Default()
 
 	logger.Info("HAProxy Template Ingress Controller starting",
 		"configmap", configMapName,
 		"secret", secretName,
-		"webhook_service", webhookServiceName,
+		"webhook_cert_secret", webhookCertSecretName,
 		"namespace", k8sClient.Namespace())
 
 	// Main reinitialization loop
@@ -107,7 +109,7 @@ func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretNam
 			return nil
 		default:
 			// Run one iteration
-			err := runIteration(ctx, k8sClient, configMapName, secretName, webhookServiceName, debugPort, logger)
+			err := runIteration(ctx, k8sClient, configMapName, secretName, webhookCertSecretName, debugPort, logger)
 			if err != nil {
 				// Check if error is context cancellation (graceful shutdown)
 				if ctx.Err() != nil {
@@ -129,19 +131,28 @@ func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretNam
 // fetchAndValidateInitialConfig fetches, parses, and validates the initial ConfigMap and Secret.
 //
 // Returns the validated configuration and credentials, or an error if any step fails.
+// WebhookCertificates holds the TLS certificate and private key for the webhook server.
+type WebhookCertificates struct {
+	CertPEM []byte
+	KeyPEM  []byte
+	Version string
+}
+
 func fetchAndValidateInitialConfig(
 	ctx context.Context,
 	k8sClient *client.Client,
 	configMapName string,
 	secretName string,
+	webhookCertSecretName string,
 	configMapGVR schema.GroupVersionResource,
 	secretGVR schema.GroupVersionResource,
 	logger *slog.Logger,
-) (*coreconfig.Config, *coreconfig.Credentials, error) {
-	logger.Info("Fetching initial configuration and credentials")
+) (*coreconfig.Config, *coreconfig.Credentials, *WebhookCertificates, error) {
+	logger.Info("Fetching initial configuration, credentials, and webhook certificates")
 
 	var configMapResource *unstructured.Unstructured
 	var secretResource *unstructured.Unstructured
+	var webhookCertSecretResource *unstructured.Unstructured
 
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -155,7 +166,7 @@ func fetchAndValidateInitialConfig(
 		return nil
 	})
 
-	// Fetch Secret
+	// Fetch Secret (credentials)
 	g.Go(func() error {
 		var err error
 		secretResource, err = k8sClient.GetResource(gCtx, secretGVR, secretName)
@@ -165,40 +176,56 @@ func fetchAndValidateInitialConfig(
 		return nil
 	})
 
-	// Wait for both fetches to complete
+	// Fetch Secret (webhook certificates)
+	g.Go(func() error {
+		var err error
+		webhookCertSecretResource, err = k8sClient.GetResource(gCtx, secretGVR, webhookCertSecretName)
+		if err != nil {
+			return fmt.Errorf("failed to fetch webhook certificate Secret %q: %w", webhookCertSecretName, err)
+		}
+		return nil
+	})
+
+	// Wait for all fetches to complete
 	if err := g.Wait(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Parse initial configuration
-	logger.Info("Parsing initial configuration")
+	logger.Info("Parsing initial configuration, credentials, and webhook certificates")
 
 	cfg, err := parseConfigMap(configMapResource)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse initial ConfigMap: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to parse initial ConfigMap: %w", err)
 	}
 
 	creds, err := parseSecret(secretResource)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse initial Secret: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to parse initial Secret: %w", err)
+	}
+
+	webhookCerts, err := parseWebhookCertSecret(webhookCertSecretResource)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to parse webhook certificate Secret: %w", err)
 	}
 
 	// Validate initial configuration
-	logger.Info("Validating initial configuration")
+	logger.Info("Validating initial configuration and credentials")
 
 	if err := coreconfig.ValidateStructure(cfg); err != nil {
-		return nil, nil, fmt.Errorf("initial configuration validation failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("initial configuration validation failed: %w", err)
 	}
 
 	if err := coreconfig.ValidateCredentials(creds); err != nil {
-		return nil, nil, fmt.Errorf("initial credentials validation failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("initial credentials validation failed: %w", err)
 	}
 
 	logger.Info("Initial configuration validated successfully",
 		"config_version", configMapResource.GetResourceVersion(),
-		"secret_version", secretResource.GetResourceVersion())
+		"secret_version", secretResource.GetResourceVersion(),
+		"webhook_cert_version", webhookCertSecretResource.GetResourceVersion())
 
-	return cfg, creds, nil
+	return cfg, creds, webhookCerts, nil
 }
 
 // componentSetup contains all resources created during component initialization.
@@ -242,7 +269,6 @@ func setupComponents(
 
 	// Create webhook validators (for admission validation)
 	basicWebhookValidator := webhook.NewBasicValidatorComponent(bus, logger)
-	// Note: DryRunValidator created later when config is available (in setupWebhook)
 
 	// Create config change channel for reinitialization signaling
 	configChangeCh := make(chan *coreconfig.Config, 1)
@@ -266,13 +292,13 @@ func setupComponents(
 	go basicValidator.Start(iterCtx)
 	go templateValidator.Start(iterCtx)
 	go jsonpathValidator.Start(iterCtx)
-	go configChangeHandlerComponent.Start(iterCtx)
 	go func() {
 		if err := basicWebhookValidator.Start(iterCtx); err != nil {
-			logger.Error("basicWebhookValidator failed", "error", err)
+			logger.Error("basic webhook validator failed", "error", err)
+			cancel()
 		}
 	}()
-	// DryRunValidator started later when config is available (in setupWebhook)
+	go configChangeHandlerComponent.Start(iterCtx)
 
 	logger.Debug("All components started")
 
@@ -636,19 +662,19 @@ func startReconciliationComponents(
 
 // setupWebhook creates and starts the webhook component if webhook validation is enabled.
 //
-// The webhook component manages admission webhook lifecycle including:
-//   - TLS certificate generation and rotation
-//   - HTTPS webhook server
-//   - Dynamic ValidatingWebhookConfiguration management
-//   - Integration with controller validators (DryRunValidator for semantic validation)
+// This function:
+//  1. Extracts webhook rules from configuration
+//  2. Creates template engine for dry-run validation
+//  3. Starts DryRunValidator component
+//  4. Creates and starts webhook component with mounted certificates
 //
-// This is started before reconciliation components to ensure webhook is ready
-// before any resource validation requests arrive.
+// The webhook component validates Kubernetes resources via admission webhook.
+// Certificates are expected to be mounted at /etc/webhook/certs/ (provided by Helm).
 func setupWebhook(
 	iterCtx context.Context,
 	cfg *coreconfig.Config,
+	webhookCerts *WebhookCertificates,
 	k8sClient *client.Client,
-	webhookServiceName string,
 	bus *busevents.EventBus,
 	storeManager *resourcestore.Manager,
 	logger *slog.Logger,
@@ -663,8 +689,7 @@ func setupWebhook(
 	}
 
 	logger.Info("Webhook validation enabled",
-		"rule_count", len(rules),
-		"service_name", webhookServiceName)
+		"rule_count", len(rules))
 
 	// Create DryRunValidator for semantic validation
 	// This requires a template engine for rendering
@@ -728,16 +753,27 @@ func setupWebhook(
 
 	logger.Info("Dry-run validator started")
 
-	// Create webhook component
+	// Create RESTMapper for resolving resource kinds from GVR
+	// This uses the Kubernetes API discovery to get authoritative mappings
+	logger.Debug("Creating RESTMapper for resource kind resolution")
+	discoveryClient := k8sClient.Clientset().Discovery()
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(
+		memory.NewMemCacheClient(discoveryClient),
+	)
+
+	// Create webhook component with certificate data from Kubernetes API
+	// Certificates are fetched from Secret via Kubernetes API and passed directly to component
 	webhookComponent := webhook.New(
-		k8sClient.Clientset(),
 		bus,
 		logger,
 		&webhook.Config{
-			Namespace:   k8sClient.Namespace(),
-			ServiceName: webhookServiceName,
-			Rules:       rules,
+			Port:    9443, // Default webhook port
+			Path:    "/validate",
+			Rules:   rules,
+			CertPEM: webhookCerts.CertPEM,
+			KeyPEM:  webhookCerts.KeyPEM,
 		},
+		mapper,
 		metricsRecorder,
 	)
 
@@ -745,14 +781,11 @@ func setupWebhook(
 	go func() {
 		if err := webhookComponent.Start(iterCtx); err != nil {
 			logger.Error("webhook component failed", "error", err)
-			// Don't cancel iteration - webhook is optional
+			cancel()
 		}
 	}()
 
-	logger.Info("Webhook component started",
-		"namespace", k8sClient.Namespace(),
-		"service", webhookServiceName,
-		"rules", len(rules))
+	logger.Info("Webhook component started")
 }
 
 // setupReconciliation creates and starts the reconciliation components (Stage 5).
@@ -824,7 +857,7 @@ func runIteration(
 	k8sClient *client.Client,
 	configMapName string,
 	secretName string,
-	webhookServiceName string,
+	webhookCertSecretName string,
 	debugPort int,
 	logger *slog.Logger,
 ) error {
@@ -844,8 +877,8 @@ func runIteration(
 	}
 
 	// 1. Fetch and validate initial configuration
-	cfg, creds, err := fetchAndValidateInitialConfig(
-		ctx, k8sClient, configMapName, secretName,
+	cfg, creds, webhookCerts, err := fetchAndValidateInitialConfig(
+		ctx, k8sClient, configMapName, secretName, webhookCertSecretName,
 		configMapGVR, secretGVR, logger,
 	)
 	if err != nil {
@@ -878,44 +911,43 @@ func runIteration(
 		return err
 	}
 
-	// 5. Initialize StateCache and metrics component, subscribe BEFORE bus.Start()
-	// This ensures they receive all events, including buffered startup events
+	// 5. Initialize StateCache and metrics component
+	// These must be started BEFORE bus.Start() to receive buffered startup events
 	stateCache := NewStateCache(setup.Bus, resourceWatcher)
-	stateCache.Subscribe() // Synchronous - registers subscription immediately
 
-	// Subscribe metrics component (synchronous - must be before bus.Start())
-	setup.MetricsComponent.Start()
-
-	// 5.5. Start the EventBus (releases buffered events and begins normal operation)
-	setup.Bus.Start()
-
-	// 5.6. Start StateCache and metrics component event loops in background
+	// Start StateCache and metrics component in background goroutines
+	// These will subscribe immediately and wait for events
 	go func() {
-		if err := stateCache.Run(setup.IterCtx); err != nil {
+		if err := stateCache.Start(setup.IterCtx); err != nil {
 			logger.Error("state cache failed", "error", err)
 			// Non-fatal error - don't cancel iteration
 		}
 	}()
 
 	go func() {
-		if err := setup.MetricsComponent.Run(setup.IterCtx); err != nil {
+		if err := setup.MetricsComponent.Start(setup.IterCtx); err != nil {
 			logger.Error("metrics component failed", "error", err)
 			// Non-fatal error - don't cancel iteration
 		}
 	}()
 
-	// 6. Setup webhook if enabled
-	if webhook.HasWebhookEnabled(cfg) {
-		logger.Info("Stage 5.5: Starting webhook component")
-		setupWebhook(setup.IterCtx, cfg, k8sClient, webhookServiceName, setup.Bus, setup.StoreManager, logger, setup.MetricsComponent.Metrics(), setup.Cancel)
-	} else {
-		logger.Debug("Webhook validation disabled (no resources have enable_validation_webhook: true)")
-	}
+	// 5.5. Brief pause to ensure subscriptions are registered before releasing buffered events
+	// This prevents race condition where bus.Start() releases events before subscriptions are ready
+	time.Sleep(10 * time.Millisecond)
 
-	// 7. Start reconciliation components (Stage 5)
+	// 5.6. Start the EventBus (releases buffered events and begins normal operation)
+	setup.Bus.Start()
+
+	// 6. Start reconciliation components (Stage 5)
 	logger.Info("Stage 5: Starting reconciliation components")
 	if err := setupReconciliation(setup.IterCtx, cfg, creds, resourceWatcher, setup.Bus, logger, setup.Cancel); err != nil {
 		return err
+	}
+
+	// 7. Setup webhook validation if enabled
+	if webhook.HasWebhookEnabled(cfg) {
+		logger.Info("Stage 6: Setting up webhook validation")
+		setupWebhook(setup.IterCtx, cfg, webhookCerts, k8sClient, setup.Bus, setup.StoreManager, logger, setup.MetricsComponent.Metrics(), setup.Cancel)
 	}
 
 	// 8. Setup debug and metrics infrastructure
@@ -1004,4 +1036,64 @@ func parseSecret(resource *unstructured.Unstructured) (*coreconfig.Credentials, 
 	}
 
 	return creds, nil
+}
+
+// parseWebhookCertSecret extracts and decodes webhook TLS certificate data from a Secret.
+func parseWebhookCertSecret(resource *unstructured.Unstructured) (*WebhookCertificates, error) {
+	// Extract Secret data field
+	dataRaw, found, err := unstructured.NestedMap(resource.Object, "data")
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract data field: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("Secret has no data field")
+	}
+
+	// Extract tls.crt (standard Kubernetes TLS Secret key)
+	tlsCertBase64, ok := dataRaw["tls.crt"]
+	if !ok {
+		return nil, fmt.Errorf("Secret data missing 'tls.crt' key")
+	}
+
+	// Extract tls.key (standard Kubernetes TLS Secret key)
+	tlsKeyBase64, ok := dataRaw["tls.key"]
+	if !ok {
+		return nil, fmt.Errorf("Secret data missing 'tls.key' key")
+	}
+
+	// Decode base64 certificate
+	var certPEM []byte
+	if strValue, ok := tlsCertBase64.(string); ok {
+		certPEM, err = base64.StdEncoding.DecodeString(strValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 tls.crt: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("tls.crt has invalid type: %T", tlsCertBase64)
+	}
+
+	// Decode base64 private key
+	var keyPEM []byte
+	if strValue, ok := tlsKeyBase64.(string); ok {
+		keyPEM, err = base64.StdEncoding.DecodeString(strValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 tls.key: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("tls.key has invalid type: %T", tlsKeyBase64)
+	}
+
+	// Validate we have non-empty data
+	if len(certPEM) == 0 {
+		return nil, fmt.Errorf("tls.crt is empty")
+	}
+	if len(keyPEM) == 0 {
+		return nil, fmt.Errorf("tls.key is empty")
+	}
+
+	return &WebhookCertificates{
+		CertPEM: certPEM,
+		KeyPEM:  keyPEM,
+		Version: resource.GetResourceVersion(),
+	}, nil
 }

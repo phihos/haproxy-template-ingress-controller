@@ -6,21 +6,20 @@ metadata:
   labels:
     {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 rules:
-  # Core resources
+  # Watched resources from configuration
+  {{- range $name, $resource := .Values.controller.config.watched_resources }}
+  - apiGroups:
+      {{- if eq $resource.api_version "v1" }}
+      - ""
+      {{- else }}
+      - {{ $resource.api_version | regexFind "^[^/]+" }}
+      {{- end }}
+    resources:
+      - {{ $resource.resources }}
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  # Additional core resources
   - apiGroups: [""]
-    resources: ["services", "configmaps", "namespaces", "secrets", "pods"]
+    resources: ["configmaps", "namespaces", "pods"]
     verbs: ["get", "list", "watch"]
-  # Ingress resources
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list", "watch"]
-  # EndpointSlice resources
-  - apiGroups: ["discovery.k8s.io"]
-    resources: ["endpointslices"]
-    verbs: ["get", "list", "watch"]
-  # Webhook configuration resources
-  # Always grant permissions to allow dynamic webhook management via ConfigMap
-  - apiGroups: ["admissionregistration.k8s.io"]
-    resources: ["validatingwebhookconfigurations"]
-    verbs: ["get", "create", "update", "patch", "delete"]
 {{- end }}

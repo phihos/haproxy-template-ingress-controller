@@ -132,7 +132,77 @@ func (r *RendererComponent) Run(ctx context.Context) error {
 **Use direct function calls:**
 - Within the same package
 - Pure components calling other pure components
+- Utility components (see below)
 - No need for decoupling or observability
+
+### Utility Components vs Pure Components
+
+Not all dependencies require event-driven coordination. The codebase distinguishes between:
+
+**Pure Components** (require event adapters):
+- Contain domain business logic
+- Examples: `pkg/templating`, `pkg/k8s`, `pkg/dataplane`
+- Should be wrapped in event adapters when used in `pkg/controller`
+- Changes to these affect reconciliation logic
+
+**Utility Components** (can be called directly):
+- Infrastructure/cross-cutting concerns
+- Examples: EventBus, StoreManager, Metrics, RestMapper
+- Provide services used by multiple components
+- No domain-specific business logic
+- Can be injected and called directly without events
+
+#### Examples of Direct Utility Calls
+
+```go
+// Good - direct utility component calls
+func (c *DryRunValidator) handleValidationRequest(req *events.WebhookValidationRequest) {
+    // StoreManager is a utility component - direct call is acceptable
+    overlayStores, err := c.storeManager.CreateOverlayMap(resourceType, req.Namespace, req.Name, req.Object, operation)
+
+    // Metrics is a utility component - direct call
+    if c.metrics != nil {
+        c.metrics.RecordValidation(result)
+    }
+
+    // RestMapper is a utility component - direct call
+    gvk, err := c.restMapper.KindFor(gvr)
+}
+
+// Bad - calling pure component without event adapter
+func (c *SomeComponent) Run(ctx context.Context) error {
+    // This should go through an event adapter, not called directly
+    config, err := c.templateEngine.Render("haproxy.cfg", context)
+    return err
+}
+```
+
+#### Decision Tree: Events vs Direct Calls
+
+```
+Does the call involve domain business logic?
+├─ YES → Use event-driven pattern
+│   └─ Examples: template rendering, config validation, HAProxy sync
+│
+└─ NO → Is it infrastructure/utility?
+    ├─ YES → Direct call is acceptable
+    │   └─ Examples: EventBus.Publish(), StoreManager.Get(), Metrics.Record()
+    │
+    └─ MAYBE → Review with team
+        └─ Ask: "Could this become reusable business logic?"
+```
+
+#### Utility Components Registry
+
+Current utility components that can be called directly:
+
+- **EventBus** (`pkg/events`): Event infrastructure
+- **StoreManager** (`pkg/controller/resourcestore`): Resource storage utilities
+- **Metrics** (`pkg/controller/metrics`): Prometheus metrics recording
+- **RestMapper** (`k8s.io/apimachinery/pkg/api/meta`): Kubernetes API mapping
+- **Logger** (`log/slog`): Structured logging
+
+When adding new components, explicitly document if they are "pure" or "utility" in their CLAUDE.md file.
 
 ## Import Path Conventions
 

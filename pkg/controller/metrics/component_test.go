@@ -48,14 +48,14 @@ func TestComponent_ReconciliationEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Subscribe before starting event bus
-	component.Start()
+	// Start component processing (subscribes immediately)
+	go component.Start(ctx)
+
+	// Brief pause to ensure subscription is registered
+	time.Sleep(10 * time.Millisecond)
 
 	// Start event bus
 	eventBus.Start()
-
-	// Start component processing
-	go component.Run(ctx)
 
 	// Publish reconciliation completed event
 	eventBus.Publish(events.NewReconciliationCompletedEvent(1500))
@@ -89,9 +89,9 @@ func TestComponent_DeploymentEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	component.Start()
+	go component.Start(ctx)
+	time.Sleep(10 * time.Millisecond)
 	eventBus.Start()
-	go component.Run(ctx)
 
 	// Publish deployment completed event
 	eventBus.Publish(events.NewDeploymentCompletedEvent(2, 2, 0, 2500))
@@ -137,9 +137,9 @@ func TestComponent_ValidationEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	component.Start()
+	go component.Start(ctx)
+	time.Sleep(10 * time.Millisecond)
 	eventBus.Start()
-	go component.Run(ctx)
 
 	// Publish validation completed event
 	eventBus.Publish(events.NewValidationCompletedEvent(nil, 100))
@@ -170,9 +170,9 @@ func TestComponent_ResourceEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	component.Start()
+	go component.Start(ctx)
+	time.Sleep(10 * time.Millisecond)
 	eventBus.Start()
-	go component.Run(ctx)
 
 	// First, publish IndexSynchronizedEvent to initialize counts
 	eventBus.Publish(events.NewIndexSynchronizedEvent(map[string]int{
@@ -240,9 +240,9 @@ func TestComponent_AllEventTypes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	component.Start()
+	go component.Start(ctx)
+	time.Sleep(10 * time.Millisecond)
 	eventBus.Start()
-	go component.Run(ctx)
 
 	// Publish various event types
 	eventBus.Publish(events.NewReconciliationCompletedEvent(1000))
@@ -279,13 +279,13 @@ func TestComponent_GracefulShutdown(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	component.Start()
-	eventBus.Start()
-
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- component.Run(ctx)
+		errChan <- component.Start(ctx)
 	}()
+
+	time.Sleep(10 * time.Millisecond)
+	eventBus.Start()
 
 	// Publish some events
 	eventBus.Publish(events.NewReconciliationCompletedEvent(500))
@@ -318,9 +318,9 @@ func TestComponent_HighEventVolume(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	component.Start()
+	go component.Start(ctx)
+	time.Sleep(10 * time.Millisecond)
 	eventBus.Start()
-	go component.Run(ctx)
 
 	// Publish many events rapidly
 	for i := 0; i < 100; i++ {

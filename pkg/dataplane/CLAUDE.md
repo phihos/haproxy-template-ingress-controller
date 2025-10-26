@@ -524,6 +524,189 @@ func TestController_UsesDataplane(t *testing.T) {
 }
 ```
 
+## Error Simplification Pattern
+
+The dataplane package provides helper functions to extract user-friendly error messages from complex library errors. This is especially important at component boundaries where raw errors from HAProxy or template rendering contain implementation details.
+
+### SimplifyValidationError
+
+Extracts meaningful messages from HAProxy validation errors.
+
+**Handles two types of validation errors:**
+
+1. **Schema validation errors** - OpenAPI spec violations from client-native library
+2. **Semantic validation errors** - HAProxy binary validation failures
+
+```go
+// pkg/dataplane/errors.go
+func SimplifyValidationError(err error) string {
+    if err == nil {
+        return ""
+    }
+
+    errStr := err.Error()
+
+    // Try semantic validation error first (preserves context from parseHAProxyError)
+    if strings.Contains(errStr, "semantic validation failed") {
+        return simplifySemanticError(errStr)
+    }
+
+    // Try schema validation error
+    if strings.Contains(errStr, "schema validation failed") {
+        return simplifySchemaError(errStr)
+    }
+
+    // Unknown error type, return as-is
+    return errStr
+}
+```
+
+**Usage example:**
+
+```go
+// pkg/controller/dryrunvalidator/component.go
+_, err := c.validator.ValidateConfig(ctx, haproxyConfig, nil, 0)
+if err != nil {
+    // Extract user-friendly message for webhook response
+    simplified := dataplane.SimplifyValidationError(err)
+
+    c.eventBus.Publish(events.NewWebhookValidationResponse(
+        req.RequestID,
+        "dryrun",
+        false,  // denied
+        simplified,  // User-friendly error message
+    ))
+    return
+}
+```
+
+**Input/Output examples:**
+
+```go
+// Schema validation error (field constraint violation)
+Input:  "schema validation failed: configuration violates API schema constraints: Error at \"/maxconn\": must be >= 1\nValue:\n  \"0\""
+Output: "maxconn must be >= 1 (got 0)"
+
+// Semantic validation error (HAProxy binary rejection)
+Input:  "semantic validation failed: configuration has semantic errors: haproxy validation failed: [ALERT] (1) : parsing [/tmp/haproxy123.cfg:45] : 'bind' : cannot find SSL certificate '/etc/haproxy/ssl/missing.pem'\n"
+Output: "[ALERT] (1) : parsing [/tmp/haproxy123.cfg:45] : 'bind' : cannot find SSL certificate '/etc/haproxy/ssl/missing.pem'"
+```
+
+### SimplifyRenderingError
+
+Extracts meaningful messages from template rendering failures, particularly template-level validation errors from the `fail()` function.
+
+```go
+// pkg/dataplane/errors.go
+func SimplifyRenderingError(err error) string {
+    if err == nil {
+        return ""
+    }
+
+    errStr := err.Error()
+
+    // Look for the fail() function error pattern
+    marker := "invalid call to function 'fail': "
+    idx := strings.Index(errStr, marker)
+    if idx == -1 {
+        // Not a fail() error, return original (could be syntax error, missing variable, etc.)
+        return errStr
+    }
+
+    // Extract everything after the marker (the user-provided message)
+    message := errStr[idx+len(marker):]
+    return strings.TrimSpace(message)
+}
+```
+
+**Usage example:**
+
+```go
+// pkg/controller/dryrunvalidator/component.go
+haproxyConfig, err := c.engine.Render("haproxy.cfg", templateContext)
+if err != nil {
+    // Extract user-friendly message for webhook response
+    simplified := dataplane.SimplifyRenderingError(err)
+
+    c.eventBus.Publish(events.NewWebhookValidationResponse(
+        req.RequestID,
+        "dryrun",
+        false,
+        simplified,
+    ))
+    return
+}
+```
+
+**Input/Output examples:**
+
+```go
+// Template-level validation error (from fail() function)
+Input:  "failed to render haproxy.cfg: failed to render template 'haproxy.cfg': unable to execute template: ... invalid call to function 'fail': Service 'api-backend' not found in namespace 'default'"
+Output: "Service 'api-backend' not found in namespace 'default'"
+
+// Syntax error (not from fail() - returned as-is)
+Input:  "failed to render haproxy.cfg: syntax error at line 42"
+Output: "failed to render haproxy.cfg: syntax error at line 42"
+```
+
+### When to Use Error Simplification
+
+**Use at component boundaries:**
+- Webhook validation responses (user-facing)
+- Dry-run validation results (API responses)
+- Log messages for end users
+- Prometheus alert descriptions
+
+**Don't use for:**
+- Internal logging (want full stack trace)
+- Debugging scenarios (need implementation details)
+- Error wrapping (preserve error chain)
+- Metrics labels (keep structured)
+
+**Pattern:**
+
+```go
+// Internal error handling - keep full error
+if err := syncConfig(cfg); err != nil {
+    logger.Error("sync failed", "error", err)  // Full error for debugging
+    metrics.RecordError(err.Error())            // Full error for metrics
+    return fmt.Errorf("sync failed: %w", err)   // Wrap for error chain
+}
+
+// User-facing error - simplify
+if err := validateConfig(cfg); err != nil {
+    simplified := dataplane.SimplifyValidationError(err)
+    return &ValidationResult{
+        Valid:  false,
+        Reason: simplified,  // User-friendly message
+    }
+}
+```
+
+### Testing Error Simplification
+
+```go
+func TestSimplifyValidationError_SchemaError(t *testing.T) {
+    rawError := errors.New(`schema validation failed: configuration violates API schema constraints:
+Error at "/maxconn": must be >= 1
+Value:
+  "0"`)
+
+    simplified := dataplane.SimplifyValidationError(rawError)
+
+    assert.Equal(t, "maxconn must be >= 1 (got 0)", simplified)
+}
+
+func TestSimplifyRenderingError_FailFunction(t *testing.T) {
+    rawError := errors.New(`failed to render haproxy.cfg: failed to render template 'haproxy.cfg': unable to execute template: invalid call to function 'fail': Service not found`)
+
+    simplified := dataplane.SimplifyRenderingError(rawError)
+
+    assert.Equal(t, "Service not found", simplified)
+}
+```
+
 ## Common Pitfalls
 
 ### Not Using Three-Phase Sync

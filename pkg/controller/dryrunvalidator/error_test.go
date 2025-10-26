@@ -18,6 +18,8 @@ import (
 	"errors"
 	"testing"
 
+	"haproxy-template-ic/pkg/dataplane"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -96,7 +98,7 @@ Schema:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := simplifyValidationError(tt.input)
+			result := dataplane.SimplifyValidationError(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

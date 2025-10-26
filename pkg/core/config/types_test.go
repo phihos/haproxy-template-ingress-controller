@@ -82,13 +82,13 @@ haproxy_config:
 
 	ingress := cfg.WatchedResources["ingresses"]
 	assert.Equal(t, "networking.k8s.io/v1", ingress.APIVersion)
-	assert.Equal(t, "Ingress", ingress.Kind)
+	assert.Equal(t, "ingresses", ingress.Resources)
 	assert.True(t, ingress.EnableValidationWebhook)
 	assert.Equal(t, []string{"metadata.namespace", "metadata.name"}, ingress.IndexBy)
 
 	service := cfg.WatchedResources["services"]
 	assert.Equal(t, "v1", service.APIVersion)
-	assert.Equal(t, "Service", service.Kind)
+	assert.Equal(t, "services", service.Resources)
 	assert.False(t, service.EnableValidationWebhook)
 	assert.Equal(t, []string{"metadata.namespace"}, service.IndexBy)
 
@@ -166,7 +166,7 @@ index_by: ["metadata.namespace", "metadata.name"]
 	require.NoError(t, err)
 
 	assert.Equal(t, "networking.k8s.io/v1", wr.APIVersion)
-	assert.Equal(t, "Ingress", wr.Kind)
+	assert.Equal(t, "ingresses", wr.Resources)
 	assert.True(t, wr.EnableValidationWebhook)
 	assert.Equal(t, []string{"metadata.namespace", "metadata.name"}, wr.IndexBy)
 }

@@ -105,8 +105,8 @@ func validateWatchedResource(name string, resource *WatchedResource) error {
 		return fmt.Errorf("resource %q: api_version cannot be empty", name)
 	}
 
-	if resource.Kind == "" {
-		return fmt.Errorf("resource %q: kind cannot be empty", name)
+	if resource.Resources == "" {
+		return fmt.Errorf("resource %q: resources cannot be empty", name)
 	}
 
 	if len(resource.IndexBy) == 0 {

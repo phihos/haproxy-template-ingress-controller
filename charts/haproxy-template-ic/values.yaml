@@ -64,20 +64,20 @@ controller:
     watched_resources:
       ingresses:
         api_version: networking.k8s.io/v1
-        kind: Ingress
+        resources: ingresses
         index_by: ["metadata.namespace", "metadata.name"]
         enable_validation_webhook: true
       services:
         api_version: v1
-        kind: Service
+        resources: services
         index_by: ["metadata.namespace", "metadata.name"]
       endpoints:
         api_version: discovery.k8s.io/v1
-        kind: EndpointSlice
+        resources: endpointslices
         index_by: ["metadata.labels.kubernetes\\.io/service-name"]
       secrets:
         api_version: v1
-        kind: Secret
+        resources: secrets
         store: on-demand
         index_by: ["metadata.namespace", "metadata.name"]
 
@@ -207,6 +207,9 @@ controller:
           {%- set ns = namespace(processed_userlists=[]) %}
           {%- for ingress in resources.ingresses.List() %}
             {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
+            {%- if auth_type and auth_type != "basic-auth" %}
+              {{- fail("Invalid value '" ~ auth_type ~ "' for annotation 'haproxy.org/auth-type' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'basic-auth'") -}}
+            {%- endif %}
             {%- if auth_type == "basic-auth" %}
               {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
               {%- if auth_secret %}
@@ -250,6 +253,9 @@ controller:
           {#- Generate http-request auth directives for backends requiring authentication #}
           {#- Uses userlist created by top-level-annotation-haproxytech-auth #}
           {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
+          {%- if auth_type and auth_type != "basic-auth" %}
+            {{- fail("Invalid value '" ~ auth_type ~ "' for annotation 'haproxy.org/auth-type' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'basic-auth'") -}}
+          {%- endif %}
           {%- if auth_type == "basic-auth" %}
             {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
             {%- set auth_realm = ingress.metadata.annotations["haproxy.org/auth-realm"] | default("Restricted Area") %}
@@ -452,17 +458,51 @@ controller:
 
 # Webhook configuration
 # Kubernetes admission webhook for resource validation
+# ValidatingWebhookConfiguration is created by Helm at installation time
 webhook:
   # Enable webhook validation
+  # Requires watched_resources to have enable_validation_webhook: true
   enabled: true
 
   # Webhook HTTPS server port (inside container)
   port: 9443
 
+  # Secret name containing webhook TLS certificates
+  # The Secret must contain keys: tls.crt, tls.key, ca.crt
+  # Defaults to: {{ include "haproxy-template-ic.fullname" . }}-webhook-cert
+  # Leave empty to use the default naming convention
+  secretName: ""
+
   # Service configuration for webhook endpoint
   service:
     # Service port (exposed to Kubernetes API server)
     port: 443
+
+  # Certificate management
+  # Choose ONE of the following options:
+  #
+  # Option 1: Use cert-manager (recommended for production)
+  # Requires cert-manager to be installed in the cluster
+  certManager:
+    enabled: false
+    # Issuer reference for cert-manager Certificate resource
+    issuerRef:
+      name: selfsigned-issuer
+      kind: Issuer
+      # group: cert-manager.io  # Optional, defaults to cert-manager.io
+    # Certificate validity duration (default: 1 year)
+    duration: 8760h  # 1 year
+    # Renew certificate when this much time is left (default: 30 days)
+    renewBefore: 720h  # 30 days
+
+  # Option 2: Manual certificate management
+  # Provide base64-encoded CA bundle for ValidatingWebhookConfiguration
+  # This is required when certManager.enabled is false
+  # Create the certificate Secret manually with keys: tls.crt, tls.key, ca.crt
+  # Secret name is configured via webhook.secretName (default: haproxy-webhook-certs)
+  caBundle: ""  # Base64-encoded CA certificate
+  # Example:
+  # caBundle: LS0tLS1CRUdJTi...
 
 # Dataplane API credentials
 credentials:

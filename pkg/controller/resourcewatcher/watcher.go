@@ -105,7 +105,7 @@ func New(
 	// Add haproxy-pods watcher (or override if user configured it)
 	resourcesWithHAProxyPods["haproxy-pods"] = coreconfig.WatchedResource{
 		APIVersion:    "v1",
-		Kind:          "Pod",
+		Resources:     "pods",
 		LabelSelector: cfg.PodSelector.MatchLabels,
 		IndexBy: []string{
 			"metadata.namespace",
@@ -336,16 +336,15 @@ func toGVR(wr *coreconfig.WatchedResource) (schema.GroupVersionResource, error) 
 	if wr.APIVersion == "" {
 		return schema.GroupVersionResource{}, fmt.Errorf("api_version is required")
 	}
-	if wr.Kind == "" {
-		return schema.GroupVersionResource{}, fmt.Errorf("kind is required")
+	if wr.Resources == "" {
+		return schema.GroupVersionResource{}, fmt.Errorf("resources is required")
 	}
 
 	// Parse APIVersion into Group/Version
 	group, version := parseAPIVersion(wr.APIVersion)
 
-	// Convert Kind to resource name (pluralize)
-	// This is a simplified implementation - production code would use RESTMapper
-	resource := pluralizeKind(wr.Kind)
+	// Use the explicit plural resource name from configuration
+	resource := wr.Resources
 
 	return schema.GroupVersionResource{
 		Group:    group,
@@ -366,38 +365,6 @@ func parseAPIVersion(apiVersion string) (group, version string) {
 		return "", parts[0]
 	}
 	return parts[0], parts[1]
-}
-
-// pluralizeKind converts a Kind to a resource name by adding "s" or "es".
-//
-// This is a simplified implementation that handles common cases.
-// A production implementation would use the RESTMapper from client-go.
-//
-// Examples:
-//   - "Ingress" → "ingresses"
-//   - "Service" → "services"
-//   - "Pod" → "pods"
-//   - "Endpoints" → "endpoints" (already plural)
-//   - "EndpointSlice" → "endpointslices"
-func pluralizeKind(kind string) string {
-	lower := strings.ToLower(kind)
-
-	// Special cases that are already plural
-	if strings.HasSuffix(lower, "endpoints") {
-		return lower
-	}
-
-	// Add "es" for words ending in "s", "x", "z", "ch", "sh"
-	if strings.HasSuffix(lower, "s") ||
-		strings.HasSuffix(lower, "x") ||
-		strings.HasSuffix(lower, "z") ||
-		strings.HasSuffix(lower, "ch") ||
-		strings.HasSuffix(lower, "sh") {
-		return lower + "es"
-	}
-
-	// Default: add "s"
-	return lower + "s"
 }
 
 // mergeIgnoreFields combines global and per-resource ignore field lists.

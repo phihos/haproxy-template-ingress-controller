@@ -133,7 +133,7 @@ func createInvalidTestConfig() *coreconfig.Config {
 		WatchedResources: map[string]coreconfig.WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy: []string{
 					"metadata.namespace",
 				},
@@ -166,7 +166,7 @@ func createValidTestConfig() *coreconfig.Config {
 		WatchedResources: map[string]coreconfig.WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
-				Kind:       "Ingress",
+				Resources:  "ingresses",
 				IndexBy: []string{
 					"metadata.namespace",
 				},
