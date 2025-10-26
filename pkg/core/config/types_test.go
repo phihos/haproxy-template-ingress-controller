@@ -28,12 +28,12 @@ watched_resources_ignore_fields:
 watched_resources:
   ingresses:
     api_version: networking.k8s.io/v1
-    kind: Ingress
+    resources: ingresses
     enable_validation_webhook: true
     index_by: ["metadata.namespace", "metadata.name"]
   services:
     api_version: v1
-    kind: Service
+    resources: services
     enable_validation_webhook: false
     index_by: ["metadata.namespace"]
 
@@ -156,7 +156,7 @@ verbose: 1
 func TestWatchedResource_UnmarshalYAML(t *testing.T) {
 	yamlConfig := `
 api_version: networking.k8s.io/v1
-kind: Ingress
+resources: ingresses
 enable_validation_webhook: true
 index_by: ["metadata.namespace", "metadata.name"]
 `

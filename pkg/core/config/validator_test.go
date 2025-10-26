@@ -277,7 +277,7 @@ func TestValidateWatchedResource_MissingKind(t *testing.T) {
 
 	err := ValidateStructure(cfg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "kind")
+	assert.Contains(t, err.Error(), "resources")
 }
 
 func TestValidateWatchedResource_EmptyIndexBy(t *testing.T) {

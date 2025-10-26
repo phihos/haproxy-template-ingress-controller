@@ -106,7 +106,7 @@ pod_selector:
 watched_resources:
   ingresses:
     api_version: networking.k8s.io/v1
-    kind: Ingress
+    resources: ingresses
     index_by: ["metadata.namespace"]
 
 haproxy_config:
