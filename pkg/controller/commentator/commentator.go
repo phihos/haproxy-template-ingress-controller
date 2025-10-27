@@ -115,10 +115,11 @@ func (ec *EventCommentator) determineLogLevel(eventType string) slog.Level {
 		events.EventTypeWebhookValidationError:
 		return slog.LevelError
 
-	// Warn level - invalid states
+	// Warn level - invalid states and leadership loss
 	case events.EventTypeConfigInvalid,
 		events.EventTypeCredentialsInvalid,
-		events.EventTypeWebhookValidationDenied:
+		events.EventTypeWebhookValidationDenied,
+		events.EventTypeLostLeadership:
 		return slog.LevelWarn
 
 	// Info level - lifecycle and completion events
@@ -128,7 +129,10 @@ func (ec *EventCommentator) determineLogLevel(eventType string) slog.Level {
 		events.EventTypeIndexSynchronized,
 		events.EventTypeReconciliationCompleted,
 		events.EventTypeValidationCompleted,
-		events.EventTypeDeploymentCompleted:
+		events.EventTypeDeploymentCompleted,
+		events.EventTypeLeaderElectionStarted,
+		events.EventTypeBecameLeader,
+		events.EventTypeNewLeaderObserved:
 		return slog.LevelInfo
 
 	// Debug level - everything else (detailed operational events)
@@ -462,6 +466,40 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 				"request_uid", e.RequestUID,
 				"kind", e.Kind,
 				"error", e.Error)
+
+	// Leader Election Events
+	case *events.LeaderElectionStartedEvent:
+		return fmt.Sprintf("Leader election started: identity=%s, lease=%s/%s",
+				e.Identity, e.LeaseNamespace, e.LeaseName),
+			append(attrs,
+				"identity", e.Identity,
+				"lease_name", e.LeaseName,
+				"lease_namespace", e.LeaseNamespace)
+
+	case *events.BecameLeaderEvent:
+		return fmt.Sprintf("🎖️  Became leader: %s", e.Identity),
+			append(attrs, "identity", e.Identity)
+
+	case *events.LostLeadershipEvent:
+		reasonMsg := ""
+		if e.Reason != "" {
+			reasonMsg = fmt.Sprintf(" (reason: %s)", e.Reason)
+		}
+		return fmt.Sprintf("⚠️  Lost leadership: %s%s", e.Identity, reasonMsg),
+			append(attrs,
+				"identity", e.Identity,
+				"reason", e.Reason)
+
+	case *events.NewLeaderObservedEvent:
+		observerMsg := "another replica"
+		if e.IsSelf {
+			observerMsg = "this replica"
+		}
+		return fmt.Sprintf("New leader observed: %s (%s)",
+				e.NewLeaderIdentity, observerMsg),
+			append(attrs,
+				"leader_identity", e.NewLeaderIdentity,
+				"is_self", e.IsSelf)
 
 	default:
 		// Fallback for unknown event types

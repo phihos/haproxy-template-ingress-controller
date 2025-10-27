@@ -60,6 +60,7 @@ haproxy_config:
 watched_resources:
   ingresses:
     api_version: networking.k8s.io/v1
+    kind: Ingress
     resources: ingresses
     index_by:
       - metadata.namespace
@@ -99,6 +100,73 @@ haproxy_config:
 watched_resources:
   ingresses:
     api_version: networking.k8s.io/v1
+    kind: Ingress
+    resources: ingresses
+    index_by:
+      - metadata.namespace
+      - metadata.name
+`
+
+// HAConfigWithLeaderElectionYAML is the controller configuration with leader election enabled.
+const HAConfigWithLeaderElectionYAML = `
+pod_selector:
+  match_labels:
+    app: haproxy
+    component: loadbalancer
+
+controller:
+  healthz_port: 8080
+  metrics_port: 9090
+  leader_election:
+    enabled: true
+    lease_name: haproxy-template-ic-leader
+    lease_duration: 60s
+    renew_deadline: 15s
+    retry_period: 5s
+
+haproxy_config:
+  template: |
+    global
+      maxconn 2000
+
+    defaults
+      mode http
+      timeout connect 5000ms
+      timeout client 50000ms
+      timeout server 50000ms
+
+    frontend test-frontend
+      bind :8080
+      {%- for ingress in resources.ingresses.List() %}
+      {%- for rule in ingress.spec.rules %}
+      {%- for path in rule.http.paths %}
+      {%- if path.backend.service %}
+      use_backend ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }} if { path_beg {{ path.path }} }
+      {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+      {%- endfor %}
+      default_backend test-backend
+
+    {%- for ingress in resources.ingresses.List() %}
+    {%- for rule in ingress.spec.rules %}
+    {%- for path in rule.http.paths %}
+    {%- if path.backend.service %}
+
+    backend ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}
+      server test-server 127.0.0.1:8080
+    {%- endif %}
+    {%- endfor %}
+    {%- endfor %}
+    {%- endfor %}
+
+    backend test-backend
+      server test-server 127.0.0.1:9999
+
+watched_resources:
+  ingresses:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
     resources: ingresses
     index_by:
       - metadata.namespace
@@ -385,6 +453,11 @@ func NewClusterRole(name, namespace string) *rbacv1.ClusterRole {
 				Resources: []string{"validatingwebhookconfigurations"},
 				Verbs:     []string{"create", "update", "get", "list", "watch", "delete"},
 			},
+			{
+				APIGroups: []string{"coordination.k8s.io"},
+				Resources: []string{"leases"},
+				Verbs:     []string{"get", "create", "update"},
+			},
 		},
 	}
 }
@@ -417,8 +490,7 @@ func NewClusterRoleBinding(name, clusterRoleName, serviceAccountName, serviceAcc
 }
 
 // NewControllerDeployment creates a controller deployment.
-func NewControllerDeployment(namespace, configMapName, secretName, serviceAccountName string, debugPort int32) *appsv1.Deployment {
-	replicas := int32(1)
+func NewControllerDeployment(namespace, configMapName, secretName, serviceAccountName string, debugPort int32, replicas int32) *appsv1.Deployment {
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -467,6 +539,22 @@ func NewControllerDeployment(namespace, configMapName, secretName, serviceAccoun
 								{
 									Name:  "WEBHOOK_SERVICE_NAME",
 									Value: "haproxy-template-ic-webhook",
+								},
+								{
+									Name: "POD_NAME",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.name",
+										},
+									},
+								},
+								{
+									Name: "POD_NAMESPACE",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.namespace",
+										},
+									},
 								},
 							},
 							Ports: []corev1.ContainerPort{

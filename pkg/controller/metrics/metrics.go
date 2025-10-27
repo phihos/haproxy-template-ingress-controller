@@ -53,6 +53,11 @@ type Metrics struct {
 	WebhookValidationTotal *prometheus.CounterVec
 	WebhookCertExpiry      prometheus.Gauge
 	WebhookCertRotations   prometheus.Counter
+
+	// Leader election metrics
+	LeaderElectionIsLeader            prometheus.Gauge
+	LeaderElectionTransitionsTotal    prometheus.Counter
+	LeaderElectionTimeAsLeaderSeconds prometheus.Counter
 }
 
 // New creates all controller metrics and registers them with the provided registry.
@@ -169,6 +174,23 @@ func New(registry prometheus.Registerer) *Metrics {
 			"haproxy_ic_webhook_cert_rotations_total",
 			"Total number of webhook certificate rotations",
 		),
+
+		// Leader election metrics
+		LeaderElectionIsLeader: pkgmetrics.NewGauge(
+			registry,
+			"haproxy_ic_leader_election_is_leader",
+			"Indicates if this replica is the leader (1) or follower (0)",
+		),
+		LeaderElectionTransitionsTotal: pkgmetrics.NewCounter(
+			registry,
+			"haproxy_ic_leader_election_transitions_total",
+			"Total number of leadership transitions",
+		),
+		LeaderElectionTimeAsLeaderSeconds: pkgmetrics.NewCounter(
+			registry,
+			"haproxy_ic_leader_election_time_as_leader_seconds_total",
+			"Cumulative time spent as leader in seconds",
+		),
 	}
 }
 
@@ -263,4 +285,30 @@ func (m *Metrics) SetWebhookCertExpiry(expiryTime int64) {
 // RecordWebhookCertRotation records a webhook certificate rotation.
 func (m *Metrics) RecordWebhookCertRotation() {
 	m.WebhookCertRotations.Inc()
+}
+
+// SetIsLeader sets whether this replica is the leader.
+//
+// Parameters:
+//   - isLeader: true if this replica is the leader, false otherwise
+func (m *Metrics) SetIsLeader(isLeader bool) {
+	if isLeader {
+		m.LeaderElectionIsLeader.Set(1)
+	} else {
+		m.LeaderElectionIsLeader.Set(0)
+	}
+}
+
+// RecordLeadershipTransition records a leadership state change.
+// Call this whenever leadership is gained or lost.
+func (m *Metrics) RecordLeadershipTransition() {
+	m.LeaderElectionTransitionsTotal.Inc()
+}
+
+// AddTimeAsLeader adds time spent as leader to the cumulative counter.
+//
+// Parameters:
+//   - seconds: Time spent as leader in seconds
+func (m *Metrics) AddTimeAsLeader(seconds float64) {
+	m.LeaderElectionTimeAsLeaderSeconds.Add(seconds)
 }

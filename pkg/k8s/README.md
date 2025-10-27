@@ -797,6 +797,9 @@ The package is organized into focused subpackages:
   - Uses SharedInformerFactory
   - Debouncing logic
   - Sync tracking and callbacks
+- **leaderelection/**: Leader election using Kubernetes Leases
+  - Pure component (no event dependencies)
+  - See `pkg/k8s/leaderelection/README.md` for details
 
 ## Thread Safety
 

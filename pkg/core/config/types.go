@@ -90,6 +90,42 @@ type ControllerConfig struct {
 	// MetricsPort is the port for Prometheus metrics.
 	// Default: 9090
 	MetricsPort int `yaml:"metrics_port"`
+
+	// LeaderElection configures leader election for high availability.
+	LeaderElection LeaderElectionConfig `yaml:"leader_election"`
+}
+
+// LeaderElectionConfig configures leader election for running multiple replicas.
+type LeaderElectionConfig struct {
+	// Enabled determines whether leader election is active.
+	// If false, the controller assumes it is the sole instance (single-replica mode).
+	// Default: true
+	Enabled bool `yaml:"enabled"`
+
+	// LeaseName is the name of the Lease resource used for coordination.
+	// Default: haproxy-template-ic-leader
+	LeaseName string `yaml:"lease_name"`
+
+	// LeaseDuration is the duration that non-leader candidates will wait
+	// to force acquire leadership (measured against time of last observed ack).
+	// Format: Go duration string (e.g., "60s", "1m")
+	// Default: 60s
+	// Minimum: 15s
+	LeaseDuration string `yaml:"lease_duration"`
+
+	// RenewDeadline is the duration that the acting leader will retry
+	// refreshing leadership before giving up.
+	// Format: Go duration string (e.g., "15s")
+	// Default: 15s
+	// Must be less than LeaseDuration
+	RenewDeadline string `yaml:"renew_deadline"`
+
+	// RetryPeriod is the duration the LeaderElector clients should wait
+	// between tries of actions.
+	// Format: Go duration string (e.g., "5s")
+	// Default: 5s
+	// Must be less than RenewDeadline
+	RetryPeriod string `yaml:"retry_period"`
 }
 
 // LoggingConfig configures logging behavior.

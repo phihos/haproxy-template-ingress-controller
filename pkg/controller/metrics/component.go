@@ -17,6 +17,7 @@ package metrics
 import (
 	"context"
 	"sync"
+	"time"
 
 	"haproxy-template-ic/pkg/controller/events"
 	pkgevents "haproxy-template-ic/pkg/events"
@@ -38,6 +39,9 @@ type Component struct {
 	metrics        *Metrics
 	eventBus       *pkgevents.EventBus
 	resourceCounts map[string]int // Tracks current resource counts
+
+	// Leader election tracking
+	becameLeaderAt time.Time // When this replica became leader (zero if not leader)
 
 	// Initialization state (guarded by initOnce)
 	initOnce  sync.Once
@@ -154,5 +158,22 @@ func (c *Component) handleEvent(event pkgevents.Event) {
 		newCount := currentCount + e.ChangeStats.Created - e.ChangeStats.Deleted
 		c.resourceCounts[e.ResourceTypeName] = newCount
 		c.metrics.SetResourceCount(e.ResourceTypeName, newCount)
+
+	// Leader election events
+	case *events.BecameLeaderEvent:
+		c.becameLeaderAt = e.Timestamp()
+		c.metrics.SetIsLeader(true)
+		c.metrics.RecordLeadershipTransition()
+
+	case *events.LostLeadershipEvent:
+		c.metrics.SetIsLeader(false)
+		c.metrics.RecordLeadershipTransition()
+
+		// Record time spent as leader
+		if !c.becameLeaderAt.IsZero() {
+			timeAsLeader := e.Timestamp().Sub(c.becameLeaderAt)
+			c.metrics.AddTimeAsLeader(timeAsLeader.Seconds())
+			c.becameLeaderAt = time.Time{} // Reset
+		}
 	}
 }

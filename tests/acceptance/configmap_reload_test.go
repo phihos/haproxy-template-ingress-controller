@@ -136,6 +136,7 @@ func TestConfigMapReload(t *testing.T) {
 				ControllerSecretName,
 				ControllerServiceAccountName,
 				DebugPort,
+				1, // Single replica for this test
 			)
 			if err := client.Resources().Create(ctx, deployment); err != nil {
 				t.Fatal("Failed to create deployment:", err)
@@ -415,7 +416,7 @@ func TestConfigMapReload(t *testing.T) {
 			}
 
 			// Delete deployment
-			deployment := NewControllerDeployment(namespace, ControllerConfigMapName, ControllerSecretName, ControllerServiceAccountName, DebugPort)
+			deployment := NewControllerDeployment(namespace, ControllerConfigMapName, ControllerSecretName, ControllerServiceAccountName, DebugPort, 1)
 			if err := client.Resources().Delete(ctx, deployment); err != nil {
 				t.Log("Warning: failed to delete deployment:", err)
 			}

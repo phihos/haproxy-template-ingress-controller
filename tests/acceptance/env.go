@@ -229,3 +229,69 @@ func WaitForWebhookConfiguration(ctx context.Context, restConfig *rest.Config, n
 		}
 	}
 }
+
+// GetAllControllerPods returns all controller pods in the namespace.
+func GetAllControllerPods(ctx context.Context, client klient.Client, namespace string) ([]corev1.Pod, error) {
+	var podList corev1.PodList
+	res := client.Resources(namespace)
+	if err := res.List(ctx, &podList, resources.WithLabelSelector("app="+ControllerDeploymentName)); err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	return podList.Items, nil
+}
+
+// GetLeaseHolder queries the Lease resource and returns the holder identity.
+// Returns empty string if Lease doesn't exist or has no holder.
+func GetLeaseHolder(ctx context.Context, restConfig *rest.Config, namespace, leaseName string) (string, error) {
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	lease, err := clientset.CoordinationV1().Leases(namespace).Get(ctx, leaseName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get lease: %w", err)
+	}
+
+	if lease.Spec.HolderIdentity == nil {
+		return "", nil
+	}
+
+	return *lease.Spec.HolderIdentity, nil
+}
+
+// WaitForLeaderElection waits until a Lease exists with a holder identity.
+// Returns error if timeout occurs before leader is elected.
+func WaitForLeaderElection(ctx context.Context, restConfig *rest.Config, namespace, leaseName string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for leader election")
+
+		case <-ticker.C:
+			lease, err := clientset.CoordinationV1().Leases(namespace).Get(ctx, leaseName, metav1.GetOptions{})
+			if err != nil {
+				// Lease doesn't exist yet, keep waiting
+				continue
+			}
+
+			if lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity != "" {
+				// Leader elected
+				return nil
+			}
+			// Lease exists but no holder yet, keep waiting
+		}
+	}
+}

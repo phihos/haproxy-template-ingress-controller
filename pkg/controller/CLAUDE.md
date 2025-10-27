@@ -35,6 +35,8 @@ pkg/controller/
 │   ├── executor.go      # Orchestrates Renderer, Validator, Deployer
 │   └── executor_test.go # Event flow and orchestration tests
 ├── indextracker/         # Index synchronization tracker
+├── leaderelection/       # Leader election event adapter
+│   └── component.go     # Wraps pure leader election, publishes events
 ├── reconciler/           # Reconciliation debouncer (Stage 5)
 │   ├── reconciler.go    # Debounces changes, triggers reconciliation
 │   └── reconciler_test.go
@@ -851,5 +853,7 @@ for event := range eventChan {
 
 - Event infrastructure: `pkg/events/CLAUDE.md`
 - Package organization: `pkg/CLAUDE.md`
+- Leader election: `pkg/controller/leaderelection/CLAUDE.md`
+- Metrics component: `pkg/controller/metrics/CLAUDE.md`
 - Architecture: `/docs/development/design.md`
 - API documentation: `pkg/controller/README.md`

@@ -477,6 +477,34 @@ rendered, _ := debugClient.GetRenderedConfig(ctx)
 assert.Contains(t, rendered, "maxconn 2000")
 ```
 
+## Docker Image Requirements
+
+**CRITICAL**: Acceptance tests require the Docker image to be tagged as `haproxy-template-ic:test` (NOT `:dev` or any other tag).
+
+The test framework automatically loads this image into the kind cluster during test setup. If you make code changes, you must rebuild the image with the correct tag:
+
+```bash
+# Standard rebuild (uses Docker cache for faster builds)
+docker build -t haproxy-template-ic:test -f Dockerfile .
+
+# Force complete rebuild (necessary if cached layers are stale)
+docker build --no-cache -t haproxy-template-ic:test -f Dockerfile .
+```
+
+**When to use `--no-cache`:**
+- After making code changes that aren't reflected in test behavior
+- When you suspect Docker is using old cached layers
+- When debugging mysterious test failures that don't match your code changes
+
+**Common mistake**: Building with the wrong tag and wondering why tests don't use your latest code:
+```bash
+# WRONG - tests won't use this image
+docker build -t haproxy-template-ic:dev -f Dockerfile .
+
+# CORRECT - tests will use this image
+docker build -t haproxy-template-ic:test -f Dockerfile .
+```
+
 ## Debugging Acceptance Tests
 
 ### Keep Resources After Test
@@ -506,12 +534,16 @@ kubectl logs -n haproxy-test haproxy-template-ic-xxx -f
 
 ### Manual Test Execution
 
+**IMPORTANT**: Always use the `:test` tag for acceptance tests.
+
 ```bash
 # Create cluster manually
 kind create cluster --name haproxy-test
 
-# Build and load controller image
-make docker-build
+# Build controller image with CORRECT tag
+docker build -t haproxy-template-ic:test -f Dockerfile .
+
+# Load image into kind cluster
 kind load docker-image haproxy-template-ic:test --name haproxy-test
 
 # Run test
@@ -519,6 +551,18 @@ go test -v ./tests/acceptance -run TestConfigMapReload
 
 # Cleanup
 kind delete cluster --name haproxy-test
+```
+
+**Troubleshooting tip**: If tests fail after code changes, ensure the image was rebuilt with `--no-cache`:
+```bash
+# Rebuild without cache to ensure latest code is included
+docker build --no-cache -t haproxy-template-ic:test -f Dockerfile .
+
+# Load into kind cluster
+kind load docker-image haproxy-template-ic:test --name haproxy-test
+
+# Run test again
+go test -v ./tests/acceptance -run TestConfigMapReload
 ```
 
 ## Resources

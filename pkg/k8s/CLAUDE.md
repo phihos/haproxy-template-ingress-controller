@@ -24,11 +24,12 @@ Modify this package when:
 
 ```
 pkg/k8s/
-├── types/        # Core interfaces (Store, WatcherConfig)
-├── client/       # Kubernetes client wrapper
-├── indexer/      # JSONPath evaluation and field filtering
-├── store/        # MemoryStore and CachedStore implementations
-└── watcher/      # Resource watching (Watcher and SingleWatcher)
+├── types/           # Core interfaces (Store, WatcherConfig)
+├── client/          # Kubernetes client wrapper
+├── indexer/         # JSONPath evaluation and field filtering
+├── store/           # MemoryStore and CachedStore implementations
+├── watcher/         # Resource watching (Watcher and SingleWatcher)
+└── leaderelection/  # Pure leader election component (no events)
 ```
 
 ## Key Concepts
@@ -675,5 +676,6 @@ go func() {
 
 - API documentation: `pkg/k8s/README.md`
 - Architecture: `/docs/development/design.md`
+- Leader election: `pkg/k8s/leaderelection/CLAUDE.md`
 - client-go documentation: https://github.com/kubernetes/client-go
 - JSONPath syntax: https://kubernetes.io/docs/reference/kubectl/jsonpath/
