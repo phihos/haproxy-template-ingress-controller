@@ -26,23 +26,26 @@
 package main
 
 import (
-	"context"
-	"flag"
 	"fmt"
-	"log/slog"
-	"math"
 	"os"
-	"os/signal"
-	"runtime"
-	"runtime/debug"
-	"strconv"
-	"syscall"
 
 	_ "github.com/KimMachineGun/automemlimit"
-
-	"haproxy-template-ic/pkg/controller"
-	"haproxy-template-ic/pkg/k8s/client"
+	"github.com/spf13/cobra"
 )
+
+// rootCmd represents the base command when called without any subcommands.
+var rootCmd = &cobra.Command{
+	Use:   "controller",
+	Short: "HAProxy Template Ingress Controller",
+	Long: `HAProxy Template Ingress Controller - Template-driven HAProxy configuration management.
+
+The controller provides two main commands:
+
+  run      - Run the controller (watches CRDs and manages HAProxy)
+  validate - Validate a HAProxyTemplateConfig with embedded tests
+
+Use "controller [command] --help" for more information about a command.`,
+}
 
 const (
 	// DefaultCRDName is the default name for the HAProxyTemplateConfig CRD resource.
@@ -60,128 +63,15 @@ const (
 	DefaultDebugPort = 0
 )
 
+func init() {
+	// Add subcommands
+	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(validateCmd)
+}
+
 func main() {
-	// Parse command-line flags
-	var (
-		crdName               string
-		secretName            string
-		webhookCertSecretName string
-		kubeconfig            string
-		debugPort             int
-	)
-
-	flag.StringVar(&crdName, "crd-name", "",
-		"Name of the HAProxyTemplateConfig CRD containing controller configuration (env: CRD_NAME)")
-	flag.StringVar(&secretName, "secret-name", "",
-		"Name of the Secret containing HAProxy Dataplane API credentials (env: SECRET_NAME)")
-	flag.StringVar(&webhookCertSecretName, "webhook-cert-secret-name", "",
-		"Name of the Secret containing webhook TLS certificates (env: WEBHOOK_CERT_SECRET_NAME)")
-	flag.StringVar(&kubeconfig, "kubeconfig", "",
-		"Path to kubeconfig file (for out-of-cluster development)")
-	flag.IntVar(&debugPort, "debug-port", 0,
-		"Port for debug HTTP server (0 to disable, env: DEBUG_PORT)")
-	flag.Parse()
-
-	// Configuration priority: CLI flags > Environment variables > Defaults
-
-	// CRD name
-	if crdName == "" {
-		crdName = os.Getenv("CRD_NAME")
-	}
-	if crdName == "" {
-		crdName = DefaultCRDName
-	}
-
-	// Secret name
-	if secretName == "" {
-		secretName = os.Getenv("SECRET_NAME")
-	}
-	if secretName == "" {
-		secretName = DefaultSecretName
-	}
-
-	// Webhook certificate Secret name
-	if webhookCertSecretName == "" {
-		webhookCertSecretName = os.Getenv("WEBHOOK_CERT_SECRET_NAME")
-	}
-	if webhookCertSecretName == "" {
-		webhookCertSecretName = DefaultWebhookCertSecretName
-	}
-
-	// Debug port
-	if debugPort == 0 {
-		if envDebugPort := os.Getenv("DEBUG_PORT"); envDebugPort != "" {
-			if port, err := strconv.Atoi(envDebugPort); err == nil {
-				debugPort = port
-			}
-		}
-	}
-	if debugPort == 0 {
-		debugPort = DefaultDebugPort
-	}
-
-	// Set up structured logging
-	logLevel := slog.LevelInfo
-
-	// Check VERBOSE environment variable for log level
-	// 0 = WARNING, 1 = INFO (default), 2 = DEBUG
-	switch os.Getenv("VERBOSE") {
-	case "0":
-		logLevel = slog.LevelWarn
-	case "2":
-		logLevel = slog.LevelDebug
-	}
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
-	}))
-	slog.SetDefault(logger)
-
-	// Log detected resource limits for observability
-	gomaxprocs := runtime.GOMAXPROCS(0)
-	var gomemlimit string
-	if limit := debug.SetMemoryLimit(-1); limit != math.MaxInt64 {
-		gomemlimit = fmt.Sprintf("%d bytes (%.2f MiB)", limit, float64(limit)/(1024*1024))
-	} else {
-		gomemlimit = "unlimited"
-	}
-
-	logger.Info("HAProxy Template Ingress Controller starting",
-		"version", "v0.1.0",
-		"crd_name", crdName,
-		"secret", secretName,
-		"webhook_cert_secret", webhookCertSecretName,
-		"debug_port", debugPort,
-		"log_level", logLevel.String(),
-		"gomaxprocs", gomaxprocs,
-		"gomemlimit", gomemlimit)
-
-	// Create Kubernetes client
-	k8sClient, err := client.New(client.Config{
-		Kubeconfig: kubeconfig,
-	})
-	if err != nil {
-		logger.Error("Failed to create Kubernetes client", "error", err)
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	logger.Info("Kubernetes client created successfully",
-		"namespace", k8sClient.Namespace(),
-		"in_cluster", kubeconfig == "")
-
-	// Set up signal handling for graceful shutdown
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
-
-	// Run the controller
-	if err := controller.Run(ctx, k8sClient, crdName, secretName, webhookCertSecretName, debugPort); err != nil {
-		// Only log error if it's not a graceful shutdown
-		if ctx.Err() == nil {
-			logger.Error("Controller failed", "error", err)
-			cancel()
-			os.Exit(1) //nolint:gocritic // exitAfterDefer: cancel() called explicitly before exit
-		}
-	}
-
-	logger.Info("Controller shutdown complete")
 }
