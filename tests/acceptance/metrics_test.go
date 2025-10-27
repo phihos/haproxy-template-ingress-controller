@@ -145,6 +145,7 @@ func TestMetrics(t *testing.T) {
 				ControllerSecretName,
 				ControllerServiceAccountName,
 				DebugPort,
+				1, // Single replica for this test
 			)
 			if err := client.Resources().Create(ctx, deployment); err != nil {
 				t.Fatal("Failed to create deployment:", err)

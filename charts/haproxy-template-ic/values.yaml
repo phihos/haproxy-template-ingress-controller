@@ -1,7 +1,9 @@
 # Default values for haproxy-template-ic.
 
 # Replica count for controller
-replicaCount: 1
+# Default: 2 replicas for high availability with leader election
+# Only the leader replica deploys configs; followers remain ready for failover
+replicaCount: 2
 
 # Controller image configuration
 image:
@@ -34,6 +36,27 @@ controller:
     controller:
       healthz_port: 8080
       metrics_port: 9090
+
+      # Leader election for high availability
+      # When multiple controller replicas are running, only the leader performs
+      # write operations (deploying configs to HAProxy). All replicas continue
+      # watching resources, rendering configs, and validating (hot standby).
+      leader_election:
+        # Enable leader election (recommended when replicaCount > 1)
+        enabled: true
+        # Name of the Lease resource used for coordination
+        # Defaults to the Helm release fullname if not specified
+        # This ensures multiple releases in the same namespace don't conflict
+        lease_name: ""
+        # Duration that non-leader candidates wait to acquire leadership
+        # Default: 60s (failover happens within this time after leader failure)
+        lease_duration: 60s
+        # Duration the leader retries refreshing leadership before giving up
+        # Default: 15s (should be < lease_duration, typically 1/4 of it)
+        renew_deadline: 15s
+        # Interval between leadership refresh attempts
+        # Default: 5s (should be < renew_deadline, typically 1/3 of it)
+        retry_period: 5s
 
     dataplane:
       port: 5555

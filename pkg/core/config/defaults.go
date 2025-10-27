@@ -36,6 +36,21 @@ const (
 
 	// DefaultDataplaneConfigFile is the default path to the main HAProxy config file.
 	DefaultDataplaneConfigFile = "/etc/haproxy/haproxy.cfg"
+
+	// DefaultLeaderElectionEnabled is the default leader election enabled setting.
+	DefaultLeaderElectionEnabled = true
+
+	// DefaultLeaderElectionLeaseName is the default name for the leader election lease.
+	DefaultLeaderElectionLeaseName = "haproxy-template-ic-leader"
+
+	// DefaultLeaderElectionLeaseDuration is the default lease duration.
+	DefaultLeaderElectionLeaseDuration = 60 * time.Second
+
+	// DefaultLeaderElectionRenewDeadline is the default renew deadline.
+	DefaultLeaderElectionRenewDeadline = 15 * time.Second
+
+	// DefaultLeaderElectionRetryPeriod is the default retry period.
+	DefaultLeaderElectionRetryPeriod = 5 * time.Second
 )
 
 // setDefaults applies default values to unset configuration fields.
@@ -51,6 +66,21 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Controller.MetricsPort == 0 {
 		cfg.Controller.MetricsPort = DefaultMetricsPort
+	}
+
+	// Leader election defaults
+	// Note: Enabled defaults to true (zero value for bool is false, so we set it explicitly)
+	if cfg.Controller.LeaderElection.LeaseName == "" {
+		cfg.Controller.LeaderElection.LeaseName = DefaultLeaderElectionLeaseName
+	}
+	if cfg.Controller.LeaderElection.LeaseDuration == "" {
+		cfg.Controller.LeaderElection.LeaseDuration = DefaultLeaderElectionLeaseDuration.String()
+	}
+	if cfg.Controller.LeaderElection.RenewDeadline == "" {
+		cfg.Controller.LeaderElection.RenewDeadline = DefaultLeaderElectionRenewDeadline.String()
+	}
+	if cfg.Controller.LeaderElection.RetryPeriod == "" {
+		cfg.Controller.LeaderElection.RetryPeriod = DefaultLeaderElectionRetryPeriod.String()
 	}
 
 	// Logging defaults
@@ -100,4 +130,37 @@ func (d *DataplaneConfig) GetDriftPreventionInterval() time.Duration {
 		}
 	}
 	return DefaultDriftPreventionInterval
+}
+
+// GetLeaseDuration returns the configured lease duration
+// or the default if not specified or invalid.
+func (le *LeaderElectionConfig) GetLeaseDuration() time.Duration {
+	if le.LeaseDuration != "" {
+		if duration, err := time.ParseDuration(le.LeaseDuration); err == nil {
+			return duration
+		}
+	}
+	return DefaultLeaderElectionLeaseDuration
+}
+
+// GetRenewDeadline returns the configured renew deadline
+// or the default if not specified or invalid.
+func (le *LeaderElectionConfig) GetRenewDeadline() time.Duration {
+	if le.RenewDeadline != "" {
+		if duration, err := time.ParseDuration(le.RenewDeadline); err == nil {
+			return duration
+		}
+	}
+	return DefaultLeaderElectionRenewDeadline
+}
+
+// GetRetryPeriod returns the configured retry period
+// or the default if not specified or invalid.
+func (le *LeaderElectionConfig) GetRetryPeriod() time.Duration {
+	if le.RetryPeriod != "" {
+		if duration, err := time.ParseDuration(le.RetryPeriod); err == nil {
+			return duration
+		}
+	}
+	return DefaultLeaderElectionRetryPeriod
 }

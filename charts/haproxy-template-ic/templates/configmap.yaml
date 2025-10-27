@@ -1,3 +1,7 @@
+{{- $config := deepCopy .Values.controller.config }}
+{{- if not $config.controller.leader_election.lease_name }}
+{{- $_ := set $config.controller.leader_election "lease_name" (include "haproxy-template-ic.fullname" .) }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,4 +11,4 @@ metadata:
     {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 data:
   config: |
-    {{ .Values.controller.config | toYaml | nindent 4 }}
+    {{ $config | toYaml | nindent 4 }}

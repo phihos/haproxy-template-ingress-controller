@@ -116,6 +116,12 @@ const (
 	EventTypeWebhookValidationAllowed = "webhook.validation.allowed"
 	EventTypeWebhookValidationDenied  = "webhook.validation.denied"
 	EventTypeWebhookValidationError   = "webhook.validation.error"
+
+	// Leader election event types.
+	EventTypeLeaderElectionStarted = "leader.election.started"
+	EventTypeBecameLeader          = "leader.became"
+	EventTypeLostLeadership        = "leader.lost"
+	EventTypeNewLeaderObserved     = "leader.observed"
 )
 
 // -----------------------------------------------------------------------------
@@ -1218,3 +1224,83 @@ func NewWebhookValidationErrorEvent(requestUID, kind, errorMsg string) *WebhookV
 
 func (e *WebhookValidationErrorEvent) EventType() string    { return EventTypeWebhookValidationError }
 func (e *WebhookValidationErrorEvent) Timestamp() time.Time { return e.timestamp }
+
+// -----------------------------------------------------------------------------
+// Leader Election Events.
+// -----------------------------------------------------------------------------
+
+// LeaderElectionStartedEvent is published when leader election is initiated.
+type LeaderElectionStartedEvent struct {
+	Identity       string
+	LeaseName      string
+	LeaseNamespace string
+	timestamp      time.Time
+}
+
+// NewLeaderElectionStartedEvent creates a new LeaderElectionStartedEvent.
+func NewLeaderElectionStartedEvent(identity, leaseName, leaseNamespace string) *LeaderElectionStartedEvent {
+	return &LeaderElectionStartedEvent{
+		Identity:       identity,
+		LeaseName:      leaseName,
+		LeaseNamespace: leaseNamespace,
+		timestamp:      time.Now(),
+	}
+}
+
+func (e *LeaderElectionStartedEvent) EventType() string    { return EventTypeLeaderElectionStarted }
+func (e *LeaderElectionStartedEvent) Timestamp() time.Time { return e.timestamp }
+
+// BecameLeaderEvent is published when this replica becomes the leader.
+type BecameLeaderEvent struct {
+	Identity  string
+	timestamp time.Time
+}
+
+// NewBecameLeaderEvent creates a new BecameLeaderEvent.
+func NewBecameLeaderEvent(identity string) *BecameLeaderEvent {
+	return &BecameLeaderEvent{
+		Identity:  identity,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *BecameLeaderEvent) EventType() string    { return EventTypeBecameLeader }
+func (e *BecameLeaderEvent) Timestamp() time.Time { return e.timestamp }
+
+// LostLeadershipEvent is published when this replica loses leadership.
+type LostLeadershipEvent struct {
+	Identity  string
+	Reason    string // graceful_shutdown, lease_expired, etc.
+	timestamp time.Time
+}
+
+// NewLostLeadershipEvent creates a new LostLeadershipEvent.
+func NewLostLeadershipEvent(identity, reason string) *LostLeadershipEvent {
+	return &LostLeadershipEvent{
+		Identity:  identity,
+		Reason:    reason,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *LostLeadershipEvent) EventType() string    { return EventTypeLostLeadership }
+func (e *LostLeadershipEvent) Timestamp() time.Time { return e.timestamp }
+
+// NewLeaderObservedEvent is published when a new leader is observed.
+type NewLeaderObservedEvent struct {
+	NewLeaderIdentity string
+	IsSelf            bool // true if this replica is the new leader
+	timestamp         time.Time
+}
+
+// NewNewLeaderObservedEvent creates a new NewLeaderObservedEvent.
+func NewNewLeaderObservedEvent(newLeaderIdentity string, isSelf bool) *NewLeaderObservedEvent {
+	return &NewLeaderObservedEvent{
+		NewLeaderIdentity: newLeaderIdentity,
+		IsSelf:            isSelf,
+		timestamp:         time.Now(),
+	}
+}
+
+func (e *NewLeaderObservedEvent) EventType() string    { return EventTypeNewLeaderObserved }
+func (e *NewLeaderObservedEvent) Timestamp() time.Time { return e.timestamp }

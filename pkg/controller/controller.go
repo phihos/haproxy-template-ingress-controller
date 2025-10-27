@@ -27,6 +27,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -47,6 +49,7 @@ import (
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/controller/executor"
 	"haproxy-template-ic/pkg/controller/indextracker"
+	leaderelectionctrl "haproxy-template-ic/pkg/controller/leaderelection"
 	"haproxy-template-ic/pkg/controller/metrics"
 	"haproxy-template-ic/pkg/controller/reconciler"
 	"haproxy-template-ic/pkg/controller/renderer"
@@ -59,6 +62,7 @@ import (
 	busevents "haproxy-template-ic/pkg/events"
 	"haproxy-template-ic/pkg/introspection"
 	"haproxy-template-ic/pkg/k8s/client"
+	k8sleaderelection "haproxy-template-ic/pkg/k8s/leaderelection"
 	"haproxy-template-ic/pkg/k8s/types"
 	"haproxy-template-ic/pkg/k8s/watcher"
 	pkgmetrics "haproxy-template-ic/pkg/metrics"
@@ -525,6 +529,15 @@ type reconciliationComponents struct {
 	driftMonitor        *deployer.DriftPreventionMonitor
 }
 
+// leaderOnlyComponents holds components that only the leader should run.
+type leaderOnlyComponents struct {
+	deployer            *deployer.Component
+	deploymentScheduler *deployer.DeploymentScheduler
+	driftMonitor        *deployer.DriftPreventionMonitor
+	ctx                 context.Context
+	cancel              context.CancelFunc
+}
+
 // createReconciliationComponents creates all reconciliation components.
 func createReconciliationComponents(
 	cfg *coreconfig.Config,
@@ -585,14 +598,16 @@ func createReconciliationComponents(
 	}, nil
 }
 
-// startReconciliationComponents starts all reconciliation components in background goroutines.
+// startReconciliationComponents starts reconciliation components.
+// All replicas start: Reconciler, Renderer, HAProxyValidator, Executor, Discovery
+// Leader-only components (Deployer, DeploymentScheduler, DriftMonitor) are NOT started here.
 func startReconciliationComponents(
 	iterCtx context.Context,
 	components *reconciliationComponents,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
 ) {
-	// Start reconciler in background
+	// Start reconciler in background (all replicas)
 	go func() {
 		if err := components.reconciler.Start(iterCtx); err != nil {
 			logger.Error("reconciler failed", "error", err)
@@ -600,7 +615,7 @@ func startReconciliationComponents(
 		}
 	}()
 
-	// Start renderer in background
+	// Start renderer in background (all replicas)
 	go func() {
 		if err := components.renderer.Start(iterCtx); err != nil {
 			logger.Error("renderer failed", "error", err)
@@ -608,7 +623,7 @@ func startReconciliationComponents(
 		}
 	}()
 
-	// Start HAProxy validator in background
+	// Start HAProxy validator in background (all replicas)
 	go func() {
 		if err := components.haproxyValidator.Start(iterCtx); err != nil {
 			logger.Error("HAProxy validator failed", "error", err)
@@ -616,7 +631,7 @@ func startReconciliationComponents(
 		}
 	}()
 
-	// Start executor in background
+	// Start executor in background (all replicas)
 	go func() {
 		if err := components.executor.Start(iterCtx); err != nil {
 			logger.Error("executor failed", "error", err)
@@ -624,7 +639,7 @@ func startReconciliationComponents(
 		}
 	}()
 
-	// Start discovery in background
+	// Start discovery in background (all replicas)
 	go func() {
 		if err := components.discovery.Start(iterCtx); err != nil {
 			logger.Error("discovery failed", "error", err)
@@ -632,32 +647,70 @@ func startReconciliationComponents(
 		}
 	}()
 
-	// Start deployer in background
+	logger.Info("Reconciliation components started (all replicas)",
+		"components", "Reconciler, Renderer, HAProxyValidator, Executor, Discovery")
+}
+
+// startLeaderOnlyComponents starts components that only the leader should run.
+// Returns a leaderOnlyComponents struct with cancellation control.
+func startLeaderOnlyComponents(
+	parentCtx context.Context,
+	components *reconciliationComponents,
+	logger *slog.Logger,
+	parentCancel context.CancelFunc,
+) *leaderOnlyComponents {
+	// Create separate context for leader-only components
+	leaderCtx, leaderCancel := context.WithCancel(parentCtx)
+
+	// Start deployer in background (leader only)
 	go func() {
-		if err := components.deployer.Start(iterCtx); err != nil {
+		if err := components.deployer.Start(leaderCtx); err != nil && leaderCtx.Err() == nil {
 			logger.Error("deployer failed", "error", err)
-			cancel()
+			parentCancel()
 		}
 	}()
 
-	// Start deployment scheduler in background
+	// Start deployment scheduler in background (leader only)
 	go func() {
-		if err := components.deploymentScheduler.Start(iterCtx); err != nil {
+		if err := components.deploymentScheduler.Start(leaderCtx); err != nil && leaderCtx.Err() == nil {
 			logger.Error("deployment scheduler failed", "error", err)
-			cancel()
+			parentCancel()
 		}
 	}()
 
-	// Start drift prevention monitor in background
+	// Start drift prevention monitor in background (leader only)
 	go func() {
-		if err := components.driftMonitor.Start(iterCtx); err != nil {
+		if err := components.driftMonitor.Start(leaderCtx); err != nil && leaderCtx.Err() == nil {
 			logger.Error("drift prevention monitor failed", "error", err)
-			cancel()
+			parentCancel()
 		}
 	}()
 
-	logger.Info("Reconciliation components started",
-		"components", "Reconciler, Renderer, HAProxyValidator, Executor, Discovery, Deployer, DeploymentScheduler, DriftMonitor")
+	logger.Info("Leader-only components started",
+		"components", "Deployer, DeploymentScheduler, DriftMonitor")
+
+	return &leaderOnlyComponents{
+		deployer:            components.deployer,
+		deploymentScheduler: components.deploymentScheduler,
+		driftMonitor:        components.driftMonitor,
+		ctx:                 leaderCtx,
+		cancel:              leaderCancel,
+	}
+}
+
+// stopLeaderOnlyComponents stops leader-only components gracefully.
+func stopLeaderOnlyComponents(components *leaderOnlyComponents, logger *slog.Logger) {
+	if components == nil || components.cancel == nil {
+		return
+	}
+
+	logger.Info("Stopping leader-only components")
+	components.cancel()
+
+	// Brief pause to allow graceful shutdown
+	time.Sleep(100 * time.Millisecond)
+
+	logger.Info("Leader-only components stopped")
 }
 
 // setupWebhook creates and starts the webhook component if webhook validation is enabled.
@@ -798,6 +851,8 @@ func setupWebhook(
 //
 // All components are started after initial resource synchronization to ensure we
 // have a complete view of the cluster state before beginning reconciliation cycles.
+//
+// Returns the reconciliation components for use in leader election callbacks.
 func setupReconciliation(
 	iterCtx context.Context,
 	cfg *coreconfig.Config,
@@ -806,14 +861,15 @@ func setupReconciliation(
 	bus *busevents.EventBus,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
-) error {
+) (*reconciliationComponents, error) {
 	// Create all components
 	components, err := createReconciliationComponents(cfg, resourceWatcher, bus, logger)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Start all components in background
+	// Start all-replica components in background
+	// Leader-only components (Deployer, DeploymentScheduler, DriftMonitor) are NOT started here
 	startReconciliationComponents(iterCtx, components, logger, cancel)
 
 	// Give components a brief moment to subscribe to the EventBus
@@ -834,7 +890,94 @@ func setupReconciliation(
 	bus.Publish(events.NewReconciliationTriggeredEvent("initial_sync_complete"))
 	logger.Debug("Published initial reconciliation trigger")
 
-	return nil
+	return components, nil
+}
+
+// setupLeaderElection initializes leader election or starts leader-only components immediately.
+//
+// Returns leader components struct and mutex for lifecycle management.
+func setupLeaderElection(
+	iterCtx context.Context,
+	cfg *coreconfig.Config,
+	k8sClient *client.Client,
+	reconComponents *reconciliationComponents,
+	eventBus *busevents.EventBus,
+	logger *slog.Logger,
+	cancel context.CancelFunc,
+) (*leaderOnlyComponents, *sync.Mutex) {
+	var leaderComponents *leaderOnlyComponents
+	var leaderComponentsMutex sync.Mutex
+
+	if cfg.Controller.LeaderElection.Enabled {
+		// Read pod identity from environment
+		podName := os.Getenv("POD_NAME")
+		podNamespace := os.Getenv("POD_NAMESPACE")
+
+		if podName == "" {
+			logger.Warn("POD_NAME environment variable not set, using hostname as identity")
+			hostname, _ := os.Hostname()
+			podName = hostname
+		}
+
+		if podNamespace == "" {
+			podNamespace = k8sClient.Namespace()
+			logger.Debug("POD_NAMESPACE not set, using client namespace", "namespace", podNamespace)
+		}
+
+		// Create pure leader election config
+		leConfig := &k8sleaderelection.Config{
+			Enabled:         true,
+			Identity:        podName,
+			LeaseName:       cfg.Controller.LeaderElection.LeaseName,
+			LeaseNamespace:  podNamespace,
+			LeaseDuration:   cfg.Controller.LeaderElection.GetLeaseDuration(),
+			RenewDeadline:   cfg.Controller.LeaderElection.GetRenewDeadline(),
+			RetryPeriod:     cfg.Controller.LeaderElection.GetRetryPeriod(),
+			ReleaseOnCancel: true,
+		}
+
+		// Define leader election callbacks
+		callbacks := k8sleaderelection.Callbacks{
+			OnStartedLeading: func(ctx context.Context) {
+				logger.Info("Became leader, starting deployment components")
+				leaderComponentsMutex.Lock()
+				defer leaderComponentsMutex.Unlock()
+				leaderComponents = startLeaderOnlyComponents(iterCtx, reconComponents, logger, cancel)
+			},
+			OnStoppedLeading: func() {
+				logger.Warn("Lost leadership, stopping deployment components")
+				leaderComponentsMutex.Lock()
+				defer leaderComponentsMutex.Unlock()
+				stopLeaderOnlyComponents(leaderComponents, logger)
+				leaderComponents = nil
+			},
+			OnNewLeader: func(identity string) {
+				logger.Info("New leader observed", "leader_identity", identity, "is_self", identity == podName)
+			},
+		}
+
+		// Create leader election component (event adapter)
+		elector, err := leaderelectionctrl.New(leConfig, k8sClient.Clientset(), eventBus, callbacks, logger)
+		if err != nil {
+			logger.Error("Failed to create leader elector", "error", err)
+			return nil, &leaderComponentsMutex
+		}
+
+		// Start leader election loop in background
+		go func() {
+			if err := elector.Run(iterCtx); err != nil {
+				logger.Error("leader election failed", "error", err)
+			}
+		}()
+
+		logger.Info("Leader election initialized", "identity", podName, "lease_name", leConfig.LeaseName, "lease_namespace", leConfig.LeaseNamespace)
+	} else {
+		// Leader election disabled - start leader-only components immediately
+		logger.Info("Leader election disabled, starting all components")
+		leaderComponents = startLeaderOnlyComponents(iterCtx, reconComponents, logger, cancel)
+	}
+
+	return leaderComponents, &leaderComponentsMutex
 }
 
 // runIteration runs a single controller iteration.
@@ -940,9 +1083,16 @@ func runIteration(
 
 	// 6. Start reconciliation components (Stage 5)
 	logger.Info("Stage 5: Starting reconciliation components")
-	if err := setupReconciliation(setup.IterCtx, cfg, creds, resourceWatcher, setup.Bus, logger, setup.Cancel); err != nil {
+	reconComponents, err := setupReconciliation(setup.IterCtx, cfg, creds, resourceWatcher, setup.Bus, logger, setup.Cancel)
+	if err != nil {
 		return err
 	}
+
+	// 6.5. Setup leader election (Stage 0 - before everything else ideally, but we need cfg)
+	logger.Info("Stage 0: Initializing leader election")
+	leaderComponents, leaderComponentsMutex := setupLeaderElection(
+		setup.IterCtx, cfg, k8sClient, reconComponents, setup.Bus, logger, setup.Cancel,
+	)
 
 	// 7. Setup webhook validation if enabled
 	if webhook.HasWebhookEnabled(cfg) {
@@ -955,15 +1105,30 @@ func runIteration(
 
 	logger.Info("Controller iteration initialized successfully - entering event loop")
 
-	// 8. Wait for config change signal or context cancellation
+	// 9. Wait for config change signal or context cancellation
 	select {
 	case <-setup.IterCtx.Done():
 		logger.Info("Controller iteration cancelled", "reason", setup.IterCtx.Err())
+
+		// Cleanup leader-only components if still running
+		leaderComponentsMutex.Lock()
+		if leaderComponents != nil {
+			stopLeaderOnlyComponents(leaderComponents, logger)
+		}
+		leaderComponentsMutex.Unlock()
+
 		return nil
 
 	case newConfig := <-setup.ConfigChangeCh:
 		logger.Info("Configuration change detected, triggering reinitialization",
 			"new_config_version", fmt.Sprintf("%p", newConfig))
+
+		// Stop leader-only components before canceling context
+		leaderComponentsMutex.Lock()
+		if leaderComponents != nil {
+			stopLeaderOnlyComponents(leaderComponents, logger)
+		}
+		leaderComponentsMutex.Unlock()
 
 		// Cancel iteration context to stop all components and watchers
 		setup.Cancel()

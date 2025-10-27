@@ -147,6 +147,56 @@ haproxy_ic_event_subscribers
 delta(haproxy_ic_event_subscribers[5m])
 ```
 
+### Leader Election Metrics
+
+Track leadership status and transitions for high availability deployments.
+
+**haproxy_ic_leader_election_is_leader** (gauge)
+- Indicates if this replica is currently the leader
+- Values: 1 (leader), 0 (follower)
+- Only one replica should report 1 across all controller instances
+
+**haproxy_ic_leader_election_transitions_total** (counter)
+- Total number of leadership transitions (becoming leader or losing leadership)
+- Increments on both gain and loss of leadership
+- Frequent transitions may indicate cluster instability
+
+**haproxy_ic_leader_election_time_as_leader_seconds_total** (counter)
+- Cumulative time this replica has spent as leader (in seconds)
+- Updates when losing leadership
+- Useful for understanding leadership distribution
+
+**Example Queries:**
+```promql
+# Current leader count (should be 1 across all replicas)
+sum(haproxy_ic_leader_election_is_leader)
+
+# Leadership transition rate
+rate(haproxy_ic_leader_election_transitions_total[1h])
+
+# Average time as leader per transition
+haproxy_ic_leader_election_time_as_leader_seconds_total /
+haproxy_ic_leader_election_transitions_total
+
+# Identify current leader pod
+haproxy_ic_leader_election_is_leader{pod=~".*"} == 1
+
+# Alert on split-brain (multiple leaders)
+sum(haproxy_ic_leader_election_is_leader) > 1
+
+# Alert on no leader
+sum(haproxy_ic_leader_election_is_leader) < 1
+
+# Alert on frequent leadership changes (> 5 per hour)
+rate(haproxy_ic_leader_election_transitions_total[1h]) > 5
+```
+
+**Operational Notes:**
+- In single-replica deployments (leader election disabled), metrics still exist
+- Normal failover causes 1 transition (old leader loses, new leader gains)
+- High transition rates may indicate: clock skew, network issues, or resource contention
+- Leadership distribution should be relatively balanced over time
+
 ## Component Architecture
 
 ### Metrics Struct
@@ -166,6 +216,9 @@ type Metrics struct {
     ResourceCount          *prometheus.GaugeVec  // type label
     EventSubscribers       prometheus.Gauge
     EventsPublished        prometheus.Counter
+    LeaderElectionIsLeader       prometheus.Gauge
+    LeaderElectionTransitionsTotal prometheus.Counter
+    LeaderElectionTimeAsLeaderSeconds prometheus.Counter
 }
 ```
 
@@ -264,6 +317,10 @@ The component automatically updates metrics based on these events:
 **Resource Events:**
 - `IndexSynchronizedEvent` → Initializes resource counts
 - `ResourceIndexUpdatedEvent` → Updates resource counts incrementally
+
+**Leader Election Events:**
+- `BecameLeaderEvent` → Sets is_leader to 1, increments transitions, starts time tracking
+- `LostLeadershipEvent` → Sets is_leader to 0, increments transitions, records time as leader
 
 ## Testing
 

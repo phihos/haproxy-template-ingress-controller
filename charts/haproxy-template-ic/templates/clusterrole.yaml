@@ -22,4 +22,8 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps", "namespaces", "pods"]
     verbs: ["get", "list", "watch"]
+  # Leader election (coordination.k8s.io/v1)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
 {{- end }}

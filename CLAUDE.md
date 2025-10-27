@@ -503,7 +503,10 @@ For detailed development context on specific packages, see:
 - `pkg/CLAUDE.md` - Package organization principles
 - `pkg/events/CLAUDE.md` - Event bus infrastructure
 - `pkg/controller/CLAUDE.md` - Controller orchestration
+- `pkg/controller/leaderelection/CLAUDE.md` - Leader election event adapter
+- `pkg/controller/metrics/CLAUDE.md` - Metrics collection
 - `pkg/k8s/CLAUDE.md` - Kubernetes integration
+- `pkg/k8s/leaderelection/CLAUDE.md` - Pure leader election component
 - `pkg/dataplane/CLAUDE.md` - HAProxy integration
 - `pkg/templating/CLAUDE.md` - Template engine
 - `pkg/core/CLAUDE.md` - Core functionality

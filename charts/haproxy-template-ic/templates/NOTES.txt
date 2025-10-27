@@ -3,6 +3,27 @@ HAProxy Template Ingress Controller has been installed!
 Controller Status:
   kubectl get pods -l app.kubernetes.io/name={{ include "haproxy-template-ic.name" . }} -n {{ .Release.Namespace }}
 
+{{- if and (.Values.controller.config.controller.leader_election.enabled) (gt (.Values.replicaCount | int) 1) }}
+
+High Availability ({{ .Values.replicaCount }} replicas):
+  ✓ Leader election is enabled
+  Only the leader replica deploys configs to HAProxy
+  All replicas watch resources and remain ready for failover
+
+  Check current leader:
+    kubectl get lease {{ .Values.controller.config.controller.leader_election.lease_name }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.holderIdentity}'
+
+  View leadership metrics:
+    kubectl port-forward -n {{ .Release.Namespace }} deployment/{{ include "haproxy-template-ic.fullname" . }} 9090:9090
+    curl http://localhost:9090/metrics | grep leader_election_is_leader
+{{- else if eq (.Values.replicaCount | int) 1 }}
+
+Single Replica Mode:
+  Running with 1 replica (leader election disabled)
+  For high availability, scale to 2+ replicas:
+    helm upgrade {{ .Release.Name }} charts/haproxy-template-ic --reuse-values --set replicaCount=2
+{{- end }}
+
 View Logs:
   kubectl logs -f -l app.kubernetes.io/name={{ include "haproxy-template-ic.name" . }} -n {{ .Release.Namespace }}
 
