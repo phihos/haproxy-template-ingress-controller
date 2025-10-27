@@ -393,4 +393,4 @@ To migrate an existing single-replica deployment to HA:
 
 - [Leader Election Design](../development/design/leader-election.md) - Architecture and implementation details
 - [Metrics Reference](../../pkg/controller/metrics/README.md) - Leader election metrics documentation
-- [Troubleshooting Guide](./troubleshooting.md) - General troubleshooting
+- [Troubleshooting Guide](../troubleshooting.md) - General troubleshooting

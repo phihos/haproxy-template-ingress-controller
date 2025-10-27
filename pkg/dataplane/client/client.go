@@ -16,7 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"haproxy-template-ic/codegen/dataplaneapi"
+	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
 // Endpoint represents HAProxy Dataplane API connection information.

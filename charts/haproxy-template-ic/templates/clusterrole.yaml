@@ -6,24 +6,32 @@ metadata:
   labels:
     {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 rules:
-  # Watched resources from configuration
-  {{- range $name, $resource := .Values.controller.config.watched_resources }}
-  - apiGroups:
-      {{- if eq $resource.api_version "v1" }}
-      - ""
-      {{- else }}
-      - {{ $resource.api_version | regexFind "^[^/]+" }}
-      {{- end }}
-    resources:
-      - {{ $resource.resources }}
+  # Common Kubernetes resources (typically watched by controller)
+  # Ingresses
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
     verbs: ["get", "list", "watch"]
-  {{- end }}
+  # Services and Endpoints
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
   # Additional core resources
   - apiGroups: [""]
-    resources: ["configmaps", "namespaces", "pods"]
+    resources: ["namespaces", "pods"]
     verbs: ["get", "list", "watch"]
   # Leader election (coordination.k8s.io/v1)
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "create", "update"]
+  # HAProxyTemplateConfig CRD
+  - apiGroups: ["haproxy-template-ic.github.io"]
+    resources: ["haproxytemplateconfigs"]
+    verbs: ["get", "list", "watch"]
+  # Secrets for credentials referenced by HAProxyTemplateConfig
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "watch"]
 {{- end }}

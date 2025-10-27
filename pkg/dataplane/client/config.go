@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"haproxy-template-ic/codegen/dataplaneapi"
+	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
 // GetVersion retrieves the current configuration version from the Dataplane API.

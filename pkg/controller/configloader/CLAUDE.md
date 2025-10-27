@@ -93,49 +93,15 @@ for event := range eventChan {
 
 ## Common Pitfalls
 
-### Missing "config" Key
+### Invalid CRD Spec
 
-**Problem**: ConfigMap doesn't have `data.config` field.
+**Problem**: HAProxyTemplateConfig CRD has invalid spec format.
 
-```yaml
-# Bad - wrong key name
-apiVersion: v1
-kind: ConfigMap
-data:
-  configuration: |  # Wrong key!
-    templates: ...
-```
-
-**Solution**: Use "config" key.
-
-```yaml
-# Good
-apiVersion: v1
-kind: ConfigMap
-data:
-  config: |  # Correct key
-    templates: ...
-```
-
-### Invalid YAML Syntax
-
-**Problem**: YAML parsing fails, no event published.
-
-```yaml
-# Bad - invalid YAML
-config: |
-  templates:
-    main: |
-      global
-        maxconn 2000
-      # Missing closing quote or indent error
-```
-
-**Solution**: Component logs error but doesn't publish event. Fix YAML syntax.
+**Solution**: Component logs error but doesn't publish event. Verify CRD spec against schema and fix validation errors.
 
 ### Resource Type Mismatch
 
-**Problem**: ConfigResourceChangedEvent contains non-ConfigMap resource.
+**Problem**: ConfigResourceChangedEvent contains non-HAProxyTemplateConfig resource.
 
 **Solution**: This should not happen if watcher is configured correctly. Check watcher configuration.
 

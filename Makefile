@@ -11,6 +11,7 @@ GOLANGCI_LINT := $(GO) run github.com/golangci/golangci-lint/cmd/golangci-lint
 GOVULNCHECK := $(GO) run golang.org/x/vuln/cmd/govulncheck
 ARCH_GO := $(GO) run github.com/arch-go/arch-go
 OAPI_CODEGEN := $(GO) run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
+CONTROLLER_GEN := $(GO) run sigs.k8s.io/controller-tools/cmd/controller-gen
 
 # Docker variables
 IMAGE_NAME ?= haproxy-template-ic# Container image name (override: IMAGE_NAME=my-image)
@@ -194,9 +195,26 @@ verify: ## Verify dependencies
 
 ## Code generation
 
-generate: ## Run go generate
-	@echo "Running go generate..."
-	$(GO) generate ./...
+generate: generate-crds generate-deepcopy generate-clientset ## Run all code generation
+
+generate-crds: ## Generate CRD manifests from Go types
+	@echo "Generating CRD manifests..."
+	@mkdir -p charts/haproxy-template-ic/crds
+	$(CONTROLLER_GEN) crd:crdVersions=v1 \
+		paths=./pkg/apis/haproxytemplate/v1alpha1/... \
+		output:crd:dir=./charts/haproxy-template-ic/crds/
+	@echo "✓ CRD manifests generated in charts/haproxy-template-ic/crds/"
+
+generate-deepcopy: ## Generate DeepCopy methods for API types
+	@echo "Generating DeepCopy methods..."
+	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt \
+		paths=./pkg/apis/haproxytemplate/v1alpha1/...
+	@echo "✓ DeepCopy methods generated"
+
+generate-clientset: ## Generate Kubernetes clientset, informers, and listers
+	@echo "Generating Kubernetes clientset, informers, and listers..."
+	./hack/update-codegen.sh
+	@echo "✓ Clientset, informers, and listers generated"
 
 ## Cleanup
 
@@ -224,6 +242,7 @@ install-tools: ## Install/sync all tool dependencies (from go.mod tools section)
 	$(GO) install golang.org/x/vuln/cmd/govulncheck
 	$(GO) install github.com/arch-go/arch-go
 	$(GO) install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
+	$(GO) install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 	@echo "✓ All tools installed!"
 
 ## Convenience targets

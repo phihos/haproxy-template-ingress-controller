@@ -1,0 +1,209 @@
+// Copyright 2025 Philipp Hossner
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package testrunner
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// OutputFormat specifies the output format for test results.
+type OutputFormat string
+
+const (
+	// OutputFormatSummary outputs a human-readable summary.
+	OutputFormatSummary OutputFormat = "summary"
+
+	// OutputFormatJSON outputs structured JSON.
+	OutputFormatJSON OutputFormat = "json"
+
+	// OutputFormatYAML outputs structured YAML.
+	OutputFormatYAML OutputFormat = "yaml"
+)
+
+// FormatResults formats test results according to the specified format.
+func FormatResults(results *TestResults, format OutputFormat) (string, error) {
+	switch format {
+	case OutputFormatSummary:
+		return formatSummary(results), nil
+	case OutputFormatJSON:
+		return formatJSON(results)
+	case OutputFormatYAML:
+		return formatYAML(results)
+	default:
+		return "", fmt.Errorf("unknown output format: %s", format)
+	}
+}
+
+// formatSummary formats results as a human-readable summary.
+//
+//nolint:revive // Complexity acceptable for formatting with multiple output conditions
+func formatSummary(results *TestResults) string {
+	var out strings.Builder
+
+	if results.TotalTests == 0 {
+		out.WriteString("No tests found\n")
+		return out.String()
+	}
+
+	// Print each test result
+	for _, test := range results.TestResults {
+		// Test header
+		if test.Passed {
+			out.WriteString(fmt.Sprintf("✓ %s (%.3fs)\n", test.TestName, test.Duration.Seconds()))
+		} else {
+			out.WriteString(fmt.Sprintf("✗ %s (%.3fs)\n", test.TestName, test.Duration.Seconds()))
+		}
+
+		// Test description if present
+		if test.Description != "" {
+			out.WriteString(fmt.Sprintf("  %s\n", test.Description))
+		}
+
+		// Render error if present
+		if test.RenderError != "" {
+			out.WriteString("  ✗ Template rendering failed\n")
+			out.WriteString(fmt.Sprintf("    Error: %s\n", test.RenderError))
+		}
+
+		// Print assertions
+		for _, assertion := range test.Assertions {
+			if assertion.Passed {
+				if assertion.Description != "" {
+					out.WriteString(fmt.Sprintf("  ✓ %s\n", assertion.Description))
+				} else {
+					out.WriteString(fmt.Sprintf("  ✓ %s\n", assertion.Type))
+				}
+			} else {
+				if assertion.Description != "" {
+					out.WriteString(fmt.Sprintf("  ✗ %s\n", assertion.Description))
+				} else {
+					out.WriteString(fmt.Sprintf("  ✗ %s\n", assertion.Type))
+				}
+				if assertion.Error != "" {
+					out.WriteString(fmt.Sprintf("    Error: %s\n", assertion.Error))
+				}
+			}
+		}
+
+		out.WriteString("\n")
+	}
+
+	// Summary line
+	out.WriteString(fmt.Sprintf("Tests: %d passed, %d failed, %d total (%.3fs)\n",
+		results.PassedTests,
+		results.FailedTests,
+		results.TotalTests,
+		results.Duration.Seconds()))
+
+	return out.String()
+}
+
+// formatJSON formats results as JSON.
+func formatJSON(results *TestResults) (string, error) {
+	// Convert duration to seconds for JSON output
+	type jsonTestResult struct {
+		TestName    string            `json:"testName"`
+		Description string            `json:"description,omitempty"`
+		Passed      bool              `json:"passed"`
+		Duration    float64           `json:"duration"`
+		Assertions  []AssertionResult `json:"assertions,omitempty"`
+		RenderError string            `json:"renderError,omitempty"`
+	}
+
+	type jsonResults struct {
+		TotalTests  int              `json:"totalTests"`
+		PassedTests int              `json:"passedTests"`
+		FailedTests int              `json:"failedTests"`
+		Duration    float64          `json:"duration"`
+		Tests       []jsonTestResult `json:"tests"`
+	}
+
+	jr := jsonResults{
+		TotalTests:  results.TotalTests,
+		PassedTests: results.PassedTests,
+		FailedTests: results.FailedTests,
+		Duration:    results.Duration.Seconds(),
+		Tests:       make([]jsonTestResult, 0, len(results.TestResults)),
+	}
+
+	for _, test := range results.TestResults {
+		jr.Tests = append(jr.Tests, jsonTestResult{
+			TestName:    test.TestName,
+			Description: test.Description,
+			Passed:      test.Passed,
+			Duration:    test.Duration.Seconds(),
+			Assertions:  test.Assertions,
+			RenderError: test.RenderError,
+		})
+	}
+
+	data, err := json.MarshalIndent(jr, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	return string(data), nil
+}
+
+// formatYAML formats results as YAML.
+func formatYAML(results *TestResults) (string, error) {
+	// Convert duration to seconds for YAML output
+	type yamlTestResult struct {
+		TestName    string            `yaml:"testName"`
+		Description string            `yaml:"description,omitempty"`
+		Passed      bool              `yaml:"passed"`
+		Duration    float64           `yaml:"duration"`
+		Assertions  []AssertionResult `yaml:"assertions,omitempty"`
+		RenderError string            `yaml:"renderError,omitempty"`
+	}
+
+	type yamlResults struct {
+		TotalTests  int              `yaml:"totalTests"`
+		PassedTests int              `yaml:"passedTests"`
+		FailedTests int              `yaml:"failedTests"`
+		Duration    float64          `yaml:"duration"`
+		Tests       []yamlTestResult `yaml:"tests"`
+	}
+
+	yr := yamlResults{
+		TotalTests:  results.TotalTests,
+		PassedTests: results.PassedTests,
+		FailedTests: results.FailedTests,
+		Duration:    results.Duration.Seconds(),
+		Tests:       make([]yamlTestResult, 0, len(results.TestResults)),
+	}
+
+	for _, test := range results.TestResults {
+		yr.Tests = append(yr.Tests, yamlTestResult{
+			TestName:    test.TestName,
+			Description: test.Description,
+			Passed:      test.Passed,
+			Duration:    test.Duration.Seconds(),
+			Assertions:  test.Assertions,
+			RenderError: test.RenderError,
+		})
+	}
+
+	data, err := yaml.Marshal(yr)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal YAML: %w", err)
+	}
+
+	return string(data), nil
+}

@@ -4,7 +4,7 @@
 # Generates Go client for HAProxy Dataplane API v3
 #
 package: dataplaneapi
-output: codegen/dataplaneapi/client.gen.go
+output: pkg/generated/dataplaneapi/client.gen.go
 generate:
   client: true
   embedded-spec: true

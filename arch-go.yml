@@ -18,6 +18,8 @@ dependenciesRules:
         - "**.pkg.metrics.**"
         - "**.pkg.templating.**"
         - "**.pkg.webhook.**"
+        - "**.pkg.apis.**"         # CRD API types
+        - "**.pkg.generated.**"    # Generated Kubernetes clients
         - "**.codegen.**"
 
   # Rule 2: core packages should NOT depend on other top-level packages

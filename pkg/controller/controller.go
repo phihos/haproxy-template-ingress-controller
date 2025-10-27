@@ -34,10 +34,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/restmapper"
 
+	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/controller/commentator"
 	"haproxy-template-ic/pkg/controller/configchange"
 	"haproxy-template-ic/pkg/controller/configloader"
@@ -81,14 +83,14 @@ const (
 //
 // The controller uses an event-driven architecture:
 //   - EventBus coordinates all components
-//   - SingleWatchers monitor ConfigMap and Secret
+//   - SingleWatcher monitors HAProxyTemplateConfig CRD and Secret
 //   - Components react to events and publish results
 //   - ConfigChangeHandler detects validated config changes and signals reinitialization
 //
 // Parameters:
 //   - ctx: Context for cancellation (SIGTERM, SIGINT, etc.)
 //   - k8sClient: Kubernetes client for API access
-//   - configMapName: Name of the ConfigMap containing the controller configuration
+//   - crdName: Name of the HAProxyTemplateConfig CRD
 //   - secretName: Name of the Secret containing HAProxy Dataplane API credentials
 //   - webhookCertSecretName: Name of the Secret containing webhook TLS certificates
 //   - debugPort: Port for debug HTTP server (0 to disable)
@@ -96,11 +98,11 @@ const (
 // Returns:
 //   - Error if the controller cannot start or encounters a fatal error
 //   - nil if the context is cancelled (graceful shutdown)
-func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName, webhookCertSecretName string, debugPort int) error {
+func Run(ctx context.Context, k8sClient *client.Client, crdName, secretName, webhookCertSecretName string, debugPort int) error {
 	logger := slog.Default()
 
 	logger.Info("HAProxy Template Ingress Controller starting",
-		"configmap", configMapName,
+		"crd_name", crdName,
 		"secret", secretName,
 		"webhook_cert_secret", webhookCertSecretName,
 		"namespace", k8sClient.Namespace())
@@ -113,7 +115,7 @@ func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretNam
 			return nil
 		default:
 			// Run one iteration
-			err := runIteration(ctx, k8sClient, configMapName, secretName, webhookCertSecretName, debugPort, logger)
+			err := runIteration(ctx, k8sClient, crdName, secretName, webhookCertSecretName, debugPort, logger)
 			if err != nil {
 				// Check if error is context cancellation (graceful shutdown)
 				if ctx.Err() != nil {
@@ -145,27 +147,28 @@ type WebhookCertificates struct {
 func fetchAndValidateInitialConfig(
 	ctx context.Context,
 	k8sClient *client.Client,
-	configMapName string,
+	crdName string,
 	secretName string,
 	webhookCertSecretName string,
-	configMapGVR schema.GroupVersionResource,
+	crdGVR schema.GroupVersionResource,
 	secretGVR schema.GroupVersionResource,
 	logger *slog.Logger,
 ) (*coreconfig.Config, *coreconfig.Credentials, *WebhookCertificates, error) {
-	logger.Info("Fetching initial configuration, credentials, and webhook certificates")
+	logger.Info("Fetching initial CRD, credentials, and webhook certificates",
+		"crd_name", crdName)
 
-	var configMapResource *unstructured.Unstructured
+	var crdResource *unstructured.Unstructured
 	var secretResource *unstructured.Unstructured
 	var webhookCertSecretResource *unstructured.Unstructured
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Fetch ConfigMap
+	// Fetch HAProxyTemplateConfig CRD
 	g.Go(func() error {
 		var err error
-		configMapResource, err = k8sClient.GetResource(gCtx, configMapGVR, configMapName)
+		crdResource, err = k8sClient.GetResource(gCtx, crdGVR, crdName)
 		if err != nil {
-			return fmt.Errorf("failed to fetch ConfigMap %q: %w", configMapName, err)
+			return fmt.Errorf("failed to fetch HAProxyTemplateConfig %q: %w", crdName, err)
 		}
 		return nil
 	})
@@ -198,9 +201,9 @@ func fetchAndValidateInitialConfig(
 	// Parse initial configuration
 	logger.Info("Parsing initial configuration, credentials, and webhook certificates")
 
-	cfg, err := parseConfigMap(configMapResource)
+	cfg, err := parseCRD(crdResource)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse initial ConfigMap: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to parse initial HAProxyTemplateConfig: %w", err)
 	}
 
 	creds, err := parseSecret(secretResource)
@@ -225,7 +228,7 @@ func fetchAndValidateInitialConfig(
 	}
 
 	logger.Info("Initial configuration validated successfully",
-		"config_version", configMapResource.GetResourceVersion(),
+		"crd_version", crdResource.GetResourceVersion(),
 		"secret_version", secretResource.GetResourceVersion(),
 		"webhook_cert_version", webhookCertSecretResource.GetResourceVersion())
 
@@ -432,32 +435,32 @@ func setupResourceWatchers(
 	return resourceWatcher, nil
 }
 
-// setupConfigWatchers creates and starts ConfigMap and Secret watchers, then waits for sync.
+// setupConfigWatchers creates and starts HAProxyTemplateConfig CRD and Secret watchers, then waits for sync.
 //
 // Returns an error if watcher creation or synchronization fails.
 func setupConfigWatchers(
 	iterCtx context.Context,
 	k8sClient *client.Client,
-	configMapName string,
+	crdName string,
 	secretName string,
-	configMapGVR schema.GroupVersionResource,
+	crdGVR schema.GroupVersionResource,
 	secretGVR schema.GroupVersionResource,
 	bus *busevents.EventBus,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
 ) error {
-	// Create watchers for ConfigMap and Secret
-	configMapWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
-		GVR:       configMapGVR,
+	// Create watcher for HAProxyTemplateConfig CRD
+	crdWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
+		GVR:       crdGVR,
 		Namespace: k8sClient.Namespace(),
-		Name:      configMapName,
+		Name:      crdName,
 		OnChange: func(obj interface{}) error {
 			bus.Publish(events.NewConfigResourceChangedEvent(obj))
 			return nil
 		},
 	}, k8sClient)
 	if err != nil {
-		return fmt.Errorf("failed to create ConfigMap watcher: %w", err)
+		return fmt.Errorf("failed to create HAProxyTemplateConfig watcher: %w", err)
 	}
 
 	secretWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
@@ -475,8 +478,8 @@ func setupConfigWatchers(
 
 	// Start watchers in goroutines
 	go func() {
-		if err := configMapWatcher.Start(iterCtx); err != nil {
-			logger.Error("ConfigMap watcher failed", "error", err)
+		if err := crdWatcher.Start(iterCtx); err != nil {
+			logger.Error("HAProxyTemplateConfig watcher failed", "error", err)
 			cancel()
 		}
 	}()
@@ -494,8 +497,8 @@ func setupConfigWatchers(
 	watcherGroup, watcherCtx := errgroup.WithContext(iterCtx)
 
 	watcherGroup.Go(func() error {
-		if err := configMapWatcher.WaitForSync(watcherCtx); err != nil {
-			return fmt.Errorf("ConfigMap watcher sync failed: %w", err)
+		if err := crdWatcher.WaitForSync(watcherCtx); err != nil {
+			return fmt.Errorf("HAProxyTemplateConfig watcher sync failed: %w", err)
 		}
 		return nil
 	})
@@ -998,7 +1001,7 @@ func setupLeaderElection(
 func runIteration(
 	ctx context.Context,
 	k8sClient *client.Client,
-	configMapName string,
+	crdName string,
 	secretName string,
 	webhookCertSecretName string,
 	debugPort int,
@@ -1006,11 +1009,11 @@ func runIteration(
 ) error {
 	logger.Info("Starting controller iteration")
 
-	// Define GVRs for ConfigMap and Secret
-	configMapGVR := schema.GroupVersionResource{
-		Group:    "",
-		Version:  "v1",
-		Resource: "configmaps",
+	// Define GVRs for HAProxyTemplateConfig CRD and Secret
+	crdGVR := schema.GroupVersionResource{
+		Group:    "haproxy-template-ic.github.io",
+		Version:  "v1alpha1",
+		Resource: "haproxytemplateconfigs",
 	}
 
 	secretGVR := schema.GroupVersionResource{
@@ -1021,8 +1024,8 @@ func runIteration(
 
 	// 1. Fetch and validate initial configuration
 	cfg, creds, webhookCerts, err := fetchAndValidateInitialConfig(
-		ctx, k8sClient, configMapName, secretName, webhookCertSecretName,
-		configMapGVR, secretGVR, logger,
+		ctx, k8sClient, crdName, secretName, webhookCertSecretName,
+		crdGVR, secretGVR, logger,
 	)
 	if err != nil {
 		return err
@@ -1048,8 +1051,8 @@ func runIteration(
 
 	// 4. Setup config watchers
 	if err := setupConfigWatchers(
-		setup.IterCtx, k8sClient, configMapName, secretName,
-		configMapGVR, secretGVR, setup.Bus, logger, setup.Cancel,
+		setup.IterCtx, k8sClient, crdName, secretName,
+		crdGVR, secretGVR, setup.Bus, logger, setup.Cancel,
 	); err != nil {
 		return err
 	}
@@ -1141,27 +1144,33 @@ func runIteration(
 	}
 }
 
-// parseConfigMap extracts and parses configuration from a ConfigMap resource.
-func parseConfigMap(resource *unstructured.Unstructured) (*coreconfig.Config, error) {
-	// Extract ConfigMap data field
-	data, found, err := unstructured.NestedStringMap(resource.Object, "data")
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract data field: %w", err)
-	}
-	if !found {
-		return nil, fmt.Errorf("ConfigMap has no data field")
+// parseCRD extracts and converts configuration from a HAProxyTemplateConfig CRD resource.
+func parseCRD(resource *unstructured.Unstructured) (*coreconfig.Config, error) {
+	// This function uses the same logic as configloader.processCRD for consistency
+
+	// Validate resource type
+	apiVersion := resource.GetAPIVersion()
+	kind := resource.GetKind()
+
+	if kind != "HAProxyTemplateConfig" {
+		return nil, fmt.Errorf("expected HAProxyTemplateConfig, got %s", kind)
 	}
 
-	// Extract "config" key containing YAML
-	configYAML, ok := data["config"]
-	if !ok {
-		return nil, fmt.Errorf("ConfigMap data missing 'config' key")
+	if apiVersion != "haproxy-template-ic.github.io/v1alpha1" {
+		return nil, fmt.Errorf("expected apiVersion haproxy-template-ic.github.io/v1alpha1, got %s", apiVersion)
 	}
 
-	// Parse YAML and apply defaults
-	cfg, err := coreconfig.LoadConfig(configYAML)
+	// Convert unstructured to typed CRD using runtime converter
+	// This is the same approach used in configloader.processCRD
+	crd := &v1alpha1.HAProxyTemplateConfig{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(resource.Object, crd); err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to HAProxyTemplateConfig: %w", err)
+	}
+
+	// Convert CRD Spec to config.Config using the configloader converter
+	cfg, err := configloader.ConvertCRDToConfig(&crd.Spec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config YAML: %w", err)
+		return nil, fmt.Errorf("failed to convert CRD spec to config: %w", err)
 	}
 
 	return cfg, nil

@@ -4,6 +4,6 @@
 # Generates Go models for HAProxy Dataplane API v3
 #
 package: dataplaneapi
-output: codegen/dataplaneapi/models.gen.go
+output: pkg/generated/dataplaneapi/models.gen.go
 generate:
   models: true

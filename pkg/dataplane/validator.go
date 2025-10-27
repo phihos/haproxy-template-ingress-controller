@@ -26,9 +26,9 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/haproxytech/client-native/v6/models"
 
-	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/parser"
 	"haproxy-template-ic/pkg/dataplane/transform"
+	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
 var (

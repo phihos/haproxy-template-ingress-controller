@@ -45,8 +45,8 @@ import (
 )
 
 const (
-	// DefaultConfigMapName is the default name for the configuration ConfigMap.
-	DefaultConfigMapName = "haproxy-config"
+	// DefaultCRDName is the default name for the HAProxyTemplateConfig CRD resource.
+	DefaultCRDName = "haproxy-config"
 
 	// DefaultSecretName is the default name for the credentials Secret.
 	// #nosec G101 -- This is a Kubernetes resource name, not an actual credential
@@ -63,15 +63,15 @@ const (
 func main() {
 	// Parse command-line flags
 	var (
-		configMapName         string
+		crdName               string
 		secretName            string
 		webhookCertSecretName string
 		kubeconfig            string
 		debugPort             int
 	)
 
-	flag.StringVar(&configMapName, "configmap-name", "",
-		"Name of the ConfigMap containing controller configuration (env: CONFIGMAP_NAME)")
+	flag.StringVar(&crdName, "crd-name", "",
+		"Name of the HAProxyTemplateConfig CRD containing controller configuration (env: CRD_NAME)")
 	flag.StringVar(&secretName, "secret-name", "",
 		"Name of the Secret containing HAProxy Dataplane API credentials (env: SECRET_NAME)")
 	flag.StringVar(&webhookCertSecretName, "webhook-cert-secret-name", "",
@@ -84,12 +84,12 @@ func main() {
 
 	// Configuration priority: CLI flags > Environment variables > Defaults
 
-	// ConfigMap name
-	if configMapName == "" {
-		configMapName = os.Getenv("CONFIGMAP_NAME")
+	// CRD name
+	if crdName == "" {
+		crdName = os.Getenv("CRD_NAME")
 	}
-	if configMapName == "" {
-		configMapName = DefaultConfigMapName
+	if crdName == "" {
+		crdName = DefaultCRDName
 	}
 
 	// Secret name
@@ -148,7 +148,7 @@ func main() {
 
 	logger.Info("HAProxy Template Ingress Controller starting",
 		"version", "v0.1.0",
-		"configmap", configMapName,
+		"crd_name", crdName,
 		"secret", secretName,
 		"webhook_cert_secret", webhookCertSecretName,
 		"debug_port", debugPort,
@@ -174,7 +174,7 @@ func main() {
 	defer cancel()
 
 	// Run the controller
-	if err := controller.Run(ctx, k8sClient, configMapName, secretName, webhookCertSecretName, debugPort); err != nil {
+	if err := controller.Run(ctx, k8sClient, crdName, secretName, webhookCertSecretName, debugPort); err != nil {
 		// Only log error if it's not a graceful shutdown
 		if ctx.Err() == nil {
 			logger.Error("Controller failed", "error", err)

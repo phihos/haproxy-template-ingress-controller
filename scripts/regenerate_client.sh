@@ -102,14 +102,14 @@ fi
 echo "Generating models..."
 cd "$PROJECT_ROOT"
 go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen \
-    --config=codegen/oapi-codegen-config.yaml \
-    codegen/spec/haproxy-dataplane-v3-openapi3.yaml
+    --config=hack/oapi-codegen-config.yaml \
+    hack/spec/haproxy-dataplane-v3-openapi3.yaml
 
 # Generate the client
 echo "Generating client..."
 go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen \
-    --config=codegen/oapi-codegen-client-config.yaml \
-    codegen/spec/haproxy-dataplane-v3-openapi3.yaml
+    --config=hack/oapi-codegen-client-config.yaml \
+    hack/spec/haproxy-dataplane-v3-openapi3.yaml
 
 # Fix naming conflict: rename Client const to SourceClient
 echo "Fixing naming conflict in models.gen.go..."

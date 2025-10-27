@@ -10,7 +10,7 @@ Work in this directory when:
 - Writing end-to-end regression tests
 - Testing critical user-facing functionality
 - Verifying controller lifecycle behavior
-- Testing ConfigMap/Secret reload functionality
+- Testing CRD/Secret reload functionality
 - Validating controller internal state via debug endpoints
 
 **DO NOT** work here for:
@@ -251,91 +251,6 @@ func TestMyFeature(t *testing.T) {
 }
 ```
 
-### ConfigMap Reload Test (Regression)
-
-```go
-// configmap_reload_test.go
-func TestConfigMapReload(t *testing.T) {
-    testEnv := Setup(t)
-
-    feature := features.New("ConfigMap Reload").
-        Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-            // Create initial ConfigMap (version 1)
-            client, _ := cfg.NewClient()
-
-            cm := NewConfigMap(TestNamespace, ControllerConfigMapName, InitialConfigYAML)
-            err := client.Resources().Create(ctx, cm)
-            require.NoError(t, err)
-
-            // Create Secret
-            secret := NewSecret(TestNamespace, ControllerSecretName)
-            err = client.Resources().Create(ctx, secret)
-            require.NoError(t, err)
-
-            // Deploy controller
-            deployment := NewControllerDeployment(TestNamespace, ControllerConfigMapName, ControllerSecretName, DebugPort)
-            err = client.Resources().Create(ctx, deployment)
-            require.NoError(t, err)
-
-            return ctx
-        }).
-        Assess("Initial config loaded", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-            client, _ := cfg.NewClient()
-
-            // Wait for pod ready
-            err := WaitForPodReady(ctx, client, TestNamespace, "app="+ControllerDeploymentName, 2*time.Minute)
-            require.NoError(t, err)
-
-            // Get controller pod
-            pod, err := GetControllerPod(ctx, client, TestNamespace)
-            require.NoError(t, err)
-
-            // Setup debug client
-            debugClient := NewDebugClient(cfg.Client().RESTConfig(), pod, DebugPort)
-            err = debugClient.Start(ctx)
-            require.NoError(t, err)
-
-            // Verify initial config
-            config, err := debugClient.GetConfig(ctx)
-            require.NoError(t, err)
-            assert.Contains(t, fmt.Sprint(config), "2000")  // maxconn 2000
-
-            return ctx
-        }).
-        Assess("ConfigMap update triggers reload", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-            client, _ := cfg.NewClient()
-
-            // Update ConfigMap (version 2)
-            var cm corev1.ConfigMap
-            err := client.Resources().Get(ctx, ControllerConfigMapName, TestNamespace, &cm)
-            require.NoError(t, err)
-
-            cm.Data["config"] = UpdatedConfigYAML
-            err = client.Resources().Update(ctx, &cm)
-            require.NoError(t, err)
-
-            // Wait for controller to detect change
-            pod, _ := GetControllerPod(ctx, client, TestNamespace)
-            debugClient := NewDebugClient(cfg.Client().RESTConfig(), pod, DebugPort)
-            debugClient.Start(ctx)
-
-            // Poll until new config loaded
-            err = debugClient.WaitForConfigVersion(ctx, cm.ResourceVersion, 30*time.Second)
-            require.NoError(t, err)
-
-            // Verify new config
-            rendered, err := debugClient.GetRenderedConfig(ctx)
-            require.NoError(t, err)
-            assert.Contains(t, rendered, "4000")  // maxconn 4000
-
-            return ctx
-        }).
-        Feature()
-
-    testEnv.Test(t, feature)
-}
-```
-
 ## Common Patterns
 
 ### Waiting for Resources
@@ -513,7 +428,7 @@ E2E framework manages cluster lifecycle. To inspect:
 
 ```bash
 # Run test
-go test -v ./tests/acceptance -run TestConfigMapReload
+go test -v ./tests/acceptance
 
 # While test is running or failed, inspect
 kubectl config use-context kind-haproxy-test
@@ -547,7 +462,7 @@ docker build -t haproxy-template-ic:test -f Dockerfile .
 kind load docker-image haproxy-template-ic:test --name haproxy-test
 
 # Run test
-go test -v ./tests/acceptance -run TestConfigMapReload
+go test -v ./tests/acceptance
 
 # Cleanup
 kind delete cluster --name haproxy-test
@@ -562,7 +477,7 @@ docker build --no-cache -t haproxy-template-ic:test -f Dockerfile .
 kind load docker-image haproxy-template-ic:test --name haproxy-test
 
 # Run test again
-go test -v ./tests/acceptance -run TestConfigMapReload
+go test -v ./tests/acceptance
 ```
 
 ## Resources
@@ -570,4 +485,3 @@ go test -v ./tests/acceptance -run TestConfigMapReload
 - E2E Framework: https://github.com/kubernetes-sigs/e2e-framework
 - Kind: https://kind.sigs.k8s.io/
 - Debug endpoints: `pkg/introspection/README.md`
-- ConfigMap reload test: `configmap_reload_test.go`

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
+	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
 const (
