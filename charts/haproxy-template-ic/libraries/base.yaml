@@ -1,11 +1,8 @@
 # Base template library for HAProxy Template Ingress Controller
-# Contains core template snippets, maps, files, and HAProxy configuration
+# Contains resource-agnostic core template snippets, files, and HAProxy configuration
+# Uses plugin patterns (resource_*) to discover resource-specific implementations
 
 templateSnippets:
-  backend-name:
-    template: >-
-      {{- " " -}}ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
-
   backend-servers:
     template: |
       {#- Pre-allocated server pool with auto-expansion #}
@@ -39,46 +36,6 @@ templateSnippets:
         {%- endif %}
       {%- endfor %}
 
-  path-map-entry:
-    template: |
-      {#- Generate map entries for paths matching specified pathTypes #}
-      {#- Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
-      {%- for ingress in resources.ingresses.List() %}
-      {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
-      {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
-      {{ rule.host }}{{ path.path }} {% include "backend-name" -%}{{ suffix }}
-      {% endfor %}
-      {% endfor %}
-      {% endfor %}
-
-  ingress-backends:
-    template: |
-      {#- Generate all backend definitions from ingress resources #}
-      {#- Usage: {% include "ingress-backends" %} #}
-      {%- for ingress in resources.ingresses.List() %}
-      {%- if ingress.spec and ingress.spec.rules %}
-      {%- for rule in ingress.spec.rules %}
-      {%- if rule.http and rule.http.paths %}
-      {%- for path in rule.http.paths %}
-      {%- if path.backend and path.backend.service %}
-      {%- set service_name = path.backend.service.name %}
-      {%- set port = path.backend.service.port.number | default(80) %}
-
-      backend {%+ include "backend-name" +%}
-        balance roundrobin
-        option httpchk GET {{ path.path | default('/') }}
-        default-server check
-        {%- filter indent(2, first=True) %}
-        {% include "backend-annotations" %}
-        {% include "backend-servers" %}
-        {%- endfilter %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
-
   top-level-annotations:
     priority: 100
     template: |
@@ -104,40 +61,43 @@ templateSnippets:
 maps:
   host.map:
     template: |
-      {%- for ingress in resources.ingresses.List() %}
-      {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
-      {%- set host_without_asterisk = rule.host | replace('*', '', 1) %}
-      {{ host_without_asterisk }} {{ host_without_asterisk }}
-      {% endfor %}
-      {% endfor %}
+      {#- Generic host mapping infrastructure #}
+      {#- Resource libraries populate this map via map-entry-host-* snippets #}
+      {%- set matching = template_snippets | glob_match("map-entry-host-*") %}
+      {%- for snippet_name in matching %}
+      {%- include snippet_name -%}
+      {%- endfor %}
 
   path-exact.map:
     template: |
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
       # It should be used with the equality string matcher. Example:
       #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
-      {% set path_types = ["Exact"] %}
-      {%- set suffix = "" %}
-      {% include "path-map-entry" %}
-
+      {#- Resource libraries populate this map via map-entry-path-exact-* snippets #}
+      {%- set matching = template_snippets | glob_match("map-entry-path-exact-*") %}
+      {%- for snippet_name in matching %}
+      {%- include snippet_name -%}
+      {%- endfor %}
 
   path-prefix-exact.map:
     template: |
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
-      {% set path_types = ["Prefix", "ImplementationSpecific"] %}
-      {%- set suffix = "" %}
-      {% include "path-map-entry" %}
-
+      {#- Resource libraries populate this map via map-entry-path-prefix-exact-* snippets #}
+      {%- set matching = template_snippets | glob_match("map-entry-path-prefix-exact-*") %}
+      {%- for snippet_name in matching %}
+      {%- include snippet_name -%}
+      {%- endfor %}
 
   path-prefix.map:
     template: |
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
       # It should be used with the prefix string matcher. Example:
       #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
-      {% set path_types = ["Prefix", "ImplementationSpecific"] %}
-      {%- set suffix = "/" %}
-      {% include "path-map-entry" %}
-
+      {#- Resource libraries populate this map via map-entry-path-prefix-* snippets #}
+      {%- set matching = template_snippets | glob_match("map-entry-path-prefix-*") %}
+      {%- for snippet_name in matching %}
+      {%- include snippet_name -%}
+      {%- endfor %}
 
 files:
   400.http:
@@ -275,7 +235,12 @@ haproxyConfig:
         # Default backend
         default_backend default_backend
 
-    {% include "ingress-backends" %}
+    {#- Include all resource-specific backend definitions using plugin pattern #}
+    {#- Resource libraries implement resource_*_backends snippets (e.g., resource_ingress_backends, resource_gateway_backends) #}
+    {%- set matching = template_snippets | glob_match("resource_*_backends") %}
+    {%- for snippet_name in matching %}
+    {% include snippet_name %}
+    {%- endfor %}
 
     backend default_backend
         http-request return status 404

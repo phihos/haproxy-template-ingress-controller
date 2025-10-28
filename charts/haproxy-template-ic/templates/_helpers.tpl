@@ -63,7 +63,7 @@ Create the name of the service account to use
 
 {{/*
 Merge template libraries based on enabled flags
-Returns merged config with libraries applied in order: base -> haproxytech -> values.yaml
+Returns merged config with libraries applied in order: base -> ingress -> gateway -> haproxytech -> values.yaml
 */}}
 {{- define "haproxy-template-ic.mergeLibraries" -}}
 {{- $merged := dict }}
@@ -73,6 +73,18 @@ Returns merged config with libraries applied in order: base -> haproxytech -> va
 {{- if $context.Values.controller.templateLibraries.base.enabled }}
   {{- $baseLibrary := $context.Files.Get "libraries/base.yaml" | fromYaml }}
   {{- $merged = merge $merged $baseLibrary }}
+{{- end }}
+
+{{- /* Load ingress library if enabled */ -}}
+{{- if $context.Values.controller.templateLibraries.ingress.enabled }}
+  {{- $ingressLibrary := $context.Files.Get "libraries/ingress.yaml" | fromYaml }}
+  {{- $merged = merge $merged $ingressLibrary }}
+{{- end }}
+
+{{- /* Load gateway library if enabled */ -}}
+{{- if $context.Values.controller.templateLibraries.gateway.enabled }}
+  {{- $gatewayLibrary := $context.Files.Get "libraries/gateway.yaml" | fromYaml }}
+  {{- $merged = merge $merged $gatewayLibrary }}
 {{- end }}
 
 {{- /* Load haproxytech library if enabled */ -}}
