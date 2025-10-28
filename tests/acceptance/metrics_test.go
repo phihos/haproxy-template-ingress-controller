@@ -131,12 +131,12 @@ func TestMetrics(t *testing.T) {
 			}
 			t.Log("Created webhook certificate secret")
 
-			// Create ConfigMap with metrics port configured
-			configMap := NewConfigMap(namespace, ControllerConfigMapName, InitialConfigYAML)
-			if err := client.Resources().Create(ctx, configMap); err != nil {
-				t.Fatal("Failed to create configmap:", err)
+			// Create HAProxyTemplateConfig with metrics port configured
+			htplConfig := NewHAProxyTemplateConfig(namespace, "haproxy-config", ControllerSecretName, false)
+			if err := client.Resources().Create(ctx, htplConfig); err != nil {
+				t.Fatal("Failed to create HAProxyTemplateConfig:", err)
 			}
-			t.Log("Created controller configmap")
+			t.Log("Created HAProxyTemplateConfig")
 
 			// Create Deployment
 			deployment := NewControllerDeployment(
@@ -305,20 +305,37 @@ func TestMetrics(t *testing.T) {
 				t.Error("haproxy_ic_events_published_total should be > 0")
 			}
 
-			// Check that error counters are 0 (no errors during normal startup)
-			if val, ok := metricValues["haproxy_ic_reconciliation_errors_total"]; ok {
-				if val == 0 {
-					t.Logf("✓ haproxy_ic_reconciliation_errors_total = 0 (no errors)")
-				} else {
-					t.Errorf("haproxy_ic_reconciliation_errors_total = %.0f, expected 0", val)
-				}
+			// Check error counters (should be 0 with valid configuration)
+			hasErrors := false
+			if val, ok := metricValues["haproxy_ic_reconciliation_errors_total"]; ok && val > 0 {
+				t.Errorf("haproxy_ic_reconciliation_errors_total = %.0f, expected 0", val)
+				hasErrors = true
+			} else {
+				t.Logf("✓ haproxy_ic_reconciliation_errors_total = %.0f (no errors)", val)
 			}
 
-			if val, ok := metricValues["haproxy_ic_validation_errors_total"]; ok {
-				if val == 0 {
-					t.Logf("✓ haproxy_ic_validation_errors_total = 0 (no errors)")
-				} else {
-					t.Errorf("haproxy_ic_validation_errors_total = %.0f, expected 0", val)
+			if val, ok := metricValues["haproxy_ic_validation_errors_total"]; ok && val > 0 {
+				t.Errorf("haproxy_ic_validation_errors_total = %.0f, expected 0", val)
+				hasErrors = true
+			} else {
+				t.Logf("✓ haproxy_ic_validation_errors_total = %.0f (no errors)", val)
+			}
+
+			// If errors detected, print controller logs for debugging
+			if hasErrors {
+				namespace, err := GetNamespaceFromContext(ctx)
+				if err == nil {
+					client, err := cfg.NewClient()
+					if err == nil {
+						pod, err := GetControllerPod(ctx, client, namespace)
+						if err == nil {
+							t.Logf("=== Controller logs (showing validation errors) ===")
+							logs, err := GetPodLogs(ctx, client, pod, 100)
+							if err == nil {
+								t.Log(logs)
+							}
+						}
+					}
 				}
 			}
 

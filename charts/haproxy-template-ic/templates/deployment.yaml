@@ -14,7 +14,6 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -46,10 +45,10 @@ spec:
           args: ["run"]
           ports:
             - name: healthz
-              containerPort: {{ .Values.controller.config.controller.healthz_port }}
+              containerPort: {{ .Values.service.healthzPort }}
               protocol: TCP
             - name: metrics
-              containerPort: {{ .Values.controller.config.controller.metrics_port }}
+              containerPort: {{ .Values.service.metricsPort }}
               protocol: TCP
             {{- if gt (.Values.controller.debugPort | int) 0 }}
             - name: debug
@@ -70,12 +69,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: CONFIGMAP_NAME
-              value: {{ .Values.controller.configmapName | quote }}
+            - name: CRD_NAME
+              value: {{ .Values.controller.crdName | quote }}
             - name: SECRET_NAME
               value: {{ include "haproxy-template-ic.fullname" . }}-credentials
-            - name: VERBOSE
-              value: {{ .Values.controller.config.logging.verbose | quote }}
             - name: WEBHOOK_SERVICE_NAME
               value: {{ include "haproxy-template-ic.fullname" . }}-webhook
             {{- if gt (.Values.controller.debugPort | int) 0 }}

@@ -1,0 +1,16 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+rules:
+  # Credentials secret (namespace-scoped)
+  # The controller needs to watch the Secret containing HAProxy Dataplane API credentials
+  # This secret is in the same namespace as the controller deployment
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

@@ -690,7 +690,7 @@ kubectl logs -f -l app.kubernetes.io/name=haproxy-template-ic
 ```
 
 Common issues:
-- ConfigMap or Secret missing
+- HAProxyTemplateConfig CRD or Secret missing
 - RBAC permissions incorrect
 - NetworkPolicy blocking access
 

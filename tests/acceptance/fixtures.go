@@ -25,6 +25,8 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	haproxyv1alpha1 "haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 )
 
 // InitialConfigYAML is the initial controller configuration.
@@ -55,7 +57,7 @@ haproxy_config:
       default_backend test-backend
 
     backend test-backend
-      server test-server 127.0.0.1:9999
+      # Placeholder backend - no servers configured
 
 watched_resources:
   ingresses:
@@ -95,7 +97,7 @@ haproxy_config:
       default_backend test-backend
 
     backend test-backend
-      server test-server 127.0.0.1:9999
+      # Placeholder backend - no servers configured
 
 watched_resources:
   ingresses:
@@ -161,7 +163,7 @@ haproxy_config:
     {%- endfor %}
 
     backend test-backend
-      server test-server 127.0.0.1:9999
+      # Placeholder backend - no servers configured
 
 watched_resources:
   ingresses:
@@ -222,7 +224,7 @@ haproxy_config:
     {%- endfor %}
 
     backend test-backend
-      server test-server 127.0.0.1:9999
+      # Placeholder backend - no servers configured
 
 watched_resources:
   ingresses:
@@ -362,6 +364,102 @@ iofgnth8Lw==
 	}
 }
 
+// NewHAProxyTemplateConfig creates a HAProxyTemplateConfig CR for testing.
+// The leaderElection parameter controls whether leader election is enabled.
+func NewHAProxyTemplateConfig(namespace, name, secretName string, leaderElection bool) *haproxyv1alpha1.HAProxyTemplateConfig {
+	enabled := leaderElection
+
+	config := &haproxyv1alpha1.HAProxyTemplateConfig{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "haproxy-template-ic.github.io/v1alpha1",
+			Kind:       "HAProxyTemplateConfig",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: haproxyv1alpha1.HAProxyTemplateConfigSpec{
+			CredentialsSecretRef: haproxyv1alpha1.SecretReference{
+				Name: secretName,
+			},
+			PodSelector: haproxyv1alpha1.PodSelector{
+				MatchLabels: map[string]string{
+					"app":       "haproxy",
+					"component": "loadbalancer",
+				},
+			},
+			Controller: haproxyv1alpha1.ControllerConfig{
+				HealthzPort: 8080,
+				MetricsPort: 9090,
+				LeaderElection: haproxyv1alpha1.LeaderElectionConfig{
+					Enabled:       &enabled,
+					LeaseName:     "haproxy-template-ic-leader",
+					LeaseDuration: "60s",
+					RenewDeadline: "15s",
+					RetryPeriod:   "5s",
+				},
+			},
+			Logging: haproxyv1alpha1.LoggingConfig{
+				Verbose: 2, // DEBUG level for tests
+			},
+			Dataplane: haproxyv1alpha1.DataplaneConfig{
+				MapsDir:           "/tmp/haproxy-validation/maps",
+				SSLCertsDir:       "/tmp/haproxy-validation/ssl",
+				GeneralStorageDir: "/tmp/haproxy-validation/general",
+				ConfigFile:        "/tmp/haproxy-validation/haproxy.cfg",
+			},
+			WatchedResources: map[string]haproxyv1alpha1.WatchedResource{
+				"ingresses": {
+					APIVersion: "networking.k8s.io/v1",
+					Resources:  "ingresses",
+					IndexBy:    []string{"metadata.namespace", "metadata.name"},
+				},
+			},
+			HAProxyConfig: haproxyv1alpha1.HAProxyConfig{
+				Template: `global
+  maxconn 2000
+
+defaults
+  mode http
+  timeout connect 5000ms
+  timeout client 50000ms
+  timeout server 50000ms
+
+frontend test-frontend
+  bind :8080
+  {%- for ingress in resources.ingresses.List() %}
+  {%- for rule in ingress.spec.rules %}
+  {%- for path in rule.http.paths %}
+  {%- if path.backend.service %}
+  use_backend ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }} if { path_beg {{ path.path }} }
+  {%- endif %}
+  {%- endfor %}
+  {%- endfor %}
+  {%- endfor %}
+  default_backend test-backend
+
+{%- for ingress in resources.ingresses.List() %}
+{%- for rule in ingress.spec.rules %}
+{%- for path in rule.http.paths %}
+{%- if path.backend.service %}
+
+backend ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}
+  server test-server 127.0.0.1:8080
+{%- endif %}
+{%- endfor %}
+{%- endfor %}
+{%- endfor %}
+
+backend test-backend
+  # Placeholder backend - no servers configured
+`,
+			},
+		},
+	}
+
+	return config
+}
+
 // NewServiceAccount creates a ServiceAccount for the controller.
 func NewServiceAccount(namespace, name string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
@@ -380,6 +478,11 @@ func NewRole(namespace, name string) *rbacv1.Role {
 			Namespace: namespace,
 		},
 		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{"haproxy-template-ic.github.io"},
+				Resources: []string{"haproxytemplateconfigs"},
+				Verbs:     []string{"get", "watch", "list"},
+			},
 			{
 				APIGroups: []string{""},
 				Resources: []string{"configmaps"},
@@ -438,6 +541,11 @@ func NewClusterRole(name, namespace string) *rbacv1.ClusterRole {
 			},
 		},
 		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{"haproxy-template-ic.github.io"},
+				Resources: []string{"haproxytemplateconfigs"},
+				Verbs:     []string{"get", "watch", "list"},
+			},
 			{
 				APIGroups: []string{"networking.k8s.io"},
 				Resources: []string{"ingresses"},

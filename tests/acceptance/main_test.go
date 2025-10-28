@@ -14,7 +14,18 @@ import (
 	"sigs.k8s.io/e2e-framework/support/kind"
 
 	corev1 "k8s.io/api/core/v1"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
+	haproxyv1alpha1 "haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 )
+
+func init() {
+	// Register HAProxyTemplateConfig CRD scheme with the global client-go scheme
+	// This allows the e2e-framework to understand our custom resources
+	if err := haproxyv1alpha1.AddToScheme(clientgoscheme.Scheme); err != nil {
+		panic(fmt.Sprintf("failed to register haproxy scheme: %v", err))
+	}
+}
 
 const (
 	// TestKubeconfigPath is the isolated kubeconfig file for acceptance tests.
@@ -42,7 +53,10 @@ func TestMain(m *testing.M) {
 
 	// Use kind cluster for testing
 	kindClusterName := "haproxy-test"
-	kindCluster := kind.NewProvider().WithName(kindClusterName)
+	kindNodeImage := getKindNodeImage()
+	kindCluster := kind.NewProvider().
+		WithName(kindClusterName).
+		WithOpts(kind.WithImage(kindNodeImage))
 
 	// Setup: Create kind cluster and validate connection
 	testEnv.Setup(
@@ -81,6 +95,15 @@ func TestMain(m *testing.M) {
 			}
 			fmt.Println("DEBUG: Controller image loaded successfully")
 
+			// Install HAProxyTemplateConfig CRD
+			fmt.Println("DEBUG: Installing HAProxyTemplateConfig CRD...")
+			crdPath := "../../charts/haproxy-template-ic/crds/haproxy-template-ic.github.io_haproxytemplateconfigs.yaml"
+			cmd = exec.CommandContext(ctx, "kubectl", "apply", "-f", crdPath)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				return ctx, fmt.Errorf("failed to install HAProxyTemplateConfig CRD: %w\nOutput: %s", err, string(output))
+			}
+			fmt.Println("DEBUG: HAProxyTemplateConfig CRD installed successfully")
+
 			return ctx, nil
 		},
 	)
@@ -108,4 +131,18 @@ func TestMain(m *testing.M) {
 
 	// Run tests
 	os.Exit(testEnv.Run(m))
+}
+
+// getKindNodeImage returns the Kind node image to use for acceptance tests.
+// It checks the KIND_NODE_IMAGE environment variable and falls back to a default
+// known-working version (v1.32.0) if not set.
+//
+// The default v1.32.0 is used instead of v1.32.1 because v1.32.1 has a bug
+// with containerd snapshotter detection that causes image loading to fail.
+// See: https://github.com/kubernetes-sigs/kind/issues/3871
+func getKindNodeImage() string {
+	if image := os.Getenv("KIND_NODE_IMAGE"); image != "" {
+		return image
+	}
+	return "kindest/node:v1.32.0"
 }

@@ -138,6 +138,11 @@ func (c *Component) handleEvent(event pkgevents.Event) {
 	case *events.ValidationFailedEvent:
 		c.metrics.RecordValidation(false)
 
+	// Validation test events
+	case *events.ValidationTestsCompletedEvent:
+		durationSeconds := float64(e.DurationMs) / 1000.0
+		c.metrics.RecordValidationTests(e.TotalTests, e.PassedTests, e.FailedTests, durationSeconds)
+
 	// Resource events - initialize counts from IndexSynchronizedEvent
 	case *events.IndexSynchronizedEvent:
 		// Initialize all resource counts from the synchronized index

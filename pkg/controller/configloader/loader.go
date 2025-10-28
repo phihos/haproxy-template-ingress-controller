@@ -6,19 +6,20 @@ import (
 	"log/slog"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
+	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/core/config"
 	busevents "haproxy-template-ic/pkg/events"
 )
 
-// ConfigLoaderComponent subscribes to ConfigResourceChangedEvent and parses ConfigMap data.
+// ConfigLoaderComponent subscribes to ConfigResourceChangedEvent and parses config data.
 //
 // This component is responsible for:
-// - Extracting YAML configuration from ConfigMap resources
-// - Parsing YAML into config.Config structures
+// - Converting HAProxyTemplateConfig CRD Spec to config.Config
 // - Publishing ConfigParsedEvent for successfully parsed configs
-// - Logging errors for invalid YAML
+// - Logging errors for conversion failures
 //
 // Architecture:
 // This is a pure event-driven component with no knowledge of watchers or
@@ -80,7 +81,7 @@ func (c *ConfigLoaderComponent) Stop() {
 	close(c.stopCh)
 }
 
-// processConfigChange handles a ConfigResourceChangedEvent by parsing the ConfigMap.
+// processConfigChange handles a ConfigResourceChangedEvent by parsing the config resource.
 func (c *ConfigLoaderComponent) processConfigChange(event *events.ConfigResourceChangedEvent) {
 	// Extract unstructured resource
 	resource, ok := event.Resource.(*unstructured.Unstructured)
@@ -94,42 +95,61 @@ func (c *ConfigLoaderComponent) processConfigChange(event *events.ConfigResource
 	// Get resourceVersion for tracking
 	version := resource.GetResourceVersion()
 
-	c.logger.Debug("Processing ConfigMap change", "version", version)
+	// Detect resource type from apiVersion and kind
+	apiVersion := resource.GetAPIVersion()
+	kind := resource.GetKind()
 
-	// Extract ConfigMap data
-	data, found, err := unstructured.NestedStringMap(resource.Object, "data")
-	if err != nil {
-		c.logger.Error("Failed to extract ConfigMap data field",
-			"error", err,
-			"version", version)
-		return
-	}
-	if !found {
-		c.logger.Error("ConfigMap has no data field", "version", version)
-		return
-	}
+	c.logger.Debug("Processing config resource change",
+		"apiVersion", apiVersion,
+		"kind", kind,
+		"version", version)
 
-	// Extract the "config" key which contains the YAML
-	configYAML, ok := data["config"]
-	if !ok {
-		c.logger.Error("ConfigMap data missing 'config' key", "version", version)
-		return
-	}
-
-	// Parse the configuration and apply defaults
-	cfg, err := config.LoadConfig(configYAML)
-	if err != nil {
-		c.logger.Error("Failed to load configuration YAML",
-			"error", err,
+	// Validate resource type
+	if apiVersion != "haproxy-template-ic.github.io/v1alpha1" || kind != "HAProxyTemplateConfig" {
+		c.logger.Error("Unsupported resource type for config",
+			"apiVersion", apiVersion,
+			"kind", kind,
 			"version", version)
 		return
 	}
 
-	c.logger.Info("Configuration parsed successfully", "version", version)
+	// Process CRD
+	cfg, err := c.processCRD(resource)
+
+	if err != nil {
+		c.logger.Error("Failed to process config resource",
+			"error", err,
+			"apiVersion", apiVersion,
+			"kind", kind,
+			"version", version)
+		return
+	}
+
+	c.logger.Info("Configuration processed successfully",
+		"apiVersion", apiVersion,
+		"kind", kind,
+		"version", version)
 
 	// Publish ConfigParsedEvent
 	// Note: SecretVersion will be empty here - it gets populated later when
 	// the ValidationCoordinator correlates with credentials
 	parsedEvent := events.NewConfigParsedEvent(cfg, version, "")
 	c.bus.Publish(parsedEvent)
+}
+
+// processCRD converts a HAProxyTemplateConfig CRD to config.Config.
+func (c *ConfigLoaderComponent) processCRD(resource *unstructured.Unstructured) (*config.Config, error) {
+	// Convert unstructured to typed CRD
+	crd := &v1alpha1.HAProxyTemplateConfig{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(resource.Object, crd); err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to HAProxyTemplateConfig: %w", err)
+	}
+
+	// Convert CRD Spec to config.Config
+	cfg, err := ConvertCRDToConfig(&crd.Spec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert CRD Spec to config: %w", err)
+	}
+
+	return cfg, nil
 }

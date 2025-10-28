@@ -7,12 +7,12 @@ metadata:
     {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 rules:
   # Watched resources from configuration
-  {{- range $name, $resource := .Values.controller.config.watched_resources }}
+  {{- range $name, $resource := .Values.controller.config.watchedResources }}
   - apiGroups:
-      {{- if eq $resource.api_version "v1" }}
+      {{- if eq $resource.apiVersion "v1" }}
       - ""
       {{- else }}
-      - {{ $resource.api_version | regexFind "^[^/]+" }}
+      - {{ $resource.apiVersion | regexFind "^[^/]+" }}
       {{- end }}
     resources:
       - {{ $resource.resources }}
@@ -20,10 +20,14 @@ rules:
   {{- end }}
   # Additional core resources
   - apiGroups: [""]
-    resources: ["configmaps", "namespaces", "pods"]
+    resources: ["namespaces", "pods"]
     verbs: ["get", "list", "watch"]
   # Leader election (coordination.k8s.io/v1)
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "create", "update"]
+  # HAProxyTemplateConfig CRD
+  - apiGroups: ["haproxy-template-ic.github.io"]
+    resources: ["haproxytemplateconfigs"]
+    verbs: ["get", "list", "watch"]
 {{- end }}

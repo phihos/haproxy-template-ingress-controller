@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"haproxy-template-ic/codegen/dataplaneapi"
+	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
 // Transaction represents an HAProxy Dataplane API transaction.

@@ -28,16 +28,19 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/restmapper"
 
+	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/controller/commentator"
 	"haproxy-template-ic/pkg/controller/configchange"
 	"haproxy-template-ic/pkg/controller/configloader"
@@ -81,14 +84,14 @@ const (
 //
 // The controller uses an event-driven architecture:
 //   - EventBus coordinates all components
-//   - SingleWatchers monitor ConfigMap and Secret
+//   - SingleWatcher monitors HAProxyTemplateConfig CRD and Secret
 //   - Components react to events and publish results
 //   - ConfigChangeHandler detects validated config changes and signals reinitialization
 //
 // Parameters:
 //   - ctx: Context for cancellation (SIGTERM, SIGINT, etc.)
 //   - k8sClient: Kubernetes client for API access
-//   - configMapName: Name of the ConfigMap containing the controller configuration
+//   - crdName: Name of the HAProxyTemplateConfig CRD
 //   - secretName: Name of the Secret containing HAProxy Dataplane API credentials
 //   - webhookCertSecretName: Name of the Secret containing webhook TLS certificates
 //   - debugPort: Port for debug HTTP server (0 to disable)
@@ -96,11 +99,11 @@ const (
 // Returns:
 //   - Error if the controller cannot start or encounters a fatal error
 //   - nil if the context is cancelled (graceful shutdown)
-func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretName, webhookCertSecretName string, debugPort int) error {
+func Run(ctx context.Context, k8sClient *client.Client, crdName, secretName, webhookCertSecretName string, debugPort int) error {
 	logger := slog.Default()
 
 	logger.Info("HAProxy Template Ingress Controller starting",
-		"configmap", configMapName,
+		"crd_name", crdName,
 		"secret", secretName,
 		"webhook_cert_secret", webhookCertSecretName,
 		"namespace", k8sClient.Namespace())
@@ -113,7 +116,7 @@ func Run(ctx context.Context, k8sClient *client.Client, configMapName, secretNam
 			return nil
 		default:
 			// Run one iteration
-			err := runIteration(ctx, k8sClient, configMapName, secretName, webhookCertSecretName, debugPort, logger)
+			err := runIteration(ctx, k8sClient, crdName, secretName, webhookCertSecretName, debugPort, logger)
 			if err != nil {
 				// Check if error is context cancellation (graceful shutdown)
 				if ctx.Err() != nil {
@@ -145,27 +148,28 @@ type WebhookCertificates struct {
 func fetchAndValidateInitialConfig(
 	ctx context.Context,
 	k8sClient *client.Client,
-	configMapName string,
+	crdName string,
 	secretName string,
 	webhookCertSecretName string,
-	configMapGVR schema.GroupVersionResource,
+	crdGVR schema.GroupVersionResource,
 	secretGVR schema.GroupVersionResource,
 	logger *slog.Logger,
 ) (*coreconfig.Config, *coreconfig.Credentials, *WebhookCertificates, error) {
-	logger.Info("Fetching initial configuration, credentials, and webhook certificates")
+	logger.Info("Fetching initial CRD, credentials, and webhook certificates",
+		"crd_name", crdName)
 
-	var configMapResource *unstructured.Unstructured
+	var crdResource *unstructured.Unstructured
 	var secretResource *unstructured.Unstructured
 	var webhookCertSecretResource *unstructured.Unstructured
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Fetch ConfigMap
+	// Fetch HAProxyTemplateConfig CRD
 	g.Go(func() error {
 		var err error
-		configMapResource, err = k8sClient.GetResource(gCtx, configMapGVR, configMapName)
+		crdResource, err = k8sClient.GetResource(gCtx, crdGVR, crdName)
 		if err != nil {
-			return fmt.Errorf("failed to fetch ConfigMap %q: %w", configMapName, err)
+			return fmt.Errorf("failed to fetch HAProxyTemplateConfig %q: %w", crdName, err)
 		}
 		return nil
 	})
@@ -198,9 +202,9 @@ func fetchAndValidateInitialConfig(
 	// Parse initial configuration
 	logger.Info("Parsing initial configuration, credentials, and webhook certificates")
 
-	cfg, err := parseConfigMap(configMapResource)
+	cfg, err := parseCRD(crdResource)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse initial ConfigMap: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to parse initial HAProxyTemplateConfig: %w", err)
 	}
 
 	creds, err := parseSecret(secretResource)
@@ -225,7 +229,7 @@ func fetchAndValidateInitialConfig(
 	}
 
 	logger.Info("Initial configuration validated successfully",
-		"config_version", configMapResource.GetResourceVersion(),
+		"crd_version", crdResource.GetResourceVersion(),
 		"secret_version", secretResource.GetResourceVersion(),
 		"webhook_cert_version", webhookCertSecretResource.GetResourceVersion())
 
@@ -234,13 +238,14 @@ func fetchAndValidateInitialConfig(
 
 // componentSetup contains all resources created during component initialization.
 type componentSetup struct {
-	Bus              *busevents.EventBus
-	MetricsComponent *metrics.Component
-	MetricsRegistry  *prometheus.Registry
-	StoreManager     *resourcestore.Manager
-	IterCtx          context.Context
-	Cancel           context.CancelFunc
-	ConfigChangeCh   chan *coreconfig.Config
+	Bus                   *busevents.EventBus
+	MetricsComponent      *metrics.Component
+	MetricsRegistry       *prometheus.Registry
+	IntrospectionRegistry *introspection.Registry
+	StoreManager          *resourcestore.Manager
+	IterCtx               context.Context
+	Cancel                context.CancelFunc
+	ConfigChangeCh        chan *coreconfig.Config
 }
 
 // setupComponents creates and starts all event-driven components.
@@ -306,18 +311,84 @@ func setupComponents(
 
 	logger.Debug("All components started")
 
+	// Create introspection registry for debug variables
+	// This registry will be shared between early server startup and later variable registration
+	introspectionRegistry := introspection.NewRegistry()
+
 	return &componentSetup{
-		Bus:              bus,
-		MetricsComponent: metricsComponent,
-		MetricsRegistry:  registry,
-		StoreManager:     storeManager,
-		IterCtx:          iterCtx,
-		Cancel:           cancel,
-		ConfigChangeCh:   configChangeCh,
+		Bus:                   bus,
+		MetricsComponent:      metricsComponent,
+		MetricsRegistry:       registry,
+		IntrospectionRegistry: introspectionRegistry,
+		StoreManager:          storeManager,
+		IterCtx:               iterCtx,
+		Cancel:                cancel,
+		ConfigChangeCh:        configChangeCh,
 	}
 }
 
-// setupInfrastructureServers starts debug and metrics HTTP servers.
+// startEarlyInfrastructureServers starts debug and metrics HTTP servers early in startup.
+// This function is called BEFORE fetching the initial configuration, so servers are available
+// for debugging even if the controller fails to fetch config (e.g., RBAC issues).
+//
+// Unlike setupInfrastructureServers, this uses default/environment-based metrics port
+// since the config hasn't been loaded yet.
+func startEarlyInfrastructureServers(
+	ctx context.Context,
+	debugPort int,
+	setup *componentSetup,
+	logger *slog.Logger,
+) {
+	logger.Info("Starting infrastructure servers (early initialization)")
+
+	// Start debug HTTP server if port is configured
+	if debugPort > 0 {
+		// Use shared introspection registry from setup
+		// Variables will be registered later by setupInfrastructureServers
+		debugServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), setup.IntrospectionRegistry)
+		go func() {
+			if err := debugServer.Start(ctx); err != nil {
+				logger.Error("debug server failed", "error", err, "port", debugPort)
+			}
+		}()
+		logger.Info("Debug HTTP server started (early)",
+			"port", debugPort,
+			"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
+			"access_method", "kubectl port-forward",
+			"note", "variables will be registered after config loads")
+	} else {
+		logger.Debug("Debug HTTP server disabled (port=0)")
+	}
+
+	// Start metrics HTTP server with default port
+	// We use a default because config hasn't been loaded yet
+	defaultMetricsPort := 9090
+	if envPort := os.Getenv("METRICS_PORT"); envPort != "" {
+		if port, err := strconv.Atoi(envPort); err == nil {
+			defaultMetricsPort = port
+		}
+	}
+
+	if defaultMetricsPort > 0 {
+		metricsServer := pkgmetrics.NewServer(fmt.Sprintf(":%d", defaultMetricsPort), setup.MetricsRegistry)
+		go func() {
+			if err := metricsServer.Start(ctx); err != nil {
+				logger.Error("metrics server failed", "error", err, "port", defaultMetricsPort)
+			}
+		}()
+		logger.Info("Metrics HTTP server started (early)",
+			"port", defaultMetricsPort,
+			"bind_address", fmt.Sprintf("0.0.0.0:%d", defaultMetricsPort),
+			"access_method", "kubectl port-forward",
+			"endpoint", "/metrics")
+	} else {
+		logger.Debug("Metrics HTTP server disabled (port=0)")
+	}
+}
+
+// setupInfrastructureServers registers debug variables after config is loaded.
+// The HTTP servers are already started by startEarlyInfrastructureServers, so this
+// function just registers debug variables that require config/state with the shared registry.
 func setupInfrastructureServers(
 	ctx context.Context,
 	cfg *coreconfig.Config,
@@ -326,10 +397,7 @@ func setupInfrastructureServers(
 	stateCache *StateCache,
 	logger *slog.Logger,
 ) {
-	logger.Info("Stage 6: Starting debug infrastructure")
-
-	// Create instance-based introspection registry (lives/dies with this iteration)
-	registry := introspection.NewRegistry()
+	logger.Info("Stage 6: Registering debug variables (servers already running)")
 
 	// Create event buffer for tracking recent events
 	eventBuffer := debug.NewEventBuffer(1000, setup.Bus)
@@ -339,43 +407,14 @@ func setupInfrastructureServers(
 		}
 	}()
 
-	// Register debug variables with registry
-	debug.RegisterVariables(registry, stateCache, eventBuffer)
+	// Register debug variables with the shared introspection registry
+	// The HTTP server started by startEarlyInfrastructureServers uses this registry
+	debug.RegisterVariables(setup.IntrospectionRegistry, stateCache, eventBuffer)
 
-	// Start debug HTTP server if port is configured
-	if debugPort > 0 {
-		debugServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), registry)
-		go func() {
-			if err := debugServer.Start(ctx); err != nil {
-				logger.Error("debug server failed", "error", err, "port", debugPort)
-			}
-		}()
-		logger.Info("Debug HTTP server started",
-			"port", debugPort,
-			"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
-			"access_method", "kubectl port-forward",
-			"endpoints", []string{"/debug/vars", "/debug/pprof"})
-	} else {
-		logger.Debug("Debug HTTP server disabled (port=0)")
-	}
-
-	// Start metrics HTTP server if port is configured
-	metricsPort := cfg.Controller.MetricsPort
-	if metricsPort > 0 {
-		metricsServer := pkgmetrics.NewServer(fmt.Sprintf(":%d", metricsPort), setup.MetricsRegistry)
-		go func() {
-			if err := metricsServer.Start(ctx); err != nil {
-				logger.Error("metrics server failed", "error", err, "port", metricsPort)
-			}
-		}()
-		logger.Info("Metrics HTTP server started",
-			"port", metricsPort,
-			"bind_address", fmt.Sprintf("0.0.0.0:%d", metricsPort),
-			"access_method", "kubectl port-forward",
-			"endpoint", "/metrics")
-	} else {
-		logger.Debug("Metrics HTTP server disabled (port=0)")
-	}
+	logger.Debug("Debug variables registered with shared registry",
+		"debug_port", debugPort,
+		"metrics_port", cfg.Controller.MetricsPort,
+		"note", "debug endpoints now fully functional")
 }
 
 // setupResourceWatchers creates and starts resource watchers and index tracker, then waits for sync.
@@ -432,32 +471,32 @@ func setupResourceWatchers(
 	return resourceWatcher, nil
 }
 
-// setupConfigWatchers creates and starts ConfigMap and Secret watchers, then waits for sync.
+// setupConfigWatchers creates and starts HAProxyTemplateConfig CRD and Secret watchers, then waits for sync.
 //
 // Returns an error if watcher creation or synchronization fails.
 func setupConfigWatchers(
 	iterCtx context.Context,
 	k8sClient *client.Client,
-	configMapName string,
+	crdName string,
 	secretName string,
-	configMapGVR schema.GroupVersionResource,
+	crdGVR schema.GroupVersionResource,
 	secretGVR schema.GroupVersionResource,
 	bus *busevents.EventBus,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
 ) error {
-	// Create watchers for ConfigMap and Secret
-	configMapWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
-		GVR:       configMapGVR,
+	// Create watcher for HAProxyTemplateConfig CRD
+	crdWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
+		GVR:       crdGVR,
 		Namespace: k8sClient.Namespace(),
-		Name:      configMapName,
+		Name:      crdName,
 		OnChange: func(obj interface{}) error {
 			bus.Publish(events.NewConfigResourceChangedEvent(obj))
 			return nil
 		},
 	}, k8sClient)
 	if err != nil {
-		return fmt.Errorf("failed to create ConfigMap watcher: %w", err)
+		return fmt.Errorf("failed to create HAProxyTemplateConfig watcher: %w", err)
 	}
 
 	secretWatcher, err := watcher.NewSingle(&types.SingleWatcherConfig{
@@ -475,8 +514,8 @@ func setupConfigWatchers(
 
 	// Start watchers in goroutines
 	go func() {
-		if err := configMapWatcher.Start(iterCtx); err != nil {
-			logger.Error("ConfigMap watcher failed", "error", err)
+		if err := crdWatcher.Start(iterCtx); err != nil {
+			logger.Error("HAProxyTemplateConfig watcher failed", "error", err)
 			cancel()
 		}
 	}()
@@ -494,8 +533,8 @@ func setupConfigWatchers(
 	watcherGroup, watcherCtx := errgroup.WithContext(iterCtx)
 
 	watcherGroup.Go(func() error {
-		if err := configMapWatcher.WaitForSync(watcherCtx); err != nil {
-			return fmt.Errorf("ConfigMap watcher sync failed: %w", err)
+		if err := crdWatcher.WaitForSync(watcherCtx); err != nil {
+			return fmt.Errorf("HAProxyTemplateConfig watcher sync failed: %w", err)
 		}
 		return nil
 	})
@@ -998,7 +1037,7 @@ func setupLeaderElection(
 func runIteration(
 	ctx context.Context,
 	k8sClient *client.Client,
-	configMapName string,
+	crdName string,
 	secretName string,
 	webhookCertSecretName string,
 	debugPort int,
@@ -1006,11 +1045,11 @@ func runIteration(
 ) error {
 	logger.Info("Starting controller iteration")
 
-	// Define GVRs for ConfigMap and Secret
-	configMapGVR := schema.GroupVersionResource{
-		Group:    "",
-		Version:  "v1",
-		Resource: "configmaps",
+	// Define GVRs for HAProxyTemplateConfig CRD and Secret
+	crdGVR := schema.GroupVersionResource{
+		Group:    "haproxy-template-ic.github.io",
+		Version:  "v1alpha1",
+		Resource: "haproxytemplateconfigs",
 	}
 
 	secretGVR := schema.GroupVersionResource{
@@ -1019,18 +1058,22 @@ func runIteration(
 		Resource: "secrets",
 	}
 
+	// 0. Setup components BEFORE fetching config so we can start servers early
+	setup := setupComponents(ctx, logger)
+	defer setup.Cancel()
+
+	// 0.5. Start infrastructure servers EARLY (before config fetch)
+	// This allows debugging startup issues and makes metrics/debug endpoints available immediately
+	startEarlyInfrastructureServers(setup.IterCtx, debugPort, setup, logger)
+
 	// 1. Fetch and validate initial configuration
 	cfg, creds, webhookCerts, err := fetchAndValidateInitialConfig(
-		ctx, k8sClient, configMapName, secretName, webhookCertSecretName,
-		configMapGVR, secretGVR, logger,
+		ctx, k8sClient, crdName, secretName, webhookCertSecretName,
+		crdGVR, secretGVR, logger,
 	)
 	if err != nil {
 		return err
 	}
-
-	// 2. Setup components
-	setup := setupComponents(ctx, logger)
-	defer setup.Cancel()
 
 	// 3. Setup resource watchers
 	resourceWatcher, err := setupResourceWatchers(setup.IterCtx, cfg, k8sClient, setup.Bus, logger, setup.Cancel)
@@ -1048,8 +1091,8 @@ func runIteration(
 
 	// 4. Setup config watchers
 	if err := setupConfigWatchers(
-		setup.IterCtx, k8sClient, configMapName, secretName,
-		configMapGVR, secretGVR, setup.Bus, logger, setup.Cancel,
+		setup.IterCtx, k8sClient, crdName, secretName,
+		crdGVR, secretGVR, setup.Bus, logger, setup.Cancel,
 	); err != nil {
 		return err
 	}
@@ -1141,27 +1184,33 @@ func runIteration(
 	}
 }
 
-// parseConfigMap extracts and parses configuration from a ConfigMap resource.
-func parseConfigMap(resource *unstructured.Unstructured) (*coreconfig.Config, error) {
-	// Extract ConfigMap data field
-	data, found, err := unstructured.NestedStringMap(resource.Object, "data")
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract data field: %w", err)
-	}
-	if !found {
-		return nil, fmt.Errorf("ConfigMap has no data field")
+// parseCRD extracts and converts configuration from a HAProxyTemplateConfig CRD resource.
+func parseCRD(resource *unstructured.Unstructured) (*coreconfig.Config, error) {
+	// This function uses the same logic as configloader.processCRD for consistency
+
+	// Validate resource type
+	apiVersion := resource.GetAPIVersion()
+	kind := resource.GetKind()
+
+	if kind != "HAProxyTemplateConfig" {
+		return nil, fmt.Errorf("expected HAProxyTemplateConfig, got %s", kind)
 	}
 
-	// Extract "config" key containing YAML
-	configYAML, ok := data["config"]
-	if !ok {
-		return nil, fmt.Errorf("ConfigMap data missing 'config' key")
+	if apiVersion != "haproxy-template-ic.github.io/v1alpha1" {
+		return nil, fmt.Errorf("expected apiVersion haproxy-template-ic.github.io/v1alpha1, got %s", apiVersion)
 	}
 
-	// Parse YAML and apply defaults
-	cfg, err := coreconfig.LoadConfig(configYAML)
+	// Convert unstructured to typed CRD using runtime converter
+	// This is the same approach used in configloader.processCRD
+	crd := &v1alpha1.HAProxyTemplateConfig{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(resource.Object, crd); err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to HAProxyTemplateConfig: %w", err)
+	}
+
+	// Convert CRD Spec to config.Config using the configloader converter
+	cfg, err := configloader.ConvertCRDToConfig(&crd.Spec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config YAML: %w", err)
+		return nil, fmt.Errorf("failed to convert CRD spec to config: %w", err)
 	}
 
 	return cfg, nil

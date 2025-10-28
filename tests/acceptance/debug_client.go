@@ -174,6 +174,40 @@ func (dc *DebugClient) GetEvents(ctx context.Context) ([]map[string]interface{},
 	return nil, fmt.Errorf("events not found in response")
 }
 
+// WaitForConfig waits for the controller configuration to become available.
+//
+// This is useful during controller startup when the debug endpoint is running
+// but configuration hasn't been loaded yet. The method polls the debug endpoint
+// until configuration is available or the timeout expires.
+func (dc *DebugClient) WaitForConfig(ctx context.Context, timeout time.Duration) (map[string]interface{}, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, fmt.Errorf("timeout waiting for config to become available (last error: %w)", lastErr)
+			}
+			return nil, fmt.Errorf("timeout waiting for config to become available")
+
+		case <-ticker.C:
+			config, err := dc.GetConfig(ctx)
+			if err != nil {
+				lastErr = err
+				continue // Retry on error
+			}
+
+			// Config is available
+			return config, nil
+		}
+	}
+}
+
 // WaitForConfigVersion waits for the controller to load a specific config version.
 func (dc *DebugClient) WaitForConfigVersion(ctx context.Context, expectedVersion string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)

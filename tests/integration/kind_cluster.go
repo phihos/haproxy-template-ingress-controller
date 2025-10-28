@@ -20,8 +20,8 @@ import (
 // KindClusterConfig holds configuration for creating a Kind cluster
 type KindClusterConfig struct {
 	Name string
-	// Image is the Kind node image to use (e.g., "kindest/node:v1.34.0")
-	// If empty, uses the version from KIND_NODE_VERSION env var or Kind's default
+	// Image is the Kind node image to use (e.g., "kindest/node:v1.32.0")
+	// If empty, uses the image from KIND_NODE_IMAGE env var or defaults to kindest/node:v1.32.0
 	Image string
 }
 
@@ -61,13 +61,12 @@ func SetupKindCluster(cfg *KindClusterConfig) (*KindCluster, error) {
 		// Determine node image to use
 		nodeImage := cfg.Image
 		if nodeImage == "" {
-			// Check environment variable
-			nodeImage = os.Getenv("KIND_NODE_VERSION")
-			// If env var is set, format it as a full image reference
-			if nodeImage != "" {
-				nodeImage = fmt.Sprintf("kindest/node:%s", nodeImage)
+			// Check environment variable (full image path like "kindest/node:v1.32.0")
+			nodeImage = os.Getenv("KIND_NODE_IMAGE")
+			// If env var is not set, use default known-working version
+			if nodeImage == "" {
+				nodeImage = "kindest/node:v1.32.0"
 			}
-			// If still empty, Kind will use its default version
 		}
 
 		// Prepare cluster creation options
@@ -116,11 +115,46 @@ func SetupKindCluster(cfg *KindClusterConfig) (*KindCluster, error) {
 		clientset:  clientset,
 	}
 
+	// Wait for API server to be fully ready
+	// This ensures the API server is accepting connections before tests proceed
+	fmt.Printf("⏳ Waiting for API server to become ready...\n")
+	if err := waitForAPIServer(clientset, 2*time.Minute); err != nil {
+		return nil, fmt.Errorf("API server failed to become ready: %w", err)
+	}
+	fmt.Printf("✓ API server is ready\n")
+
 	// Trigger background cleanup of old test namespaces
 	// This runs asynchronously and doesn't block test execution
 	cluster.CleanupOldTestNamespacesAsync()
 
 	return cluster, nil
+}
+
+// waitForAPIServer polls the API server until it responds successfully or timeout occurs.
+// This is necessary because cluster creation may complete before the API server is fully ready
+// to accept connections, leading to "connection refused" errors in tests.
+func waitForAPIServer(clientset *kubernetes.Clientset, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for API server to become ready")
+		case <-ticker.C:
+			// Try to get server version - this is a lightweight API call
+			// that confirms the API server is responding
+			_, err := clientset.Discovery().ServerVersion()
+			if err == nil {
+				return nil // API server is ready
+			}
+			// Continue waiting on connection errors
+			fmt.Printf("  API server not ready yet (will retry): %v\n", err)
+		}
+	}
 }
 
 // CreateNamespace creates a new namespace in the cluster

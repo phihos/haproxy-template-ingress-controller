@@ -1,0 +1,282 @@
+# Base template library for HAProxy Template Ingress Controller
+# Contains core template snippets, maps, files, and HAProxy configuration
+
+templateSnippets:
+  backend-name:
+    template: >-
+      {{- " " -}}ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+
+  backend-servers:
+    template: |
+      {#- Pre-allocated server pool with auto-expansion #}
+      {%- set initial_slots = 10 %}  {#- Single place to adjust initial slots #}
+
+      {#- Collect active endpoints using O(1) indexed lookup #}
+      {#- Use namespace() to maintain list across loop scopes #}
+      {%- set ns = namespace(active_endpoints=[]) %}
+      {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
+        {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
+          {%- for address in (endpoint.addresses | default([])) %}
+            {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint.targetRef.name, 'address': address, 'port': port}] %}
+          {%- endfor %}
+        {%- endfor %}
+      {%- endfor %}
+
+      {#- Calculate required slots using simpler approach #}
+      {%- set active_count = ns.active_endpoints|length %}
+      {#- For now, just use initial_slots since we have few endpoints #}
+      {%- set max_servers = initial_slots %}
+
+      {#- Generate all server slots with fixed names #}
+      {%- for i in range(1, max_servers + 1) %}
+        {%- if loop.index0 < ns.active_endpoints|length %}
+          {#- Active server with real endpoint #}
+          {%- set endpoint = ns.active_endpoints[loop.index0] %}
+      server SRV_{{ i }} {{ endpoint.address }}:{{ endpoint.port }} check
+        {%- else %}
+          {#- Disabled placeholder server #}
+      server SRV_{{ i }} 127.0.0.1:1 disabled
+        {%- endif %}
+      {%- endfor %}
+
+  path-map-entry:
+    template: |
+      {#- Generate map entries for paths matching specified pathTypes #}
+      {#- Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
+      {%- for ingress in resources.ingresses.List() %}
+      {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
+      {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
+      {{ rule.host }}{{ path.path }} {% include "backend-name" -%}{{ suffix }}
+      {% endfor %}
+      {% endfor %}
+      {% endfor %}
+
+  ingress-backends:
+    template: |
+      {#- Generate all backend definitions from ingress resources #}
+      {#- Usage: {% include "ingress-backends" %} #}
+      {%- for ingress in resources.ingresses.List() %}
+      {%- if ingress.spec and ingress.spec.rules %}
+      {%- for rule in ingress.spec.rules %}
+      {%- if rule.http and rule.http.paths %}
+      {%- for path in rule.http.paths %}
+      {%- if path.backend and path.backend.service %}
+      {%- set service_name = path.backend.service.name %}
+      {%- set port = path.backend.service.port.number | default(80) %}
+
+      backend {%+ include "backend-name" +%}
+        balance roundrobin
+        option httpchk GET {{ path.path | default('/') }}
+        default-server check
+        {%- filter indent(2, first=True) %}
+        {% include "backend-annotations" %}
+        {% include "backend-servers" %}
+        {%- endfilter %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+
+  top-level-annotations:
+    priority: 100
+    template: |
+      {#- Orchestrator snippet that includes all top-level annotation snippets #}
+      {#- Top-level snippets generate HAProxy elements like userlist sections #}
+      {#- Usage: {% include "top-level-annotations" %} in haproxy.cfg #}
+      {%- set matching = template_snippets | glob_match("top-level-annotation-*") %}
+      {%- for snippet_name in matching %}
+      {%- include snippet_name -%}
+      {%- endfor %}
+
+  backend-annotations:
+    priority: 100
+    template: |
+      {#- Orchestrator snippet that includes all backend annotation snippets #}
+      {#- Backend snippets generate per-backend directives like http-request auth #}
+      {#- Usage: {% include "backend-annotations" %} in backend definitions #}
+      {%- set matching = template_snippets | glob_match("backend-annotation-*") %}
+      {%- for snippet_name in matching %}
+      {%- include snippet_name -%}
+      {%- endfor %}
+
+maps:
+  host.map:
+    template: |
+      {%- for ingress in resources.ingresses.List() %}
+      {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
+      {%- set host_without_asterisk = rule.host | replace('*', '', 1) %}
+      {{ host_without_asterisk }} {{ host_without_asterisk }}
+      {% endfor %}
+      {% endfor %}
+
+  path-exact.map:
+    template: |
+      # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
+      # It should be used with the equality string matcher. Example:
+      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
+      {% set path_types = ["Exact"] %}
+      {%- set suffix = "" %}
+      {% include "path-map-entry" %}
+
+
+  path-prefix-exact.map:
+    template: |
+      # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
+      {% set path_types = ["Prefix", "ImplementationSpecific"] %}
+      {%- set suffix = "" %}
+      {% include "path-map-entry" %}
+
+
+  path-prefix.map:
+    template: |
+      # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
+      # It should be used with the prefix string matcher. Example:
+      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
+      {% set path_types = ["Prefix", "ImplementationSpecific"] %}
+      {%- set suffix = "/" %}
+      {% include "path-map-entry" %}
+
+
+files:
+  400.http:
+    template: |
+      HTTP/1.0 400 Bad Request
+      Cache-Control: no-cache
+      Connection: close
+      Content-Type: text/html
+
+      <html><body><h1>400 Bad Request</h1>
+      <p>Your browser sent a request that this server could not understand.</p>
+      </body></html>
+
+  403.http:
+    template: |
+      HTTP/1.0 403 Forbidden
+      Cache-Control: no-cache
+      Connection: close
+      Content-Type: text/html
+
+      <html><body><h1>403 Forbidden</h1>
+      <p>You don't have permission to access this resource.</p>
+      </body></html>
+
+  408.http:
+    template: |
+      HTTP/1.0 408 Request Time-out
+      Cache-Control: no-cache
+      Connection: close
+      Content-Type: text/html
+
+      <html><body><h1>408 Request Time-out</h1>
+      <p>Your browser didn't send a complete request in time.</p>
+      </body></html>
+
+  500.http:
+    template: |
+      HTTP/1.0 500 Internal Server Error
+      Cache-Control: no-cache
+      Connection: close
+      Content-Type: text/html
+
+      <html><body><h1>500 Internal Server Error</h1>
+      <p>An internal server error occurred.</p>
+      </body></html>
+
+  502.http:
+    template: |
+      HTTP/1.0 502 Bad Gateway
+      Cache-Control: no-cache
+      Connection: close
+      Content-Type: text/html
+
+      <html><body><h1>502 Bad Gateway</h1>
+      <p>The server received an invalid response from an upstream server.</p>
+      </body></html>
+
+  503.http:
+    template: |
+      HTTP/1.0 503 Service Unavailable
+      Cache-Control: no-cache
+      Connection: close
+      Content-Type: text/html
+
+      <html><body><h1>503 Service Unavailable</h1>
+      <p>No server is available to handle this request.</p>
+      </body></html>
+
+  504.http:
+    template: |
+      HTTP/1.0 504 Gateway Time-out
+      Cache-Control: no-cache
+      Connection: close
+      Content-Type: text/html
+
+      <html><body><h1>504 Gateway Time-out</h1>
+      <p>The server didn't respond in time.</p>
+      </body></html>
+
+haproxyConfig:
+  template: |
+    global
+        log stdout len 4096 local0 info
+        chroot /var/lib/haproxy
+        user haproxy
+        group haproxy
+        daemon
+        ca-base /etc/ssl/certs
+        crt-base /etc/haproxy/ssl
+        tune.ssl.default-dh-param 2048
+
+    defaults
+        mode http
+        log global
+        option httplog
+        option dontlognull
+        option log-health-checks
+        option forwardfor
+        timeout connect 5000
+        timeout client 50000
+        timeout server 50000
+        errorfile 400 {{ "400.http" | get_path("file") }}
+        errorfile 403 {{ "403.http" | get_path("file") }}
+        errorfile 408 {{ "408.http" | get_path("file") }}
+        errorfile 500 {{ "500.http" | get_path("file") }}
+        errorfile 502 {{ "502.http" | get_path("file") }}
+        errorfile 503 {{ "503.http" | get_path("file") }}
+        errorfile 504 {{ "504.http" | get_path("file") }}
+
+    {#- Include top-level annotation snippets (e.g., userlist sections) #}
+    {% include "top-level-annotations" %}
+
+    frontend status
+        bind *:8404
+        no log
+        http-request return status 200 content-type text/plain string "OK" if { path /healthz }
+        http-request return status 200 content-type text/plain string "READY" if { path /ready }
+
+    frontend http_frontend
+        bind *:80
+
+        # Set variables for path-based routing
+        http-request set-var(txn.base) base
+        http-request set-var(txn.path) path
+        http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
+        http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
+        http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ "host.map" | get_path("map") }},'') if !{ var(txn.host_match) -m found }
+        http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
+        http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+        http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+
+        # Use path maps for routing
+        use_backend %[var(txn.path_match)]
+
+        # Default backend
+        default_backend default_backend
+
+    {% include "ingress-backends" %}
+
+    backend default_backend
+        http-request return status 404
+    {%+ if false +%}{%+ endif +%}

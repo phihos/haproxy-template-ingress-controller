@@ -1,0 +1,726 @@
+# Validation Tests
+
+This guide explains how to write and run validation tests for HAProxyTemplateConfig templates.
+
+## Overview
+
+Validation tests allow you to verify that your templates render correctly and produce valid HAProxy configurations.
+Tests are embedded directly in the HAProxyTemplateConfig CRD and can be executed locally using the CLI.
+
+**Benefits:**
+
+- Catch template errors before deployment
+- Verify configuration changes don't break existing functionality
+- Document expected behavior with concrete examples
+- Test edge cases and error conditions
+
+## Quick Start
+
+Add a `validationTests` section to your HAProxyTemplateConfig:
+
+```yaml
+apiVersion: haproxy-template-ic.github.io/v1alpha1
+kind: HAProxyTemplateConfig
+metadata:
+  name: my-config
+spec:
+  # ... template configuration ...
+
+  validationTests:
+    test-basic-frontend:
+      description: Frontend should be created with correct settings
+      fixtures:
+        services:
+          - apiVersion: v1
+            kind: Service
+            metadata:
+              name: my-service
+              namespace: default
+            spec:
+              ports:
+                - port: 80
+                  targetPort: 8080
+      assertions:
+        - type: haproxy_valid
+          description: Configuration must be syntactically valid
+
+        - type: contains
+          target: haproxy.cfg
+          pattern: "frontend.*default"
+          description: Must have default frontend
+```
+
+Run the tests:
+
+```bash
+controller validate -f my-config.yaml
+```
+
+## Test Structure
+
+Each validation test consists of:
+
+1. **Name**: Unique identifier for the test
+2. **Description**: Human-readable explanation of what the test verifies
+3. **Fixtures**: Test data (Kubernetes resources) to use during rendering
+4. **Assertions**: Checks to perform on the rendered output
+
+### Test Name
+
+- Must be unique within the config
+- Use lowercase with hyphens (kebab-case)
+- Be descriptive: `test-ingress-tls-routing` not `test1`
+
+### Fixtures
+
+Fixtures simulate Kubernetes resources that would be watched by the controller:
+
+```yaml
+fixtures:
+  services: # Resource type must match watchedResources config
+    - apiVersion: v1
+      kind: Service
+      metadata:
+        name: api
+        namespace: production
+      spec:
+        ports:
+          - port: 80
+            targetPort: 8080
+
+  ingresses:
+    - apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: main-ingress
+        namespace: production
+      spec:
+        rules:
+          - host: api.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: api
+                      port:
+                        number: 80
+```
+
+**Fixture Guidelines:**
+
+- Include only resources needed for the test
+- Use realistic data that represents actual use cases
+- Test both common cases and edge cases
+- Keep fixtures minimal but complete
+
+### Assertions
+
+Five assertion types are available:
+
+#### 1. haproxy_valid
+
+Validates that the rendered HAProxy configuration is syntactically valid using the HAProxy binary.
+
+```yaml
+assertions:
+  - type: haproxy_valid
+    description: HAProxy configuration must be syntactically valid
+```
+
+**When to use:**
+
+- Every test should include this assertion
+- Catches syntax errors, invalid directives, missing sections
+
+**Requirements:**
+
+- HAProxy binary must be in PATH or specified with `--haproxy-binary`
+
+#### 2. contains
+
+Verifies that the target content matches a regex pattern.
+
+```yaml
+assertions:
+  - type: contains
+    target: haproxy.cfg
+    pattern: "backend api-production"
+    description: Must create backend for API service
+
+  - type: contains
+    target: haproxy.cfg
+    pattern: "bind :443 ssl crt /etc/haproxy/ssl/cert.pem"
+    description: HTTPS frontend must use SSL certificate
+```
+
+**Parameters:**
+
+- `target`: What to check (`haproxy.cfg`, `map:<name>`, `file:<name>`, `cert:<name>`)
+- `pattern`: Regular expression to match
+- `description`: Why this pattern should exist
+
+**Pattern Tips:**
+
+- Use `.*` for wildcards: `frontend.*production`
+- Escape special regex characters: `\.` for literal dot
+- Keep patterns specific enough to catch regressions
+
+#### 3. not_contains
+
+Verifies that the target content does NOT match a pattern.
+
+```yaml
+assertions:
+  - type: not_contains
+    target: haproxy.cfg
+    pattern: "server.*127.0.0.1"
+    description: Should not have localhost servers in production
+
+  - type: not_contains
+    target: haproxy.cfg
+    pattern: "ssl-verify none"
+    description: Must not disable SSL verification
+```
+
+**Use cases:**
+
+- Verify deprecated patterns are removed
+- Ensure security-sensitive config is not present
+- Check that test/debug settings don't leak to production
+
+#### 4. equals
+
+Checks that the entire target content exactly matches the expected value.
+
+```yaml
+assertions:
+  - type: equals
+    target: map:hostnames.map
+    expected: |
+      api.example.com backend-api
+      www.example.com backend-web
+    description: Hostname map must contain exactly these entries
+```
+
+**When to use:**
+
+- Small, deterministic files (maps, simple configs)
+- When order and whitespace matter
+- Verifying complete file contents
+
+**Not recommended for:**
+
+- Large HAProxy configs (too brittle)
+- Content with timestamps or dynamic values
+
+#### 5. jsonpath
+
+Queries the template rendering context using JSONPath expressions.
+
+```yaml
+assertions:
+  - type: jsonpath
+    jsonpath: "{.resources.services.List()[0].metadata.name}"
+    expected: "my-service"
+    description: First service should be my-service
+
+  - type: jsonpath
+    jsonpath: "{.template_snippets[0]}"
+    expected: "logging"
+    description: First snippet should be logging
+```
+
+**Template Context Structure:**
+
+```json
+{
+  "resources": {
+    "services": <StoreWrapper
+    with
+    .List()
+    method>,
+    "ingresses": <StoreWrapper>
+  },
+  "template_snippets": [
+    "snippet1",
+    "snippet2"
+  ]
+}
+```
+
+**JSONPath Examples:**
+
+```yaml
+# Count resources
+- jsonpath: "{.resources.services.List() | length}"
+  expected: "3"
+
+# Check resource field
+- jsonpath: "{.resources.ingresses.List()[0].spec.rules[0].host}"
+  expected: "api.example.com"
+
+# Verify snippet order
+- jsonpath: "{.template_snippets[0]}"
+  expected: "logging"
+```
+
+## Testing Strategies
+
+### Test Organization
+
+Group related tests by feature or scenario:
+
+```yaml
+validationTests:
+  # Basic functionality
+  test-basic-http-routing:
+    description: HTTP routing for simple service
+    # ...
+
+  test-basic-load-balancing:
+    description: Load balancing across multiple servers
+    # ...
+
+  # TLS/SSL
+  test-tls-termination:
+    description: TLS termination with certificate
+    # ...
+
+  test-tls-passthrough:
+    description: TLS passthrough for end-to-end encryption
+    # ...
+
+  # Edge cases
+  test-empty-services:
+    description: Handle case with no backend services
+    # ...
+
+  test-invalid-port:
+    description: Gracefully handle invalid port numbers
+    # ...
+```
+
+### Testing Template Errors
+
+Test that templates fail gracefully with `fail()` function:
+
+```jinja
+{% if not services.List() %}
+  {{ fail("At least one service is required") }}
+{% endif %}
+```
+
+Test file:
+
+```yaml
+validationTests:
+  test-no-services-error:
+    description: Should fail gracefully when no services exist
+    fixtures:
+      services: [ ]  # Empty services
+    assertions:
+    # This test will fail at rendering stage
+    # The test runner will capture the fail() message
+```
+
+Expected output:
+
+```
+✗ test-no-services-error
+  ✗ Template rendering failed
+    Error: At least one service is required
+```
+
+### Testing Multiple Scenarios
+
+Use fixtures to test different deployment configurations:
+
+```yaml
+validationTests:
+  # Production scenario
+  test-production-setup:
+    fixtures:
+      services:
+        - name: api
+          namespace: production
+        - name: web
+          namespace: production
+    assertions:
+      - type: contains
+        pattern: "production"
+
+  # Staging scenario
+  test-staging-setup:
+    fixtures:
+      services:
+        - name: api
+          namespace: staging
+    assertions:
+      - type: contains
+        pattern: "staging"
+
+  # Development scenario
+  test-dev-setup:
+    fixtures:
+      services:
+        - name: api
+          namespace: dev
+    assertions:
+      - type: contains
+        pattern: "maxconn 100"  # Lower limits for dev
+```
+
+### Testing Auxiliary Files
+
+Test maps, general files, and SSL certificates:
+
+```yaml
+validationTests:
+  - name: test-hostname-map
+    description: Hostname map should contain all ingress hosts
+    fixtures:
+      ingresses:
+        - metadata:
+            name: main
+          spec:
+            rules:
+              - host: api.example.com
+              - host: www.example.com
+    assertions:
+      - type: contains
+        target: map:hostnames.map
+        pattern: "api.example.com"
+
+      - type: contains
+        target: map:hostnames.map
+        pattern: "www.example.com"
+
+  - name: test-error-page
+    description: Custom error page should be generated
+    fixtures:
+      services: [ ]
+    assertions:
+      - type: contains
+        target: file:500.http
+        pattern: "Internal Server Error"
+```
+
+## Running Tests
+
+### CLI Usage
+
+```bash
+# Run all tests
+controller validate -f config.yaml
+
+# Run specific test
+controller validate -f config.yaml --test test-basic-routing
+
+# Output as JSON (for CI/CD)
+controller validate -f config.yaml --output json
+
+# Output as YAML
+controller validate -f config.yaml --output yaml
+
+# Use custom HAProxy binary
+controller validate -f config.yaml --haproxy-binary /usr/local/bin/haproxy
+```
+
+### Exit Codes
+
+- **0**: All tests passed
+- **Non-zero**: One or more tests failed
+
+Use in CI/CD pipelines:
+
+```bash
+#!/bin/bash
+controller validate -f config.yaml
+if [ $? -ne 0 ]; then
+  echo "Validation tests failed!"
+  exit 1
+fi
+```
+
+### Output Formats
+
+**Summary (default):**
+
+```
+✓ test-basic-routing (0.125s)
+  Basic HTTP routing configuration
+  ✓ HAProxy configuration must be syntactically valid
+  ✓ Must have frontend
+  ✓ Must have backend
+
+✗ test-tls-config (0.089s)
+  TLS configuration
+  ✗ Must have SSL certificate
+    Error: pattern "ssl crt" not found in haproxy.cfg
+
+Tests: 1 passed, 1 failed, 2 total (0.214s)
+```
+
+**JSON:**
+
+```json
+{
+  "totalTests": 2,
+  "passedTests": 1,
+  "failedTests": 1,
+  "duration": 0.214,
+  "tests": [
+    {
+      "testName": "test-basic-routing",
+      "description": "Basic HTTP routing configuration",
+      "passed": true,
+      "duration": 0.125,
+      "assertions": [
+        ...
+      ]
+    }
+  ]
+}
+```
+
+**YAML:**
+
+```yaml
+totalTests: 2
+passedTests: 1
+failedTests: 1
+duration: 0.214
+tests:
+  - testName: test-basic-routing
+    description: Basic HTTP routing configuration
+    passed: true
+    duration: 0.125
+    assertions: [ ... ]
+```
+
+## Best Practices
+
+### 1. Test Early and Often
+
+Add tests as you develop templates:
+
+```bash
+# Development workflow
+vim config.yaml  # Edit templates
+controller validate -f config.yaml  # Run tests
+# Fix any failures, repeat
+```
+
+### 2. Keep Tests Fast
+
+- Use minimal fixtures (only what's needed)
+- Avoid excessive pattern matching
+- Group related assertions in single tests
+
+### 3. Make Tests Readable
+
+```yaml
+# Good: Clear, descriptive
+- name: test-ingress-tls-routing
+  description: Ingress with TLS should create HTTPS frontend and route to backend
+  assertions:
+    - type: contains
+      pattern: "bind :443 ssl"
+      description: HTTPS frontend must bind to port 443 with SSL
+
+# Bad: Unclear
+- name: test1
+  description: Test
+  assertions:
+    - type: contains
+      pattern: "443"
+```
+
+### 4. Test Edge Cases
+
+```yaml
+validationTests:
+  # Normal case
+  - name: test-single-service
+    fixtures:
+      services: [ ... ]
+    # ...
+
+  # Edge case: no services
+  - name: test-no-services
+    fixtures:
+      services: [ ]
+    # ...
+
+  # Edge case: many services
+  - name: test-many-services
+    fixtures:
+      services: [ ... 50 services ... ]
+    # ...
+```
+
+### 5. Document Expected Behavior
+
+Use test descriptions to document template behavior:
+
+```yaml
+- name: test-weighted-load-balancing
+  description: |
+    Services with weight annotation should use weighted round-robin.
+    Weight is specified via 'haproxy.weight' annotation.
+    Default weight is 1 if not specified.
+```
+
+## Troubleshooting
+
+### Test Fails with "haproxy: command not found"
+
+**Problem**: HAProxy binary not in PATH.
+
+**Solution**: Specify binary location:
+
+```bash
+controller validate -f config.yaml --haproxy-binary /usr/local/bin/haproxy
+```
+
+### Test Fails with "template rendering failed"
+
+**Problem**: Template syntax error or failed assertion from `fail()`.
+
+**Solution**: Check the error message for details. Common issues:
+
+- Undefined variables: `{{ undefined_var }}`
+- Missing filters: `{{ value | missing_filter }}`
+- Logic errors in conditionals
+
+### Pattern Not Matching
+
+**Problem**: `contains` assertion fails but content looks correct.
+
+**Solution**:
+
+1. Check regex syntax (escape special characters)
+2. Check for whitespace differences
+3. Use simpler patterns: `api` instead of `backend\s+api.*`
+4. Add `-o json` to see full rendered config
+
+### JSONPath Returns No Results
+
+**Problem**: JSONPath assertion fails with "returned no results".
+
+**Solution**:
+
+- Verify the path syntax: `{.resources.services}`
+- Check if the resource type exists in fixtures
+- Use `List()` method to access resources: `{.resources.services.List()}`
+
+## Examples
+
+### Complete Example: Ingress Routing
+
+```yaml
+apiVersion: haproxy-template-ic.github.io/v1alpha1
+kind: HAProxyTemplateConfig
+metadata:
+  name: ingress-routing
+spec:
+  watchedResources:
+    services:
+      apiVersion: v1
+      resources: services
+      indexBy: [ "metadata.namespace", "metadata.name" ]
+    ingresses:
+      apiVersion: networking.k8s.io/v1
+      resources: ingresses
+      indexBy: [ "metadata.namespace", "metadata.name" ]
+
+  haproxyConfig:
+    template: |
+      global
+        daemon
+
+      defaults
+        mode http
+        timeout connect 5s
+        timeout client 30s
+        timeout server 30s
+
+      frontend http
+        bind :80
+        {% for ingress in resources.ingresses.List() %}
+        {% for rule in ingress.spec.rules %}
+        acl host_{{ rule.host | replace(".", "_") }} hdr(host) -i {{ rule.host }}
+        use_backend {{ rule.host | replace(".", "_") }}_backend if host_{{ rule.host | replace(".", "_") }}
+        {% endfor %}
+        {% endfor %}
+
+      {% for ingress in resources.ingresses.List() %}
+      {% for rule in ingress.spec.rules %}
+      backend {{ rule.host | replace(".", "_") }}_backend
+        balance roundrobin
+        {% set svc_name = rule.http.paths[0].backend.service.name %}
+        {% set svc = resources.services.Get(ingress.metadata.namespace, svc_name) %}
+        {% if svc %}
+        server svc1 {{ svc.spec.clusterIP }}:{{ svc.spec.ports[0].port }} check
+        {% endif %}
+      {% endfor %}
+      {% endfor %}
+
+  validationTests:
+    test-single-ingress:
+      description: Single ingress should create frontend ACL and backend
+      fixtures:
+        services:
+          - apiVersion: v1
+            kind: Service
+            metadata:
+              name: api
+              namespace: default
+            spec:
+              clusterIP: 10.0.0.100
+              ports:
+                - port: 80
+        ingresses:
+          - apiVersion: networking.k8s.io/v1
+            kind: Ingress
+            metadata:
+              name: main
+              namespace: default
+            spec:
+              rules:
+                - host: api.example.com
+                  http:
+                    paths:
+                      - path: /
+                        backend:
+                          service:
+                            name: api
+                            port:
+                              number: 80
+      assertions:
+        - type: haproxy_valid
+          description: Configuration must be valid
+
+        - type: contains
+          target: haproxy.cfg
+          pattern: "acl host_api_example_com hdr\\(host\\) -i api.example.com"
+          description: Must have ACL for api.example.com
+
+        - type: contains
+          target: haproxy.cfg
+          pattern: "backend api_example_com_backend"
+          description: Must have backend for api.example.com
+
+        - type: contains
+          target: haproxy.cfg
+          pattern: "server svc1 10.0.0.100:80 check"
+          description: Must have server pointing to service ClusterIP
+```
+
+## Next Steps
+
+- Read the [Template Guide](./templating.md) for template syntax
+- See [Supported Configuration](./supported-configuration.md) for HAProxy directives
+- Check [Troubleshooting](./troubleshooting.md) for common issues

@@ -12,472 +12,155 @@ image:
   # Overrides the image tag whose default is the chart appVersion
   tag: ""
 
-imagePullSecrets: []
+imagePullSecrets: [ ]
 nameOverride: ""
 fullnameOverride: ""
 
 # Controller configuration
 controller:
-  # Name of the ConfigMap containing controller config
-  configmapName: haproxy-template-ic-config
+  # Name of the HAProxyTemplateConfig CRD
+  # This is the name of the HAProxyTemplateConfig custom resource
+  crdName: haproxy-template-ic-config
 
   # Debug HTTP server port (0 to disable)
   # Exposes /debug/vars and /debug/pprof endpoints for introspection
   # Access via: kubectl port-forward pod/controller-xxx 6060:6060
   debugPort: 0
 
-  # Controller configuration (rendered into ConfigMap)
+  # Template libraries
+  # Control which predefined template libraries to include
+  # Libraries are merged in order: base -> haproxytech -> values.yaml
+  # User-provided config in controller.config always takes precedence
+  templateLibraries:
+    # Base library: Core template snippets, maps, files, and HAProxy configuration
+    # Provides fundamental ingress routing and backend management
+    base:
+      enabled: true
+    # HAProxyTech library: Support for haproxy.org/* annotations
+    # Currently includes basic authentication (haproxy.org/auth-type, haproxy.org/auth-secret)
+    haproxytech:
+      enabled: true
+
+  # HAProxyTemplateConfig specification
+  # This configuration is rendered into a HAProxyTemplateConfig CRD
+  # Users can customize this configuration using Helm values or create
+  # the HAProxyTemplateConfig resource manually
   config:
-    pod_selector:
-      match_labels:
+    # Reference to the Secret containing HAProxy Dataplane API credentials
+    # The Secret is automatically created by the Helm chart
+    credentialsSecretRef:
+      # Name will be set by the template to: {{ include "haproxy-template-ic.fullname" . }}-credentials
+      name: ""  # Will be filled in by Helm template
+      # Namespace defaults to Release.Namespace if not specified
+
+    podSelector:
+      matchLabels:
         app: haproxy
         component: loadbalancer
 
     controller:
-      healthz_port: 8080
-      metrics_port: 9090
+      healthzPort: 8080
+      metricsPort: 9090
 
       # Leader election for high availability
       # When multiple controller replicas are running, only the leader performs
       # write operations (deploying configs to HAProxy). All replicas continue
       # watching resources, rendering configs, and validating (hot standby).
-      leader_election:
+      leaderElection:
         # Enable leader election (recommended when replicaCount > 1)
         enabled: true
         # Name of the Lease resource used for coordination
         # Defaults to the Helm release fullname if not specified
         # This ensures multiple releases in the same namespace don't conflict
-        lease_name: ""
+        leaseName: ""
         # Duration that non-leader candidates wait to acquire leadership
         # Default: 60s (failover happens within this time after leader failure)
-        lease_duration: 60s
+        leaseDuration: 60s
         # Duration the leader retries refreshing leadership before giving up
         # Default: 15s (should be < lease_duration, typically 1/4 of it)
-        renew_deadline: 15s
+        renewDeadline: 15s
         # Interval between leadership refresh attempts
         # Default: 5s (should be < renew_deadline, typically 1/3 of it)
-        retry_period: 5s
+        retryPeriod: 5s
 
     dataplane:
       port: 5555
       # Minimum time between consecutive deployments (rate limiting)
       # Prevents rapid-fire deployments from hammering HAProxy instances
       # Default: 2s
-      min_deployment_interval: 2s
+      minDeploymentInterval: 2s
       # Interval for periodic drift prevention deployments
       # Triggers deployment if no deployment occurred within this interval
       # Helps detect and correct configuration drift from external changes
       # Default: 60s
-      drift_prevention_interval: 60s
+      driftPreventionInterval: 60s
 
       # Directory paths for HAProxy auxiliary files
       # These paths are used for both validation and deployment
       # See: https://www.haproxy.com/documentation/haproxy-data-plane-api/reference/configuration-file/#resources
-      maps_dir: /etc/haproxy/maps
-      ssl_certs_dir: /etc/haproxy/ssl
-      general_storage_dir: /etc/haproxy/general
-      config_file: /etc/haproxy/haproxy.cfg
+      mapsDir: /etc/haproxy/maps
+      sslCertsDir: /etc/haproxy/certs
+      generalStorageDir: /etc/haproxy/general
+      configFile: /etc/haproxy/haproxy.cfg
 
     logging:
       verbose: 1  # 0=WARNING, 1=INFO, 2=DEBUG
 
-    watched_resources_ignore_fields:
+    watchedResourcesIgnoreFields:
       - metadata.managedFields
 
-    watched_resources:
+    watchedResources:
       ingresses:
-        api_version: networking.k8s.io/v1
+        apiVersion: networking.k8s.io/v1
         resources: ingresses
-        index_by: ["metadata.namespace", "metadata.name"]
-        enable_validation_webhook: true
+        indexBy: [ "metadata.namespace", "metadata.name" ]
+        enableValidationWebhook: true
       services:
-        api_version: v1
+        apiVersion: v1
         resources: services
-        index_by: ["metadata.namespace", "metadata.name"]
+        indexBy: [ "metadata.namespace", "metadata.name" ]
       endpoints:
-        api_version: discovery.k8s.io/v1
+        apiVersion: discovery.k8s.io/v1
         resources: endpointslices
-        index_by: ["metadata.labels.kubernetes\\.io/service-name"]
+        indexBy: [ "metadata.labels.kubernetes\\.io/service-name" ]
       secrets:
-        api_version: v1
+        apiVersion: v1
         resources: secrets
         store: on-demand
-        index_by: ["metadata.namespace", "metadata.name"]
+        indexBy: [ "metadata.namespace", "metadata.name" ]
 
-    template_snippets:
-      backend-name:
-        name: backend-name
-        template: >-
-          {{- " " -}}ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
-
-      auth-userlist-name:
-        name: auth-userlist-name
-        template: >-
-          {%- macro get_userlist_name(auth_secret, namespace) -%}
-          {%- if "/" in auth_secret -%}
-          auth_{{ auth_secret.split("/")[0] }}_{{ auth_secret.split("/")[1] }}
-          {%- else -%}
-          auth_{{ namespace }}_{{ auth_secret }}
-          {%- endif -%}
-          {%- endmacro -%}
-
-      backend-servers:
-        name: backend-servers
-        template: |
-          {#- Pre-allocated server pool with auto-expansion #}
-          {%- set initial_slots = 10 %}  {#- Single place to adjust initial slots #}
-
-          {#- Collect active endpoints using O(1) indexed lookup #}
-          {#- Use namespace() to maintain list across loop scopes #}
-          {%- set ns = namespace(active_endpoints=[]) %}
-          {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
-            {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
-              {%- for address in (endpoint.addresses | default([])) %}
-                {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint.targetRef.name, 'address': address, 'port': port}] %}
-              {%- endfor %}
-            {%- endfor %}
-          {%- endfor %}
-
-          {#- Calculate required slots using simpler approach #}
-          {%- set active_count = ns.active_endpoints|length %}
-          {#- For now, just use initial_slots since we have few endpoints #}
-          {%- set max_servers = initial_slots %}
-
-          {#- Generate all server slots with fixed names #}
-          {%- for i in range(1, max_servers + 1) %}
-            {%- if loop.index0 < ns.active_endpoints|length %}
-              {#- Active server with real endpoint #}
-              {%- set endpoint = ns.active_endpoints[loop.index0] %}
-          server SRV_{{ i }} {{ endpoint.address }}:{{ endpoint.port }} check
-            {%- else %}
-              {#- Disabled placeholder server #}
-          server SRV_{{ i }} 127.0.0.1:1 disabled
-            {%- endif %}
-          {%- endfor %}
-
-      path-map-entry:
-        name: path-map-entry
-        template: |
-          {#- Generate map entries for paths matching specified pathTypes #}
-          {#- Usage: {% include "path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
-          {%- for ingress in resources.ingresses.List() %}
-          {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
-          {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
-          {{ rule.host }}{{ path.path }} {% include "backend-name" -%}{{ suffix }}
-          {% endfor %}
-          {% endfor %}
-          {% endfor %}
-
-      ingress-backends:
-        name: ingress-backends
-        template: |
-          {#- Generate all backend definitions from ingress resources #}
-          {#- Usage: {% include "ingress-backends" %} #}
-          {%- for ingress in resources.ingresses.List() %}
-          {%- if ingress.spec and ingress.spec.rules %}
-          {%- for rule in ingress.spec.rules %}
-          {%- if rule.http and rule.http.paths %}
-          {%- for path in rule.http.paths %}
-          {%- if path.backend and path.backend.service %}
-          {%- set service_name = path.backend.service.name %}
-          {%- set port = path.backend.service.port.number | default(80) %}
-
-          backend {%+ include "backend-name" +%}
-            balance roundrobin
-            option httpchk GET {{ path.path | default('/') }}
-            default-server check
-            {%- filter indent(2, first=True) %}
-            {% include "backend-annotations" %}
-            {% include "backend-servers" %}
-            {%- endfilter %}
-          {%- endif %}
-          {%- endfor %}
-          {%- endif %}
-          {%- endfor %}
-          {%- endif %}
-          {%- endfor %}
-
-      top-level-annotations:
-        name: top-level-annotations
-        priority: 100
-        template: |
-          {#- Orchestrator snippet that includes all top-level annotation snippets #}
-          {#- Top-level snippets generate HAProxy elements like userlist sections #}
-          {#- Usage: {% include "top-level-annotations" %} in haproxy.cfg #}
-          {%- set matching = template_snippets | glob_match("top-level-annotation-*") %}
-          {%- for snippet_name in matching %}
-          {%- include snippet_name -%}
-          {%- endfor %}
-
-      backend-annotations:
-        name: backend-annotations
-        priority: 100
-        template: |
-          {#- Orchestrator snippet that includes all backend annotation snippets #}
-          {#- Backend snippets generate per-backend directives like http-request auth #}
-          {#- Usage: {% include "backend-annotations" %} in backend definitions #}
-          {%- set matching = template_snippets | glob_match("backend-annotation-*") %}
-          {%- for snippet_name in matching %}
-          {%- include snippet_name -%}
-          {%- endfor %}
-
-      top-level-annotation-haproxytech-auth:
-        name: top-level-annotation-haproxytech-auth
-        priority: 500
-        template: |
-          {#- Generate userlist sections for basic authentication #}
-          {#- Reads credentials from secrets referenced by haproxy.org/auth-secret annotation #}
-          {%- set ns = namespace(processed_userlists=[]) %}
-          {%- for ingress in resources.ingresses.List() %}
-            {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
-            {%- if auth_type and auth_type != "basic-auth" %}
-              {{- fail("Invalid value '" ~ auth_type ~ "' for annotation 'haproxy.org/auth-type' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'basic-auth'") -}}
-            {%- endif %}
-            {%- if auth_type == "basic-auth" %}
-              {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
-              {%- if auth_secret %}
-                {#- Generate userlist name using macro #}
-                {%- include "auth-userlist-name" -%}
-                {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
-
-                {#- Only process each userlist once #}
-                {%- if userlist_name not in ns.processed_userlists %}
-                  {%- set ns.processed_userlists = ns.processed_userlists + [userlist_name] %}
-
-                  {#- Parse secret reference for fetching #}
-                  {%- if "/" in auth_secret %}
-                    {%- set secret_namespace = auth_secret.split("/")[0] %}
-                    {%- set secret_name = auth_secret.split("/")[1] %}
-                  {%- else %}
-                    {%- set secret_namespace = ingress.metadata.namespace %}
-                    {%- set secret_name = auth_secret %}
-                  {%- endif %}
-
-                  {#- Fetch secret from store #}
-                  {%- set secret = resources.secrets.GetSingle(secret_namespace, secret_name) %}
-                  {%- if secret %}
-
-          userlist {{ userlist_name }}
-                    {%- for username in secret.data | default({}) %}
-            user {{ username }} password {{ secret.data[username] | b64decode }}
-                    {%- endfor %}
-                  {%- else %}
-                    {{- fail("Secret '" ~ secret_namespace ~ "/" ~ secret_name ~ "' referenced by annotation 'haproxy.org/auth-secret' does not exist. Please create the secret or update the annotation.") -}}
-                  {%- endif %}
-                {%- endif %}
-              {%- endif %}
-            {%- endif %}
-          {%- endfor %}
-
-      backend-annotation-haproxytech-auth:
-        name: backend-annotation-haproxytech-auth
-        priority: 500
-        template: |
-          {#- Generate http-request auth directives for backends requiring authentication #}
-          {#- Uses userlist created by top-level-annotation-haproxytech-auth #}
-          {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
-          {%- if auth_type and auth_type != "basic-auth" %}
-            {{- fail("Invalid value '" ~ auth_type ~ "' for annotation 'haproxy.org/auth-type' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'basic-auth'") -}}
-          {%- endif %}
-          {%- if auth_type == "basic-auth" %}
-            {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
-            {%- set auth_realm = ingress.metadata.annotations["haproxy.org/auth-realm"] | default("Restricted Area") %}
-            {%- if auth_secret %}
-              {#- Generate userlist name using macro #}
-              {%- include "auth-userlist-name" -%}
-              {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
-          http-request auth realm "{{ auth_realm }}" unless { http_auth({{ userlist_name }}) }
-            {%- endif %}
-          {%- endif %}
-
-    # IMPORTANT: Use the get_path filter to resolve file paths automatically.
+    # Template customization
+    # The sections below (templateSnippets, maps, files, haproxyConfig, validationTests)
+    # are provided by template libraries (see controller.templateLibraries above).
+    # You can override or extend library templates by defining them here.
+    # User-provided values always take precedence over library defaults.
     #
-    # The get_path filter constructs absolute paths based on file type:
-    #   {{ "host.map" | get_path("map") }}    → /etc/haproxy/maps/host.map
-    #   {{ "503.http" | get_path("file") }}   → /etc/haproxy/general/503.http
-    #   {{ "cert.pem" | get_path("cert") }}   → /etc/haproxy/ssl/cert.pem
+    # Example - Override a specific template snippet:
+    # templateSnippets:
+    #   backend-name:
+    #     template: >-
+    #       custom_{{ ingress.metadata.name }}
     #
-    # This ensures correct paths for both validation and deployment.
+    # Example - Add a custom map:
+    # maps:
+    #   custom.map:
+    #     template: |
+    #       # Your custom map content
+    #
+    # Example - Add custom validation tests:
+    # validationTests:
+    #   test-custom-feature:
+    #     description: Test custom feature
+    #     fixtures:
+    #       ingresses: [...]
+    #     assertions: [...]
 
-    maps:
-      host.map:
-        template: |
-          {%- for ingress in resources.ingresses.List() %}
-          {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
-          {%- set host_without_asterisk = rule.host | replace('*', '', 1) %}
-          {{ host_without_asterisk }} {{ host_without_asterisk }}
-          {% endfor %}
-          {% endfor %}
-
-      path-exact.map:
-        template: |
-          # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
-          # It should be used with the equality string matcher. Example:
-          #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
-          {% set path_types = ["Exact"] %}
-          {%- set suffix = "" %}
-          {% include "path-map-entry" %}
-
-
-      path-prefix-exact.map:
-        template: |
-          # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
-          {% set path_types = ["Prefix", "ImplementationSpecific"] %}
-          {%- set suffix = "" %}
-          {% include "path-map-entry" %}
-
-
-      path-prefix.map:
-        template: |
-          # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
-          # It should be used with the prefix string matcher. Example:
-          #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
-          {% set path_types = ["Prefix", "ImplementationSpecific"] %}
-          {%- set suffix = "/" %}
-          {% include "path-map-entry" %}
-
-
-    files:
-      400.http:
-        template: |
-          HTTP/1.0 400 Bad Request
-          Cache-Control: no-cache
-          Connection: close
-          Content-Type: text/html
-
-          <html><body><h1>400 Bad Request</h1>
-          <p>Your browser sent a request that this server could not understand.</p>
-          </body></html>
-
-      403.http:
-        template: |
-          HTTP/1.0 403 Forbidden
-          Cache-Control: no-cache
-          Connection: close
-          Content-Type: text/html
-
-          <html><body><h1>403 Forbidden</h1>
-          <p>You don't have permission to access this resource.</p>
-          </body></html>
-
-      408.http:
-        template: |
-          HTTP/1.0 408 Request Time-out
-          Cache-Control: no-cache
-          Connection: close
-          Content-Type: text/html
-
-          <html><body><h1>408 Request Time-out</h1>
-          <p>Your browser didn't send a complete request in time.</p>
-          </body></html>
-
-      500.http:
-        template: |
-          HTTP/1.0 500 Internal Server Error
-          Cache-Control: no-cache
-          Connection: close
-          Content-Type: text/html
-
-          <html><body><h1>500 Internal Server Error</h1>
-          <p>An internal server error occurred.</p>
-          </body></html>
-
-      502.http:
-        template: |
-          HTTP/1.0 502 Bad Gateway
-          Cache-Control: no-cache
-          Connection: close
-          Content-Type: text/html
-
-          <html><body><h1>502 Bad Gateway</h1>
-          <p>The server received an invalid response from an upstream server.</p>
-          </body></html>
-
-      503.http:
-        template: |
-          HTTP/1.0 503 Service Unavailable
-          Cache-Control: no-cache
-          Connection: close
-          Content-Type: text/html
-
-          <html><body><h1>503 Service Unavailable</h1>
-          <p>No server is available to handle this request.</p>
-          </body></html>
-
-      504.http:
-        template: |
-          HTTP/1.0 504 Gateway Time-out
-          Cache-Control: no-cache
-          Connection: close
-          Content-Type: text/html
-
-          <html><body><h1>504 Gateway Time-out</h1>
-          <p>The server didn't respond in time.</p>
-          </body></html>
-
-    haproxy_config:
-      template: |
-        global
-            log stdout len 4096 local0 info
-            chroot /var/lib/haproxy
-            user haproxy
-            group haproxy
-            daemon
-            ca-base /etc/ssl/certs
-            crt-base /etc/haproxy/ssl
-            tune.ssl.default-dh-param 2048
-
-        defaults
-            mode http
-            log global
-            option httplog
-            option dontlognull
-            option log-health-checks
-            option forwardfor
-            timeout connect 5000
-            timeout client 50000
-            timeout server 50000
-            errorfile 400 {{ "400.http" | get_path("file") }}
-            errorfile 403 {{ "403.http" | get_path("file") }}
-            errorfile 408 {{ "408.http" | get_path("file") }}
-            errorfile 500 {{ "500.http" | get_path("file") }}
-            errorfile 502 {{ "502.http" | get_path("file") }}
-            errorfile 503 {{ "503.http" | get_path("file") }}
-            errorfile 504 {{ "504.http" | get_path("file") }}
-
-        {#- Include top-level annotation snippets (e.g., userlist sections) #}
-        {% include "top-level-annotations" %}
-
-        frontend status
-            bind *:8404
-            no log
-            http-request return status 200 content-type text/plain string "OK" if { path /healthz }
-            http-request return status 200 content-type text/plain string "READY" if { path /ready }
-
-        frontend http_frontend
-            bind *:80
-
-            # Set variables for path-based routing
-            http-request set-var(txn.base) base
-            http-request set-var(txn.path) path
-            http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
-            http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
-            http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ "host.map" | get_path("map") }},'') if !{ var(txn.host_match) -m found }
-            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
-            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
-            http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
-
-            # Use path maps for routing
-            use_backend %[var(txn.path_match)]
-
-            # Default backend
-            default_backend default_backend
-
-        {% include "ingress-backends" %}
-
-        backend default_backend
-            http-request return status 404
-        {%+ if false +%}{%+ endif +%}
+    # Uncomment and customize as needed:
+    # templateSnippets:
+    # maps:
+    # files:
+    # haproxyConfig:
+    # validationTests:
 
 # Webhook configuration
 # Kubernetes admission webhook for resource validation
@@ -540,7 +223,7 @@ serviceAccount:
   # Automatically mount a ServiceAccount's API credentials
   automount: true
   # Annotations to add to the service account
-  annotations: {}
+  annotations: { }
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: ""
@@ -551,23 +234,23 @@ rbac:
   create: true
 
 # Pod annotations
-podAnnotations: {}
+podAnnotations: { }
 
 # Pod labels
-podLabels: {}
+podLabels: { }
 
 # Pod security context
-podSecurityContext: {}
-  # fsGroup: 2000
+podSecurityContext: { }
+# fsGroup: 2000
 
 # Container security context
-securityContext: {}
+securityContext: { }
   # capabilities:
   #   drop:
   #   - ALL
   # readOnlyRootFilesystem: true
   # runAsNonRoot: true
-  # runAsUser: 1000
+# runAsUser: 1000
 
 # Service configuration
 # Exposes controller endpoints (health and metrics)
@@ -602,7 +285,7 @@ service:
 #
 # The AUTOMEMLIMIT environment variable can be used to adjust the memory limit ratio (default: 0.9)
 # Example: AUTOMEMLIMIT=0.8 sets GOMEMLIMIT to 80% of the container memory limit
-resources: {}
+resources: { }
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
   # resources, such as Minikube. If you do want to specify resources, uncomment the following
@@ -612,16 +295,16 @@ resources: {}
   #   memory: 256Mi
   # requests:
   #   cpu: 100m
-  #   memory: 128Mi
+#   memory: 128Mi
 
 # Node selector
-nodeSelector: {}
+nodeSelector: { }
 
 # Tolerations
-tolerations: []
+tolerations: [ ]
 
 # Affinity rules
-affinity: {}
+affinity: { }
 
 # Autoscaling configuration
 autoscaling:
@@ -661,18 +344,18 @@ monitoring:
     scrapeTimeout: 10s
     # Additional labels for ServiceMonitor resource
     # Used by Prometheus to select which ServiceMonitors to use
-    labels: {}
+    labels: { }
     #   prometheus: kube-prometheus
     #   release: prometheus
     # Relabeling configurations applied before scraping
     # https://prometheus.io/docs/prometheus/latest/configuration/configuration/#relabel_config
-    relabelings: []
+    relabelings: [ ]
     # Example: Add cluster label
     # - sourceLabels: [__address__]
     #   targetLabel: cluster
     #   replacement: production
     # Metric relabeling configurations applied to scraped metrics
-    metricRelabelings: []
+    metricRelabelings: [ ]
     # Example: Drop specific metrics
     # - sourceLabels: [__name__]
     #   regex: 'haproxy_ic_event_subscribers'
@@ -709,7 +392,7 @@ networkPolicy:
           app: haproxy
           component: loadbalancer
       # Namespace selector - empty {} means all namespaces
-      namespaceSelector: {}
+      namespaceSelector: { }
       ports:
         - port: 5555  # Dataplane API
           protocol: TCP
@@ -717,7 +400,7 @@ networkPolicy:
           protocol: TCP
 
     # Additional custom egress rules
-    additionalRules: []
+    additionalRules: [ ]
     # Example:
     # - to:
     #     - namespaceSelector:
@@ -736,13 +419,13 @@ networkPolicy:
       enabled: false  # Set to true when using Prometheus with NetworkPolicy
       # Pod selector for monitoring systems (e.g., Prometheus)
       # Match the labels of your Prometheus pods
-      podSelector: {}
+      podSelector: { }
       #   matchLabels:
       #     app: prometheus
       #     app.kubernetes.io/name: prometheus
       # Namespace selector for monitoring systems
       # Match the namespace where Prometheus is running
-      namespaceSelector: {}
+      namespaceSelector: { }
       #   matchLabels:
       #     name: monitoring
       #     kubernetes.io/metadata.name: monitoring
@@ -755,7 +438,7 @@ networkPolicy:
       enabled: true
       # Allow from anywhere for health checks
       from:
-        - podSelector: {}
+        - podSelector: { }
       ports:
         - port: 8080  # Healthz
           protocol: TCP
@@ -767,8 +450,8 @@ networkPolicy:
       # Allow from all sources (API server nodes)
       # The Kubernetes API server needs to reach the webhook endpoint
       from:
-        - podSelector: {}
-        - namespaceSelector: {}
+        - podSelector: { }
+        - namespaceSelector: { }
 
     # Additional custom ingress rules
-    additionalRules: []
+    additionalRules: [ ]

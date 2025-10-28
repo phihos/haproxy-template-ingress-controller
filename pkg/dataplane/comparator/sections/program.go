@@ -7,9 +7,9 @@ import (
 
 	"github.com/haproxytech/client-native/v6/models"
 
-	"haproxy-template-ic/codegen/dataplaneapi"
 	"haproxy-template-ic/pkg/dataplane/client"
 	"haproxy-template-ic/pkg/dataplane/transform"
+	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
 // PriorityProgram defines priority for program sections.

@@ -3,7 +3,7 @@ HAProxy Template Ingress Controller has been installed!
 Controller Status:
   kubectl get pods -l app.kubernetes.io/name={{ include "haproxy-template-ic.name" . }} -n {{ .Release.Namespace }}
 
-{{- if and (.Values.controller.config.controller.leader_election.enabled) (gt (.Values.replicaCount | int) 1) }}
+{{- if and (.Values.controller.config.controller.leaderElection.enabled) (gt (.Values.replicaCount | int) 1) }}
 
 High Availability ({{ .Values.replicaCount }} replicas):
   ✓ Leader election is enabled
@@ -11,7 +11,7 @@ High Availability ({{ .Values.replicaCount }} replicas):
   All replicas watch resources and remain ready for failover
 
   Check current leader:
-    kubectl get lease {{ .Values.controller.config.controller.leader_election.lease_name }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.holderIdentity}'
+    kubectl get lease {{ .Values.controller.config.controller.leaderElection.leaseName }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.holderIdentity}'
 
   View leadership metrics:
     kubectl port-forward -n {{ .Release.Namespace }} deployment/{{ include "haproxy-template-ic.fullname" . }} 9090:9090
@@ -40,9 +40,9 @@ Debug Endpoint:
 {{- end }}
 
 Metrics Endpoint:
-  Prometheus metrics are available on port {{ .Values.controller.config.controller.metrics_port }}
-  Access via: kubectl port-forward -n {{ .Release.Namespace }} pod/<controller-pod> {{ .Values.controller.config.controller.metrics_port }}:{{ .Values.controller.config.controller.metrics_port }}
-  URL: http://localhost:{{ .Values.controller.config.controller.metrics_port }}/metrics
+  Prometheus metrics are available on port {{ .Values.controller.config.controller.metricsPort }}
+  Access via: kubectl port-forward -n {{ .Release.Namespace }} pod/<controller-pod> {{ .Values.controller.config.controller.metricsPort }}:{{ .Values.controller.config.controller.metricsPort }}
+  URL: http://localhost:{{ .Values.controller.config.controller.metricsPort }}/metrics
 
 {{- if .Values.monitoring.serviceMonitor.enabled }}
 
@@ -71,7 +71,7 @@ NetworkPolicy:
 
 Next Steps:
   1. Deploy HAProxy pods with labels matching pod_selector:
-{{- range $key, $value := .Values.controller.config.pod_selector.match_labels }}
+{{- range $key, $value := .Values.controller.config.podSelector.matchLabels }}
      {{ $key }}: {{ $value }}
 {{- end }}
 

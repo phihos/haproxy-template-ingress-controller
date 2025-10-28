@@ -124,12 +124,12 @@ func TestLeaderElection_TwoReplicas(t *testing.T) {
 				t.Fatal("Failed to create webhook cert secret:", err)
 			}
 
-			// Create ConfigMap with leader election enabled
-			configMap := NewConfigMap(namespace, ControllerConfigMapName, HAConfigWithLeaderElectionYAML)
-			if err := client.Resources().Create(ctx, configMap); err != nil {
-				t.Fatal("Failed to create configmap:", err)
+			// Create HAProxyTemplateConfig with leader election enabled
+			htplConfig := NewHAProxyTemplateConfig(namespace, "haproxy-config", ControllerSecretName, true)
+			if err := client.Resources().Create(ctx, htplConfig); err != nil {
+				t.Fatal("Failed to create HAProxyTemplateConfig:", err)
 			}
-			t.Log("Created controller configmap with leader election enabled")
+			t.Log("Created HAProxyTemplateConfig with leader election enabled")
 
 			// Create Deployment with 2 replicas
 			deployment := NewControllerDeployment(
@@ -513,9 +513,10 @@ func TestLeaderElection_Failover(t *testing.T) {
 				t.Fatal("Failed to create webhook cert secret:", err)
 			}
 
-			configMap := NewConfigMap(namespace, ControllerConfigMapName, HAConfigWithLeaderElectionYAML)
-			if err := client.Resources().Create(ctx, configMap); err != nil {
-				t.Fatal("Failed to create configmap:", err)
+			// Create HAProxyTemplateConfig with leader election enabled
+			htplConfig := NewHAProxyTemplateConfig(namespace, "haproxy-config", ControllerSecretName, true)
+			if err := client.Resources().Create(ctx, htplConfig); err != nil {
+				t.Fatal("Failed to create HAProxyTemplateConfig:", err)
 			}
 
 			deployment := NewControllerDeployment(
@@ -780,12 +781,12 @@ watched_resources:
 				t.Fatal("Failed to create webhook cert secret:", err)
 			}
 
-			// Create ConfigMap with leader election disabled
-			configMap := NewConfigMap(namespace, ControllerConfigMapName, DisabledLeaderElectionConfig)
-			if err := client.Resources().Create(ctx, configMap); err != nil {
-				t.Fatal("Failed to create configmap:", err)
+			// Create HAProxyTemplateConfig with leader election disabled
+			htplConfig := NewHAProxyTemplateConfig(namespace, "haproxy-config", ControllerSecretName, false)
+			if err := client.Resources().Create(ctx, htplConfig); err != nil {
+				t.Fatal("Failed to create HAProxyTemplateConfig:", err)
 			}
-			t.Log("Created controller configmap with leader election disabled")
+			t.Log("Created HAProxyTemplateConfig with leader election disabled")
 
 			// Create Deployment with 1 replica
 			deployment := NewControllerDeployment(
@@ -866,10 +867,12 @@ watched_resources:
 			}
 			defer debugClient.Stop()
 
-			// Verify config is loaded
-			config, err := debugClient.GetConfig(ctx)
+			// Wait for config to become available (controller is initializing)
+			// This accommodates the time needed for controller startup and debug variable registration
+			// Longer timeout for disabled mode since there are no HAProxy pods to sync
+			config, err := debugClient.WaitForConfig(ctx, 60*time.Second)
 			if err != nil {
-				t.Fatal("Failed to get config:", err)
+				t.Fatal("Failed to wait for config:", err)
 			}
 
 			if config == nil {

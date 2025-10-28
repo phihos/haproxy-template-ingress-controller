@@ -364,7 +364,37 @@ if req.OldObject != nil {
 }
 ```
 
-## Future Enhancements
+## Validation Tests Integration
+
+**Status**: IMPLEMENTED ✓
+
+The DryRunValidator now integrates the test runner to automatically execute embedded validation tests during webhook admission control.
+
+**Implementation Details**:
+
+1. **Test Runner Creation**: DryRunValidator creates a test runner instance in the constructor with Workers=1 (sequential execution for webhook context)
+
+2. **Test Execution Flow**: After HAProxy configuration validation passes, if `config.ValidationTests` is non-empty:
+   - Publishes `ValidationTestsStartedEvent`
+   - Runs all validation tests via `testRunner.RunTests()`
+   - Publishes `ValidationTestsCompletedEvent` with results
+   - If tests fail: publishes `ValidationTestsFailedEvent` and rejects admission with detailed error message
+   - If tests pass: continues to admission approval
+
+3. **Error Messages**: Detailed error messages include:
+   - Number of failed tests
+   - Test names that failed
+   - Rendering errors (if any)
+   - Assertion failures with descriptions
+
+**Benefits**:
+- Automated validation on every admission request
+- Prevents invalid configurations from being admitted
+- Rich error feedback for debugging
+- Metrics and observability through event publishing
+- No need to run CLI validation separately
+
+**Configuration**: Add `validationTests` to your HAProxyTemplateConfig CRD to enable automatic webhook validation.
 
 ### DELETE Operation Support
 

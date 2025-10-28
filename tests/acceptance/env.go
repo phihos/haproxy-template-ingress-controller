@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -294,4 +295,32 @@ func WaitForLeaderElection(ctx context.Context, restConfig *rest.Config, namespa
 			// Lease exists but no holder yet, keep waiting
 		}
 	}
+}
+
+// GetPodLogs retrieves the last N lines of logs from a pod.
+func GetPodLogs(ctx context.Context, client klient.Client, pod *corev1.Pod, tailLines int) (string, error) {
+	clientset, err := kubernetes.NewForConfig(client.RESTConfig())
+	if err != nil {
+		return "", fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	tailLinesInt64 := int64(tailLines)
+	logOptions := &corev1.PodLogOptions{
+		TailLines: &tailLinesInt64,
+	}
+
+	req := clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, logOptions)
+	podLogs, err := req.Stream(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to stream logs: %w", err)
+	}
+	defer podLogs.Close()
+
+	buf := new(strings.Builder)
+	_, err = io.Copy(buf, podLogs)
+	if err != nil {
+		return "", fmt.Errorf("failed to copy logs: %w", err)
+	}
+
+	return buf.String(), nil
 }

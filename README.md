@@ -1,13 +1,17 @@
-# HAProxy Template Ingress Controller
+# HAProxy Template I(ngress)C(ontroller)
+
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="HAProxy Template IC Logo" width="400">
+</p>
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Build Status](https://github.com/phihos/haproxy-template-ingress-controller/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/phihos/haproxy-template-ingress-controller/actions/workflows/ci.yml)
 
 ## Overview
 
-The HAProxy Template Ingress Controller is a Kubernetes operator that manages HAProxy load balancer configurations through Jinja2-like templates. Unlike annotation-based ingress controllers, you define the entire HAProxy configuration using templates, giving you complete control over all HAProxy features without being constrained by a predefined set of annotations.
+The HAProxy Template IC is a Kubernetes operator that manages HAProxy load balancer configurations through Jinja2-like templates. Unlike annotation-based ingress controllers, you define the entire HAProxy configuration using templates, giving you complete control over all HAProxy features without being constrained by a predefined set of annotations.
 
-The controller watches Kubernetes resources you specify (Ingress, Service, ConfigMap, custom CRDs, or any combination), renders your templates with the current resource state, validates the generated configuration, and deploys it to HAProxy instances using the Dataplane API. Configuration changes are applied through HAProxy's runtime API when possible to avoid process reloads and maintain existing connections.
+The controller watches Kubernetes resources you specify (Ingress, Service, Secrets, custom CRDs, or any combination), renders your templates with the current resource state, validates the generated configuration, and deploys it to HAProxy instances using the Dataplane API. Configuration changes are applied through HAProxy's runtime API when possible to avoid process reloads and maintain existing connections.
 
 **When to use this controller:**
 - You need access to HAProxy features not exposed by annotation-based controllers (custom ACLs, stick tables, rate limiting, multi-tier routing)
@@ -18,8 +22,9 @@ The controller watches Kubernetes resources you specify (Ingress, Service, Confi
 ## Features
 
 - **Template-driven configuration**: Use Jinja2-like syntax to generate HAProxy configurations from any Kubernetes resources
-- **Flexible resource watching**: Monitor any Kubernetes resource type (Ingress, Service, ConfigMap, CRDs) as input to your templates
+- **Flexible resource watching**: Monitor any Kubernetes resource type (Ingress, Service, Secrets, CRDs) as input to your templates
 - **Multi-phase validation**: Configurations are validated by the client-native parser and HAProxy binary before deployment
+- **Embedded validation tests**: Write tests directly in your HAProxyTemplateConfig with fixtures and assertions to catch template errors in CI/CD
 - **Zero-reload optimization**: Uses HAProxy runtime API for server weight, address, and maintenance state changes
 - **High availability**: Leader election with multiple controller replicas for automatic failover and zero-downtime upgrades
 - **Smart deployment scheduling**: Rate limiting prevents concurrent deployments, periodic drift detection corrects external modifications
@@ -94,7 +99,7 @@ helm install haproxy-ic ./charts/haproxy-template-ic \
   --set credentials.dataplane.password=adminpass
 ```
 
-The default configuration watches Ingress resources and generates corresponding HAProxy frontends and backends. You can customize the configuration through values or by editing the ConfigMap after installation.
+The default configuration watches Ingress resources and generates corresponding HAProxy frontends and backends. You can customize the configuration by creating a HAProxyTemplateConfig CRD resource.
 
 ### Create an Ingress Resource
 
@@ -141,8 +146,14 @@ You should see your Ingress resource translated into HAProxy frontend rules and 
 Here's a minimal configuration that watches Kubernetes Ingress resources and generates HAProxy backends:
 
 ```yaml
-# ConfigMap: haproxy-template-ic-config
-watched_resources:
+# HAProxyTemplateConfig CRD: haproxy-template-ic-config
+apiVersion: haproxy-template-ic.github.io/v1alpha1
+kind: HAProxyTemplateConfig
+metadata:
+  name: haproxy-template-ic-config
+  namespace: default
+spec:
+  watchedResources:
   # Watch Ingress resources across all namespaces
   ingresses:
     api_version: networking.k8s.io/v1
@@ -236,12 +247,82 @@ Kubernetes API → Resource Watchers → EventBus → Reconciler
 
 For detailed architecture documentation, see [docs/development/design.md](docs/development/design.md).
 
+## Validation Tests
+
+The controller includes a built-in test runner for validating HAProxy templates before deployment. You can embed validation tests directly in your HAProxyTemplateConfig CRD to catch template errors early in your development workflow.
+
+**Add tests to your configuration:**
+
+```yaml
+apiVersion: haproxy-template-ic.github.io/v1alpha1
+kind: HAProxyTemplateConfig
+metadata:
+  name: my-config
+spec:
+  # ... template configuration ...
+
+  validationTests:
+    - name: test-basic-frontend
+      description: Frontend should be created with correct settings
+      fixtures:
+        services:
+          - apiVersion: v1
+            kind: Service
+            metadata:
+              name: my-service
+              namespace: default
+            spec:
+              ports:
+                - port: 80
+                  targetPort: 8080
+      assertions:
+        - type: haproxy_valid
+          description: Configuration must be syntactically valid
+
+        - type: contains
+          target: haproxy.cfg
+          pattern: "frontend.*default"
+          description: Must have default frontend
+```
+
+**Run tests locally:**
+
+```bash
+# Run all validation tests
+controller validate -f config.yaml
+
+# Run specific test by name
+controller validate -f config.yaml --test test-basic-frontend
+
+# Output results as JSON (for CI/CD integration)
+controller validate -f config.yaml --output json
+```
+
+**Supported assertion types:**
+- `haproxy_valid` - Validates HAProxy syntax using the HAProxy binary
+- `contains` - Verifies configuration contains a regex pattern
+- `not_contains` - Verifies configuration doesn't contain a pattern
+- `equals` - Checks exact value matches
+- `jsonpath` - Queries template rendering context
+
+For complete documentation on writing and running validation tests, see [docs/validation-tests.md](docs/validation-tests.md).
+
 ## Documentation
 
 ### User Guides
 
+- [Getting Started](docs/getting-started.md) - Step-by-step guide to deploying and configuring the controller
+- [Configuration Reference](docs/configuration.md) - Complete configuration syntax and field descriptions
+- [CRD Reference](docs/crd-reference.md) - HAProxyTemplateConfig custom resource documentation
 - [Templating Guide](docs/templating.md) - How to write templates for HAProxy configuration, maps, and certificates
-- [Supported HAProxy Configuration](docs/supported-configuration.md) - Reference for what HAProxy features you can configure
+- [Validation Tests](docs/validation-tests.md) - Write and run embedded validation tests for template verification
+- [Watching Resources](docs/watching-resources.md) - Resource watching and storage strategies
+- [Supported HAProxy Configuration](docs/supported-configuration.md) - HAProxy features available through templates
+- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+
+### Operations
+
+- [High Availability](docs/operations/high-availability.md) - Leader election and multi-replica deployments
 - [Helm Chart](charts/haproxy-template-ic/README.md) - Installation and configuration guide
 
 ### Package Documentation
@@ -256,6 +337,7 @@ For detailed architecture documentation, see [docs/development/design.md](docs/d
 ### Development Documentation
 
 - [Design Documentation](docs/development/design.md) - Architecture overview and design decisions
+- [CRD Validation Design](docs/development/crd-validation-design.md) - CRD implementation and validation framework
 - [Linting Guidelines](docs/development/linting.md) - Code quality and linting setup
 
 ## Development
