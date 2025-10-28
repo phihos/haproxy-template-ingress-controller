@@ -29,15 +29,27 @@ controller:
 
   # Template libraries
   # Control which predefined template libraries to include
-  # Libraries are merged in order: base -> haproxytech -> values.yaml
+  # Libraries are merged in order: base -> ingress -> gateway -> haproxytech -> values.yaml
   # User-provided config in controller.config always takes precedence
   templateLibraries:
-    # Base library: Core template snippets, maps, files, and HAProxy configuration
-    # Provides fundamental ingress routing and backend management
+    # Base library: Resource-agnostic core configuration
+    # Provides generic HAProxy configuration, error pages, and plugin orchestration
+    # Uses resource_* patterns to discover and include resource-specific implementations
     base:
       enabled: true
+    # Ingress library: Kubernetes Ingress resource support
+    # Provides routing and backend management for networking.k8s.io/v1 Ingress resources
+    # Implements resource_ingress_* plugin interface (backends, maps, routing logic)
+    ingress:
+      enabled: true
+    # Gateway library: Kubernetes Gateway API support (placeholder for future implementation)
+    # Will provide routing for gateway.networking.k8s.io resources (HTTPRoute, TCPRoute, etc.)
+    # Will implement resource_gateway_* plugin interface
+    gateway:
+      enabled: false
     # HAProxyTech library: Support for haproxy.org/* annotations
     # Currently includes basic authentication (haproxy.org/auth-type, haproxy.org/auth-secret)
+    # Works with both Ingress and Gateway API resources
     haproxytech:
       enabled: true
 

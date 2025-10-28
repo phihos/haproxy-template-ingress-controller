@@ -1,0 +1,26 @@
+# Gateway API template library for HAProxy Template Ingress Controller
+# Provides support for Kubernetes Gateway API (gateway.networking.k8s.io)
+# Implements the resource_gateway_* plugin interface for the base library
+#
+# This library is currently a placeholder for future Gateway API support.
+# When implemented, it will provide routing for:
+# - HTTPRoute resources
+# - TCPRoute resources
+# - TLSRoute resources
+# - GRPCRoute resources
+#
+# Expected plugin interface:
+# - resource_gateway_backends: Generate backend definitions from Gateway API routes
+# - resource_gateway_backend-name: Generate backend names for Gateway API routes
+# - Maps for Gateway API routing (similar to path-exact.map, path-prefix.map for Ingress)
+
+templateSnippets:
+  # Future: resource_gateway_backends
+  # Future: resource_gateway_backend-name
+  # Future: resource_gateway_route-map-entry
+
+maps:
+  # Future: Gateway API route matching maps
+
+files:
+  # Future: Gateway API-specific files if needed
