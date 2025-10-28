@@ -52,11 +52,16 @@ func ConvertCRDToConfig(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Confi
 		Port:                    spec.Dataplane.Port,
 		MinDeploymentInterval:   spec.Dataplane.MinDeploymentInterval,
 		DriftPreventionInterval: spec.Dataplane.DriftPreventionInterval,
+		MapsDir:                 spec.Dataplane.MapsDir,
+		SSLCertsDir:             spec.Dataplane.SSLCertsDir,
+		GeneralStorageDir:       spec.Dataplane.GeneralStorageDir,
+		ConfigFile:              spec.Dataplane.ConfigFile,
 	}
 
 	// Convert watched resources
 	watchedResources := make(map[string]config.WatchedResource)
-	for name, crdRes := range spec.WatchedResources {
+	for name := range spec.WatchedResources {
+		crdRes := spec.WatchedResources[name]
 		// Parse label selector string into map
 		// CRD uses string format "key1=value1,key2=value2"
 		// Config uses map[string]string
@@ -68,15 +73,23 @@ func ConvertCRDToConfig(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Confi
 			EnableValidationWebhook: crdRes.EnableValidationWebhook,
 			IndexBy:                 crdRes.IndexBy,
 			LabelSelector:           labelSelectorMap,
-			// Note: Store field is not in CRD - will be set by defaults
+			Store:                   crdRes.Store,
 		}
 	}
 
 	// Convert template snippets
 	templateSnippets := make(map[string]config.TemplateSnippet)
 	for name, crdSnippet := range spec.TemplateSnippets {
+		// Default priority is 500 if not specified
+		priority := 500
+		if crdSnippet.Priority != nil {
+			priority = *crdSnippet.Priority
+		}
+
 		templateSnippets[name] = config.TemplateSnippet{
+			Name:     name, // Name comes from map key
 			Template: crdSnippet.Template,
+			Priority: priority,
 		}
 	}
 

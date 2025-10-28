@@ -205,23 +205,19 @@ spec:
                 type: object
               files:
                 additionalProperties:
-                  description: GeneralFile defines a general file generated from a
-                    template.
-                  properties:
-                    path:
-                      description: |-
-                        Path is the filesystem path where the file will be written.
+                  description: |-
+                    GeneralFile defines a general file generated from a template.
 
-                        Example: /etc/haproxy/errors/503.http
-                      minLength: 1
-                      type: string
+                    The filename is derived from the map key in the configuration.
+                    The full path is constructed using the get_path filter in templates:
+                      {{ "503.http" | get_path("file") }} → /etc/haproxy/general/503.http
+                  properties:
                     template:
                       description: Template is the Gonja template for generating the
                         file content.
                       minLength: 1
                       type: string
                   required:
-                  - path
                   - template
                   type: object
                 description: |-
@@ -318,6 +314,15 @@ spec:
                 additionalProperties:
                   description: TemplateSnippet defines a reusable template fragment.
                   properties:
+                    priority:
+                      description: |-
+                        Priority determines the rendering order when multiple snippets are included.
+
+                        Lower values are rendered first. Snippets with the same priority are sorted alphabetically by name.
+                        Default: 500
+                      maximum: 1000
+                      minimum: 0
+                      type: integer
                     template:
                       description: |-
                         Template is the Gonja template content.
@@ -334,17 +339,9 @@ spec:
                   Snippets can be included in other templates using {% include "name" %}.
                 type: object
               validationTests:
-                description: |-
-                  ValidationTests contains embedded validation test definitions.
-
-                  These tests are executed:
-                    - During admission webhook validation (before resource is saved)
-                    - Via the "controller validate" CLI command (pre-apply validation)
-
-                  Tests ensure templates generate valid HAProxy configurations before deployment.
-                items:
+                additionalProperties:
                   description: ValidationTest defines a validation test with fixtures
-                    and assertions.
+                    and assertions. The test name is provided by the map key.
                   properties:
                     assertions:
                       description: Assertions defines the validation checks to perform.
@@ -406,12 +403,13 @@ spec:
                       additionalProperties:
                         items:
                           type: object
+                          x-kubernetes-preserve-unknown-fields: true
                         type: array
                       description: |-
                         Fixtures defines the Kubernetes resources to use for this test.
 
                         Keys are resource type names (matching WatchedResources keys).
-                        Values are arrays of resources in unstructured format.
+                        Values are arrays of resources as raw JSON.
 
                         Example:
                           ingresses:
@@ -420,16 +418,22 @@ spec:
                               metadata:
                                 name: test-ingress
                       type: object
-                    name:
-                      description: Name is a unique identifier for this test.
-                      minLength: 1
-                      type: string
+                      x-kubernetes-preserve-unknown-fields: true
                   required:
                   - assertions
                   - fixtures
-                  - name
                   type: object
-                type: array
+                description: |-
+                  ValidationTests contains embedded validation test definitions.
+
+                  The map key is the test name, which must be unique.
+
+                  These tests are executed:
+                    - During admission webhook validation (before resource is saved)
+                    - Via the "controller validate" CLI command (pre-apply validation)
+
+                  Tests ensure templates generate valid HAProxy configurations before deployment.
+                type: object
               watchedResources:
                 additionalProperties:
                   description: WatchedResource configures watching for a specific
@@ -485,6 +489,22 @@ spec:
 
                         This is the name used in RBAC rules and API paths.
                       minLength: 1
+                      type: string
+                    store:
+                      description: |-
+                        Store specifies the storage backend for this resource type.
+
+                        Valid values:
+                          - "full": MemoryStore - keeps all resources in memory (faster, higher memory usage)
+                          - "on-demand": CachedStore - fetches resources on-demand with caching (slower, lower memory usage)
+
+                        Default: "full"
+
+                        Use "on-demand" for large resources accessed infrequently (e.g., Secrets).
+                        Use "full" for frequently accessed resources (e.g., Ingress, Service, EndpointSlice).
+                      enum:
+                      - full
+                      - on-demand
                       type: string
                   required:
                   - apiVersion

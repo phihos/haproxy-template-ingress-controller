@@ -26,7 +26,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +genclient
@@ -124,13 +124,15 @@ type HAProxyTemplateConfigSpec struct {
 
 	// ValidationTests contains embedded validation test definitions.
 	//
+	// The map key is the test name, which must be unique.
+	//
 	// These tests are executed:
 	//   - During admission webhook validation (before resource is saved)
 	//   - Via the "controller validate" CLI command (pre-apply validation)
 	//
 	// Tests ensure templates generate valid HAProxy configurations before deployment.
 	// +optional
-	ValidationTests []ValidationTest `json:"validationTests,omitempty"`
+	ValidationTests map[string]ValidationTest `json:"validationTests,omitempty"`
 }
 
 // SecretReference references a Secret by name and optional namespace.
@@ -348,6 +350,20 @@ type WatchedResource struct {
 	// If empty, watches resources in all namespaces (requires cluster-wide RBAC).
 	// +optional
 	NamespaceSelector string `json:"namespaceSelector,omitempty"`
+
+	// Store specifies the storage backend for this resource type.
+	//
+	// Valid values:
+	//   - "full": MemoryStore - keeps all resources in memory (faster, higher memory usage)
+	//   - "on-demand": CachedStore - fetches resources on-demand with caching (slower, lower memory usage)
+	//
+	// Default: "full"
+	//
+	// Use "on-demand" for large resources accessed infrequently (e.g., Secrets).
+	// Use "full" for frequently accessed resources (e.g., Ingress, Service, EndpointSlice).
+	// +kubebuilder:validation:Enum=full;on-demand
+	// +optional
+	Store string `json:"store,omitempty"`
 }
 
 // TemplateSnippet defines a reusable template fragment.
@@ -358,6 +374,15 @@ type TemplateSnippet struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
+
+	// Priority determines the rendering order when multiple snippets are included.
+	//
+	// Lower values are rendered first. Snippets with the same priority are sorted alphabetically by name.
+	// Default: 500
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=1000
+	// +optional
+	Priority *int `json:"priority,omitempty"`
 }
 
 // MapFile defines a HAProxy map file generated from a template.
@@ -371,18 +396,16 @@ type MapFile struct {
 }
 
 // GeneralFile defines a general file generated from a template.
+//
+// The filename is derived from the map key in the configuration.
+// The full path is constructed using the get_path filter in templates:
+//
+//	{{ "503.http" | get_path("file") }} → /etc/haproxy/general/503.http
 type GeneralFile struct {
 	// Template is the Gonja template for generating the file content.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
-
-	// Path is the filesystem path where the file will be written.
-	//
-	// Example: /etc/haproxy/errors/503.http
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Path string `json:"path"`
 }
 
 // SSLCertificate defines an SSL certificate generated from a template.
@@ -404,12 +427,9 @@ type HAProxyConfig struct {
 }
 
 // ValidationTest defines a validation test with fixtures and assertions.
+//
+// The test name is provided by the map key in ValidationTests.
 type ValidationTest struct {
-	// Name is a unique identifier for this test.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
 	// Description explains what this test validates.
 	// +optional
 	Description string `json:"description,omitempty"`
@@ -417,7 +437,7 @@ type ValidationTest struct {
 	// Fixtures defines the Kubernetes resources to use for this test.
 	//
 	// Keys are resource type names (matching WatchedResources keys).
-	// Values are arrays of resources in unstructured format.
+	// Values are arrays of resources as raw JSON.
 	//
 	// Example:
 	//   ingresses:
@@ -426,7 +446,8 @@ type ValidationTest struct {
 	//       metadata:
 	//         name: test-ingress
 	// +kubebuilder:validation:Required
-	Fixtures map[string][]unstructured.Unstructured `json:"fixtures"`
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Fixtures map[string][]runtime.RawExtension `json:"fixtures"`
 
 	// Assertions defines the validation checks to perform.
 	// +kubebuilder:validation:Required

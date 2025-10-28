@@ -38,7 +38,7 @@ import (
 //   - error if fixture processing fails
 //
 //nolint:revive // Complexity acceptable for fixture processing with indexing and type inference
-func (r *Runner) createStoresFromFixtures(fixtures map[string][]unstructured.Unstructured) (map[string]types.Store, error) {
+func (r *Runner) createStoresFromFixtures(fixtures map[string][]interface{}) (map[string]types.Store, error) {
 	stores := make(map[string]types.Store)
 
 	for resourceType, resources := range fixtures {
@@ -70,7 +70,16 @@ func (r *Runner) createStoresFromFixtures(fixtures map[string][]unstructured.Uns
 		storeInstance := store.NewMemoryStore(numKeys)
 
 		// Add all fixture resources to the store
-		for i, resource := range resources {
+		for i, resourceObj := range resources {
+			// Convert interface{} to unstructured.Unstructured
+			// The interface{} is expected to be a map[string]interface{}
+			resourceMap, ok := resourceObj.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("fixture resource at index %d in %s is not a map", i, resourceType)
+			}
+
+			resource := &unstructured.Unstructured{Object: resourceMap}
+
 			// Ensure resource has TypeMeta (some fixtures might omit it)
 			if resource.GetAPIVersion() == "" {
 				resource.SetAPIVersion(watchedResource.APIVersion)
@@ -89,12 +98,12 @@ func (r *Runner) createStoresFromFixtures(fixtures map[string][]unstructured.Uns
 				"namespace", resource.GetNamespace())
 
 			// Extract index keys using indexer
-			keys, err := idx.ExtractKeys(&resource)
+			keys, err := idx.ExtractKeys(resource)
 			if err != nil {
 				return nil, fmt.Errorf("failed to extract index keys from fixture resource: %w", err)
 			}
 
-			if err := storeInstance.Add(&resource, keys); err != nil {
+			if err := storeInstance.Add(resource, keys); err != nil {
 				return nil, fmt.Errorf("failed to add fixture resource to %s store: %w", resourceType, err)
 			}
 		}

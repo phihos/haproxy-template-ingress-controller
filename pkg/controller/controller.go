@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -237,13 +238,14 @@ func fetchAndValidateInitialConfig(
 
 // componentSetup contains all resources created during component initialization.
 type componentSetup struct {
-	Bus              *busevents.EventBus
-	MetricsComponent *metrics.Component
-	MetricsRegistry  *prometheus.Registry
-	StoreManager     *resourcestore.Manager
-	IterCtx          context.Context
-	Cancel           context.CancelFunc
-	ConfigChangeCh   chan *coreconfig.Config
+	Bus                   *busevents.EventBus
+	MetricsComponent      *metrics.Component
+	MetricsRegistry       *prometheus.Registry
+	IntrospectionRegistry *introspection.Registry
+	StoreManager          *resourcestore.Manager
+	IterCtx               context.Context
+	Cancel                context.CancelFunc
+	ConfigChangeCh        chan *coreconfig.Config
 }
 
 // setupComponents creates and starts all event-driven components.
@@ -309,18 +311,84 @@ func setupComponents(
 
 	logger.Debug("All components started")
 
+	// Create introspection registry for debug variables
+	// This registry will be shared between early server startup and later variable registration
+	introspectionRegistry := introspection.NewRegistry()
+
 	return &componentSetup{
-		Bus:              bus,
-		MetricsComponent: metricsComponent,
-		MetricsRegistry:  registry,
-		StoreManager:     storeManager,
-		IterCtx:          iterCtx,
-		Cancel:           cancel,
-		ConfigChangeCh:   configChangeCh,
+		Bus:                   bus,
+		MetricsComponent:      metricsComponent,
+		MetricsRegistry:       registry,
+		IntrospectionRegistry: introspectionRegistry,
+		StoreManager:          storeManager,
+		IterCtx:               iterCtx,
+		Cancel:                cancel,
+		ConfigChangeCh:        configChangeCh,
 	}
 }
 
-// setupInfrastructureServers starts debug and metrics HTTP servers.
+// startEarlyInfrastructureServers starts debug and metrics HTTP servers early in startup.
+// This function is called BEFORE fetching the initial configuration, so servers are available
+// for debugging even if the controller fails to fetch config (e.g., RBAC issues).
+//
+// Unlike setupInfrastructureServers, this uses default/environment-based metrics port
+// since the config hasn't been loaded yet.
+func startEarlyInfrastructureServers(
+	ctx context.Context,
+	debugPort int,
+	setup *componentSetup,
+	logger *slog.Logger,
+) {
+	logger.Info("Starting infrastructure servers (early initialization)")
+
+	// Start debug HTTP server if port is configured
+	if debugPort > 0 {
+		// Use shared introspection registry from setup
+		// Variables will be registered later by setupInfrastructureServers
+		debugServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), setup.IntrospectionRegistry)
+		go func() {
+			if err := debugServer.Start(ctx); err != nil {
+				logger.Error("debug server failed", "error", err, "port", debugPort)
+			}
+		}()
+		logger.Info("Debug HTTP server started (early)",
+			"port", debugPort,
+			"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
+			"access_method", "kubectl port-forward",
+			"note", "variables will be registered after config loads")
+	} else {
+		logger.Debug("Debug HTTP server disabled (port=0)")
+	}
+
+	// Start metrics HTTP server with default port
+	// We use a default because config hasn't been loaded yet
+	defaultMetricsPort := 9090
+	if envPort := os.Getenv("METRICS_PORT"); envPort != "" {
+		if port, err := strconv.Atoi(envPort); err == nil {
+			defaultMetricsPort = port
+		}
+	}
+
+	if defaultMetricsPort > 0 {
+		metricsServer := pkgmetrics.NewServer(fmt.Sprintf(":%d", defaultMetricsPort), setup.MetricsRegistry)
+		go func() {
+			if err := metricsServer.Start(ctx); err != nil {
+				logger.Error("metrics server failed", "error", err, "port", defaultMetricsPort)
+			}
+		}()
+		logger.Info("Metrics HTTP server started (early)",
+			"port", defaultMetricsPort,
+			"bind_address", fmt.Sprintf("0.0.0.0:%d", defaultMetricsPort),
+			"access_method", "kubectl port-forward",
+			"endpoint", "/metrics")
+	} else {
+		logger.Debug("Metrics HTTP server disabled (port=0)")
+	}
+}
+
+// setupInfrastructureServers registers debug variables after config is loaded.
+// The HTTP servers are already started by startEarlyInfrastructureServers, so this
+// function just registers debug variables that require config/state with the shared registry.
 func setupInfrastructureServers(
 	ctx context.Context,
 	cfg *coreconfig.Config,
@@ -329,10 +397,7 @@ func setupInfrastructureServers(
 	stateCache *StateCache,
 	logger *slog.Logger,
 ) {
-	logger.Info("Stage 6: Starting debug infrastructure")
-
-	// Create instance-based introspection registry (lives/dies with this iteration)
-	registry := introspection.NewRegistry()
+	logger.Info("Stage 6: Registering debug variables (servers already running)")
 
 	// Create event buffer for tracking recent events
 	eventBuffer := debug.NewEventBuffer(1000, setup.Bus)
@@ -342,43 +407,14 @@ func setupInfrastructureServers(
 		}
 	}()
 
-	// Register debug variables with registry
-	debug.RegisterVariables(registry, stateCache, eventBuffer)
+	// Register debug variables with the shared introspection registry
+	// The HTTP server started by startEarlyInfrastructureServers uses this registry
+	debug.RegisterVariables(setup.IntrospectionRegistry, stateCache, eventBuffer)
 
-	// Start debug HTTP server if port is configured
-	if debugPort > 0 {
-		debugServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), registry)
-		go func() {
-			if err := debugServer.Start(ctx); err != nil {
-				logger.Error("debug server failed", "error", err, "port", debugPort)
-			}
-		}()
-		logger.Info("Debug HTTP server started",
-			"port", debugPort,
-			"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
-			"access_method", "kubectl port-forward",
-			"endpoints", []string{"/debug/vars", "/debug/pprof"})
-	} else {
-		logger.Debug("Debug HTTP server disabled (port=0)")
-	}
-
-	// Start metrics HTTP server if port is configured
-	metricsPort := cfg.Controller.MetricsPort
-	if metricsPort > 0 {
-		metricsServer := pkgmetrics.NewServer(fmt.Sprintf(":%d", metricsPort), setup.MetricsRegistry)
-		go func() {
-			if err := metricsServer.Start(ctx); err != nil {
-				logger.Error("metrics server failed", "error", err, "port", metricsPort)
-			}
-		}()
-		logger.Info("Metrics HTTP server started",
-			"port", metricsPort,
-			"bind_address", fmt.Sprintf("0.0.0.0:%d", metricsPort),
-			"access_method", "kubectl port-forward",
-			"endpoint", "/metrics")
-	} else {
-		logger.Debug("Metrics HTTP server disabled (port=0)")
-	}
+	logger.Debug("Debug variables registered with shared registry",
+		"debug_port", debugPort,
+		"metrics_port", cfg.Controller.MetricsPort,
+		"note", "debug endpoints now fully functional")
 }
 
 // setupResourceWatchers creates and starts resource watchers and index tracker, then waits for sync.
@@ -1022,6 +1058,14 @@ func runIteration(
 		Resource: "secrets",
 	}
 
+	// 0. Setup components BEFORE fetching config so we can start servers early
+	setup := setupComponents(ctx, logger)
+	defer setup.Cancel()
+
+	// 0.5. Start infrastructure servers EARLY (before config fetch)
+	// This allows debugging startup issues and makes metrics/debug endpoints available immediately
+	startEarlyInfrastructureServers(setup.IterCtx, debugPort, setup, logger)
+
 	// 1. Fetch and validate initial configuration
 	cfg, creds, webhookCerts, err := fetchAndValidateInitialConfig(
 		ctx, k8sClient, crdName, secretName, webhookCertSecretName,
@@ -1030,10 +1074,6 @@ func runIteration(
 	if err != nil {
 		return err
 	}
-
-	// 2. Setup components
-	setup := setupComponents(ctx, logger)
-	defer setup.Cancel()
 
 	// 3. Setup resource watchers
 	resourceWatcher, err := setupResourceWatchers(setup.IterCtx, cfg, k8sClient, setup.Bus, logger, setup.Cancel)

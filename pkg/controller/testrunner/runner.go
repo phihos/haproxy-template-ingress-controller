@@ -32,10 +32,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
-	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/controller/renderer"
+	"haproxy-template-ic/pkg/core/config"
 	"haproxy-template-ic/pkg/dataplane"
 	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
 	"haproxy-template-ic/pkg/k8s/types"
@@ -49,8 +50,15 @@ import (
 type Runner struct {
 	engine          *templating.TemplateEngine
 	validationPaths dataplane.ValidationPaths
-	config          *v1alpha1.HAProxyTemplateConfigSpec
+	config          *config.Config
 	logger          *slog.Logger
+	workers         int
+}
+
+// testEntry is a tuple of test name and test definition for worker processing.
+type testEntry struct {
+	name string
+	test config.ValidationTest
 }
 
 // Options configures the test runner.
@@ -60,6 +68,11 @@ type Options struct {
 
 	// Logger for structured logging. If nil, uses default logger.
 	Logger *slog.Logger
+
+	// Workers is the number of parallel workers for test execution.
+	// Default: 4
+	// Set to 1 for sequential execution.
+	Workers int
 }
 
 // TestResults contains the results of running validation tests.
@@ -124,7 +137,7 @@ type AssertionResult struct {
 // New creates a new test runner.
 //
 // Parameters:
-//   - config: The HAProxyTemplateConfig spec containing templates and tests
+//   - cfg: The internal config containing templates and validation tests
 //   - engine: Pre-compiled template engine
 //   - validationPaths: Filesystem paths for HAProxy validation
 //   - options: Runner options
@@ -132,7 +145,7 @@ type AssertionResult struct {
 // Returns:
 //   - A new Runner instance ready to execute tests
 func New(
-	config *v1alpha1.HAProxyTemplateConfigSpec,
+	cfg *config.Config,
 	engine *templating.TemplateEngine,
 	validationPaths dataplane.ValidationPaths,
 	options Options,
@@ -142,11 +155,17 @@ func New(
 		logger = slog.Default()
 	}
 
+	workers := options.Workers
+	if workers <= 0 {
+		workers = 4 // Default to 4 workers
+	}
+
 	return &Runner{
 		engine:          engine,
 		validationPaths: validationPaths,
-		config:          config,
+		config:          cfg,
 		logger:          logger.With("component", "test-runner"),
+		workers:         workers,
 	}
 }
 
@@ -184,13 +203,47 @@ func (r *Runner) RunTests(ctx context.Context, testName string) (*TestResults, e
 
 	results.TotalTests = len(testsToRun)
 
-	// Run each test
-	for _, test := range testsToRun {
-		r.logger.Debug("Running test", "test", test.Name)
+	if len(testsToRun) == 0 {
+		r.logger.Info("No tests to run")
+		return results, nil
+	}
 
-		result := r.runSingleTest(ctx, test)
+	// Determine number of workers (use 1 worker if only 1 test)
+	numWorkers := r.workers
+	if len(testsToRun) < numWorkers {
+		numWorkers = len(testsToRun)
+	}
+
+	r.logger.Debug("Starting test execution",
+		"total_tests", len(testsToRun),
+		"workers", numWorkers)
+
+	// Create channels for work distribution
+	testChan := make(chan testEntry, len(testsToRun))
+	resultChan := make(chan TestResult, len(testsToRun))
+
+	// Start worker pool
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go r.testWorker(ctx, testChan, resultChan, &wg)
+	}
+
+	// Send tests to workers
+	for name, test := range testsToRun {
+		testChan <- testEntry{name: name, test: test}
+	}
+	close(testChan)
+
+	// Wait for all workers to finish in background
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	for result := range resultChan {
 		results.TestResults = append(results.TestResults, result)
-
 		if result.Passed {
 			results.PassedTests++
 		} else {
@@ -209,23 +262,38 @@ func (r *Runner) RunTests(ctx context.Context, testName string) (*TestResults, e
 	return results, nil
 }
 
-// filterTests filters validation tests by name.
-func (r *Runner) filterTests(tests []v1alpha1.ValidationTest, name string) []v1alpha1.ValidationTest {
-	var filtered []v1alpha1.ValidationTest
-	for _, test := range tests {
-		if test.Name == name {
-			filtered = append(filtered, test)
+// testWorker is a worker goroutine that processes tests from the test channel.
+func (r *Runner) testWorker(ctx context.Context, tests <-chan testEntry, results chan<- TestResult, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for entry := range tests {
+		select {
+		case <-ctx.Done():
+			// Context cancelled, stop processing
+			return
+		default:
+			r.logger.Debug("Worker processing test", "test", entry.name)
+			result := r.runSingleTest(ctx, entry.name, entry.test)
+			results <- result
 		}
+	}
+}
+
+// filterTests filters validation tests by name.
+func (r *Runner) filterTests(tests map[string]config.ValidationTest, name string) map[string]config.ValidationTest {
+	filtered := make(map[string]config.ValidationTest)
+	if test, exists := tests[name]; exists {
+		filtered[name] = test
 	}
 	return filtered
 }
 
 // runSingleTest executes a single validation test.
-func (r *Runner) runSingleTest(ctx context.Context, test v1alpha1.ValidationTest) TestResult {
+func (r *Runner) runSingleTest(ctx context.Context, testName string, test config.ValidationTest) TestResult {
 	startTime := time.Now()
 
 	result := TestResult{
-		TestName:    test.Name,
+		TestName:    testName,
 		Description: test.Description,
 		Passed:      true,
 		Assertions:  make([]AssertionResult, 0),
@@ -391,7 +459,7 @@ func (r *Runner) renderAuxiliaryFiles(context map[string]interface{}) (*dataplan
 // runAssertion executes a single assertion.
 func (r *Runner) runAssertion(
 	ctx context.Context,
-	assertion *v1alpha1.ValidationAssertion,
+	assertion *config.ValidationAssertion,
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	templateContext map[string]interface{},

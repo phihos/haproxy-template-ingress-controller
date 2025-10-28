@@ -16,18 +16,28 @@ package testrunner
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/dataplane"
 	"haproxy-template-ic/pkg/templating"
 )
+
+// Helper function to create RawExtension from map.
+func mustMarshalRawExtension(obj map[string]interface{}) runtime.RawExtension {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		panic(err)
+	}
+	return runtime.RawExtension{Raw: data}
+}
 
 func TestRunner_RunTests(t *testing.T) {
 	// Setup logger
@@ -56,11 +66,10 @@ func TestRunner_RunTests(t *testing.T) {
 						IndexBy:    []string{"metadata.namespace", "metadata.name"},
 					},
 				},
-				ValidationTests: []v1alpha1.ValidationTest{
-					{
-						Name:        "basic-rendering",
+				ValidationTests: map[string]v1alpha1.ValidationTest{
+					"basic-rendering": {
 						Description: "Test basic HAProxy rendering",
-						Fixtures: map[string][]unstructured.Unstructured{
+						Fixtures: map[string][]runtime.RawExtension{
 							"services": {},
 						},
 						Assertions: []v1alpha1.ValidationAssertion{
@@ -93,11 +102,10 @@ func TestRunner_RunTests(t *testing.T) {
 						IndexBy:    []string{"metadata.namespace", "metadata.name"},
 					},
 				},
-				ValidationTests: []v1alpha1.ValidationTest{
-					{
-						Name:        "failing-test",
+				ValidationTests: map[string]v1alpha1.ValidationTest{
+					"failing-test": {
 						Description: "Test with failing assertion",
-						Fixtures: map[string][]unstructured.Unstructured{
+						Fixtures: map[string][]runtime.RawExtension{
 							"services": {},
 						},
 						Assertions: []v1alpha1.ValidationAssertion{
@@ -130,11 +138,10 @@ func TestRunner_RunTests(t *testing.T) {
 						IndexBy:    []string{"metadata.namespace", "metadata.name"},
 					},
 				},
-				ValidationTests: []v1alpha1.ValidationTest{
-					{
-						Name:        "passing-test",
+				ValidationTests: map[string]v1alpha1.ValidationTest{
+					"passing-test": {
 						Description: "This test should pass",
-						Fixtures: map[string][]unstructured.Unstructured{
+						Fixtures: map[string][]runtime.RawExtension{
 							"services": {},
 						},
 						Assertions: []v1alpha1.ValidationAssertion{
@@ -145,10 +152,9 @@ func TestRunner_RunTests(t *testing.T) {
 							},
 						},
 					},
-					{
-						Name:        "failing-test",
+					"failing-test": {
 						Description: "This test should fail",
-						Fixtures: map[string][]unstructured.Unstructured{
+						Fixtures: map[string][]runtime.RawExtension{
 							"services": {},
 						},
 						Assertions: []v1alpha1.ValidationAssertion{
@@ -180,11 +186,10 @@ func TestRunner_RunTests(t *testing.T) {
 						IndexBy:    []string{"metadata.namespace", "metadata.name"},
 					},
 				},
-				ValidationTests: []v1alpha1.ValidationTest{
-					{
-						Name:        "test-1",
+				ValidationTests: map[string]v1alpha1.ValidationTest{
+					"test-1": {
 						Description: "First test",
-						Fixtures: map[string][]unstructured.Unstructured{
+						Fixtures: map[string][]runtime.RawExtension{
 							"services": {},
 						},
 						Assertions: []v1alpha1.ValidationAssertion{
@@ -195,10 +200,9 @@ func TestRunner_RunTests(t *testing.T) {
 							},
 						},
 					},
-					{
-						Name:        "test-2",
+					"test-2": {
 						Description: "Second test",
-						Fixtures: map[string][]unstructured.Unstructured{
+						Fixtures: map[string][]runtime.RawExtension{
 							"services": {},
 						},
 						Assertions: []v1alpha1.ValidationAssertion{
@@ -231,10 +235,9 @@ func TestRunner_RunTests(t *testing.T) {
 						IndexBy:    []string{"metadata.namespace", "metadata.name"},
 					},
 				},
-				ValidationTests: []v1alpha1.ValidationTest{
-					{
-						Name: "test-1",
-						Fixtures: map[string][]unstructured.Unstructured{
+				ValidationTests: map[string]v1alpha1.ValidationTest{
+					"test-1": {
+						Fixtures: map[string][]runtime.RawExtension{
 							"services": {},
 						},
 						Assertions: []v1alpha1.ValidationAssertion{
@@ -261,9 +264,13 @@ func TestRunner_RunTests(t *testing.T) {
 			engine, err := templating.New(templating.EngineTypeGonja, templates)
 			require.NoError(t, err)
 
+			// Convert CRD spec to internal config format
+			cfg, err := ConvertSpecToInternalConfig(tt.config)
+			require.NoError(t, err)
+
 			// Create test runner
 			runner := New(
-				tt.config,
+				cfg,
 				engine,
 				dataplane.ValidationPaths{}, // Empty paths for unit tests
 				Options{
@@ -321,23 +328,20 @@ backend {{ svc.metadata.namespace }}-{{ svc.metadata.name }}
 				IndexBy:    []string{"metadata.namespace", "metadata.name"},
 			},
 		},
-		ValidationTests: []v1alpha1.ValidationTest{
-			{
-				Name:        "with-service-fixture",
+		ValidationTests: map[string]v1alpha1.ValidationTest{
+			"with-service-fixture": {
 				Description: "Test with service fixture",
-				Fixtures: map[string][]unstructured.Unstructured{
+				Fixtures: map[string][]runtime.RawExtension{
 					"services": {
-						{
-							Object: map[string]interface{}{
-								"metadata": map[string]interface{}{
-									"name":      "test-service",
-									"namespace": "default",
-								},
-								"spec": map[string]interface{}{
-									"clusterIP": "10.0.0.1",
-								},
+						mustMarshalRawExtension(map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"name":      "test-service",
+								"namespace": "default",
 							},
-						},
+							"spec": map[string]interface{}{
+								"clusterIP": "10.0.0.1",
+							},
+						}),
 					},
 				},
 				Assertions: []v1alpha1.ValidationAssertion{
@@ -364,8 +368,12 @@ backend {{ svc.metadata.namespace }}-{{ svc.metadata.name }}
 	engine, err := templating.New(templating.EngineTypeGonja, templates)
 	require.NoError(t, err)
 
+	// Convert CRD spec to internal config format
+	cfg, err := ConvertSpecToInternalConfig(config)
+	require.NoError(t, err)
+
 	runner := New(
-		config,
+		cfg,
 		engine,
 		dataplane.ValidationPaths{},
 		Options{Logger: logger},
@@ -407,11 +415,10 @@ func TestRunner_RenderError(t *testing.T) {
 				IndexBy:    []string{"metadata.namespace", "metadata.name"},
 			},
 		},
-		ValidationTests: []v1alpha1.ValidationTest{
-			{
-				Name:        "rendering-error-test",
+		ValidationTests: map[string]v1alpha1.ValidationTest{
+			"rendering-error-test": {
 				Description: "Test with rendering error",
-				Fixtures: map[string][]unstructured.Unstructured{
+				Fixtures: map[string][]runtime.RawExtension{
 					"services": {},
 				},
 				Assertions: []v1alpha1.ValidationAssertion{
@@ -431,8 +438,12 @@ func TestRunner_RenderError(t *testing.T) {
 	engine, err := templating.New(templating.EngineTypeGonja, templates)
 	require.NoError(t, err)
 
+	// Convert CRD spec to internal config format
+	cfg, err := ConvertSpecToInternalConfig(config)
+	require.NoError(t, err)
+
 	runner := New(
-		config,
+		cfg,
 		engine,
 		dataplane.ValidationPaths{},
 		Options{Logger: logger},

@@ -1,0 +1,37 @@
+{{- if .Values.controller.config }}
+apiVersion: haproxy-template-ic.github.io/v1alpha1
+kind: HAProxyTemplateConfig
+metadata:
+  name: {{ .Values.controller.crdName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+spec:
+  {{- $config := .Values.controller.config | deepCopy }}
+  {{- if and $config.credentialsSecretRef (not $config.credentialsSecretRef.name) }}
+    {{- $_ := set $config.credentialsSecretRef "name" (printf "%s-credentials" (include "haproxy-template-ic.fullname" .)) }}
+  {{- end }}
+  {{- if and $config.controller $config.controller.leaderElection }}
+    {{- if not $config.controller.leaderElection.leaseName }}
+      {{- $_ := set $config.controller.leaderElection "leaseName" (include "haproxy-template-ic.fullname" .) }}
+    {{- end }}
+  {{- end }}
+  {{- /* Merge template libraries into config */ -}}
+  {{- $mergedLibraries := include "haproxy-template-ic.mergeLibraries" . | fromYaml }}
+  {{- if $mergedLibraries.templateSnippets }}
+    {{- $_ := set $config "templateSnippets" $mergedLibraries.templateSnippets }}
+  {{- end }}
+  {{- if $mergedLibraries.maps }}
+    {{- $_ := set $config "maps" $mergedLibraries.maps }}
+  {{- end }}
+  {{- if $mergedLibraries.files }}
+    {{- $_ := set $config "files" $mergedLibraries.files }}
+  {{- end }}
+  {{- if $mergedLibraries.haproxyConfig }}
+    {{- $_ := set $config "haproxyConfig" $mergedLibraries.haproxyConfig }}
+  {{- end }}
+  {{- if $mergedLibraries.validationTests }}
+    {{- $_ := set $config "validationTests" $mergedLibraries.validationTests }}
+  {{- end }}
+  {{- toYaml $config | nindent 2 }}
+{{- end }}

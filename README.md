@@ -24,6 +24,7 @@ The controller watches Kubernetes resources you specify (Ingress, Service, Secre
 - **Template-driven configuration**: Use Jinja2-like syntax to generate HAProxy configurations from any Kubernetes resources
 - **Flexible resource watching**: Monitor any Kubernetes resource type (Ingress, Service, Secrets, CRDs) as input to your templates
 - **Multi-phase validation**: Configurations are validated by the client-native parser and HAProxy binary before deployment
+- **Embedded validation tests**: Write tests directly in your HAProxyTemplateConfig with fixtures and assertions to catch template errors in CI/CD
 - **Zero-reload optimization**: Uses HAProxy runtime API for server weight, address, and maintenance state changes
 - **High availability**: Leader election with multiple controller replicas for automatic failover and zero-downtime upgrades
 - **Smart deployment scheduling**: Rate limiting prevents concurrent deployments, periodic drift detection corrects external modifications
@@ -246,6 +247,66 @@ Kubernetes API → Resource Watchers → EventBus → Reconciler
 
 For detailed architecture documentation, see [docs/development/design.md](docs/development/design.md).
 
+## Validation Tests
+
+The controller includes a built-in test runner for validating HAProxy templates before deployment. You can embed validation tests directly in your HAProxyTemplateConfig CRD to catch template errors early in your development workflow.
+
+**Add tests to your configuration:**
+
+```yaml
+apiVersion: haproxy-template-ic.github.io/v1alpha1
+kind: HAProxyTemplateConfig
+metadata:
+  name: my-config
+spec:
+  # ... template configuration ...
+
+  validationTests:
+    - name: test-basic-frontend
+      description: Frontend should be created with correct settings
+      fixtures:
+        services:
+          - apiVersion: v1
+            kind: Service
+            metadata:
+              name: my-service
+              namespace: default
+            spec:
+              ports:
+                - port: 80
+                  targetPort: 8080
+      assertions:
+        - type: haproxy_valid
+          description: Configuration must be syntactically valid
+
+        - type: contains
+          target: haproxy.cfg
+          pattern: "frontend.*default"
+          description: Must have default frontend
+```
+
+**Run tests locally:**
+
+```bash
+# Run all validation tests
+controller validate -f config.yaml
+
+# Run specific test by name
+controller validate -f config.yaml --test test-basic-frontend
+
+# Output results as JSON (for CI/CD integration)
+controller validate -f config.yaml --output json
+```
+
+**Supported assertion types:**
+- `haproxy_valid` - Validates HAProxy syntax using the HAProxy binary
+- `contains` - Verifies configuration contains a regex pattern
+- `not_contains` - Verifies configuration doesn't contain a pattern
+- `equals` - Checks exact value matches
+- `jsonpath` - Queries template rendering context
+
+For complete documentation on writing and running validation tests, see [docs/validation-tests.md](docs/validation-tests.md).
+
 ## Documentation
 
 ### User Guides
@@ -254,6 +315,7 @@ For detailed architecture documentation, see [docs/development/design.md](docs/d
 - [Configuration Reference](docs/configuration.md) - Complete configuration syntax and field descriptions
 - [CRD Reference](docs/crd-reference.md) - HAProxyTemplateConfig custom resource documentation
 - [Templating Guide](docs/templating.md) - How to write templates for HAProxy configuration, maps, and certificates
+- [Validation Tests](docs/validation-tests.md) - Write and run embedded validation tests for template verification
 - [Watching Resources](docs/watching-resources.md) - Resource watching and storage strategies
 - [Supported HAProxy Configuration](docs/supported-configuration.md) - HAProxy features available through templates
 - [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions

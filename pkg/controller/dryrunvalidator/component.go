@@ -30,10 +30,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/controller/renderer"
 	"haproxy-template-ic/pkg/controller/resourcestore"
+	"haproxy-template-ic/pkg/controller/testrunner"
 	"haproxy-template-ic/pkg/core/config"
 	"haproxy-template-ic/pkg/dataplane"
 	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
@@ -61,6 +63,7 @@ type Component struct {
 	config          *config.Config
 	engine          *templating.TemplateEngine
 	validationPaths dataplane.ValidationPaths
+	testRunner      *testrunner.Runner
 	logger          *slog.Logger
 }
 
@@ -84,12 +87,25 @@ func New(
 	validationPaths dataplane.ValidationPaths,
 	logger *slog.Logger,
 ) *Component {
+	// Create test runner for validation tests
+	// Use Workers: 1 for webhook context (sequential execution, faster for small test counts)
+	testRunnerInstance := testrunner.New(
+		cfg,
+		engine,
+		validationPaths,
+		testrunner.Options{
+			Logger:  logger.With("component", "test-runner"),
+			Workers: 1, // Sequential execution in webhook context
+		},
+	)
+
 	return &Component{
 		eventBus:        eventBus,
 		storeManager:    storeManager,
 		config:          cfg,
 		engine:          engine,
 		validationPaths: validationPaths,
+		testRunner:      testRunnerInstance,
 		logger:          logger.With("component", "dryrun-validator"),
 	}
 }
@@ -200,6 +216,14 @@ func (c *Component) handleValidationRequest(req *events.WebhookValidationRequest
 			"simplified", simplified)
 		c.publishResponse(req.ID, false, simplified)
 		return
+	}
+
+	// Run validation tests if configured
+	if len(c.config.ValidationTests) > 0 {
+		if err := c.runValidationTests(req.ID); err != nil {
+			c.publishResponse(req.ID, false, err.Error())
+			return
+		}
 	}
 
 	c.logger.Debug("Dry-run validation passed",
@@ -374,6 +398,91 @@ func (c *Component) renderAuxiliaryFiles(context map[string]interface{}) (*datap
 	}
 
 	return auxFiles, nil
+}
+
+// runValidationTests executes validation tests and returns an error if tests fail.
+func (c *Component) runValidationTests(requestID string) error {
+	c.logger.Debug("Running validation tests",
+		"request_id", requestID,
+		"test_count", len(c.config.ValidationTests))
+
+	testStartTime := time.Now()
+
+	// Publish ValidationTestsStartedEvent
+	c.eventBus.Publish(events.NewValidationTestsStartedEvent(len(c.config.ValidationTests)))
+
+	// Run all validation tests
+	ctx := context.Background() // Use background context for test execution
+	testResults, err := c.testRunner.RunTests(ctx, "")
+	testDuration := time.Since(testStartTime)
+
+	if err != nil {
+		c.logger.Info("Validation tests execution failed",
+			"request_id", requestID,
+			"error", err)
+		return fmt.Errorf("validation test execution failed: %w", err)
+	}
+
+	// Publish ValidationTestsCompletedEvent
+	c.eventBus.Publish(events.NewValidationTestsCompletedEvent(
+		testResults.TotalTests,
+		testResults.PassedTests,
+		testResults.FailedTests,
+		testDuration.Milliseconds(),
+	))
+
+	// If any tests failed, reject the admission
+	if !testResults.AllPassed() {
+		c.logger.Info("Validation tests failed",
+			"request_id", requestID,
+			"total_tests", testResults.TotalTests,
+			"passed_tests", testResults.PassedTests,
+			"failed_tests", testResults.FailedTests)
+
+		// Collect failed test names
+		failedTestNames := make([]string, 0, testResults.FailedTests)
+		for _, result := range testResults.TestResults {
+			if !result.Passed {
+				failedTestNames = append(failedTestNames, result.TestName)
+			}
+		}
+
+		// Publish ValidationTestsFailedEvent
+		c.eventBus.Publish(events.NewValidationTestsFailedEvent(failedTestNames))
+
+		// Build detailed error message
+		return c.buildTestFailureError(testResults)
+	}
+
+	c.logger.Debug("Validation tests passed",
+		"request_id", requestID,
+		"total_tests", testResults.TotalTests,
+		"duration_ms", testDuration.Milliseconds())
+
+	return nil
+}
+
+// buildTestFailureError builds a detailed error message from test results.
+func (c *Component) buildTestFailureError(testResults *testrunner.TestResults) error {
+	errorMsg := fmt.Sprintf("Validation tests failed: %d/%d tests failed\n\nFailed tests:\n",
+		testResults.FailedTests, testResults.TotalTests)
+
+	for _, result := range testResults.TestResults {
+		if !result.Passed {
+			errorMsg += fmt.Sprintf("\n- Test: %s\n", result.TestName)
+			if result.RenderError != "" {
+				errorMsg += fmt.Sprintf("  Rendering failed: %s\n", result.RenderError)
+			}
+			for _, assertion := range result.Assertions {
+				if !assertion.Passed {
+					errorMsg += fmt.Sprintf("  Assertion failed: %s - %s\n",
+						assertion.Description, assertion.Error)
+				}
+			}
+		}
+	}
+
+	return fmt.Errorf("%s", errorMsg)
 }
 
 // publishResponse publishes a WebhookValidationResponse event.

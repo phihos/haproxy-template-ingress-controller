@@ -1,0 +1,352 @@
+# HAProxyTech annotation library for HAProxy Template Ingress Controller
+# Contains template snippets for haproxy.org/* annotations and corresponding validation tests
+
+templateSnippets:
+  auth-userlist-name:
+    template: >-
+      {%- macro get_userlist_name(auth_secret, namespace) -%}
+      {%- if "/" in auth_secret -%}
+      auth_{{ auth_secret.split("/")[0] }}_{{ auth_secret.split("/")[1] }}
+      {%- else -%}
+      auth_{{ namespace }}_{{ auth_secret }}
+      {%- endif -%}
+      {%- endmacro -%}
+
+  top-level-annotation-haproxytech-auth:
+    priority: 500
+    template: |
+      {#- Generate userlist sections for basic authentication #}
+      {#- Reads credentials from secrets referenced by haproxy.org/auth-secret annotation #}
+      {%- set ns = namespace(processed_userlists=[]) %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
+        {%- if auth_type and auth_type != "basic-auth" %}
+          {{- fail("Invalid value '" ~ auth_type ~ "' for annotation 'haproxy.org/auth-type' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'basic-auth'") -}}
+        {%- endif %}
+        {%- if auth_type == "basic-auth" %}
+          {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
+          {%- if auth_secret %}
+            {#- Generate userlist name using macro #}
+            {%- include "auth-userlist-name" -%}
+            {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
+
+            {#- Only process each userlist once #}
+            {%- if userlist_name not in ns.processed_userlists %}
+              {%- set ns.processed_userlists = ns.processed_userlists + [userlist_name] %}
+
+              {#- Parse secret reference for fetching #}
+              {%- if "/" in auth_secret %}
+                {%- set secret_namespace = auth_secret.split("/")[0] %}
+                {%- set secret_name = auth_secret.split("/")[1] %}
+              {%- else %}
+                {%- set secret_namespace = ingress.metadata.namespace %}
+                {%- set secret_name = auth_secret %}
+              {%- endif %}
+
+              {#- Fetch secret from store #}
+              {%- set secret = resources.secrets.GetSingle(secret_namespace, secret_name) %}
+              {%- if secret %}
+
+      userlist {{ userlist_name }}
+                {%- for username in secret.data | default({}) %}
+        user {{ username }} password {{ secret.data[username] | b64decode }}
+                {%- endfor %}
+              {%- else %}
+                {{- fail("Secret '" ~ secret_namespace ~ "/" ~ secret_name ~ "' referenced by annotation 'haproxy.org/auth-secret' does not exist. Please create the secret or update the annotation.") -}}
+              {%- endif %}
+            {%- endif %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor %}
+
+  backend-annotation-haproxytech-auth:
+    priority: 500
+    template: |
+      {#- Generate http-request auth directives for backends requiring authentication #}
+      {#- Uses userlist created by top-level-annotation-haproxytech-auth #}
+      {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
+      {%- if auth_type and auth_type != "basic-auth" %}
+        {{- fail("Invalid value '" ~ auth_type ~ "' for annotation 'haproxy.org/auth-type' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'basic-auth'") -}}
+      {%- endif %}
+      {%- if auth_type == "basic-auth" %}
+        {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
+        {%- set auth_realm = ingress.metadata.annotations["haproxy.org/auth-realm"] | default("Restricted Area") %}
+        {%- if auth_secret %}
+          {#- Generate userlist name using macro #}
+          {%- include "auth-userlist-name" -%}
+          {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
+      http-request auth realm "{{ auth_realm }}" unless { http_auth({{ userlist_name }}) }
+        {%- endif %}
+      {%- endif %}
+
+validationTests:
+  test-auth-basic-cross-namespace:
+    description: Basic authentication with secret in different namespace
+    fixtures:
+      secrets:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            namespace: auth-system
+          type: Opaque
+          data:
+            admin: YWRtaW46JGFwcjEkcmlGTnk5OXkkbkdQNWU2QkZQTTVzV3htVURsUGJ4Lw==  # admin:admin
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: production
+            annotations:
+              haproxy.org/auth-type: basic-auth
+              haproxy.org/auth-secret: auth-system/shared-auth
+          spec:
+            rules:
+              - host: api.production.example.com
+                http:
+                  paths:
+                    - path: /api
+                      pathType: Prefix
+                      backend:
+                        service:
+                          port:
+                            number: 443
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: production
+          spec:
+            ports:
+              - port: 443
+                targetPort: 8443
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "userlist auth_auth-system_shared-auth"
+        description: Must generate userlist with cross-namespace naming
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "user admin password"
+        description: Userlist must contain credentials from cross-namespace secret
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http_auth\\(auth_auth-system_shared-auth\\)"
+        description: Backend must reference cross-namespace userlist
+
+  test-auth-custom-realm:
+    description: Basic authentication with custom realm
+    fixtures:
+      secrets:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            namespace: default
+          type: Opaque
+          data:
+            apiuser: YXBpdXNlcjokYXByMSR0ZXN0JFRlc3RQYXNzd29yZDEyMw==  # apiuser:test
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            annotations:
+              haproxy.org/auth-type: basic-auth
+              haproxy.org/auth-secret: api-auth
+              haproxy.org/auth-realm: "API Access - Authorization Required"
+          spec:
+            rules:
+              - host: secure-api.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+          spec:
+            ports:
+              - port: 8080
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request auth realm "API Access - Authorization Required"'
+        description: Backend must use custom auth realm
+
+      - type: not_contains
+        target: haproxy.cfg
+        pattern: 'realm "Restricted Area"'
+        description: Must not use default realm when custom realm specified
+
+  test-auth-shared-userlist-deduplication:
+    description: Multiple ingresses sharing same secret generate single userlist
+    fixtures:
+      secrets:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            namespace: default
+          type: Opaque
+          data:
+            admin: YWRtaW46JGFwcjEkcmlGTnk5OXkkbkdQNWU2QkZQTTVzV3htVURsUGJ4Lw==
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            annotations:
+              haproxy.org/auth-type: basic-auth
+              haproxy.org/auth-secret: shared-credentials
+          spec:
+            rules:
+              - host: app1.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          port:
+                            number: 80
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            annotations:
+              haproxy.org/auth-type: basic-auth
+              haproxy.org/auth-secret: shared-credentials
+          spec:
+            rules:
+              - host: app2.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          port:
+                            number: 80
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "userlist auth_default_shared-credentials"
+        description: Must generate shared userlist
+
+      - type: not_contains
+        target: haproxy.cfg
+        pattern: "userlist auth_default_shared-credentials.*userlist auth_default_shared-credentials"
+        description: Must not duplicate userlist for same secret
+
+  test-auth-invalid-type:
+    description: Invalid auth-type annotation should fail with clear error
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            annotations:
+              haproxy.org/auth-type: digest-auth  # Invalid type
+              haproxy.org/auth-secret: auth-creds
+          spec:
+            rules:
+              - host: invalid.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          port:
+                            number: 80
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+    assertions:
+      - type: contains
+        target: rendering_error
+        pattern: "Invalid value 'digest-auth' for annotation 'haproxy.org/auth-type'"
+        description: Must fail with clear error for invalid auth type
+
+      - type: contains
+        target: rendering_error
+        pattern: "Valid values: 'basic-auth'"
+        description: Error must indicate valid auth type values
+
+  test-auth-missing-secret:
+    description: Missing auth secret should fail with clear error
+    fixtures:
+      secrets: [ ]  # No secrets defined
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            annotations:
+              haproxy.org/auth-type: basic-auth
+              haproxy.org/auth-secret: nonexistent-secret
+          spec:
+            rules:
+              - host: missing.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          port:
+                            number: 80
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+    assertions:
+      - type: contains
+        target: rendering_error
+        pattern: "Secret 'default/nonexistent-secret'.*does not exist"
+        description: Must fail with clear error for missing secret
+
+      - type: contains
+        target: rendering_error
+        pattern: "Please create the secret or update the annotation"
+        description: Error must provide actionable guidance

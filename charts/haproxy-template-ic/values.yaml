@@ -12,7 +12,7 @@ image:
   # Overrides the image tag whose default is the chart appVersion
   tag: ""
 
-imagePullSecrets: []
+imagePullSecrets: [ ]
 nameOverride: ""
 fullnameOverride: ""
 
@@ -26,6 +26,141 @@ controller:
   # Exposes /debug/vars and /debug/pprof endpoints for introspection
   # Access via: kubectl port-forward pod/controller-xxx 6060:6060
   debugPort: 0
+
+  # Template libraries
+  # Control which predefined template libraries to include
+  # Libraries are merged in order: base -> haproxytech -> values.yaml
+  # User-provided config in controller.config always takes precedence
+  templateLibraries:
+    # Base library: Core template snippets, maps, files, and HAProxy configuration
+    # Provides fundamental ingress routing and backend management
+    base:
+      enabled: true
+    # HAProxyTech library: Support for haproxy.org/* annotations
+    # Currently includes basic authentication (haproxy.org/auth-type, haproxy.org/auth-secret)
+    haproxytech:
+      enabled: true
+
+  # HAProxyTemplateConfig specification
+  # This configuration is rendered into a HAProxyTemplateConfig CRD
+  # Users can customize this configuration using Helm values or create
+  # the HAProxyTemplateConfig resource manually
+  config:
+    # Reference to the Secret containing HAProxy Dataplane API credentials
+    # The Secret is automatically created by the Helm chart
+    credentialsSecretRef:
+      # Name will be set by the template to: {{ include "haproxy-template-ic.fullname" . }}-credentials
+      name: ""  # Will be filled in by Helm template
+      # Namespace defaults to Release.Namespace if not specified
+
+    podSelector:
+      matchLabels:
+        app: haproxy
+        component: loadbalancer
+
+    controller:
+      healthzPort: 8080
+      metricsPort: 9090
+
+      # Leader election for high availability
+      # When multiple controller replicas are running, only the leader performs
+      # write operations (deploying configs to HAProxy). All replicas continue
+      # watching resources, rendering configs, and validating (hot standby).
+      leaderElection:
+        # Enable leader election (recommended when replicaCount > 1)
+        enabled: true
+        # Name of the Lease resource used for coordination
+        # Defaults to the Helm release fullname if not specified
+        # This ensures multiple releases in the same namespace don't conflict
+        leaseName: ""
+        # Duration that non-leader candidates wait to acquire leadership
+        # Default: 60s (failover happens within this time after leader failure)
+        leaseDuration: 60s
+        # Duration the leader retries refreshing leadership before giving up
+        # Default: 15s (should be < lease_duration, typically 1/4 of it)
+        renewDeadline: 15s
+        # Interval between leadership refresh attempts
+        # Default: 5s (should be < renew_deadline, typically 1/3 of it)
+        retryPeriod: 5s
+
+    dataplane:
+      port: 5555
+      # Minimum time between consecutive deployments (rate limiting)
+      # Prevents rapid-fire deployments from hammering HAProxy instances
+      # Default: 2s
+      minDeploymentInterval: 2s
+      # Interval for periodic drift prevention deployments
+      # Triggers deployment if no deployment occurred within this interval
+      # Helps detect and correct configuration drift from external changes
+      # Default: 60s
+      driftPreventionInterval: 60s
+
+      # Directory paths for HAProxy auxiliary files
+      # These paths are used for both validation and deployment
+      # See: https://www.haproxy.com/documentation/haproxy-data-plane-api/reference/configuration-file/#resources
+      mapsDir: /etc/haproxy/maps
+      sslCertsDir: /etc/haproxy/certs
+      generalStorageDir: /etc/haproxy/general
+      configFile: /etc/haproxy/haproxy.cfg
+
+    logging:
+      verbose: 1  # 0=WARNING, 1=INFO, 2=DEBUG
+
+    watchedResourcesIgnoreFields:
+      - metadata.managedFields
+
+    watchedResources:
+      ingresses:
+        apiVersion: networking.k8s.io/v1
+        resources: ingresses
+        indexBy: [ "metadata.namespace", "metadata.name" ]
+        enableValidationWebhook: true
+      services:
+        apiVersion: v1
+        resources: services
+        indexBy: [ "metadata.namespace", "metadata.name" ]
+      endpoints:
+        apiVersion: discovery.k8s.io/v1
+        resources: endpointslices
+        indexBy: [ "metadata.labels.kubernetes\\.io/service-name" ]
+      secrets:
+        apiVersion: v1
+        resources: secrets
+        store: on-demand
+        indexBy: [ "metadata.namespace", "metadata.name" ]
+
+    # Template customization
+    # The sections below (templateSnippets, maps, files, haproxyConfig, validationTests)
+    # are provided by template libraries (see controller.templateLibraries above).
+    # You can override or extend library templates by defining them here.
+    # User-provided values always take precedence over library defaults.
+    #
+    # Example - Override a specific template snippet:
+    # templateSnippets:
+    #   backend-name:
+    #     template: >-
+    #       custom_{{ ingress.metadata.name }}
+    #
+    # Example - Add a custom map:
+    # maps:
+    #   custom.map:
+    #     template: |
+    #       # Your custom map content
+    #
+    # Example - Add custom validation tests:
+    # validationTests:
+    #   test-custom-feature:
+    #     description: Test custom feature
+    #     fixtures:
+    #       ingresses: [...]
+    #     assertions: [...]
+
+    # Uncomment and customize as needed:
+    # templateSnippets:
+    # maps:
+    # files:
+    # haproxyConfig:
+    # validationTests:
 
 # Webhook configuration
 # Kubernetes admission webhook for resource validation
@@ -88,7 +223,7 @@ serviceAccount:
   # Automatically mount a ServiceAccount's API credentials
   automount: true
   # Annotations to add to the service account
-  annotations: {}
+  annotations: { }
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: ""
@@ -99,23 +234,23 @@ rbac:
   create: true
 
 # Pod annotations
-podAnnotations: {}
+podAnnotations: { }
 
 # Pod labels
-podLabels: {}
+podLabels: { }
 
 # Pod security context
-podSecurityContext: {}
-  # fsGroup: 2000
+podSecurityContext: { }
+# fsGroup: 2000
 
 # Container security context
-securityContext: {}
+securityContext: { }
   # capabilities:
   #   drop:
   #   - ALL
   # readOnlyRootFilesystem: true
   # runAsNonRoot: true
-  # runAsUser: 1000
+# runAsUser: 1000
 
 # Service configuration
 # Exposes controller endpoints (health and metrics)
@@ -150,7 +285,7 @@ service:
 #
 # The AUTOMEMLIMIT environment variable can be used to adjust the memory limit ratio (default: 0.9)
 # Example: AUTOMEMLIMIT=0.8 sets GOMEMLIMIT to 80% of the container memory limit
-resources: {}
+resources: { }
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
   # resources, such as Minikube. If you do want to specify resources, uncomment the following
@@ -160,16 +295,16 @@ resources: {}
   #   memory: 256Mi
   # requests:
   #   cpu: 100m
-  #   memory: 128Mi
+#   memory: 128Mi
 
 # Node selector
-nodeSelector: {}
+nodeSelector: { }
 
 # Tolerations
-tolerations: []
+tolerations: [ ]
 
 # Affinity rules
-affinity: {}
+affinity: { }
 
 # Autoscaling configuration
 autoscaling:
@@ -209,18 +344,18 @@ monitoring:
     scrapeTimeout: 10s
     # Additional labels for ServiceMonitor resource
     # Used by Prometheus to select which ServiceMonitors to use
-    labels: {}
+    labels: { }
     #   prometheus: kube-prometheus
     #   release: prometheus
     # Relabeling configurations applied before scraping
     # https://prometheus.io/docs/prometheus/latest/configuration/configuration/#relabel_config
-    relabelings: []
+    relabelings: [ ]
     # Example: Add cluster label
     # - sourceLabels: [__address__]
     #   targetLabel: cluster
     #   replacement: production
     # Metric relabeling configurations applied to scraped metrics
-    metricRelabelings: []
+    metricRelabelings: [ ]
     # Example: Drop specific metrics
     # - sourceLabels: [__name__]
     #   regex: 'haproxy_ic_event_subscribers'
@@ -257,7 +392,7 @@ networkPolicy:
           app: haproxy
           component: loadbalancer
       # Namespace selector - empty {} means all namespaces
-      namespaceSelector: {}
+      namespaceSelector: { }
       ports:
         - port: 5555  # Dataplane API
           protocol: TCP
@@ -265,7 +400,7 @@ networkPolicy:
           protocol: TCP
 
     # Additional custom egress rules
-    additionalRules: []
+    additionalRules: [ ]
     # Example:
     # - to:
     #     - namespaceSelector:
@@ -284,13 +419,13 @@ networkPolicy:
       enabled: false  # Set to true when using Prometheus with NetworkPolicy
       # Pod selector for monitoring systems (e.g., Prometheus)
       # Match the labels of your Prometheus pods
-      podSelector: {}
+      podSelector: { }
       #   matchLabels:
       #     app: prometheus
       #     app.kubernetes.io/name: prometheus
       # Namespace selector for monitoring systems
       # Match the namespace where Prometheus is running
-      namespaceSelector: {}
+      namespaceSelector: { }
       #   matchLabels:
       #     name: monitoring
       #     kubernetes.io/metadata.name: monitoring
@@ -303,7 +438,7 @@ networkPolicy:
       enabled: true
       # Allow from anywhere for health checks
       from:
-        - podSelector: {}
+        - podSelector: { }
       ports:
         - port: 8080  # Healthz
           protocol: TCP
@@ -315,8 +450,8 @@ networkPolicy:
       # Allow from all sources (API server nodes)
       # The Kubernetes API server needs to reach the webhook endpoint
       from:
-        - podSelector: {}
-        - namespaceSelector: {}
+        - podSelector: { }
+        - namespaceSelector: { }
 
     # Additional custom ingress rules
-    additionalRules: []
+    additionalRules: [ ]

@@ -83,6 +83,11 @@ const (
 	EventTypeValidationCompleted = "validation.completed"
 	EventTypeValidationFailed    = "validation.failed"
 
+	// Validation test event types (embedded validation tests).
+	EventTypeValidationTestsStarted   = "validation_tests.started"
+	EventTypeValidationTestsCompleted = "validation_tests.completed"
+	EventTypeValidationTestsFailed    = "validation_tests.failed"
+
 	// Deployment event types.
 	EventTypeDeploymentScheduled      = "deployment.scheduled"
 	EventTypeDeploymentStarted        = "deployment.started"
@@ -652,6 +657,77 @@ func NewValidationFailedEvent(errors []string, durationMs int64) *ValidationFail
 
 func (e *ValidationFailedEvent) EventType() string    { return EventTypeValidationFailed }
 func (e *ValidationFailedEvent) Timestamp() time.Time { return e.timestamp }
+
+// ValidationTestsStartedEvent is published when embedded validation tests begin execution.
+//
+// This is used for both CLI validation and webhook validation.
+type ValidationTestsStartedEvent struct {
+	TestCount int // Number of tests to execute
+	timestamp time.Time
+}
+
+// NewValidationTestsStartedEvent creates a new ValidationTestsStartedEvent.
+func NewValidationTestsStartedEvent(testCount int) *ValidationTestsStartedEvent {
+	return &ValidationTestsStartedEvent{
+		TestCount: testCount,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *ValidationTestsStartedEvent) EventType() string    { return EventTypeValidationTestsStarted }
+func (e *ValidationTestsStartedEvent) Timestamp() time.Time { return e.timestamp }
+
+// ValidationTestsCompletedEvent is published when all validation tests finish execution.
+//
+// This event is published regardless of whether tests passed or failed.
+type ValidationTestsCompletedEvent struct {
+	TotalTests  int   // Total number of tests executed
+	PassedTests int   // Number of tests that passed
+	FailedTests int   // Number of tests that failed
+	DurationMs  int64 // Time taken to execute all tests
+	timestamp   time.Time
+}
+
+// NewValidationTestsCompletedEvent creates a new ValidationTestsCompletedEvent.
+func NewValidationTestsCompletedEvent(total, passed, failed int, durationMs int64) *ValidationTestsCompletedEvent {
+	return &ValidationTestsCompletedEvent{
+		TotalTests:  total,
+		PassedTests: passed,
+		FailedTests: failed,
+		DurationMs:  durationMs,
+		timestamp:   time.Now(),
+	}
+}
+
+func (e *ValidationTestsCompletedEvent) EventType() string    { return EventTypeValidationTestsCompleted }
+func (e *ValidationTestsCompletedEvent) Timestamp() time.Time { return e.timestamp }
+
+// ValidationTestsFailedEvent is published when validation tests fail during webhook validation.
+//
+// This event is only published during webhook validation when tests fail and admission is denied.
+type ValidationTestsFailedEvent struct {
+	FailedTests []string // Names of tests that failed
+	timestamp   time.Time
+}
+
+// NewValidationTestsFailedEvent creates a new ValidationTestsFailedEvent.
+// Performs defensive copy of the failed tests slice.
+func NewValidationTestsFailedEvent(failedTests []string) *ValidationTestsFailedEvent {
+	// Defensive copy of slice
+	var failedCopy []string
+	if len(failedTests) > 0 {
+		failedCopy = make([]string, len(failedTests))
+		copy(failedCopy, failedTests)
+	}
+
+	return &ValidationTestsFailedEvent{
+		FailedTests: failedCopy,
+		timestamp:   time.Now(),
+	}
+}
+
+func (e *ValidationTestsFailedEvent) EventType() string    { return EventTypeValidationTestsFailed }
+func (e *ValidationTestsFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Deployment Events.

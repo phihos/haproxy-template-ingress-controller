@@ -353,6 +353,27 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 				len(e.Errors), e.DurationMs),
 			append(attrs, "error_count", len(e.Errors), "duration_ms", e.DurationMs)
 
+	// Validation Test Events
+	case *events.ValidationTestsStartedEvent:
+		return fmt.Sprintf("Starting validation tests (%d tests)", e.TestCount),
+			append(attrs, "test_count", e.TestCount)
+
+	case *events.ValidationTestsCompletedEvent:
+		return fmt.Sprintf("Validation tests completed: %d passed, %d failed (%dms)",
+				e.PassedTests, e.FailedTests, e.DurationMs),
+			append(attrs,
+				"total_tests", e.TotalTests,
+				"passed_tests", e.PassedTests,
+				"failed_tests", e.FailedTests,
+				"duration_ms", e.DurationMs)
+
+	case *events.ValidationTestsFailedEvent:
+		return fmt.Sprintf("Validation tests failed: %d tests",
+				len(e.FailedTests)),
+			append(attrs,
+				"failed_count", len(e.FailedTests),
+				"failed_tests", e.FailedTests)
+
 	// Deployment Events
 	case *events.DeploymentStartedEvent:
 		return fmt.Sprintf("Deployment started to %d HAProxy instances", len(e.Endpoints)),

@@ -69,6 +69,49 @@ type Config struct {
 
 	// HAProxyConfig contains the main HAProxy configuration template.
 	HAProxyConfig HAProxyConfig `yaml:"haproxy_config"`
+
+	// ValidationTests contains embedded tests for validating template rendering.
+	// These tests are used both in CLI validation and webhook admission validation.
+	// The map key is the test name, which must be unique.
+	ValidationTests map[string]ValidationTest `yaml:"validation_tests"`
+}
+
+// ValidationTest defines a single validation test with fixtures and assertions.
+//
+// The test name is provided by the map key in ValidationTests.
+type ValidationTest struct {
+	// Description explains what this test validates.
+	Description string `yaml:"description"`
+
+	// Fixtures contains mock Kubernetes resources for this test.
+	// The map key is the resource type name (e.g., "services", "ingresses").
+	// The map value is a list of resources in unstructured format.
+	Fixtures map[string][]interface{} `yaml:"fixtures"`
+
+	// Assertions contains validation checks to run against the rendered config.
+	Assertions []ValidationAssertion `yaml:"assertions"`
+}
+
+// ValidationAssertion defines a single validation check.
+type ValidationAssertion struct {
+	// Type is the assertion type: "haproxy_valid", "contains", "not_contains", "equals", "jsonpath".
+	Type string `yaml:"type"`
+
+	// Description explains what this assertion validates.
+	Description string `yaml:"description"`
+
+	// Target specifies what to validate: "haproxy.cfg", "map:<name>", "file:<name>", "cert:<name>".
+	// Only used for non-haproxy_valid assertions.
+	Target string `yaml:"target"`
+
+	// Pattern is the regex pattern to match (for "contains" and "not_contains").
+	Pattern string `yaml:"pattern"`
+
+	// Expected is the expected value (for "equals" and "jsonpath").
+	Expected string `yaml:"expected"`
+
+	// JSONPath is the JSONPath expression to query (for "jsonpath").
+	JSONPath string `yaml:"jsonpath"`
 }
 
 // PodSelector identifies which HAProxy pods to configure.
@@ -215,7 +258,8 @@ type WatchedResource struct {
 // TemplateSnippet is a reusable template fragment.
 type TemplateSnippet struct {
 	// Name is the snippet identifier for {% include "name" %}.
-	Name string `yaml:"name"`
+	// This is derived from the map key in the configuration.
+	Name string
 
 	// Template is the template content.
 	Template string `yaml:"template"`

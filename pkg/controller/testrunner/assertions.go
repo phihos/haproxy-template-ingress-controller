@@ -22,7 +22,7 @@ import (
 
 	"k8s.io/client-go/util/jsonpath"
 
-	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
+	"haproxy-template-ic/pkg/core/config"
 	"haproxy-template-ic/pkg/dataplane"
 )
 
@@ -33,7 +33,7 @@ func (r *Runner) assertHAProxyValid(
 	_ context.Context,
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
-	assertion *v1alpha1.ValidationAssertion,
+	assertion *config.ValidationAssertion,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "haproxy_valid",
@@ -59,7 +59,7 @@ func (r *Runner) assertHAProxyValid(
 func (r *Runner) assertContains(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
-	assertion *v1alpha1.ValidationAssertion,
+	assertion *config.ValidationAssertion,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "contains",
@@ -94,7 +94,7 @@ func (r *Runner) assertContains(
 func (r *Runner) assertNotContains(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
-	assertion *v1alpha1.ValidationAssertion,
+	assertion *config.ValidationAssertion,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "not_contains",
@@ -129,7 +129,7 @@ func (r *Runner) assertNotContains(
 func (r *Runner) assertEquals(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
-	assertion *v1alpha1.ValidationAssertion,
+	assertion *config.ValidationAssertion,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "equals",
@@ -159,7 +159,7 @@ func (r *Runner) assertEquals(
 // assertJSONPath evaluates a JSONPath expression against the template context.
 func (r *Runner) assertJSONPath(
 	templateContext map[string]interface{},
-	assertion *v1alpha1.ValidationAssertion,
+	assertion *config.ValidationAssertion,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "jsonpath",

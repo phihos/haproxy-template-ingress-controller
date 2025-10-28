@@ -157,7 +157,9 @@ func TestConvertCRDToConfig(t *testing.T) {
 				},
 				TemplateSnippets: map[string]config.TemplateSnippet{
 					"common_defaults": {
+						Name:     "common_defaults",
 						Template: "timeout connect 5s",
+						Priority: 500,
 					},
 				},
 				Maps: map[string]config.MapFile{

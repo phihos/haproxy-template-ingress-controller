@@ -60,3 +60,48 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Merge template libraries based on enabled flags
+Returns merged config with libraries applied in order: base -> haproxytech -> values.yaml
+*/}}
+{{- define "haproxy-template-ic.mergeLibraries" -}}
+{{- $merged := dict }}
+{{- $context := . }}
+
+{{- /* Load base library if enabled */ -}}
+{{- if $context.Values.controller.templateLibraries.base.enabled }}
+  {{- $baseLibrary := $context.Files.Get "libraries/base.yaml" | fromYaml }}
+  {{- $merged = merge $merged $baseLibrary }}
+{{- end }}
+
+{{- /* Load haproxytech library if enabled */ -}}
+{{- if $context.Values.controller.templateLibraries.haproxytech.enabled }}
+  {{- $haproxytechLibrary := $context.Files.Get "libraries/haproxytech.yaml" | fromYaml }}
+  {{- $merged = merge $merged $haproxytechLibrary }}
+{{- end }}
+
+{{- /* Merge user-provided config from values.yaml (highest priority) */ -}}
+{{- $userConfig := dict }}
+{{- if $context.Values.controller.config.templateSnippets }}
+  {{- $_ := set $userConfig "templateSnippets" $context.Values.controller.config.templateSnippets }}
+{{- end }}
+{{- if $context.Values.controller.config.maps }}
+  {{- $_ := set $userConfig "maps" $context.Values.controller.config.maps }}
+{{- end }}
+{{- if $context.Values.controller.config.files }}
+  {{- $_ := set $userConfig "files" $context.Values.controller.config.files }}
+{{- end }}
+{{- if $context.Values.controller.config.haproxyConfig }}
+  {{- $_ := set $userConfig "haproxyConfig" $context.Values.controller.config.haproxyConfig }}
+{{- end }}
+{{- if $context.Values.controller.config.validationTests }}
+  {{- $_ := set $userConfig "validationTests" $context.Values.controller.config.validationTests }}
+{{- end }}
+
+{{- /* Merge user config last so it overrides libraries */ -}}
+{{- $merged = merge $merged $userConfig }}
+
+{{- /* Return merged config as YAML */ -}}
+{{- $merged | toYaml }}
+{{- end }}

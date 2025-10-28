@@ -6,18 +6,18 @@ metadata:
   labels:
     {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 rules:
-  # Common Kubernetes resources (typically watched by controller)
-  # Ingresses
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
+  # Watched resources from configuration
+  {{- range $name, $resource := .Values.controller.config.watchedResources }}
+  - apiGroups:
+      {{- if eq $resource.apiVersion "v1" }}
+      - ""
+      {{- else }}
+      - {{ $resource.apiVersion | regexFind "^[^/]+" }}
+      {{- end }}
+    resources:
+      - {{ $resource.resources }}
     verbs: ["get", "list", "watch"]
-  # Services and Endpoints
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["discovery.k8s.io"]
-    resources: ["endpointslices"]
-    verbs: ["get", "list", "watch"]
+  {{- end }}
   # Additional core resources
   - apiGroups: [""]
     resources: ["namespaces", "pods"]
@@ -30,8 +30,4 @@ rules:
   - apiGroups: ["haproxy-template-ic.github.io"]
     resources: ["haproxytemplateconfigs"]
     verbs: ["get", "list", "watch"]
-  # Secrets for credentials referenced by HAProxyTemplateConfig
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "watch"]
 {{- end }}

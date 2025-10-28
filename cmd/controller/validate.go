@@ -100,78 +100,28 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no validation tests found in config")
 	}
 
-	// Create template engine with templates from config
-	templates := make(map[string]string)
-
-	// Add main HAProxy template
-	templates["haproxy.cfg"] = configSpec.HAProxyConfig.Template
-
-	// Add template snippets
-	for name, snippet := range configSpec.TemplateSnippets {
-		templates[name] = snippet.Template
-	}
-
-	// Add map files
-	for name, mapFile := range configSpec.Maps {
-		templates[name] = mapFile.Template
-	}
-
-	// Add general files
-	for name, file := range configSpec.Files {
-		templates[name] = file.Template
-	}
-
-	// Add SSL certificates
-	for name, cert := range configSpec.SSLCertificates {
-		templates[name] = cert.Template
-	}
-
-	logger.Info("Compiling templates",
-		"total_templates", len(templates),
-		"snippets", len(configSpec.TemplateSnippets),
-		"maps", len(configSpec.Maps),
-		"files", len(configSpec.Files),
-		"certs", len(configSpec.SSLCertificates))
-
-	engine, err := templating.New(templating.EngineTypeGonja, templates)
+	// Create template engine
+	engine, err := createTemplateEngine(configSpec, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create template engine: %w", err)
+		return err
 	}
 
-	// Setup validation paths
-	// Use temporary directory for validation
-	tempDir, err := os.MkdirTemp("", "haproxy-validation-*")
+	// Setup validation paths in temp directory
+	validationPaths, cleanupFunc, err := setupValidationPaths()
 	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
+		return err
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupFunc()
 
-	// Create auxiliary file directories
-	mapsDir := filepath.Join(tempDir, "maps")
-	sslCertsDir := filepath.Join(tempDir, "ssl")
-	generalStorageDir := filepath.Join(tempDir, "files")
-	configFile := filepath.Join(tempDir, "haproxy.cfg")
-
-	if err := os.MkdirAll(mapsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create maps directory: %w", err)
-	}
-	if err := os.MkdirAll(sslCertsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create SSL certs directory: %w", err)
-	}
-	if err := os.MkdirAll(generalStorageDir, 0755); err != nil {
-		return fmt.Errorf("failed to create general storage directory: %w", err)
-	}
-
-	validationPaths := dataplane.ValidationPaths{
-		MapsDir:           mapsDir,
-		SSLCertsDir:       sslCertsDir,
-		GeneralStorageDir: generalStorageDir,
-		ConfigFile:        configFile,
+	// Convert CRD spec to internal config format
+	cfg, err := testrunner.ConvertSpecToInternalConfig(configSpec)
+	if err != nil {
+		return fmt.Errorf("failed to convert config: %w", err)
 	}
 
 	// Create test runner
 	runner := testrunner.New(
-		configSpec,
+		cfg,
 		engine,
 		validationPaths,
 		testrunner.Options{
@@ -181,7 +131,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	// Run tests
 	logger.Info("Running validation tests",
-		"total_tests", len(configSpec.ValidationTests),
+		"total_tests", len(cfg.ValidationTests),
 		"filter", validateTestName)
 
 	results, err := runner.RunTests(ctx, validateTestName)
@@ -236,4 +186,77 @@ func loadConfigFromFile(filePath string) (*v1alpha1.HAProxyTemplateConfigSpec, e
 	}
 
 	return &spec, nil
+}
+
+// createTemplateEngine creates and compiles the template engine from config spec.
+func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, logger *slog.Logger) (*templating.TemplateEngine, error) {
+	// Extract all template sources
+	templates := make(map[string]string)
+
+	// Main HAProxy config template
+	templates["haproxy.cfg"] = configSpec.HAProxyConfig.Template
+
+	// Template snippets
+	for name, snippet := range configSpec.TemplateSnippets {
+		templates[name] = snippet.Template
+	}
+
+	// Map files
+	for name, mapFile := range configSpec.Maps {
+		templates[name] = mapFile.Template
+	}
+
+	// General files
+	for name, file := range configSpec.Files {
+		templates[name] = file.Template
+	}
+
+	// SSL certificates
+	for name, cert := range configSpec.SSLCertificates {
+		templates[name] = cert.Template
+	}
+
+	// Compile all templates
+	logger.Info("Compiling templates", "template_count", len(templates))
+	engine, err := templating.New(templating.EngineTypeGonja, templates)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile templates: %w", err)
+	}
+
+	return engine, nil
+}
+
+// setupValidationPaths creates temporary directories for HAProxy validation.
+// Returns the validation paths and a cleanup function.
+func setupValidationPaths() (dataplane.ValidationPaths, func(), error) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "haproxy-validate-*")
+	if err != nil {
+		return dataplane.ValidationPaths{}, nil, fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	// Create subdirectories for auxiliary files
+	mapsDir := filepath.Join(tempDir, "maps")
+	sslDir := filepath.Join(tempDir, "ssl")
+	filesDir := filepath.Join(tempDir, "files")
+
+	for _, dir := range []string{mapsDir, sslDir, filesDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			os.RemoveAll(tempDir)
+			return dataplane.ValidationPaths{}, nil, fmt.Errorf("failed to create directory: %w", err)
+		}
+	}
+
+	validationPaths := dataplane.ValidationPaths{
+		MapsDir:           mapsDir,
+		SSLCertsDir:       sslDir,
+		GeneralStorageDir: filesDir,
+		ConfigFile:        filepath.Join(tempDir, "haproxy.cfg"),
+	}
+
+	cleanupFunc := func() {
+		os.RemoveAll(tempDir)
+	}
+
+	return validationPaths, cleanupFunc, nil
 }
