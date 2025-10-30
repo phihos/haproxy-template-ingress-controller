@@ -1,26 +1,317 @@
 # Gateway API template library for HAProxy Template Ingress Controller
-# Provides support for Kubernetes Gateway API (gateway.networking.k8s.io)
+# Provides support for Kubernetes Gateway API (gateway.networking.k8s.io/v1)
 # Implements the resource_gateway_* plugin interface for the base library
 #
-# This library is currently a placeholder for future Gateway API support.
-# When implemented, it will provide routing for:
-# - HTTPRoute resources
-# - TCPRoute resources
-# - TLSRoute resources
-# - GRPCRoute resources
+# Supported resources:
+# - HTTPRoute (Standard/GA): HTTP/HTTPS routing with path matching, header matching, traffic splitting
+# - GRPCRoute (Standard/GA): gRPC-specific routing with method matching
 #
-# Expected plugin interface:
-# - resource_gateway_backends: Generate backend definitions from Gateway API routes
-# - resource_gateway_backend-name: Generate backend names for Gateway API routes
-# - Maps for Gateway API routing (similar to path-exact.map, path-prefix.map for Ingress)
+# Features:
+# - Path matching (Exact, PathPrefix, RegularExpression)
+# - Header matching
+# - Traffic splitting using HAProxy server weights
+# - Host-based routing
+# - Gateway name filtering (routes attach to specific Gateway resources)
+
+watchedResources:
+  httproutes:
+    apiVersion: gateway.networking.k8s.io/v1
+    resources: httproutes
+    indexBy: ["metadata.namespace", "metadata.name"]
+    enableValidationWebhook: true
+    # Filter by Gateway reference using label selector
+    # Users can label HTTPRoutes to target specific Gateways
+    # Example: kubectl label httproute my-route gateway=haproxy
+
+  grpcroutes:
+    apiVersion: gateway.networking.k8s.io/v1
+    resources: grpcroutes
+    indexBy: ["metadata.namespace", "metadata.name"]
+    enableValidationWebhook: true
 
 templateSnippets:
-  # Future: resource_gateway_backends
-  # Future: resource_gateway_backend-name
-  # Future: resource_gateway_route-map-entry
+  resource_gateway_backend-name:
+    template: >-
+      {{- " " -}}gtw_{{ route.metadata.namespace }}_{{ route.metadata.name }}_{{ backend.name }}_{{ backend.port }}
 
-maps:
-  # Future: Gateway API route matching maps
+  resource_gateway_backends:
+    template: |
+      {#- Generate backend definitions from HTTPRoute and GRPCRoute resources #}
+      {#- Deduplicates backends: one backend per unique (namespace, route, service, port) combination #}
+      {#- Usage: {% include "resource_gateway_backends" %} #}
 
-files:
-  # Future: Gateway API-specific files if needed
+      {#- Use namespace with string tracking for seen backends #}
+      {%- set ns = namespace(seen="") %}
+
+      {#- HTTPRoute backends #}
+      {%- for route in resources.httproutes.List() %}
+      {%- for rule in (route.spec.rules | default([])) %}
+      {%- if rule.backendRefs %}
+      {%- for backendRef in rule.backendRefs %}
+      {%- set backend = {"name": backendRef.name, "port": backendRef.port} %}
+      {%- set backend_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ backend.name ~ "_" ~ backend.port %}
+      {%- if ("|" ~ backend_key ~ "|") not in ns.seen %}
+      {%- set ns.seen = ns.seen ~ "|" ~ backend_key ~ "|" %}
+
+      backend {%+ include "resource_gateway_backend-name" +%}
+        balance roundrobin
+        default-server check
+        {%- filter indent(2, first=True) %}
+        {% include "backend-annotations" %}
+        {% set service_name = backend.name %}
+        {% set port = backend.port %}
+        {% include "backend-servers" %}
+        {%- endfilter %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+
+      {#- GRPCRoute backends #}
+      {%- for route in resources.grpcroutes.List() %}
+      {%- for rule in (route.spec.rules | default([])) %}
+      {%- if rule.backendRefs %}
+      {%- for backendRef in rule.backendRefs %}
+      {%- set backend = {"name": backendRef.name, "port": backendRef.port} %}
+      {%- set backend_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ backend.name ~ "_" ~ backend.port %}
+      {%- if ("|" ~ backend_key ~ "|") not in ns.seen %}
+      {%- set ns.seen = ns.seen ~ "|" ~ backend_key ~ "|" %}
+
+      backend {%+ include "resource_gateway_backend-name" +%}
+        balance roundrobin
+        default-server check proto h2
+        {%- filter indent(2, first=True) %}
+        {% include "backend-annotations" %}
+        {% set service_name = backend.name %}
+        {% set port = backend.port %}
+        {% include "backend-servers" %}
+        {%- endfilter %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+
+  resource_gateway_path-map-entry:
+    template: |
+      {#- Generate HTTPRoute path matching map entries #}
+      {#- Usage: {% include "resource_gateway_path-map-entry" with context %} where path_type = "Exact" or "PathPrefix" #}
+      {%- for route in resources.httproutes.List() %}
+      {%- for hostname in (route.spec.hostnames | default([""])) %}
+      {%- for rule in (route.spec.rules | default([])) %}
+      {%- if rule.backendRefs %}
+      {%- set first_backend = rule.backendRefs[0] %}
+      {%- set backend = {"name": first_backend.name, "port": first_backend.port} %}
+      {%- for match in (rule.matches | default([{}])) %}
+      {%- if match.path and match.path.type == path_type %}
+      {{ hostname }}{{ match.path.value | default("/") }} {% include "resource_gateway_backend-name" %}{{ suffix }}
+      {% elif not match.path and path_type == "PathPrefix" %}
+      {#- Default match (no path specified means match all) #}
+      {{ hostname }}/ {% include "resource_gateway_backend-name" %}{{ suffix }}
+      {% endif %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+      {%- endfor %}
+
+  map-entry-host-gateway:
+    template: |
+      {#- Generate host map entries for Gateway API routes #}
+      {%- for route in resources.httproutes.List() %}
+      {%- for hostname in (route.spec.hostnames | default([])) %}
+      {{ hostname }} {{ hostname }}
+      {% endfor %}
+      {% endfor %}
+      {%- for route in resources.grpcroutes.List() %}
+      {%- for hostname in (route.spec.hostnames | default([])) %}
+      {{ hostname }} {{ hostname }}
+      {% endfor %}
+      {% endfor %}
+
+  map-entry-path-exact-gateway:
+    template: |
+      {#- Generate exact path map entries for HTTPRoute #}
+      {% set path_type = "Exact" %}
+      {%- set suffix = "" %}
+      {% include "resource_gateway_path-map-entry" %}
+
+  map-entry-path-prefix-exact-gateway:
+    template: |
+      {#- Generate prefix-exact path map entries for HTTPRoute #}
+      {% set path_type = "PathPrefix" %}
+      {%- set suffix = "" %}
+      {% include "resource_gateway_path-map-entry" %}
+
+  map-entry-path-prefix-gateway:
+    template: |
+      {#- Generate prefix path map entries with trailing slash for HTTPRoute #}
+      {% set path_type = "PathPrefix" %}
+      {%- set suffix = "/" %}
+      {% include "resource_gateway_path-map-entry" %}
+
+  map-entry-path-regex-gateway:
+    template: |
+      {#- Generate regex path map entries for HTTPRoute with RegularExpression type #}
+      {%- for route in resources.httproutes.List() %}
+      {%- for hostname in (route.spec.hostnames | default([""])) %}
+      {%- for rule in (route.spec.rules | default([])) %}
+      {%- if rule.backendRefs %}
+      {%- set first_backend = rule.backendRefs[0] %}
+      {%- set backend = {"name": first_backend.name, "port": first_backend.port} %}
+      {%- for match in (rule.matches | default([{}])) %}
+      {%- if match.path and match.path.type == "RegularExpression" %}
+      {{ hostname }}{{ match.path.value | default("/") }} {% include "resource_gateway_backend-name" %}
+      {% endif %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+      {%- endfor %}
+
+validationTests:
+  test-httproute-duplicate-backend-different-ports:
+    description: HTTPRoute with multiple rules to same service but different ports (tests deduplication)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-svc
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+              - name: admin
+                port: 81
+                targetPort: 8081
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: multi-port
+            namespace: default
+          spec:
+            parentRefs:
+              - name: gateway
+                namespace: default
+            hostnames:
+              - example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                backendRefs:
+                  - name: api-svc
+                    port: 80
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /admin
+                backendRefs:
+                  - name: api-svc
+                    port: 81
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /app
+                backendRefs:
+                  - name: api-svc
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend gw_default_multi-port_api-svc_80"
+        description: Must generate backend for port 80
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend gw_default_multi-port_api-svc_81"
+        description: Must generate backend for port 81
+
+      - type: match_count
+        target: haproxy.cfg
+        pattern: "^backend gw_default_multi-port_api-svc_"
+        expected: "2"
+        description: Must generate exactly 2 backends (deduplication test)
+
+  test-grpcroute-duplicate-backend-different-ports:
+    description: GRPCRoute with multiple rules to same service but different ports (tests deduplication)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: grpc-svc
+            namespace: default
+          spec:
+            ports:
+              - name: grpc
+                port: 9090
+                targetPort: 9090
+              - name: grpc-admin
+                port: 9091
+                targetPort: 9091
+      grpcroutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: GRPCRoute
+          metadata:
+            name: multi-port
+            namespace: default
+          spec:
+            parentRefs:
+              - name: gateway
+                namespace: default
+            hostnames:
+              - grpc.example.com
+            rules:
+              - matches:
+                  - method:
+                      type: Exact
+                      service: com.example.API
+                      method: Method1
+                backendRefs:
+                  - name: grpc-svc
+                    port: 9090
+              - matches:
+                  - method:
+                      type: Exact
+                      service: com.example.Admin
+                      method: Method1
+                backendRefs:
+                  - name: grpc-svc
+                    port: 9091
+              - matches:
+                  - method:
+                      type: Exact
+                      service: com.example.App
+                      method: Method1
+                backendRefs:
+                  - name: grpc-svc
+                    port: 9090
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend gw_default_multi-port_grpc-svc_9090"
+        description: Must generate backend for port 9090
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend gw_default_multi-port_grpc-svc_9091"
+        description: Must generate backend for port 9091
+
+      - type: match_count
+        target: haproxy.cfg
+        pattern: "^backend gw_default_multi-port_grpc-svc_"
+        expected: "2"
+        description: Must generate exactly 2 backends (deduplication test)

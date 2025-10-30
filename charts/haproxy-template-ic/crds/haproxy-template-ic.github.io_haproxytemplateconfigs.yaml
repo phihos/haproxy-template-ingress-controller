@@ -205,12 +205,11 @@ spec:
                 type: object
               files:
                 additionalProperties:
-                  description: |-
-                    GeneralFile defines a general file generated from a template.
-
-                    The filename is derived from the map key in the configuration.
-                    The full path is constructed using the get_path filter in templates:
-                      {{ "503.http" | get_path("file") }} → /etc/haproxy/general/503.http
+                  description: "GeneralFile defines a general file generated from
+                    a template.\n\nThe filename is derived from the map key in the
+                    configuration.\nThe full path is constructed using the get_path
+                    filter in templates:\n\n\t{{ \"503.http\" | get_path(\"file\")
+                    }} → /etc/haproxy/general/503.http"
                   properties:
                     template:
                       description: Template is the Gonja template for generating the
@@ -340,8 +339,10 @@ spec:
                 type: object
               validationTests:
                 additionalProperties:
-                  description: ValidationTest defines a validation test with fixtures
-                    and assertions. The test name is provided by the map key.
+                  description: |-
+                    ValidationTest defines a validation test with fixtures and assertions.
+
+                    The test name is provided by the map key in ValidationTests.
                   properties:
                     assertions:
                       description: Assertions defines the validation checks to perform.
@@ -384,12 +385,14 @@ spec:
                                 - not_contains: Checks if target does not contain pattern (regex)
                                 - equals: Checks if target equals expected value
                                 - jsonpath: Evaluates JSONPath expression against target
+                                - match_count: Counts how many times pattern matches in target (regex)
                             enum:
                             - haproxy_valid
                             - contains
                             - not_contains
                             - equals
                             - jsonpath
+                            - match_count
                             type: string
                         required:
                         - type

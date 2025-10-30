@@ -33,5 +33,8 @@ spec:
   {{- if $mergedLibraries.validationTests }}
     {{- $_ := set $config "validationTests" $mergedLibraries.validationTests }}
   {{- end }}
+  {{- if $mergedLibraries.watchedResources }}
+    {{- $_ := set $config "watchedResources" (merge ($config.watchedResources | default dict) $mergedLibraries.watchedResources) }}
+  {{- end }}
   {{- toYaml $config | nindent 2 }}
 {{- end }}

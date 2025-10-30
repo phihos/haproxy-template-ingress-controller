@@ -62,8 +62,9 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Merge template libraries based on enabled flags
+Deep merge template libraries based on enabled flags
 Returns merged config with libraries applied in order: base -> ingress -> gateway -> haproxytech -> values.yaml
+Uses mustMergeOverwrite for deep merging of all nested structures
 */}}
 {{- define "haproxy-template-ic.mergeLibraries" -}}
 {{- $merged := dict }}
@@ -72,25 +73,25 @@ Returns merged config with libraries applied in order: base -> ingress -> gatewa
 {{- /* Load base library if enabled */ -}}
 {{- if $context.Values.controller.templateLibraries.base.enabled }}
   {{- $baseLibrary := $context.Files.Get "libraries/base.yaml" | fromYaml }}
-  {{- $merged = merge $merged $baseLibrary }}
+  {{- $merged = mustMergeOverwrite $merged $baseLibrary }}
 {{- end }}
 
 {{- /* Load ingress library if enabled */ -}}
 {{- if $context.Values.controller.templateLibraries.ingress.enabled }}
   {{- $ingressLibrary := $context.Files.Get "libraries/ingress.yaml" | fromYaml }}
-  {{- $merged = merge $merged $ingressLibrary }}
+  {{- $merged = mustMergeOverwrite $merged $ingressLibrary }}
 {{- end }}
 
-{{- /* Load gateway library if enabled */ -}}
-{{- if $context.Values.controller.templateLibraries.gateway.enabled }}
+{{- /* Load gateway library if enabled AND Gateway API CRDs are available */ -}}
+{{- if and $context.Values.controller.templateLibraries.gateway.enabled ($context.Capabilities.APIVersions.Has "gateway.networking.k8s.io/v1/GatewayClass") }}
   {{- $gatewayLibrary := $context.Files.Get "libraries/gateway.yaml" | fromYaml }}
-  {{- $merged = merge $merged $gatewayLibrary }}
+  {{- $merged = mustMergeOverwrite $merged $gatewayLibrary }}
 {{- end }}
 
 {{- /* Load haproxytech library if enabled */ -}}
 {{- if $context.Values.controller.templateLibraries.haproxytech.enabled }}
   {{- $haproxytechLibrary := $context.Files.Get "libraries/haproxytech.yaml" | fromYaml }}
-  {{- $merged = merge $merged $haproxytechLibrary }}
+  {{- $merged = mustMergeOverwrite $merged $haproxytechLibrary }}
 {{- end }}
 
 {{- /* Merge user-provided config from values.yaml (highest priority) */ -}}
@@ -112,7 +113,7 @@ Returns merged config with libraries applied in order: base -> ingress -> gatewa
 {{- end }}
 
 {{- /* Merge user config last so it overrides libraries */ -}}
-{{- $merged = merge $merged $userConfig }}
+{{- $merged = mustMergeOverwrite $merged $userConfig }}
 
 {{- /* Return merged config as YAML */ -}}
 {{- $merged | toYaml }}

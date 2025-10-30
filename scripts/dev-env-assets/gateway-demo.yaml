@@ -1,0 +1,161 @@
+# Gateway API demonstration resources for HAProxy Template Ingress Controller
+# This file demonstrates HTTPRoute capabilities including:
+# - Basic path-based routing
+# - Path matching variants (Exact, PathPrefix)
+# - Traffic splitting with weighted backends
+#
+# Prerequisites:
+# - Gateway API CRDs must be installed
+# - Gateway library must be enabled in controller config
+# - echo-server service must exist
+
+---
+# Base Gateway resource that HTTPRoutes will attach to
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: dev-gateway
+  namespace: echo
+spec:
+  gatewayClassName: haproxy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+
+---
+# HTTPRoute 1: Basic path-based routing
+# Demonstrates: Simple PathPrefix matching with single backend
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-basic
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-gateway.localdev.me"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 2: Path matching variants
+# Demonstrates: Exact and PathPrefix matching on different paths
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-paths
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-paths.localdev.me"
+  rules:
+    # Exact path match - only matches /exact, not /exact/foo
+    - matches:
+        - path:
+            type: Exact
+            value: /exact
+      backendRefs:
+        - name: echo-server
+          port: 80
+    # PathPrefix match - matches /api, /api/, /api/foo, etc.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: echo-server
+          port: 80
+    # Default catch-all for other paths
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 3: Traffic splitting with weighted backends
+# Demonstrates: Weighted routing to multiple backends (70/30 split)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-split
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-split.localdev.me"
+  rules:
+    - backendRefs:
+        # 70% of traffic goes to primary echo-server
+        - name: echo-server
+          port: 80
+          weight: 70
+        # 30% of traffic goes to echo-server-v2
+        - name: echo-server-v2
+          port: 80
+          weight: 30
+
+---
+# Second echo server variant for traffic splitting demonstration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-server-v2
+  namespace: echo
+  labels:
+    app: echo-server-v2
+    variant: v2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: echo-server-v2
+      variant: v2
+  template:
+    metadata:
+      labels:
+        app: echo-server-v2
+        variant: v2
+    spec:
+      containers:
+        - name: server
+          image: ealen/echo-server:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            # Set environment variable to distinguish v2 in responses
+            - name: ENVIRONMENT
+              value: "v2"
+          ports:
+            - containerPort: 80
+
+---
+# Service for echo-server-v2
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-server-v2
+  namespace: echo
+  labels:
+    app: echo-server-v2
+    variant: v2
+spec:
+  selector:
+    app: echo-server-v2
+    variant: v2
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

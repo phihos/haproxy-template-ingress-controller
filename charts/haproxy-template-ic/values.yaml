@@ -31,6 +31,7 @@ controller:
   # Control which predefined template libraries to include
   # Libraries are merged in order: base -> ingress -> gateway -> haproxytech -> values.yaml
   # User-provided config in controller.config always takes precedence
+  # Each library can define its own watched resources (conditionally included when enabled)
   templateLibraries:
     # Base library: Resource-agnostic core configuration
     # Provides generic HAProxy configuration, error pages, and plugin orchestration
@@ -40,18 +41,33 @@ controller:
     # Ingress library: Kubernetes Ingress resource support
     # Provides routing and backend management for networking.k8s.io/v1 Ingress resources
     # Implements resource_ingress_* plugin interface (backends, maps, routing logic)
+    # Watched resources: ingresses (filtered by spec.ingressClassName)
     ingress:
       enabled: true
-    # Gateway library: Kubernetes Gateway API support (placeholder for future implementation)
-    # Will provide routing for gateway.networking.k8s.io resources (HTTPRoute, TCPRoute, etc.)
-    # Will implement resource_gateway_* plugin interface
+    # Gateway library: Kubernetes Gateway API support
+    # Provides routing for gateway.networking.k8s.io/v1 resources (HTTPRoute, GRPCRoute)
+    # Implements resource_gateway_* plugin interface
+    # Watched resources: httproutes, grpcroutes
+    # Features: Path matching, header matching, traffic splitting, host-based routing
     gateway:
-      enabled: false
+      enabled: true
     # HAProxyTech library: Support for haproxy.org/* annotations
     # Currently includes basic authentication (haproxy.org/auth-type, haproxy.org/auth-secret)
     # Works with both Ingress and Gateway API resources
     haproxytech:
       enabled: true
+    # HAProxy Ingress library: haproxy-ingress.github.io annotation compatibility
+    # Provides support for haproxy-ingress.github.io/path-type annotation
+    # Supports: "regex" path type for Ingress resources with pathType: ImplementationSpecific
+    # Reference: https://haproxy-ingress.github.io/docs/configuration/keys/#path-type
+    haproxyIngress:
+      enabled: false
+    # Path Regex Last library: Performance-first path matching order
+    # Overrides default ordering to: Exact > Prefix > Regex (regex moved to last)
+    # Default (de facto standard): Exact > Regex > Prefix
+    # Enable for HAProxy-optimized performance (exact/prefix faster than regex)
+    pathRegexLast:
+      enabled: false
 
   # HAProxyTemplateConfig specification
   # This configuration is rendered into a HAProxyTemplateConfig CRD
@@ -122,11 +138,11 @@ controller:
       - metadata.managedFields
 
     watchedResources:
-      ingresses:
-        apiVersion: networking.k8s.io/v1
-        resources: ingresses
-        indexBy: [ "metadata.namespace", "metadata.name" ]
-        enableValidationWebhook: true
+      # Resource-specific watched resources are defined in template libraries:
+      # - ingresses: Defined in ingress library (when enabled)
+      # - httproutes, grpcroutes: Defined in gateway library (when enabled)
+      #
+      # Core resources (always watched):
       services:
         apiVersion: v1
         resources: services
@@ -140,6 +156,13 @@ controller:
         resources: secrets
         store: on-demand
         indexBy: [ "metadata.namespace", "metadata.name" ]
+      #
+      # You can add custom watched resources here or override library-defined resources
+      # Example - Watch ConfigMaps:
+      # configmaps:
+      #   apiVersion: v1
+      #   resources: configmaps
+      #   indexBy: ["metadata.namespace", "metadata.name"]
 
     # Template customization
     # The sections below (templateSnippets, maps, files, haproxyConfig, validationTests)
@@ -221,6 +244,50 @@ webhook:
   caBundle: ""  # Base64-encoded CA certificate
   # Example:
   # caBundle: LS0tLS1CRUdJTi...
+
+# IngressClass resource
+# Creates an IngressClass resource for Kubernetes 1.18+
+# Only created when ingress library is enabled and API is available
+ingressClass:
+  # Enable IngressClass creation
+  enabled: true
+  # Name of the IngressClass
+  name: haproxy
+  # Mark as default IngressClass for the cluster
+  # Warning: Only one IngressClass should be marked as default cluster-wide
+  # Set to true only if this is the sole ingress controller
+  default: false
+  # Controller identifier (must be unique across all ingress controllers)
+  # This value should match what the controller uses to identify itself
+  controllerName: haproxy-template-ic.github.io/controller
+
+# GatewayClass resource
+# Creates a GatewayClass resource for Gateway API
+# Only created when gateway library is enabled and Gateway API CRDs are installed
+# Prerequisites: Gateway API CRDs must be installed first:
+#   kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+gatewayClass:
+  # Enable GatewayClass creation
+  enabled: true
+  # Name of the GatewayClass
+  name: haproxy
+  # Mark as default GatewayClass for the cluster
+  # Warning: Only one GatewayClass should be marked as default cluster-wide
+  # Set to true only if this is the sole Gateway API controller
+  default: false
+  # Controller identifier (must be unique across all Gateway API controllers)
+  # This value should match what the controller uses to identify itself
+  controllerName: haproxy-template-ic.github.io/controller
+  # Reference to HAProxyTemplateConfig for controller-specific configuration
+  # Automatically points to the HAProxyTemplateConfig created by this chart
+  # This links Gateway API configuration to the controller's template-based config
+  parametersRef:
+    group: haproxy-template-ic.github.io
+    kind: HAProxyTemplateConfig
+    # Name will default to controller.crdName if empty
+    name: ""
+    # Namespace will default to Release.Namespace if empty
+    namespace: ""
 
 # Dataplane API credentials
 credentials:

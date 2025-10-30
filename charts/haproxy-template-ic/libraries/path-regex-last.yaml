@@ -1,0 +1,36 @@
+# Path Regex Last library for HAProxy Template Ingress Controller
+# Overrides the default path matching order to place regex matching last
+#
+# Default ordering (de facto standard): Exact > Regex > Prefix
+# This library ordering (performance-first): Exact > Prefix > Regex
+#
+# Enable this library for HAProxy-optimized path matching where faster
+# exact and prefix matches are evaluated before slower regex matches.
+#
+# Usage:
+#   controller:
+#     templateLibraries:
+#       pathRegexLast:
+#         enabled: true
+
+templateSnippets:
+  use-backend-selection:
+    template: |
+      {#- Backend selection logic with performance-first ordering #}
+      {#- Overrides base library: Exact > Prefix > Regex (regex moved to last) #}
+
+      # Set variables for path-based routing
+      http-request set-var(txn.base) base
+      http-request set-var(txn.path) path
+      http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
+      http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
+      http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ "host.map" | get_path("map") }},'') if !{ var(txn.host_match) -m found }
+
+      # Path matching order: Exact > Prefix-exact > Prefix > Regex
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ "path-regex.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+
+      # Use path maps for routing
+      use_backend %[var(txn.path_match)]

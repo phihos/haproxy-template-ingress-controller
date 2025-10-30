@@ -22,6 +22,7 @@ package validator
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"haproxy-template-ic/pkg/controller/events"
@@ -36,17 +37,27 @@ const (
 
 // HAProxyValidatorComponent validates rendered HAProxy configurations.
 //
-// It subscribes to TemplateRenderedEvent, validates the configuration using
+// It subscribes to TemplateRenderedEvent and BecameLeaderEvent, validates the configuration using
 // dataplane.ValidateConfiguration(), and publishes validation result events
 // for the next phase (deployment).
 //
 // Validation is performed in two phases:
 //  1. Syntax validation using client-native parser
 //  2. Semantic validation using haproxy binary (-c flag)
+//
+// The component caches the last validation result to support state replay during
+// leadership transitions (when new leader-only components start subscribing).
 type HAProxyValidatorComponent struct {
 	eventBus        *busevents.EventBus
 	logger          *slog.Logger
 	validationPaths dataplane.ValidationPaths
+
+	// State protected by mutex (for leadership transition replay)
+	mu                       sync.RWMutex
+	lastValidationSucceeded  bool
+	lastValidationWarnings   []string
+	lastValidationDurationMs int64
+	hasValidationResult      bool
 }
 
 // NewHAProxyValidator creates a new HAProxy validator component.
@@ -104,8 +115,12 @@ func (v *HAProxyValidatorComponent) Start(ctx context.Context) error {
 
 // handleEvent processes events from the EventBus.
 func (v *HAProxyValidatorComponent) handleEvent(event busevents.Event) {
-	if ev, ok := event.(*events.TemplateRenderedEvent); ok {
+	switch ev := event.(type) {
+	case *events.TemplateRenderedEvent:
 		v.handleTemplateRendered(ev)
+
+	case *events.BecameLeaderEvent:
+		v.handleBecameLeader(ev)
 	}
 }
 
@@ -154,14 +169,66 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 	v.logger.Info("HAProxy configuration validation completed",
 		"duration_ms", durationMs)
 
+	// Cache validation result for leadership transition replay
+	v.mu.Lock()
+	v.lastValidationSucceeded = true
+	v.lastValidationWarnings = []string{} // No warnings
+	v.lastValidationDurationMs = durationMs
+	v.hasValidationResult = true
+	v.mu.Unlock()
+
 	v.eventBus.Publish(events.NewValidationCompletedEvent(
 		[]string{}, // No warnings
 		durationMs,
 	))
 }
 
-// publishValidationFailure publishes a validation failure event.
+// handleBecameLeader handles BecameLeaderEvent by re-publishing the last validation result.
+//
+// This ensures DeploymentScheduler (which starts subscribing only after becoming leader)
+// receives the current validation state, even if validation occurred before leadership was acquired.
+//
+// This prevents the "late subscriber problem" where leader-only components miss events
+// that were published before they started subscribing.
+func (v *HAProxyValidatorComponent) handleBecameLeader(_ *events.BecameLeaderEvent) {
+	v.mu.RLock()
+	hasResult := v.hasValidationResult
+	succeeded := v.lastValidationSucceeded
+	warnings := v.lastValidationWarnings
+	durationMs := v.lastValidationDurationMs
+	v.mu.RUnlock()
+
+	if !hasResult {
+		v.logger.Debug("became leader but no validation result available yet, skipping state replay")
+		return
+	}
+
+	if succeeded {
+		v.logger.Info("became leader, re-publishing last validation result (success) for DeploymentScheduler",
+			"warnings", len(warnings),
+			"duration_ms", durationMs)
+
+		v.eventBus.Publish(events.NewValidationCompletedEvent(
+			warnings,
+			durationMs,
+		))
+	} else {
+		v.logger.Info("became leader, last validation failed, skipping state replay")
+		// Note: We only replay ValidationCompletedEvent (success), not ValidationFailedEvent.
+		// DeploymentScheduler only acts on successful validation, so replaying failures
+		// would be unnecessary and could cause confusion.
+	}
+}
+
+// publishValidationFailure publishes a validation failure event and caches the failure state.
 func (v *HAProxyValidatorComponent) publishValidationFailure(errors []string, durationMs int64) {
+	// Cache validation failure for leadership transition state
+	v.mu.Lock()
+	v.lastValidationSucceeded = false
+	v.lastValidationDurationMs = durationMs
+	v.hasValidationResult = true
+	v.mu.Unlock()
+
 	v.eventBus.Publish(events.NewValidationFailedEvent(
 		errors,
 		durationMs,

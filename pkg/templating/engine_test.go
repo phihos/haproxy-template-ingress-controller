@@ -14,7 +14,7 @@ func TestNew_Success(t *testing.T) {
 		"farewell": "Goodbye {{ name }}!",
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, engine)
 
@@ -32,7 +32,7 @@ func TestNew_UnsupportedEngine(t *testing.T) {
 
 	// Use an invalid engine type
 	invalidEngine := EngineType(999)
-	engine, err := New(invalidEngine, templates)
+	engine, err := New(invalidEngine, templates, nil, nil)
 
 	assert.Nil(t, engine)
 	require.Error(t, err)
@@ -48,7 +48,7 @@ func TestNew_CompilationError(t *testing.T) {
 		"invalid": "Hello {{ name",
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 
 	assert.Nil(t, engine)
 	require.Error(t, err)
@@ -64,7 +64,7 @@ func TestRender_Success(t *testing.T) {
 		"info":     "Name: {{ user.name }}, Age: {{ user.age }}",
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	// Test simple rendering
@@ -90,7 +90,7 @@ func TestRender_TemplateNotFound(t *testing.T) {
 		"greeting": "Hello {{ name }}!",
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	output, err := engine.Render("nonexistent", map[string]interface{}{})
@@ -110,7 +110,7 @@ func TestRender_RenderError(t *testing.T) {
 		"with_error": "{{ value | undefined_filter }}",
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	output, err := engine.Render("with_error", map[string]interface{}{
@@ -132,7 +132,7 @@ func TestTemplateNames(t *testing.T) {
 		"template3": "Content 3",
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	names := engine.TemplateNames()
@@ -148,7 +148,7 @@ func TestGetRawTemplate(t *testing.T) {
 		"greeting": templateContent,
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	// Test existing template
@@ -170,7 +170,7 @@ func TestHasTemplate(t *testing.T) {
 		"existing": "Content",
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	assert.True(t, engine.HasTemplate("existing"))
@@ -183,7 +183,7 @@ func TestString(t *testing.T) {
 		"template2": "Content 2",
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	str := engine.String()
@@ -254,7 +254,7 @@ func TestGonja_ComplexFeatures(t *testing.T) {
 		"with_filter": `{{ text | upper }}`,
 	}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	// Test loop
@@ -282,7 +282,7 @@ func TestGonja_ComplexFeatures(t *testing.T) {
 func TestNew_EmptyTemplates(t *testing.T) {
 	templates := map[string]string{}
 
-	engine, err := New(EngineTypeGonja, templates)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, engine)
 
@@ -349,7 +349,7 @@ func TestTemplateIncludes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := New(EngineTypeGonja, tt.templates)
+			engine, err := New(EngineTypeGonja, tt.templates, nil, nil)
 			require.NoError(t, err)
 
 			output, err := engine.Render(tt.render, tt.context)
@@ -443,7 +443,7 @@ func TestNewWithFilters_GetPathFilter(t *testing.T) {
 				"test": tt.template,
 			}
 
-			engine, err := NewWithFilters(EngineTypeGonja, templates, filters)
+			engine, err := New(EngineTypeGonja, templates, filters, nil)
 			require.NoError(t, err)
 
 			output, err := engine.Render("test", tt.context)
@@ -478,7 +478,7 @@ func TestNewWithFilters_CustomPathsConfiguration(t *testing.T) {
 		"test": `{{ "test.map" | get_path("map") }}`,
 	}
 
-	engine, err := NewWithFilters(EngineTypeGonja, templates, filters)
+	engine, err := New(EngineTypeGonja, templates, filters, nil)
 	require.NoError(t, err)
 
 	output, err := engine.Render("test", nil)
@@ -512,7 +512,7 @@ func TestNewWithFilters_MultipleFilters(t *testing.T) {
 		"test": `{{ filename | uppercase | get_path("map") }}`,
 	}
 
-	engine, err := NewWithFilters(EngineTypeGonja, templates, filters)
+	engine, err := New(EngineTypeGonja, templates, filters, nil)
 	require.NoError(t, err)
 
 	output, err := engine.Render("test", map[string]interface{}{
@@ -528,7 +528,7 @@ func TestNewWithFilters_NilFilters(t *testing.T) {
 		"test": "Hello {{ name }}",
 	}
 
-	engine, err := NewWithFilters(EngineTypeGonja, templates, nil)
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	output, err := engine.Render("test", map[string]interface{}{

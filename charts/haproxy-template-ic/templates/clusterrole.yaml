@@ -1,4 +1,7 @@
 {{- if .Values.rbac.create }}
+{{- /* Merge watched resources from libraries */ -}}
+{{- $mergedLibraries := include "haproxy-template-ic.mergeLibraries" . | fromYaml }}
+{{- $allWatchedResources := merge ($mergedLibraries.watchedResources | default dict) (.Values.controller.config.watchedResources | default dict) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -6,8 +9,8 @@ metadata:
   labels:
     {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 rules:
-  # Watched resources from configuration
-  {{- range $name, $resource := .Values.controller.config.watchedResources }}
+  # Watched resources from configuration and libraries
+  {{- range $name, $resource := $allWatchedResources }}
   - apiGroups:
       {{- if eq $resource.apiVersion "v1" }}
       - ""

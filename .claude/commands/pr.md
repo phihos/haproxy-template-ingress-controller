@@ -15,10 +15,11 @@ Usage: `/pr`
 **DO NOT** selectively stage only "your" files or files you think are related to the current feature. The user is explicitly requesting to commit EVERYTHING in the current branch state.
 
 **Before creating/updating PR:**
-1. Run `git status` to see ALL changes
-2. Run `git add .` to stage ALL changes (or `git add -A` for comprehensive staging)
-3. Commit with descriptive message covering all changes
-4. Push to remote
+1. Create a new branch if the current branch is main 
+2. Run `git status` to see ALL changes
+3. Run `git add .` to stage ALL changes (or `git add -A` for comprehensive staging)
+4. Commit with descriptive message covering all changes
+5. Push to remote
 
 ## What this does
 

@@ -2,10 +2,28 @@
 # Provides support for Kubernetes networking.k8s.io/v1 Ingress resources
 # Implements the resource_ingress_* plugin interface for the base library
 
+watchedResources:
+  ingresses:
+    apiVersion: networking.k8s.io/v1
+    resources: ingresses
+    indexBy: ["metadata.namespace", "metadata.name"]
+    enableValidationWebhook: true
+    # Filter by ingress class name (only watches ingresses with matching spec.ingressClassName)
+    # Set to empty string ("") to watch all ingresses regardless of class
+    fieldSelector: "spec.ingressClassName=haproxy"
+  services:
+    apiVersion: v1
+    resources: services
+    indexBy: ["metadata.namespace", "metadata.name"]
+  endpoints:
+    apiVersion: discovery.k8s.io/v1
+    resources: endpointslices
+    indexBy: ["metadata.namespace", "metadata.labels.kubernetes\\.io/service-name"]
+
 templateSnippets:
   resource_ingress_backend-name:
     template: >-
-      {{- " " -}}ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
+      {{- "" -}}ing_{{ ingress.metadata.namespace }}_{{ ingress.metadata.name }}_{{ path.backend.service.name }}_{{ path.backend.service.port.name | default(path.backend.service.port.number) }}
 
   resource_ingress_path-map-entry:
     template: |
@@ -23,6 +41,8 @@ templateSnippets:
     template: |
       {#- Generate all backend definitions from ingress resources #}
       {#- Usage: {% include "resource_ingress_backends" %} #}
+      {#- Deduplicate backends: multiple paths to same service+port share one backend #}
+      {%- set ns = namespace(seen=[]) %}
       {%- for ingress in resources.ingresses.List() %}
       {%- if ingress.spec and ingress.spec.rules %}
       {%- for rule in ingress.spec.rules %}
@@ -31,6 +51,10 @@ templateSnippets:
       {%- if path.backend and path.backend.service %}
       {%- set service_name = path.backend.service.name %}
       {%- set port = path.backend.service.port.number | default(80) %}
+      {#- Compute backend key for deduplication (matches resource_ingress_backend-name) #}
+      {%- set backend_key = ingress.metadata.namespace ~ "_" ~ ingress.metadata.name ~ "_" ~ path.backend.service.name ~ "_" ~ (path.backend.service.port.name | default(path.backend.service.port.number)) %}
+      {%- if backend_key not in ns.seen %}
+      {%- set ns.seen = ns.seen.append(backend_key) %}
 
       backend {%+ include "resource_ingress_backend-name" +%}
         balance roundrobin
@@ -40,6 +64,7 @@ templateSnippets:
         {% include "backend-annotations" %}
         {% include "backend-servers" %}
         {%- endfilter %}
+      {%- endif %}
       {%- endif %}
       {%- endfor %}
       {%- endif %}
@@ -77,3 +102,96 @@ templateSnippets:
       {% set path_types = ["Prefix", "ImplementationSpecific"] %}
       {%- set suffix = "/" %}
       {% include "resource_ingress_path-map-entry" %}
+
+validationTests:
+  test-ingress-duplicate-backend-different-ports:
+    description: Ingress with multiple paths to same service but different ports (tests deduplication)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-svc
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+              - name: admin
+                port: 81
+                targetPort: 8081
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-svc-abc123
+            namespace: default
+            labels:
+              kubernetes.io/service-name: api-svc
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.0.1"
+              targetRef:
+                kind: Pod
+                name: api-pod-1
+          ports:
+            - name: http
+              port: 8080
+              protocol: TCP
+            - name: admin
+              port: 8081
+              protocol: TCP
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: multi-port
+            namespace: default
+          spec:
+            ingressClassName: haproxy
+            rules:
+              - host: example.com
+                http:
+                  paths:
+                    - path: /api
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: api-svc
+                          port:
+                            number: 80
+                    - path: /admin
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: api-svc
+                          port:
+                            number: 81
+                    - path: /app
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: api-svc
+                          port:
+                            number: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_multi-port_api-svc_80"
+        description: Must generate backend for port 80
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_multi-port_api-svc_81"
+        description: Must generate backend for port 81
+
+      - type: match_count
+        target: haproxy.cfg
+        pattern: "backend ing_default_multi-port_api-svc_"
+        expected: "2"
+        description: Must generate exactly 2 backends (deduplication test)

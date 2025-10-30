@@ -138,6 +138,9 @@ func (s *DeploymentScheduler) handleEvent(ctx context.Context, event busevents.E
 
 	case *events.DeploymentCompletedEvent:
 		s.handleDeploymentCompleted(e)
+
+	case *events.LostLeadershipEvent:
+		s.handleLostLeadership(e)
 	}
 }
 
@@ -413,4 +416,31 @@ func (s *DeploymentScheduler) scheduleWithRateLimitUnlocked(
 	// Recursive: schedule pending (we're still marked as in-progress)
 	s.scheduleWithRateLimitUnlocked(ctx, pending.config, pending.auxFiles,
 		pending.endpoints, pending.reason)
+}
+
+// handleLostLeadership handles LostLeadershipEvent by clearing deployment state.
+//
+// When a replica loses leadership, leader-only components (including this scheduler)
+// are stopped via context cancellation. However, we defensively clear state to prevent
+// potential deadlocks if there's a race condition during shutdown.
+//
+// This prevents scenarios where:
+//   - deploymentInProgress is stuck at true, blocking future deployments
+//   - pendingDeployment contains stale deployments that shouldn't execute
+func (s *DeploymentScheduler) handleLostLeadership(_ *events.LostLeadershipEvent) {
+	s.schedulerMutex.Lock()
+	defer s.schedulerMutex.Unlock()
+
+	if s.deploymentInProgress || s.pendingDeployment != nil {
+		s.logger.Info("lost leadership, clearing deployment state",
+			"deployment_in_progress", s.deploymentInProgress,
+			"has_pending", s.pendingDeployment != nil)
+	}
+
+	// Clear deployment state to prevent stale deployments
+	s.deploymentInProgress = false
+	s.pendingDeployment = nil
+
+	// Note: lastDeploymentEndTime is NOT cleared - this historical data is safe to keep
+	// and helps prevent rapid deployments if leadership is quickly reacquired
 }

@@ -39,7 +39,7 @@ const (
 // Component is the Discovery event adapter.
 //
 // This component:
-//   - Subscribes to ConfigValidatedEvent, CredentialsUpdatedEvent, and ResourceIndexUpdatedEvent
+//   - Subscribes to ConfigValidatedEvent, CredentialsUpdatedEvent, ResourceIndexUpdatedEvent, and BecameLeaderEvent
 //   - Maintains current state (dataplanePort, credentials, podStore)
 //   - Calls Discovery.DiscoverEndpoints() when relevant events occur
 //   - Publishes HAProxyPodsDiscoveredEvent with discovered endpoints
@@ -48,7 +48,8 @@ const (
 //  1. ConfigValidatedEvent → Update dataplanePort → Trigger discovery
 //  2. CredentialsUpdatedEvent → Update credentials → Trigger discovery
 //  3. ResourceIndexUpdatedEvent (haproxy-pods) → Trigger discovery
-//  4. Discovery completes → Publish HAProxyPodsDiscoveredEvent
+//  4. BecameLeaderEvent → Re-trigger discovery for new leader's DeploymentScheduler
+//  5. Discovery completes → Publish HAProxyPodsDiscoveredEvent
 type Component struct {
 	discovery *Discovery
 	eventBus  *busevents.EventBus
@@ -124,6 +125,9 @@ func (c *Component) handleEvent(event interface{}) {
 
 	case *events.ResourceSyncCompleteEvent:
 		c.handleResourceSyncComplete(e)
+
+	case *events.BecameLeaderEvent:
+		c.handleBecameLeader(e)
 	}
 }
 
@@ -260,6 +264,33 @@ func (c *Component) handleResourceSyncComplete(event *events.ResourceSyncComplet
 		c.triggerDiscovery(podStore, *credentials)
 	} else {
 		c.logger.Debug("skipping discovery after sync, missing requirements",
+			"has_credentials", hasCredentials,
+			"has_dataplane_port", hasDataplanePort,
+			"has_pod_store", podStore != nil)
+	}
+}
+
+// handleBecameLeader processes BecameLeaderEvent.
+//
+// Re-publishes HAProxy pod discovery when this replica becomes leader.
+// This ensures the DeploymentScheduler (which only starts on the leader) receives
+// current endpoint state even if pods were discovered before leadership was acquired.
+func (c *Component) handleBecameLeader(_ *events.BecameLeaderEvent) {
+	c.logger.Info("became leader, re-discovering HAProxy pods for deployment scheduler")
+
+	// Get current state
+	c.mu.RLock()
+	podStore := c.podStore
+	credentials := c.credentials
+	hasCredentials := c.hasCredentials
+	hasDataplanePort := c.hasDataplanePort
+	c.mu.RUnlock()
+
+	// Trigger discovery if we have everything
+	if hasCredentials && hasDataplanePort && podStore != nil {
+		c.triggerDiscovery(podStore, *credentials)
+	} else {
+		c.logger.Warn("became leader but cannot discover pods yet, missing requirements",
 			"has_credentials", hasCredentials,
 			"has_dataplane_port", hasDataplanePort,
 			"has_pod_store", podStore != nil)

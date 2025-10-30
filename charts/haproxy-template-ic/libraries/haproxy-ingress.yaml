@@ -1,0 +1,26 @@
+# HAProxy Ingress compatibility library for HAProxy Template Ingress Controller
+# Provides support for haproxy-ingress.github.io annotation compatibility
+# Reference: https://haproxy-ingress.github.io/docs/configuration/keys/
+#
+# Supported annotations:
+# - haproxy-ingress.github.io/path-type: "regex"
+#
+# Note: This library only implements regex path matching. Other path-type values
+# (exact, prefix, begin) are handled by the standard Ingress pathType field or
+# require additional implementation.
+
+templateSnippets:
+  map-entry-path-regex-ingress-haproxy-ingress:
+    template: |
+      {#- Generate regex map entries for Ingress with haproxy-ingress.github.io/path-type annotation #}
+      {#- Only processes Ingress resources with pathType: ImplementationSpecific AND path-type: "regex" annotation #}
+      {%- for ingress in resources.ingresses.List() %}
+      {%- set path_type_annotation = ingress.metadata.annotations.get("haproxy-ingress.github.io/path-type", "") %}
+      {%- if path_type_annotation == "regex" %}
+      {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
+      {%- for path in (rule.http.paths | default([]) | selectattr("pathType", "equalto", "ImplementationSpecific")) %}
+      {{ rule.host }}{{ path.path }} {% include "resource_ingress_backend-name" -%}
+      {% endfor %}
+      {% endfor %}
+      {%- endif %}
+      {%- endfor %}

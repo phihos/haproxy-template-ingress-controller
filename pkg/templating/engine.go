@@ -16,6 +16,8 @@ package templating
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
 
 	"github.com/nikolalohinski/gonja/v2/builtins"
 	"github.com/nikolalohinski/gonja/v2/config"
@@ -67,73 +69,78 @@ type TemplateEngine struct {
 	compiledTemplates map[string]*exec.Template
 }
 
-// New creates a new TemplateEngine with the specified engine type and templates.
+// testInFixed implements a fixed "in" test that compares string values for lists.
+//
+// This fixes a Gonja limitation where the built-in "in" test uses Go's interface{} equality,
+// which compares object identity rather than values. Each template expression with the ~
+// concatenation operator creates a NEW *exec.Value object, so even identical string values
+// fail equality checks.
+//
+// For lists/arrays: Iterates and compares using String() method (value comparison).
+// For other types: Delegates to Contains() which works correctly for maps and strings.
+func testInFixed(ctx *exec.Context, in *exec.Value, params *exec.VarArgs) (bool, error) {
+	seq := params.First()
+
+	// Use getResolvedValue() helper to properly dereference pointers
+	// This mirrors the logic in Value.Contains()
+	resolved := seq.Val
+	if resolved.IsValid() && resolved.Kind() == reflect.Ptr {
+		resolved = resolved.Elem()
+	}
+
+	// For lists/arrays: compare using String() method (value comparison)
+	if resolved.Kind() == reflect.Slice || resolved.Kind() == reflect.Array {
+		inStr := in.String()
+		for i := 0; i < resolved.Len(); i++ {
+			// Get item from list and wrap in Value
+			item := exec.ToValue(resolved.Index(i))
+			itemStr := item.String()
+			if inStr == itemStr {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	// For other types (maps, strings): delegate to Contains() which works correctly
+	return seq.Contains(in), nil
+}
+
+// New creates a new TemplateEngine with the specified engine type, templates,
+// custom filters, and custom global functions.
+//
 // All templates are compiled during initialization. Returns an error if any
 // template fails to compile or if the engine type is not supported.
 //
-// For custom filters or global functions, use NewWithFiltersAndFunctions instead.
+// Custom filters and functions are optional - pass nil if not needed.
 //
-// Example:
+// The engine automatically includes a fixed "in" test that compares string values
+// instead of object identity for list membership checks, solving a Gonja limitation.
 //
-//	templates := map[string]string{
-//	    "greeting": "Hello {{ name }}!",
-//	    "config":   "server {{ host }}:{{ port }}",
-//	}
-//	engine, err := templating.New(templating.EngineTypeGonja, templates)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-func New(engineType EngineType, templates map[string]string) (*TemplateEngine, error) {
-	return NewWithFiltersAndFunctions(engineType, templates, nil, nil)
-}
-
-// NewWithFilters creates a new TemplateEngine with custom filters.
-// All templates are compiled during initialization with the custom filters registered.
-//
-// For custom global functions, use NewWithFiltersAndFunctions instead.
-//
-// Example:
-//
-//	pathResolver := &templating.PathResolver{
-//	    MapsDir: "/etc/haproxy/maps",
-//	    SSLDir:  "/etc/haproxy/ssl",
-//	}
-//	filters := map[string]templating.FilterFunc{
-//	    "get_path": pathResolver.GetPath,
-//	}
-//	engine, err := templating.NewWithFilters(templating.EngineTypeGonja, templates, filters)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-func NewWithFilters(engineType EngineType, templates map[string]string, customFilters map[string]FilterFunc) (*TemplateEngine, error) {
-	return NewWithFiltersAndFunctions(engineType, templates, customFilters, nil)
-}
-
-// NewWithFiltersAndFunctions creates a new TemplateEngine with custom filters and global functions.
-// All templates are compiled during initialization with the custom filters and functions registered.
-//
-// Example:
+// Example with custom filters and functions:
 //
 //	filters := map[string]templating.FilterFunc{
-//	    "get_path": pathResolver.GetPath,
+//	    "uppercase": func(in interface{}, args ...interface{}) (interface{}, error) {
+//	        return strings.ToUpper(in.(string)), nil
+//	    },
 //	}
 //	functions := map[string]templating.GlobalFunc{
 //	    "fail": func(args ...interface{}) (interface{}, error) {
-//	        if len(args) != 1 {
-//	            return nil, fmt.Errorf("fail() requires exactly one string argument")
-//	        }
-//	        message, ok := args[0].(string)
-//	        if !ok {
-//	            return nil, fmt.Errorf("fail() argument must be a string")
-//	        }
-//	        return nil, fmt.Errorf(message)
+//	        return nil, fmt.Errorf("%v", args[0])
 //	    },
 //	}
-//	engine, err := templating.NewWithFiltersAndFunctions(templating.EngineTypeGonja, templates, filters, functions)
+//	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func NewWithFiltersAndFunctions(engineType EngineType, templates map[string]string, customFilters map[string]FilterFunc, customFunctions map[string]GlobalFunc) (*TemplateEngine, error) {
+//
+// Example without custom filters/functions:
+//
+//	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+func New(engineType EngineType, templates map[string]string, customFilters map[string]FilterFunc, customFunctions map[string]GlobalFunc) (*TemplateEngine, error) {
 	// Validate engine type
 	if engineType != EngineTypeGonja {
 		return nil, NewUnsupportedEngineError(engineType)
@@ -204,12 +211,23 @@ func NewWithFiltersAndFunctions(engineType EngineType, templates map[string]stri
 		globalFunctions = globalFunctions.Update(customFunctionContext)
 	}
 
+	// Always override the "in" test with our fixed version
+	// This fixes a Gonja limitation where list membership checks use object identity
+	// instead of value comparison for computed template expressions
+	testMap := map[string]exec.TestFunction{
+		"in": testInFixed,
+	}
+	customTestSet := exec.NewTestSet(testMap)
+	tests := builtins.Tests.Update(customTestSet)
+
+	customMethods := createCustomMethods()
+
 	environment := &exec.Environment{
 		Filters:           filters,
-		Tests:             builtins.Tests,
+		Tests:             tests, // Use tests with fixed "in" operator
 		ControlStructures: builtins.ControlStructures,
-		Methods:           builtins.Methods,
-		Context:           globalFunctions, // Include global functions (builtins + custom)
+		Methods:           customMethods, // Use custom methods with fixed append()
+		Context:           globalFunctions,
 	}
 
 	// Store raw templates and compile each one through the loader
@@ -226,6 +244,123 @@ func NewWithFiltersAndFunctions(engineType EngineType, templates map[string]stri
 	}
 
 	return engine, nil
+}
+
+// createCustomMethods creates custom method sets for list and dict types with fixed behavior.
+func createCustomMethods() exec.Methods {
+	return exec.Methods{
+		Bool:  builtins.Methods.Bool,
+		Str:   builtins.Methods.Str,
+		Int:   builtins.Methods.Int,
+		Float: builtins.Methods.Float,
+		Dict:  createCustomDictMethods(),
+		List:  createCustomListMethods(),
+	}
+}
+
+// createCustomListMethods creates custom list method set with fixed append() that returns modified list.
+func createCustomListMethods() *exec.MethodSet[[]interface{}] {
+	return exec.NewMethodSet[[]interface{}](map[string]exec.Method[[]interface{}]{
+		"append": func(_ []interface{}, selfValue *exec.Value, arguments *exec.VarArgs) (interface{}, error) {
+			var x interface{}
+			if err := arguments.Take(
+				exec.PositionalArgument("x", nil, exec.AnyArgument(&x)),
+			); err != nil {
+				return nil, exec.ErrInvalidCall(err)
+			}
+
+			// Modify list in-place (same as builtin)
+			*selfValue = *exec.ToValue(reflect.Append(selfValue.Val, reflect.ValueOf(exec.ToValue(x))))
+
+			// RETURN the modified list instead of nil (our fix)
+			return selfValue.Interface(), nil
+		},
+
+		// Copy other builtin list methods unchanged from Gonja
+		"reverse": func(_ []interface{}, selfValue *exec.Value, arguments *exec.VarArgs) (interface{}, error) {
+			if err := arguments.Take(); err != nil {
+				return nil, exec.ErrInvalidCall(err)
+			}
+			reversed := reflect.MakeSlice(selfValue.Val.Type(), 0, 0)
+			for i := selfValue.Val.Len() - 1; i >= 0; i-- {
+				reversed = reflect.Append(reversed, selfValue.Val.Index(i))
+			}
+			for i := 0; i < selfValue.Val.Len(); i++ {
+				selfValue.Val.Index(i).Set(reversed.Index(i))
+			}
+			return selfValue.Interface(), nil
+		},
+
+		"copy": func(self []interface{}, selfValue *exec.Value, arguments *exec.VarArgs) (interface{}, error) {
+			if err := arguments.Take(); err != nil {
+				return nil, exec.ErrInvalidCall(err)
+			}
+			return self, nil
+		},
+	})
+}
+
+// createCustomDictMethods creates custom dict method set with fixed update() that returns modified dict.
+func createCustomDictMethods() *exec.MethodSet[map[string]interface{}] {
+	return exec.NewMethodSet[map[string]interface{}](map[string]exec.Method[map[string]interface{}]{
+		// Copy builtin dict methods unchanged from Gonja
+		"keys": func(self map[string]interface{}, selfValue *exec.Value, arguments *exec.VarArgs) (interface{}, error) {
+			if err := arguments.Take(); err != nil {
+				return nil, exec.ErrInvalidCall(err)
+			}
+			keys := make([]string, 0)
+			for key := range self {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			return keys, nil
+		},
+
+		"items": func(self map[string]interface{}, selfValue *exec.Value, arguments *exec.VarArgs) (interface{}, error) {
+			if err := arguments.Take(); err != nil {
+				return nil, exec.ErrInvalidCall(err)
+			}
+			items := make([]interface{}, 0)
+			for _, item := range self {
+				items = append(items, item)
+			}
+			return items, nil
+		},
+
+		// Custom update() method that returns the modified dict
+		"update": func(self map[string]interface{}, selfValue *exec.Value, arguments *exec.VarArgs) (interface{}, error) {
+			var otherAny interface{}
+			if err := arguments.Take(
+				exec.PositionalArgument("other", nil, exec.AnyArgument(&otherAny)),
+			); err != nil {
+				return nil, exec.ErrInvalidCall(err)
+			}
+
+			// Handle both map[string]interface{} and *exec.Dict
+			var pairs map[string]interface{}
+
+			switch v := otherAny.(type) {
+			case map[string]interface{}:
+				pairs = v
+			case *exec.Dict:
+				// Convert *exec.Dict to map[string]interface{}
+				pairs = make(map[string]interface{})
+				for _, pair := range v.Pairs {
+					pairs[pair.Key.String()] = pair.Value.Interface()
+				}
+			default:
+				return nil, fmt.Errorf("update() expects a dict, got %T", otherAny)
+			}
+
+			// Update dict in-place
+			for k, v := range pairs {
+				self[k] = v
+			}
+
+			// RETURN the modified dict instead of nil (our fix)
+			return self, nil
+		},
+	})
 }
 
 // Render executes the named template with the provided context and returns the

@@ -3,6 +3,39 @@
 # Uses plugin patterns (resource_*) to discover resource-specific implementations
 
 templateSnippets:
+  macros:
+    template: |
+      {#- Reusable macro: Include all snippets matching a glob pattern #}
+      {#- Usage: {% from "macros" import include_matching %}{{ include_matching("pattern-*") }} #}
+      {%- macro include_matching(pattern) -%}
+      {%- set matching = template_snippets | glob_match(pattern) %}
+      {%- for snippet_name in matching %}
+      {%- include snippet_name -%}
+      {%- endfor %}
+      {%- endmacro -%}
+
+  use-backend-selection:
+    template: |
+      {#- Backend selection logic using path matching maps #}
+      {#- Default ordering: Exact > Regex > Prefix (de facto standard) #}
+      {#- Override this snippet in path-regex-last library for performance-first ordering #}
+
+      # Set variables for path-based routing
+      http-request set-var(txn.base) base
+      http-request set-var(txn.path) path
+      http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
+      http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
+      http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ "host.map" | get_path("map") }},'') if !{ var(txn.host_match) -m found }
+
+      # Path matching order: Exact > Regex > Prefix-exact > Prefix
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ "path-regex.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+
+      # Use path maps for routing
+      use_backend %[var(txn.path_match)]
+
   backend-servers:
     template: |
       {#- Pre-allocated server pool with auto-expansion #}
@@ -42,10 +75,8 @@ templateSnippets:
       {#- Orchestrator snippet that includes all top-level annotation snippets #}
       {#- Top-level snippets generate HAProxy elements like userlist sections #}
       {#- Usage: {% include "top-level-annotations" %} in haproxy.cfg #}
-      {%- set matching = template_snippets | glob_match("top-level-annotation-*") %}
-      {%- for snippet_name in matching %}
-      {%- include snippet_name -%}
-      {%- endfor %}
+      {%- from "macros" import include_matching -%}
+      {{- include_matching("top-level-annotation-*") -}}
 
   backend-annotations:
     priority: 100
@@ -53,20 +84,16 @@ templateSnippets:
       {#- Orchestrator snippet that includes all backend annotation snippets #}
       {#- Backend snippets generate per-backend directives like http-request auth #}
       {#- Usage: {% include "backend-annotations" %} in backend definitions #}
-      {%- set matching = template_snippets | glob_match("backend-annotation-*") %}
-      {%- for snippet_name in matching %}
-      {%- include snippet_name -%}
-      {%- endfor %}
+      {%- from "macros" import include_matching -%}
+      {{- include_matching("backend-annotation-*") -}}
 
 maps:
   host.map:
     template: |
       {#- Generic host mapping infrastructure #}
       {#- Resource libraries populate this map via map-entry-host-* snippets #}
-      {%- set matching = template_snippets | glob_match("map-entry-host-*") %}
-      {%- for snippet_name in matching %}
-      {%- include snippet_name -%}
-      {%- endfor %}
+      {%- from "macros" import include_matching -%}
+      {{- include_matching("map-entry-host-*") -}}
 
   path-exact.map:
     template: |
@@ -74,19 +101,15 @@ maps:
       # It should be used with the equality string matcher. Example:
       #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
       {#- Resource libraries populate this map via map-entry-path-exact-* snippets #}
-      {%- set matching = template_snippets | glob_match("map-entry-path-exact-*") %}
-      {%- for snippet_name in matching %}
-      {%- include snippet_name -%}
-      {%- endfor %}
+      {%- from "macros" import include_matching -%}
+      {{- include_matching("map-entry-path-exact-*") -}}
 
   path-prefix-exact.map:
     template: |
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
       {#- Resource libraries populate this map via map-entry-path-prefix-exact-* snippets #}
-      {%- set matching = template_snippets | glob_match("map-entry-path-prefix-exact-*") %}
-      {%- for snippet_name in matching %}
-      {%- include snippet_name -%}
-      {%- endfor %}
+      {%- from "macros" import include_matching -%}
+      {{- include_matching("map-entry-path-prefix-exact-*") -}}
 
   path-prefix.map:
     template: |
@@ -94,10 +117,17 @@ maps:
       # It should be used with the prefix string matcher. Example:
       #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
       {#- Resource libraries populate this map via map-entry-path-prefix-* snippets #}
-      {%- set matching = template_snippets | glob_match("map-entry-path-prefix-*") %}
-      {%- for snippet_name in matching %}
-      {%- include snippet_name -%}
-      {%- endfor %}
+      {%- from "macros" import include_matching -%}
+      {{- include_matching("map-entry-path-prefix-*") -}}
+
+  path-regex.map:
+    template: |
+      # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
+      # It should be used with the regex string matcher. Example:
+      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ "path-regex.map" | get_path("map") }})
+      {#- Resource libraries populate this map via map-entry-path-regex-* snippets #}
+      {%- from "macros" import include_matching -%}
+      {{- include_matching("map-entry-path-regex-*") -}}
 
 files:
   400.http:
@@ -219,28 +249,18 @@ haproxyConfig:
     frontend http_frontend
         bind *:80
 
-        # Set variables for path-based routing
-        http-request set-var(txn.base) base
-        http-request set-var(txn.path) path
-        http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
-        http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
-        http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ "host.map" | get_path("map") }},'') if !{ var(txn.host_match) -m found }
-        http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
-        http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
-        http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
-
-        # Use path maps for routing
-        use_backend %[var(txn.path_match)]
+        {#- Include backend selection logic (can be overridden by libraries) #}
+        {%- filter indent(8, first=False) %}
+        {% include "use-backend-selection" -%}
+        {%- endfilter %}
 
         # Default backend
         default_backend default_backend
 
     {#- Include all resource-specific backend definitions using plugin pattern #}
     {#- Resource libraries implement resource_*_backends snippets (e.g., resource_ingress_backends, resource_gateway_backends) #}
-    {%- set matching = template_snippets | glob_match("resource_*_backends") %}
-    {%- for snippet_name in matching %}
-    {% include snippet_name %}
-    {%- endfor %}
+    {%- from "macros" import include_matching -%}
+    {{ include_matching("resource_*_backends") }}
 
     backend default_backend
         http-request return status 404

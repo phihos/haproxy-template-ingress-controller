@@ -849,11 +849,188 @@ for event := range eventChan {
 }
 ```
 
+## Leadership Transition Patterns
+
+### The "Late Subscriber Problem"
+
+When leadership transitions occur, leader-only components start subscribing AFTER critical state events have already been published. This creates event ordering bugs where leader-only components miss essential state.
+
+**Example timeline:**
+```
+14:03:29 - All-replica: Discovery publishes HAProxyPodsDiscoveredEvent
+14:03:30 - All-replica: Renderer publishes TemplateRenderedEvent
+14:03:31 - All-replica: Validator publishes ValidationCompletedEvent
+         ↓
+14:05:04 - Leader election completes
+14:05:05 - Leader-only: DeploymentScheduler starts subscribing
+         ↓
+         ❌ DeploymentScheduler never receives critical events
+         ❌ Deployment deadlocked forever
+```
+
+### Solution 1: State Replay on BecameLeaderEvent
+
+All-replica components that maintain state must re-publish their last state when a new leader is elected.
+
+**Pattern:**
+```go
+// All-replica component (Renderer, Validator, Discovery, etc.)
+type Component struct {
+    eventBus *busevents.EventBus
+    logger   *slog.Logger
+
+    // State protected by mutex
+    mu         sync.RWMutex
+    lastState  State
+    hasState   bool
+}
+
+func (c *Component) handleEvent(event busevents.Event) {
+    switch e := event.(type) {
+    case *events.BecameLeaderEvent:
+        c.handleBecameLeader(e)
+    // ... other cases ...
+    }
+}
+
+func (c *Component) handleBecameLeader(_ *events.BecameLeaderEvent) {
+    c.mu.RLock()
+    hasState := c.hasState
+    state := c.lastState
+    c.mu.RUnlock()
+
+    if !hasState {
+        c.logger.Debug("became leader but no state available yet, skipping state replay")
+        return
+    }
+
+    c.logger.Info("became leader, re-publishing last state for leader-only components",
+        "state_size", len(state))
+
+    // Re-publish the last state event
+    c.eventBus.Publish(events.NewStateEvent(state))
+}
+
+// Cache state when publishing normally
+func (c *Component) handleWork(event *events.WorkEvent) {
+    // ... perform work ...
+
+    result := processWork(event)
+
+    // Cache result for leadership transition replay
+    c.mu.Lock()
+    c.lastState = result
+    c.hasState = true
+    c.mu.Unlock()
+
+    // Publish normally
+    c.eventBus.Publish(events.NewStateEvent(result))
+}
+```
+
+**Implemented in:**
+- `pkg/controller/discovery/component.go:278` - Re-publishes HAProxyPodsDiscoveredEvent
+- `pkg/controller/renderer/component.go:230` - Re-publishes TemplateRenderedEvent
+- `pkg/controller/validator/haproxy_validator.go:186` - Re-publishes ValidationCompletedEvent
+
+### Solution 2: State Cleanup on LostLeadershipEvent
+
+Leader-only components must clean up state when losing leadership to prevent deadlocks.
+
+**Pattern:**
+```go
+// Leader-only component (DeploymentScheduler, DriftMonitor, etc.)
+type Component struct {
+    eventBus *busevents.EventBus
+    logger   *slog.Logger
+
+    // State protected by mutex
+    mu          sync.Mutex
+    inProgress  bool
+    pendingWork *Work
+    timer       *time.Timer
+}
+
+func (c *Component) handleEvent(event busevents.Event) {
+    switch e := event.(type) {
+    case *events.LostLeadershipEvent:
+        c.handleLostLeadership(e)
+    // ... other cases ...
+    }
+}
+
+func (c *Component) handleLostLeadership(_ *events.LostLeadershipEvent) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    if c.inProgress || c.pendingWork != nil {
+        c.logger.Info("lost leadership, clearing component state",
+            "in_progress", c.inProgress,
+            "has_pending", c.pendingWork != nil)
+    }
+
+    // Clear in-progress flags to prevent deadlocks
+    c.inProgress = false
+    c.pendingWork = nil
+
+    // Stop timers to prevent leaked goroutines
+    if c.timer != nil {
+        c.timer.Stop()
+    }
+
+    // Note: Historical data like lastCompletionTime can be kept for rate limiting
+}
+```
+
+**Implemented in:**
+- `pkg/controller/deployer/scheduler.go:421` - Clears deployment state
+- `pkg/controller/deployer/driftmonitor.go:205` - Stops drift timer
+
+### Checklist for New Components
+
+**For all-replica components that maintain state:**
+- [ ] Cache last successful state with `sync.RWMutex`
+- [ ] Include `hasState bool` to distinguish "no state" from "zero state"
+- [ ] Subscribe to `BecameLeaderEvent`
+- [ ] Re-publish last state in `handleBecameLeader()`
+- [ ] Check `hasState` before replaying (don't publish uninitialized state)
+
+**For leader-only components:**
+- [ ] Subscribe to `LostLeadershipEvent`
+- [ ] Clear in-progress flags in `handleLostLeadership()`
+- [ ] Stop timers/goroutines to prevent leaks
+- [ ] Clear transient state (but keep historical data like timestamps)
+
+**For both:**
+- [ ] Document state dependencies in component CLAUDE.md
+- [ ] Add component to `LEADER_ONLY_COMPONENTS.md` checklist
+- [ ] Test leadership transitions manually
+- [ ] Log state replay and cleanup events for debugging
+
+### Testing Leadership Transitions
+
+```bash
+# Deploy with 2 replicas
+kubectl -n haproxy-template-ic scale deployment haproxy-template-ic --replicas=2
+
+# Delete current leader to trigger election
+LEADER=$(kubectl -n haproxy-template-ic get pods -l app=haproxy-template-ic -o jsonpath='{.items[0].metadata.name}')
+kubectl -n haproxy-template-ic delete pod $LEADER
+
+# Expected log pattern after transition:
+# 14:05:04.123 | INFO | Became leader
+# 14:05:04.124 | INFO | became leader, re-discovering HAProxy pods for deployment scheduler
+# 14:05:04.125 | INFO | became leader, re-publishing last rendered config
+# 14:05:04.126 | INFO | became leader, re-publishing last validation result (success)
+# 14:05:04.127 | INFO | scheduling deployment | endpoint_count=2
+```
+
 ## Resources
 
 - Event infrastructure: `pkg/events/CLAUDE.md`
 - Package organization: `pkg/CLAUDE.md`
 - Leader election: `pkg/controller/leaderelection/CLAUDE.md`
+- Leadership transition guidelines: `pkg/controller/LEADER_ONLY_COMPONENTS.md`
 - Metrics component: `pkg/controller/metrics/CLAUDE.md`
 - Architecture: `/docs/development/design.md`
 - API documentation: `pkg/controller/README.md`
