@@ -60,6 +60,7 @@ func (r *Runner) assertContains(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	assertion *config.ValidationAssertion,
+	renderError string,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "contains",
@@ -72,7 +73,7 @@ func (r *Runner) assertContains(
 	}
 
 	// Resolve target to actual content
-	target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles)
+	target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles, renderError)
 
 	// Check if pattern matches
 	matched, err := regexp.MatchString(assertion.Pattern, target)
@@ -95,6 +96,7 @@ func (r *Runner) assertNotContains(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	assertion *config.ValidationAssertion,
+	renderError string,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "not_contains",
@@ -107,7 +109,7 @@ func (r *Runner) assertNotContains(
 	}
 
 	// Resolve target to actual content
-	target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles)
+	target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles, renderError)
 
 	// Check if pattern matches
 	matched, err := regexp.MatchString(assertion.Pattern, target)
@@ -125,11 +127,62 @@ func (r *Runner) assertNotContains(
 	return result
 }
 
+// assertMatchCount validates that the target content contains exactly the expected number of pattern matches.
+func (r *Runner) assertMatchCount(
+	haproxyConfig string,
+	auxiliaryFiles *dataplane.AuxiliaryFiles,
+	assertion *config.ValidationAssertion,
+	renderError string,
+) AssertionResult {
+	result := AssertionResult{
+		Type:        "match_count",
+		Description: assertion.Description,
+		Passed:      true,
+	}
+
+	if result.Description == "" {
+		result.Description = fmt.Sprintf("Target %s must contain exactly %s matches of pattern %q", assertion.Target, assertion.Expected, assertion.Pattern)
+	}
+
+	// Resolve target to actual content
+	target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles, renderError)
+
+	// Compile regex pattern
+	re, err := regexp.Compile(assertion.Pattern)
+	if err != nil {
+		result.Passed = false
+		result.Error = fmt.Sprintf("invalid regex pattern %q: %v", assertion.Pattern, err)
+		return result
+	}
+
+	// Find all matches
+	matches := re.FindAllString(target, -1)
+	actualCount := len(matches)
+
+	// Parse expected count from string
+	var expectedCount int
+	_, err = fmt.Sscanf(assertion.Expected, "%d", &expectedCount)
+	if err != nil {
+		result.Passed = false
+		result.Error = fmt.Sprintf("invalid expected count %q: must be an integer", assertion.Expected)
+		return result
+	}
+
+	// Compare counts
+	if actualCount != expectedCount {
+		result.Passed = false
+		result.Error = fmt.Sprintf("expected %d matches, got %d matches of pattern %q in %s", expectedCount, actualCount, assertion.Pattern, assertion.Target)
+	}
+
+	return result
+}
+
 // assertEquals validates that the target content exactly equals the expected value.
 func (r *Runner) assertEquals(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	assertion *config.ValidationAssertion,
+	renderError string,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "equals",
@@ -142,7 +195,7 @@ func (r *Runner) assertEquals(
 	}
 
 	// Resolve target to actual content
-	target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles)
+	target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles, renderError)
 
 	// Compare values
 	if target != assertion.Expected {
@@ -208,45 +261,70 @@ func (r *Runner) assertJSONPath(
 
 // resolveTarget resolves the target content based on the target specification.
 //
-// Target format: "haproxy.cfg" or "map:<name>" or "file:<name>" or "cert:<name>".
-func (r *Runner) resolveTarget(target, haproxyConfig string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+// Target format: "haproxy.cfg" or "map:<name>" or "file:<name>" or "cert:<name>" or "rendering_error".
+func (r *Runner) resolveTarget(target, haproxyConfig string, auxiliaryFiles *dataplane.AuxiliaryFiles, renderError string) string {
+	if target == "rendering_error" {
+		return renderError
+	}
+
 	if target == "haproxy.cfg" || target == "" {
 		return haproxyConfig
 	}
 
-	// Check for auxiliary file targets
-	if strings.HasPrefix(target, "map:") {
-		mapName := strings.TrimPrefix(target, "map:")
-		for _, mapFile := range auxiliaryFiles.MapFiles {
-			if mapFile.Path == mapName {
-				return mapFile.Content
-			}
-		}
-		return "" // Map not found
-	}
-
-	if strings.HasPrefix(target, "file:") {
-		fileName := strings.TrimPrefix(target, "file:")
-		for _, generalFile := range auxiliaryFiles.GeneralFiles {
-			if generalFile.Filename == fileName {
-				return generalFile.Content
-			}
-		}
-		return "" // File not found
-	}
-
-	if strings.HasPrefix(target, "cert:") {
-		certName := strings.TrimPrefix(target, "cert:")
-		for _, sslCert := range auxiliaryFiles.SSLCertificates {
-			if sslCert.Path == certName {
-				return sslCert.Content
-			}
-		}
-		return "" // Certificate not found
+	// Check for auxiliary file targets with type prefix
+	if content := r.resolveAuxiliaryFile(target, auxiliaryFiles); content != "" {
+		return content
 	}
 
 	// Default to haproxy.cfg if target format is unknown
 	return haproxyConfig
+}
+
+// resolveAuxiliaryFile resolves auxiliary file content based on target prefix.
+func (r *Runner) resolveAuxiliaryFile(target string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	if strings.HasPrefix(target, "map:") {
+		return r.findMapFile(strings.TrimPrefix(target, "map:"), auxiliaryFiles)
+	}
+
+	if strings.HasPrefix(target, "file:") {
+		return r.findGeneralFile(strings.TrimPrefix(target, "file:"), auxiliaryFiles)
+	}
+
+	if strings.HasPrefix(target, "cert:") {
+		return r.findCertificate(strings.TrimPrefix(target, "cert:"), auxiliaryFiles)
+	}
+
+	return ""
+}
+
+// findMapFile searches for a map file by name.
+func (r *Runner) findMapFile(mapName string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	for _, mapFile := range auxiliaryFiles.MapFiles {
+		if mapFile.Path == mapName {
+			return mapFile.Content
+		}
+	}
+	return ""
+}
+
+// findGeneralFile searches for a general file by filename.
+func (r *Runner) findGeneralFile(fileName string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	for _, generalFile := range auxiliaryFiles.GeneralFiles {
+		if generalFile.Filename == fileName {
+			return generalFile.Content
+		}
+	}
+	return ""
+}
+
+// findCertificate searches for a certificate by path.
+func (r *Runner) findCertificate(certName string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	for _, sslCert := range auxiliaryFiles.SSLCertificates {
+		if sslCert.Path == certName {
+			return sslCert.Content
+		}
+	}
+	return ""
 }
 
 // truncateString truncates a string to maxLen characters.

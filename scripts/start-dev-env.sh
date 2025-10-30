@@ -345,6 +345,24 @@ ensure_cluster() {
 	fi
 	kubectl config use-context "$ctx" >/dev/null
 	ok "Context configured."
+
+	# Install Gateway API CRDs if not already present
+	# This must happen before Helm install so .Capabilities.APIVersions.Has can detect them
+	if ! kubectl get crd gatewayclasses.gateway.networking.k8s.io >/dev/null 2>&1; then
+		log INFO "Installing Gateway API CRDs (standard channel v1.2.0)..."
+		kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml >/dev/null 2>&1
+
+		# Wait for CRDs to be established
+		log INFO "Waiting for Gateway API CRDs to be established..."
+		kubectl wait --for condition=established --timeout=60s \
+			crd/gatewayclasses.gateway.networking.k8s.io \
+			crd/gateways.gateway.networking.k8s.io \
+			crd/httproutes.gateway.networking.k8s.io \
+			crd/grpcroutes.gateway.networking.k8s.io >/dev/null 2>&1
+		ok "Gateway API CRDs installed"
+	else
+		debug "Gateway API CRDs already installed"
+	fi
 }
 
 # Verify and auto-switch kubectl context (CONVENIENCE + SAFETY)
@@ -645,9 +663,36 @@ deploy_ingressclass() {
     ok "IngressClass 'haproxy-template-ic' deployed."
 }
 
+deploy_gateway_demo() {
+	log INFO "Deploying Gateway API demo resources..."
+
+	# Deploy Gateway API demo resources (CRDs already installed in ensure_cluster)
+	log INFO "Applying Gateway API demo manifests..."
+	retry_with_backoff 3 2 kubectl apply -f "${ASSETS_DIR}/gateway-demo.yaml" || {
+		err "Failed to deploy Gateway API demo resources"
+		return 1
+	}
+
+	# Wait for echo-server-v2 deployment
+	log INFO "Waiting for echo-server-v2 deployment to become ready..."
+	if ! kubectl -n "${ECHO_NAMESPACE}" rollout status deployment/echo-server-v2 --timeout=120s >/dev/null 2>&1; then
+		warn "echo-server-v2 deployment did not become ready in time"
+		return 1
+	fi
+
+	ok "Gateway API demo resources deployed"
+	echo "Gateway: dev-gateway"
+	echo "HTTPRoutes:"
+	echo "  - echo-basic (echo-gateway.localdev.me)"
+	echo "  - echo-paths (echo-paths.localdev.me)"
+	echo "  - echo-split (echo-split.localdev.me - 70/30 traffic split)"
+}
+
 deploy_echo_server() {
 	log INFO "Creating demo Echo Server in namespace '${ECHO_NAMESPACE}'..."
 	kubectl get ns "${ECHO_NAMESPACE}" >/dev/null 2>&1 || kubectl create ns "${ECHO_NAMESPACE}" >/dev/null
+
+	# Deploy echo-server application and service
 	kubectl -n "${ECHO_NAMESPACE}" apply -f - >/dev/null <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -685,7 +730,18 @@ spec:
     - name: http
       port: 80
       targetPort: 80
----
+EOF
+
+	log INFO "Waiting for Echo Server deployment to become ready..."
+	kubectl -n "${ECHO_NAMESPACE}" rollout status deployment/${ECHO_APP_NAME} --timeout=120s >/dev/null
+	ok "Echo Server is ready."
+}
+
+deploy_ingress_demo() {
+	log INFO "Deploying Ingress demo resources..."
+
+	# Deploy Ingress resources for echo-server
+	kubectl -n "${ECHO_NAMESPACE}" apply -f - >/dev/null <<EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -739,21 +795,10 @@ spec:
                   number: 80
 EOF
 
-	log INFO "Waiting for Echo Server deployment to become ready..."
-	kubectl -n "${ECHO_NAMESPACE}" rollout status deployment/${ECHO_APP_NAME} --timeout=120s >/dev/null
-	ok "Echo Server is ready."
-
-	ok "Echo Server deployed with Ingress resources."
-	echo "Public Ingress (no auth): echo.localdev.me"
-	echo "Protected Ingress (basic auth): echo-auth.localdev.me"
-	echo ""
-	echo "Test public endpoint:"
-	echo "  curl -H 'Host: echo.localdev.me' http://localhost:30080"
-	echo ""
-	echo "Test protected endpoint:"
-	echo "  curl -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Should return 401"
-	echo "  curl -u admin:admin -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Should succeed"
-	echo "  curl -u user:password -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Should succeed"
+	ok "Ingress demo resources deployed"
+	echo "Ingress resources:"
+	echo "  - echo-server (echo.localdev.me)"
+	echo "  - echo-server-auth (echo-auth.localdev.me - basic auth)"
 }
 
 # Development convenience functions
@@ -1070,18 +1115,33 @@ post_deploy_tips() {
 	ok "🧪 Testing the Ingress Controller:"
 	echo "  - Quick test: $0 test"
 	echo
-	echo "  Public endpoint (no auth):"
-	echo "    curl -H 'Host: echo.localdev.me' http://localhost:30080"
+	echo "  Ingress resources (networking.k8s.io/v1):"
+	echo "    Public endpoint (no auth):"
+	echo "      curl -H 'Host: echo.localdev.me' http://localhost:30080"
 	echo
-	echo "  Protected endpoint (basic auth):"
-	echo "    curl -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Returns 401"
-	echo "    curl -u admin:admin -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Succeeds"
-	echo "    curl -u user:password -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Succeeds"
+	echo "    Protected endpoint (basic auth):"
+	echo "      curl -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Returns 401"
+	echo "      curl -u admin:admin -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Succeeds"
+	echo "      curl -u user:password -H 'Host: echo-auth.localdev.me' http://localhost:30080  # Succeeds"
+	echo
+	echo "  HTTPRoute resources (gateway.networking.k8s.io/v1):"
+	echo "    Basic routing:"
+	echo "      curl -H 'Host: echo-gateway.localdev.me' http://localhost:30080"
+	echo
+	echo "    Path matching variants:"
+	echo "      curl -H 'Host: echo-paths.localdev.me' http://localhost:30080/exact  # Exact match"
+	echo "      curl -H 'Host: echo-paths.localdev.me' http://localhost:30080/api/v1  # PathPrefix match"
+	echo
+	echo "    Traffic splitting (70% v1 / 30% v2):"
+	echo "      for i in {1..10}; do curl -s -H 'Host: echo-split.localdev.me' http://localhost:30080 | grep -o 'ENVIRONMENT.*'; done"
 	echo
 	echo "  Browser test:"
-	echo "    Add to /etc/hosts: 127.0.0.1 echo.localdev.me echo-auth.localdev.me"
-	echo "    Visit: http://echo.localdev.me:30080 (no auth)"
-	echo "    Visit: http://echo-auth.localdev.me:30080 (credentials: admin/admin or user/password)"
+	echo "    Add to /etc/hosts:"
+	echo "      127.0.0.1 echo.localdev.me echo-auth.localdev.me echo-gateway.localdev.me echo-paths.localdev.me echo-split.localdev.me"
+	echo "    Visit: http://echo.localdev.me:30080 (Ingress, no auth)"
+	echo "    Visit: http://echo-auth.localdev.me:30080 (Ingress, basic auth)"
+	echo "    Visit: http://echo-gateway.localdev.me:30080 (HTTPRoute, basic)"
+	echo "    Visit: http://echo-split.localdev.me:30080 (HTTPRoute, traffic split - refresh multiple times)"
 	echo
 	echo "  - Port forwarding: $0 port-forward"
 	echo
@@ -1263,6 +1323,8 @@ dev_up() {
 
     if [[ "$SKIP_ECHO" != "true" ]]; then
         deploy_echo_server
+        deploy_ingress_demo
+        deploy_gateway_demo
     fi
 
     post_deploy_tips

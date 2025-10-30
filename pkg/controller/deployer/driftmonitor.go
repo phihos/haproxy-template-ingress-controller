@@ -111,8 +111,12 @@ func (m *DriftPreventionMonitor) Start(ctx context.Context) error {
 
 // handleEvent processes events from the EventBus.
 func (m *DriftPreventionMonitor) handleEvent(event busevents.Event) {
-	if _, ok := event.(*events.DeploymentCompletedEvent); ok {
+	switch e := event.(type) {
+	case *events.DeploymentCompletedEvent:
 		m.handleDeploymentCompleted()
+
+	case *events.LostLeadershipEvent:
+		m.handleLostLeadership(e)
 	}
 }
 
@@ -196,4 +200,31 @@ func (m *DriftPreventionMonitor) getDriftTimerChan() <-chan time.Time {
 	closed := make(chan time.Time)
 	close(closed)
 	return closed
+}
+
+// handleLostLeadership handles LostLeadershipEvent by stopping the drift prevention timer.
+//
+// When a replica loses leadership, leader-only components (including this monitor)
+// are stopped via context cancellation. However, we defensively stop the timer and
+// clear state to prevent potential issues during shutdown.
+//
+// This ensures:
+//   - The drift timer is properly stopped (no leaked goroutines)
+//   - lastDeploymentTime is cleared (fresh start if leadership is reacquired)
+func (m *DriftPreventionMonitor) handleLostLeadership(_ *events.LostLeadershipEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.timerActive {
+		m.logger.Info("lost leadership, stopping drift prevention timer")
+	}
+
+	// Stop drift timer
+	if m.driftTimer != nil {
+		m.driftTimer.Stop()
+		m.timerActive = false
+	}
+
+	// Clear last deployment time (fresh start if leadership is reacquired)
+	m.lastDeploymentTime = time.Time{}
 }

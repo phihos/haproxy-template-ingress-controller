@@ -53,6 +53,19 @@ Metrics Endpoint:
   ServiceMonitor: disabled (set monitoring.serviceMonitor.enabled=true to enable)
 {{- end }}
 
+{{- if and .Values.controller.templateLibraries.gateway.enabled (not (.Capabilities.APIVersions.Has "gateway.networking.k8s.io/v1/GatewayClass")) }}
+
+⚠️  WARNING: Gateway API library is enabled but Gateway API CRDs are not installed.
+
+The controller will not watch HTTPRoute/GRPCRoute resources.
+
+To fix this, install Gateway API CRDs:
+
+  kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+
+Then restart or reinstall this Helm release.
+{{- end }}
+
 {{- if .Values.networkPolicy.enabled }}
 
 NetworkPolicy:

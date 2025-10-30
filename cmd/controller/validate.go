@@ -100,18 +100,18 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no validation tests found in config")
 	}
 
-	// Create template engine
-	engine, err := createTemplateEngine(configSpec, logger)
-	if err != nil {
-		return err
-	}
-
 	// Setup validation paths in temp directory
 	validationPaths, cleanupFunc, err := setupValidationPaths()
 	if err != nil {
 		return err
 	}
 	defer cleanupFunc()
+
+	// Create template engine with custom filters
+	engine, err := createTemplateEngine(configSpec, validationPaths, logger)
+	if err != nil {
+		return err
+	}
 
 	// Convert CRD spec to internal config format
 	cfg, err := testrunner.ConvertSpecToInternalConfig(configSpec)
@@ -188,8 +188,8 @@ func loadConfigFromFile(filePath string) (*v1alpha1.HAProxyTemplateConfigSpec, e
 	return &spec, nil
 }
 
-// createTemplateEngine creates and compiles the template engine from config spec.
-func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, logger *slog.Logger) (*templating.TemplateEngine, error) {
+// createTemplateEngine creates and compiles the template engine from config spec with custom filters.
+func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, validationPaths dataplane.ValidationPaths, logger *slog.Logger) (*templating.TemplateEngine, error) {
 	// Extract all template sources
 	templates := make(map[string]string)
 
@@ -216,9 +216,33 @@ func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, logger
 		templates[name] = cert.Template
 	}
 
-	// Compile all templates
+	// Create path resolver for get_path filter
+	pathResolver := &templating.PathResolver{
+		MapsDir:    validationPaths.MapsDir,
+		SSLDir:     validationPaths.SSLCertsDir,
+		GeneralDir: validationPaths.GeneralStorageDir,
+	}
+
+	// Register custom filters
+	filters := map[string]templating.FilterFunc{
+		"get_path":   pathResolver.GetPath,
+		"glob_match": templating.GlobMatch,
+		"b64decode":  templating.B64Decode,
+	}
+
+	// Register custom global functions
+	functions := map[string]templating.GlobalFunc{
+		"fail": func(args ...interface{}) (interface{}, error) {
+			if len(args) == 0 {
+				return nil, fmt.Errorf("template evaluation failed")
+			}
+			return nil, fmt.Errorf("%v", args[0])
+		},
+	}
+
+	// Compile all templates with custom filters and functions
 	logger.Info("Compiling templates", "template_count", len(templates))
-	engine, err := templating.New(templating.EngineTypeGonja, templates)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile templates: %w", err)
 	}

@@ -6,8 +6,12 @@ image:
   tag: dev
   pullPolicy: Never  # Never pull, always use local image
 
-# Increase verbosity for debugging
+# Enable Gateway API support for development
 controller:
+  templateLibraries:
+    gateway:
+      enabled: true
+
   config:
     logging:
       verbose: 2  # DEBUG level

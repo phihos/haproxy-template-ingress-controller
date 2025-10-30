@@ -15,8 +15,46 @@ templateSnippets:
   top-level-annotation-haproxytech-auth:
     priority: 500
     template: |
-      {#- Generate userlist sections for basic authentication #}
-      {#- Reads credentials from secrets referenced by haproxy.org/auth-secret annotation #}
+      {#-
+        HAProxy Basic Authentication Support
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#auth-secret
+
+        Annotations:
+          - haproxy.org/auth-type: "basic-auth" (required)
+          - haproxy.org/auth-secret: "<secret-name>" or "<namespace>/<secret-name>" (required)
+          - haproxy.org/auth-realm: "<realm>" (optional, default: "RestrictedArea")
+
+        Secret Format:
+          The auth-secret must be an Opaque secret where:
+            - Key: username (e.g., "admin")
+            - Value: base64-encoded password hash (e.g., base64("$apr1$..."))
+
+          IMPORTANT: The value contains ONLY the password hash, NOT "username:hash" (htpasswd format).
+
+          Example Secret:
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: my-auth
+              namespace: default
+            type: Opaque
+            data:
+              admin: JDJ5JDA1JG1OMVdWazVRbmJnNFF3ZEFkWGJmei44YjNjZUg2UTVLT1ZDS3hSMklrTkFmSmdMaTVwSUtX  # base64($2y$05$...) bcrypt hash
+
+          Generate Password Hash:
+            # Create bcrypt hash and encode to base64 (HAProxy 3.2+ supports bcrypt, not MD5 apr1)
+            htpasswd -nbB admin mypassword | cut -d: -f2 | base64 -w0
+
+        Generated HAProxy Config:
+          userlist auth_<namespace>_<secret-name>
+            user <username> password <hash>
+
+          Cross-namespace secrets use format: auth_<secret-namespace>_<secret-name>
+
+        Deduplication:
+          Multiple ingresses referencing the same secret share one userlist.
+      -#}
       {%- set ns = namespace(processed_userlists=[]) %}
       {%- for ingress in resources.ingresses.List() %}
         {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
@@ -32,7 +70,7 @@ templateSnippets:
 
             {#- Only process each userlist once #}
             {%- if userlist_name not in ns.processed_userlists %}
-              {%- set ns.processed_userlists = ns.processed_userlists + [userlist_name] %}
+              {%- set _ = ns.processed_userlists.append(userlist_name) %}
 
               {#- Parse secret reference for fetching #}
               {%- if "/" in auth_secret %}
@@ -62,15 +100,29 @@ templateSnippets:
   backend-annotation-haproxytech-auth:
     priority: 500
     template: |
-      {#- Generate http-request auth directives for backends requiring authentication #}
-      {#- Uses userlist created by top-level-annotation-haproxytech-auth #}
+      {#-
+        HAProxy Basic Authentication - Backend Directive
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#auth-secret
+
+        Annotations:
+          - haproxy.org/auth-type: "basic-auth" (triggers this template)
+          - haproxy.org/auth-secret: "<secret-name>" or "<namespace>/<secret-name>"
+          - haproxy.org/auth-realm: "<realm>" (optional, default: "RestrictedArea")
+
+        Generated HAProxy Config:
+          http-request auth realm "<realm>" unless { http_auth(<userlist-name>) }
+
+        Note: Requires corresponding userlist created by top-level-annotation-haproxytech-auth
+      -#}
       {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
       {%- if auth_type and auth_type != "basic-auth" %}
         {{- fail("Invalid value '" ~ auth_type ~ "' for annotation 'haproxy.org/auth-type' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'basic-auth'") -}}
       {%- endif %}
       {%- if auth_type == "basic-auth" %}
         {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
-        {%- set auth_realm = ingress.metadata.annotations["haproxy.org/auth-realm"] | default("Restricted Area") %}
+        {#- Note: HAProxy Data Plane API's OpenAPI schema requires realm without spaces (regex: ^[^\s]+$) #}
+        {%- set auth_realm = ingress.metadata.annotations["haproxy.org/auth-realm"] | default("RestrictedArea") %}
         {%- if auth_secret %}
           {#- Generate userlist name using macro #}
           {%- include "auth-userlist-name" -%}
@@ -88,14 +140,16 @@ validationTests:
           kind: Secret
           metadata:
             namespace: auth-system
+            name: shared-auth
           type: Opaque
           data:
-            admin: YWRtaW46JGFwcjEkcmlGTnk5OXkkbkdQNWU2QkZQTTVzV3htVURsUGJ4Lw==  # admin:admin
+            admin: JDJ5JDA1JG1OMVdWazVRbmJnNFF3ZEFkWGJmei44YjNjZUg2UTVLT1ZDS3hSMklrTkFmSmdMaTVwSUtX  # base64($2y$05$...) bcrypt hash
       ingresses:
         - apiVersion: networking.k8s.io/v1
           kind: Ingress
           metadata:
             namespace: production
+            name: api-ingress
             annotations:
               haproxy.org/auth-type: basic-auth
               haproxy.org/auth-secret: auth-system/shared-auth
@@ -108,6 +162,7 @@ validationTests:
                       pathType: Prefix
                       backend:
                         service:
+                          name: api-service
                           port:
                             number: 443
       services:
@@ -115,10 +170,29 @@ validationTests:
           kind: Service
           metadata:
             namespace: production
+            name: api-service
           spec:
             ports:
               - port: 443
                 targetPort: 8443
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-service-xyz789
+            namespace: production
+            labels:
+              kubernetes.io/service-name: api-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.1.5"
+              targetRef:
+                kind: Pod
+                name: api-pod-1
+          ports:
+            - port: 8443
+              protocol: TCP
     assertions:
       - type: haproxy_valid
         description: HAProxy configuration must be syntactically valid
@@ -146,18 +220,20 @@ validationTests:
           kind: Secret
           metadata:
             namespace: default
+            name: api-auth
           type: Opaque
           data:
-            apiuser: YXBpdXNlcjokYXByMSR0ZXN0JFRlc3RQYXNzd29yZDEyMw==  # apiuser:test
+            apiuser: JDJ5JDA1JDJlV1VoQVU5Z0VlZ2FDZkY4Uk4xZHV1WUNrdlhoUGtpS1BDL3pkTFBvN2xNYlkxcWlUQXRP  # base64($2y$05$...) bcrypt hash
       ingresses:
         - apiVersion: networking.k8s.io/v1
           kind: Ingress
           metadata:
             namespace: default
+            name: secure-api-ingress
             annotations:
               haproxy.org/auth-type: basic-auth
               haproxy.org/auth-secret: api-auth
-              haproxy.org/auth-realm: "API Access - Authorization Required"
+              haproxy.org/auth-realm: "API-Access"
           spec:
             rules:
               - host: secure-api.example.com
@@ -167,6 +243,7 @@ validationTests:
                       pathType: Prefix
                       backend:
                         service:
+                          name: api-service
                           port:
                             number: 8080
       services:
@@ -174,21 +251,40 @@ validationTests:
           kind: Service
           metadata:
             namespace: default
+            name: api-service
           spec:
             ports:
               - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-service-def456
+            namespace: default
+            labels:
+              kubernetes.io/service-name: api-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.2.10"
+              targetRef:
+                kind: Pod
+                name: api-pod-2
+          ports:
+            - port: 8080
+              protocol: TCP
     assertions:
       - type: haproxy_valid
         description: HAProxy configuration must be syntactically valid
 
       - type: contains
         target: haproxy.cfg
-        pattern: 'http-request auth realm "API Access - Authorization Required"'
+        pattern: 'http-request auth realm "API-Access"'
         description: Backend must use custom auth realm
 
       - type: not_contains
         target: haproxy.cfg
-        pattern: 'realm "Restricted Area"'
+        pattern: 'realm "RestrictedArea"'
         description: Must not use default realm when custom realm specified
 
   test-auth-shared-userlist-deduplication:
@@ -199,14 +295,16 @@ validationTests:
           kind: Secret
           metadata:
             namespace: default
+            name: shared-credentials
           type: Opaque
           data:
-            admin: YWRtaW46JGFwcjEkcmlGTnk5OXkkbkdQNWU2QkZQTTVzV3htVURsUGJ4Lw==
+            admin: JDJ5JDA1JG1OMVdWazVRbmJnNFF3ZEFkWGJmei44YjNjZUg2UTVLT1ZDS3hSMklrTkFmSmdMaTVwSUtX  # base64($2y$05$...) bcrypt hash
       ingresses:
         - apiVersion: networking.k8s.io/v1
           kind: Ingress
           metadata:
             namespace: default
+            name: app1-ingress
             annotations:
               haproxy.org/auth-type: basic-auth
               haproxy.org/auth-secret: shared-credentials
@@ -219,12 +317,14 @@ validationTests:
                       pathType: Prefix
                       backend:
                         service:
+                          name: app1-service
                           port:
                             number: 80
         - apiVersion: networking.k8s.io/v1
           kind: Ingress
           metadata:
             namespace: default
+            name: app2-ingress
             annotations:
               haproxy.org/auth-type: basic-auth
               haproxy.org/auth-secret: shared-credentials
@@ -237,6 +337,7 @@ validationTests:
                       pathType: Prefix
                       backend:
                         service:
+                          name: app2-service
                           port:
                             number: 80
       services:
@@ -244,6 +345,7 @@ validationTests:
           kind: Service
           metadata:
             namespace: default
+            name: app1-service
           spec:
             ports:
               - port: 80
@@ -251,9 +353,45 @@ validationTests:
           kind: Service
           metadata:
             namespace: default
+            name: app2-service
           spec:
             ports:
               - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app1-service-aaa111
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app1-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.3.20"
+              targetRef:
+                kind: Pod
+                name: app1-pod-1
+          ports:
+            - port: 80
+              protocol: TCP
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app2-service-bbb222
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app2-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.3.21"
+              targetRef:
+                kind: Pod
+                name: app2-pod-1
+          ports:
+            - port: 80
+              protocol: TCP
     assertions:
       - type: haproxy_valid
         description: HAProxy configuration must be syntactically valid
@@ -276,6 +414,7 @@ validationTests:
           kind: Ingress
           metadata:
             namespace: default
+            name: invalid-ingress
             annotations:
               haproxy.org/auth-type: digest-auth  # Invalid type
               haproxy.org/auth-secret: auth-creds
@@ -295,9 +434,28 @@ validationTests:
           kind: Service
           metadata:
             namespace: default
+            name: invalid-service
           spec:
             ports:
               - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: invalid-service-ccc333
+            namespace: default
+            labels:
+              kubernetes.io/service-name: invalid-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.4.30"
+              targetRef:
+                kind: Pod
+                name: invalid-pod-1
+          ports:
+            - port: 80
+              protocol: TCP
     assertions:
       - type: contains
         target: rendering_error
@@ -318,6 +476,7 @@ validationTests:
           kind: Ingress
           metadata:
             namespace: default
+            name: missing-secret-ingress
             annotations:
               haproxy.org/auth-type: basic-auth
               haproxy.org/auth-secret: nonexistent-secret
@@ -337,9 +496,28 @@ validationTests:
           kind: Service
           metadata:
             namespace: default
+            name: missing-secret-service
           spec:
             ports:
               - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: missing-secret-service-ddd444
+            namespace: default
+            labels:
+              kubernetes.io/service-name: missing-secret-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.5.40"
+              targetRef:
+                kind: Pod
+                name: missing-secret-pod-1
+          ports:
+            - port: 80
+              protocol: TCP
     assertions:
       - type: contains
         target: rendering_error

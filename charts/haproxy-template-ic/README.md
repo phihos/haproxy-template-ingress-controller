@@ -1,15 +1,16 @@
 # HAProxy Template Ingress Controller Helm Chart
 
-This Helm chart deploys the HAProxy Template Ingress Controller, which manages HAProxy configurations dynamically based on Kubernetes Ingress resources.
+This Helm chart deploys the HAProxy Template Ingress Controller, which manages HAProxy configurations dynamically based on Kubernetes resources.
 
 ## Overview
 
 The HAProxy Template Ingress Controller:
-- Watches Kubernetes Ingress, Service, EndpointSlice, and Secret resources
+- Watches Kubernetes Ingress and/or Gateway API resources
 - Renders Jinja2 templates to generate HAProxy configurations
 - Deploys configurations to HAProxy pods via Dataplane API
 - Supports cross-namespace HAProxy pod management
-- Includes optional validation sidecar for config testing
+- Template library system for modular feature support
+- Conditional resource watching based on enabled features
 
 ## Prerequisites
 
@@ -49,12 +50,17 @@ helm install my-controller ./charts/haproxy-template-ic \
 | `replicaCount` | Number of controller replicas (2+ recommended for HA) | `2` |
 | `image.repository` | Controller image repository | `ghcr.io/phihos/haproxy-template-ic` |
 | `image.tag` | Controller image tag | Chart appVersion |
+| `controller.templateLibraries.ingress.enabled` | Enable Ingress resource support | `true` |
+| `controller.templateLibraries.gateway.enabled` | Enable Gateway API support (HTTPRoute, GRPCRoute) | `false` |
+| `ingressClass.enabled` | Create IngressClass resource | `true` |
+| `ingressClass.name` | IngressClass name | `haproxy` |
+| `gatewayClass.enabled` | Create GatewayClass resource | `true` |
+| `gatewayClass.name` | GatewayClass name | `haproxy` |
 | `controller.debugPort` | Debug HTTP server port (0=disabled) | `0` |
 | `controller.config.pod_selector` | Labels to match HAProxy pods | `{app: haproxy, component: loadbalancer}` |
 | `controller.config.logging.verbose` | Log level (0=WARN, 1=INFO, 2=DEBUG) | `1` |
 | `credentials.dataplane.username` | Dataplane API username | `admin` |
 | `credentials.dataplane.password` | Dataplane API password | `adminpass` |
-| `validation.enabled` | Enable validation sidecar | `false` |
 | `networkPolicy.enabled` | Enable NetworkPolicy | `true` |
 
 ### Controller Configuration
@@ -83,6 +89,388 @@ controller:
         api_version: networking.k8s.io/v1
         kind: Ingress
         index_by: ["metadata.namespace", "metadata.name"]
+```
+
+### Ingress Class Filtering
+
+By default, the controller only watches Ingress resources with `spec.ingressClassName: haproxy`. This ensures the controller only processes ingresses intended for it.
+
+**Default behavior:**
+```yaml
+controller:
+  config:
+    watched_resources:
+      ingresses:
+        fieldSelector: "spec.ingressClassName=haproxy"
+```
+
+**To change the ingress class name:**
+```yaml
+controller:
+  config:
+    watched_resources:
+      ingresses:
+        fieldSelector: "spec.ingressClassName=my-custom-class"
+```
+
+**To watch all ingresses regardless of class:**
+```yaml
+controller:
+  config:
+    watched_resources:
+      ingresses:
+        fieldSelector: ""
+```
+
+The field selector uses Kubernetes server-side filtering for efficient resource watching. Only ingresses matching the specified `spec.ingressClassName` will be processed by the controller.
+
+## Template Libraries
+
+The controller uses a template library system for modular feature support. Libraries are merged in order: base → ingress → gateway → haproxytech → user values.
+
+### Available Libraries
+
+**Base Library** (always enabled)
+- Resource-agnostic HAProxy core configuration
+- Error pages and plugin orchestration
+- Uses `resource_*` patterns to discover implementations
+
+**Ingress Library** (enabled by default)
+- Kubernetes Ingress resource support (networking.k8s.io/v1)
+- Path matching, host-based routing, backend management
+- Watched resources: `ingresses` (filtered by `spec.ingressClassName`)
+
+**Gateway Library** (disabled by default)
+- Kubernetes Gateway API support (gateway.networking.k8s.io/v1)
+- HTTPRoute and GRPCRoute routing with advanced features
+- Watched resources: `httproutes`, `grpcroutes`
+
+**HAProxyTech Library** (enabled by default)
+- Support for haproxy.org/* annotations
+- Works with both Ingress and Gateway API resources
+
+### Enabling Gateway API Support
+
+To enable Gateway API support:
+
+```yaml
+controller:
+  templateLibraries:
+    gateway:
+      enabled: true
+```
+
+This automatically:
+- Adds HTTPRoute and GRPCRoute to watched resources
+- Grants necessary RBAC permissions (via ClusterRole)
+- Includes Gateway API routing templates
+
+### Gateway API Features
+
+When the gateway library is enabled, the controller supports:
+
+**HTTPRoute:**
+- Path matching (Exact, PathPrefix)
+- Host-based routing via `hostnames`
+- Traffic splitting with `backendRefs` weights
+- Header matching (future)
+- Query parameter matching (future)
+
+**GRPCRoute:**
+- gRPC method matching
+- Host-based routing
+- Traffic splitting with server weights
+- HTTP/2 backend connections
+
+**Example HTTPRoute:**
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: example-route
+spec:
+  hostnames:
+    - "example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: api-service-v1
+          port: 8080
+          weight: 90
+        - name: api-service-v2
+          port: 8080
+          weight: 10
+```
+
+This creates an HAProxy backend with 90/10 traffic split using server weights.
+
+### Conditional Resource Watching
+
+Watched resources are determined by enabled libraries:
+
+| Library | Enabled | Watched Resources |
+|---------|---------|-------------------|
+| ingress | `true` (default) | ingresses |
+| gateway | `false` (default) | - |
+| gateway | `true` | httproutes, grpcroutes |
+
+Core resources (services, endpoints, secrets) are always watched.
+
+## IngressClass
+
+The chart automatically creates an IngressClass resource when the ingress library is enabled and Kubernetes 1.18+ is detected.
+
+### Configuration
+
+```yaml
+ingressClass:
+  enabled: true       # Create IngressClass (default: true)
+  name: haproxy       # IngressClass name
+  default: false      # Mark as cluster default
+  controllerName: haproxy-template-ic.github.io/controller
+```
+
+### Capability Detection
+
+The chart uses `Capabilities.APIVersions.Has` to check for `networking.k8s.io/v1/IngressClass`. If the API is not available (Kubernetes < 1.18), the resource is silently skipped without error.
+
+### Creation Conditions
+
+IngressClass is created only when ALL of the following are true:
+1. `ingressClass.enabled: true` (default)
+2. `controller.templateLibraries.ingress.enabled: true` (default)
+3. `networking.k8s.io/v1/IngressClass` API exists in cluster
+
+### Multi-Controller Environments
+
+When running multiple ingress controllers:
+
+**Ensure unique identification:**
+```yaml
+# Controller 1 (haproxy-template-ic)
+ingressClass:
+  name: haproxy
+  controllerName: haproxy-template-ic.github.io/controller
+
+# Controller 2 (nginx)
+ingressClass:
+  name: nginx
+  controllerName: k8s.io/ingress-nginx
+```
+
+**Only one should be default:**
+```yaml
+# Set default on one controller only
+ingressClass:
+  default: true  # Only on ONE controller
+```
+
+### Disabling IngressClass Creation
+
+If you manage IngressClass resources separately or use an external tool:
+
+```yaml
+ingressClass:
+  enabled: false
+```
+
+### Using IngressClass
+
+Ingress resources reference the IngressClass via `spec.ingressClassName`:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example
+spec:
+  ingressClassName: haproxy  # References IngressClass.metadata.name
+  rules:
+    - host: example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: example-service
+                port:
+                  number: 80
+```
+
+## GatewayClass
+
+The chart automatically creates a GatewayClass resource when the gateway library is enabled and Gateway API CRDs are installed.
+
+### Prerequisites
+
+Install Gateway API CRDs (standard channel) before enabling the gateway library:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+```
+
+### Configuration
+
+```yaml
+controller:
+  templateLibraries:
+    gateway:
+      enabled: true
+
+gatewayClass:
+  enabled: true
+  name: haproxy
+  default: false
+  controllerName: haproxy-template-ic.github.io/controller
+  parametersRef:
+    group: haproxy-template-ic.github.io
+    kind: HAProxyTemplateConfig
+    name: ""        # Defaults to controller.crdName
+    namespace: ""   # Defaults to Release.Namespace
+```
+
+### Capability Detection
+
+The chart checks for `gateway.networking.k8s.io/v1/GatewayClass` before creating the resource. If Gateway API CRDs are not installed, the resource is silently skipped without error.
+
+### Creation Conditions
+
+GatewayClass is created only when ALL of the following are true:
+1. `gatewayClass.enabled: true` (default)
+2. `controller.templateLibraries.gateway.enabled: true` (must be explicitly enabled)
+3. `gateway.networking.k8s.io/v1/GatewayClass` API exists in cluster
+
+### parametersRef - Controller Configuration Link
+
+The GatewayClass automatically references the HAProxyTemplateConfig created by this chart via `parametersRef`. This links Gateway API configuration to the controller's template-based configuration system.
+
+**How it works:**
+1. GatewayClass points to HAProxyTemplateConfig via `spec.parametersRef`
+2. Controller reads HAProxyTemplateConfig for template snippets, maps, watched resources, and HAProxy configuration
+3. Gateway API consumers get the same routing capabilities as Ingress consumers
+
+**Default behavior:**
+- `parametersRef.name` defaults to `controller.crdName` (typically `haproxy-template-ic-config`)
+- `parametersRef.namespace` defaults to chart's release namespace
+
+**Inspect the reference:**
+```bash
+kubectl get gatewayclass haproxy -o yaml
+```
+
+### Multi-Controller Environments
+
+When running multiple Gateway API controllers:
+
+**Ensure unique identification:**
+```yaml
+# Controller 1 (haproxy-template-ic)
+gatewayClass:
+  name: haproxy
+  controllerName: haproxy-template-ic.github.io/controller
+
+# Controller 2 (nginx-gateway-fabric)
+gatewayClass:
+  name: nginx
+  controllerName: gateway.nginx.org/nginx-gateway-controller
+```
+
+**Only one should be default:**
+```yaml
+# Set default on one controller only
+gatewayClass:
+  default: true  # Only on ONE controller
+```
+
+### Advanced: Multiple GatewayClasses
+
+You can create multiple GatewayClasses pointing to different HAProxyTemplateConfig resources for different routing scenarios (e.g., internet-facing vs internal):
+
+```bash
+# Install chart with default config
+helm install haproxy-internet ./charts/haproxy-template-ic
+
+# Create separate HAProxyTemplateConfig for internal traffic with different templates
+kubectl apply -f - <<EOF
+apiVersion: haproxy-template-ic.github.io/v1alpha1
+kind: HAProxyTemplateConfig
+metadata:
+  name: haproxy-internal-config
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: haproxy-internal
+  # ... different template configuration ...
+EOF
+
+# Create additional GatewayClass pointing to the internal config
+kubectl apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: haproxy-internal
+spec:
+  controllerName: haproxy-template-ic.github.io/controller
+  parametersRef:
+    group: haproxy-template-ic.github.io
+    kind: HAProxyTemplateConfig
+    name: haproxy-internal-config
+    namespace: default
+EOF
+```
+
+### Using GatewayClass
+
+Gateway resources reference the GatewayClass, and HTTPRoutes attach to Gateways:
+
+**1. Create a Gateway:**
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: example-gateway
+spec:
+  gatewayClassName: haproxy  # References GatewayClass.metadata.name
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+```
+
+**2. Create HTTPRoutes that attach to the Gateway:**
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: example-route
+spec:
+  parentRefs:
+    - name: example-gateway  # References Gateway.metadata.name
+  hostnames:
+    - "example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: example-service
+          port: 80
+```
+
+### Disabling GatewayClass Creation
+
+If you manage GatewayClass resources separately:
+
+```yaml
+gatewayClass:
+  enabled: false
 ```
 
 ## Resource Limits and Cloud-Native Behavior

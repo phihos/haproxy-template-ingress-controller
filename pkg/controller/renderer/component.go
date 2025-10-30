@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"haproxy-template-ic/pkg/controller/events"
@@ -42,15 +43,26 @@ const (
 
 // Component implements the renderer component.
 //
-// It subscribes to ReconciliationTriggeredEvent, renders all templates
+// It subscribes to ReconciliationTriggeredEvent and BecameLeaderEvent, renders all templates
 // using the template engine and resource stores, and publishes the results
 // via TemplateRenderedEvent or TemplateRenderFailedEvent.
+//
+// The component caches the last rendered output to support state replay during
+// leadership transitions (when new leader-only components start subscribing).
 type Component struct {
 	eventBus *busevents.EventBus
 	engine   *templating.TemplateEngine
 	config   *config.Config
 	stores   map[string]types.Store
 	logger   *slog.Logger
+
+	// State protected by mutex (for leadership transition replay)
+	mu                   sync.RWMutex
+	lastHAProxyConfig    string
+	lastAuxiliaryFiles   *dataplane.AuxiliaryFiles
+	lastAuxFileCount     int
+	lastRenderDurationMs int64
+	hasRenderedConfig    bool
 }
 
 // New creates a new Renderer component.
@@ -104,7 +116,7 @@ func New(
 	}
 
 	// Pre-compile all templates with custom filters and functions
-	engine, err := templating.NewWithFiltersAndFunctions(templating.EngineTypeGonja, templates, filters, functions)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create template engine: %w", err)
 	}
@@ -152,8 +164,12 @@ func (c *Component) Start(ctx context.Context) error {
 
 // handleEvent processes events from the EventBus.
 func (c *Component) handleEvent(event busevents.Event) {
-	if ev, ok := event.(*events.ReconciliationTriggeredEvent); ok {
+	switch ev := event.(type) {
+	case *events.ReconciliationTriggeredEvent:
 		c.handleReconciliationTriggered(ev)
+
+	case *events.BecameLeaderEvent:
+		c.handleBecameLeader(ev)
 	}
 }
 
@@ -193,7 +209,50 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 		"auxiliary_files", auxFileCount,
 		"duration_ms", durationMs)
 
+	// Cache rendered output for leadership transition replay
+	c.mu.Lock()
+	c.lastHAProxyConfig = haproxyConfig
+	c.lastAuxiliaryFiles = auxiliaryFiles
+	c.lastAuxFileCount = auxFileCount
+	c.lastRenderDurationMs = durationMs
+	c.hasRenderedConfig = true
+	c.mu.Unlock()
+
 	// Publish success event with rendered content
+	c.eventBus.Publish(events.NewTemplateRenderedEvent(
+		haproxyConfig,
+		auxiliaryFiles,
+		auxFileCount,
+		durationMs,
+	))
+}
+
+// handleBecameLeader handles BecameLeaderEvent by re-publishing the last rendered config.
+//
+// This ensures DeploymentScheduler (which starts subscribing only after becoming leader)
+// receives the current rendered state, even if rendering occurred before leadership was acquired.
+//
+// This prevents the "late subscriber problem" where leader-only components miss events
+// that were published before they started subscribing.
+func (c *Component) handleBecameLeader(_ *events.BecameLeaderEvent) {
+	c.mu.RLock()
+	hasState := c.hasRenderedConfig
+	haproxyConfig := c.lastHAProxyConfig
+	auxiliaryFiles := c.lastAuxiliaryFiles
+	auxFileCount := c.lastAuxFileCount
+	durationMs := c.lastRenderDurationMs
+	c.mu.RUnlock()
+
+	if !hasState {
+		c.logger.Debug("became leader but no rendered config available yet, skipping state replay")
+		return
+	}
+
+	c.logger.Info("became leader, re-publishing last rendered config for DeploymentScheduler",
+		"config_bytes", len(haproxyConfig),
+		"auxiliary_files", auxFileCount)
+
+	// Re-publish the last rendered event to ensure new leader-only components receive it
 	c.eventBus.Publish(events.NewTemplateRenderedEvent(
 		haproxyConfig,
 		auxiliaryFiles,

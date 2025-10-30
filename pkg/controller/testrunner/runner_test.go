@@ -261,7 +261,7 @@ func TestRunner_RunTests(t *testing.T) {
 			templates := map[string]string{
 				"haproxy.cfg": tt.config.HAProxyConfig.Template,
 			}
-			engine, err := templating.New(templating.EngineTypeGonja, templates)
+			engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil)
 			require.NoError(t, err)
 
 			// Convert CRD spec to internal config format
@@ -365,7 +365,7 @@ backend {{ svc.metadata.namespace }}-{{ svc.metadata.name }}
 	templates := map[string]string{
 		"haproxy.cfg": config.HAProxyConfig.Template,
 	}
-	engine, err := templating.New(templating.EngineTypeGonja, templates)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	// Convert CRD spec to internal config format
@@ -435,7 +435,7 @@ func TestRunner_RenderError(t *testing.T) {
 	templates := map[string]string{
 		"haproxy.cfg": config.HAProxyConfig.Template,
 	}
-	engine, err := templating.New(templating.EngineTypeGonja, templates)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil)
 	require.NoError(t, err)
 
 	// Convert CRD spec to internal config format
@@ -465,10 +465,12 @@ func TestRunner_RenderError(t *testing.T) {
 	assert.False(t, testResult.Passed)
 	assert.NotEmpty(t, testResult.RenderError, "render error should be populated")
 
-	// Verify rendering failure is added as assertion
-	assert.Len(t, testResult.Assertions, 1)
+	// Verify rendering failure is added as assertion, plus the original assertion also failed
+	assert.Len(t, testResult.Assertions, 2)
 	assert.Equal(t, "rendering", testResult.Assertions[0].Type)
 	assert.False(t, testResult.Assertions[0].Passed)
+	assert.Equal(t, "contains", testResult.Assertions[1].Type)
+	assert.False(t, testResult.Assertions[1].Passed)
 }
 
 func TestTestResults_AllPassed(t *testing.T) {

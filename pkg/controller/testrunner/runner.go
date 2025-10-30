@@ -311,27 +311,25 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 	// 2. Render HAProxy configuration and auxiliary files
 	haproxyConfig, auxiliaryFiles, err := r.renderWithStores(stores)
 	if err != nil {
-		result.Passed = false
 		result.RenderError = dataplane.SimplifyRenderingError(err)
-		result.Duration = time.Since(startTime)
 
 		// Add rendering failure as assertion for completeness
 		result.Assertions = append(result.Assertions, AssertionResult{
 			Type:        "rendering",
-			Description: "Template rendering",
+			Description: "Template rendering failed",
 			Passed:      false,
 			Error:       result.RenderError,
 		})
-
-		return result
+		// Don't return early - continue to run assertions
+		// Some tests expect rendering to fail (negative tests with rendering_error assertions)
 	}
 
 	// 3. Build template context for JSONPath assertions
 	templateContext := r.buildRenderingContext(stores)
 
-	// 4. Run all assertions
+	// 4. Run all assertions (whether rendering succeeded or failed)
 	for i := range test.Assertions {
-		assertionResult := r.runAssertion(ctx, &test.Assertions[i], haproxyConfig, auxiliaryFiles, templateContext)
+		assertionResult := r.runAssertion(ctx, &test.Assertions[i], haproxyConfig, auxiliaryFiles, templateContext, result.RenderError)
 		result.Assertions = append(result.Assertions, assertionResult)
 
 		if !assertionResult.Passed {
@@ -339,8 +337,26 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 		}
 	}
 
+	// Test passes if either:
+	// - Rendering succeeded AND all assertions passed
+	// - Rendering failed BUT test has rendering_error assertions that passed
+	if result.RenderError != "" && !hasRenderingErrorAssertions(test.Assertions) {
+		result.Passed = false
+	}
+
 	result.Duration = time.Since(startTime)
 	return result
+}
+
+// hasRenderingErrorAssertions checks if the test has any assertions targeting rendering_error.
+// This is used to determine if a test expects rendering to fail (negative test).
+func hasRenderingErrorAssertions(assertions []config.ValidationAssertion) bool {
+	for _, assertion := range assertions {
+		if assertion.Target == "rendering_error" {
+			return true
+		}
+	}
+	return false
 }
 
 // renderWithStores renders HAProxy configuration using test fixture stores.
@@ -463,6 +479,7 @@ func (r *Runner) runAssertion(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	templateContext map[string]interface{},
+	renderError string,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        assertion.Type,
@@ -475,13 +492,16 @@ func (r *Runner) runAssertion(
 		result = r.assertHAProxyValid(ctx, haproxyConfig, auxiliaryFiles, assertion)
 
 	case "contains":
-		result = r.assertContains(haproxyConfig, auxiliaryFiles, assertion)
+		result = r.assertContains(haproxyConfig, auxiliaryFiles, assertion, renderError)
 
 	case "not_contains":
-		result = r.assertNotContains(haproxyConfig, auxiliaryFiles, assertion)
+		result = r.assertNotContains(haproxyConfig, auxiliaryFiles, assertion, renderError)
+
+	case "match_count":
+		result = r.assertMatchCount(haproxyConfig, auxiliaryFiles, assertion, renderError)
 
 	case "equals":
-		result = r.assertEquals(haproxyConfig, auxiliaryFiles, assertion)
+		result = r.assertEquals(haproxyConfig, auxiliaryFiles, assertion, renderError)
 
 	case "jsonpath":
 		result = r.assertJSONPath(templateContext, assertion)

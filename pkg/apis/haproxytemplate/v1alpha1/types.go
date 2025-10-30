@@ -465,8 +465,9 @@ type ValidationAssertion struct {
 	//   - not_contains: Checks if target does not contain pattern (regex)
 	//   - equals: Checks if target equals expected value
 	//   - jsonpath: Evaluates JSONPath expression against target
+	//   - match_count: Counts how many times pattern matches in target (regex)
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=haproxy_valid;contains;not_contains;equals;jsonpath
+	// +kubebuilder:validation:Enum=haproxy_valid;contains;not_contains;equals;jsonpath;match_count
 	Type string `json:"type"`
 
 	// Description explains what this assertion validates.
