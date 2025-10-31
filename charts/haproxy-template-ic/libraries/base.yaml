@@ -16,7 +16,8 @@ templateSnippets:
 
   use-backend-selection:
     template: |
-      {#- Backend selection logic using path matching maps #}
+      {#- Backend selection logic with qualifier system #}
+      {#- Supports BACKEND and MULTIBACKEND qualifiers #}
       {#- Default ordering: Exact > Regex > Prefix (de facto standard) #}
       {#- Override this snippet in path-regex-last library for performance-first ordering #}
 
@@ -33,8 +34,29 @@ templateSnippets:
       http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
       http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
 
-      # Use path maps for routing
-      use_backend %[var(txn.path_match)]
+      # Parse qualifier from path match (field 1 = qualifier type)
+      # Empty string if no path match - falls through gracefully
+      http-request set-var(txn.path_match_qualifier) var(txn.path_match),field(1,:)
+
+      # MULTIBACKEND qualifier: weighted routing
+      # Format: MULTIBACKEND:<total_weight>:<route_key>
+      # Field 2 = total_weight, Field 3 = route_key
+      # Result: sets txn.backend_name via weighted-multi-backend.map lookup
+      http-request set-var(txn.total_weight) var(txn.path_match),field(2,:) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
+      http-request set-var(txn.random_weight) rand(),mod(txn.total_weight) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
+      http-request set-var(txn.route_key) var(txn.path_match),field(3,:) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
+      http-request set-var(txn.lookup_key) var(txn.random_weight),concat(:,txn.route_key,) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
+      http-request set-var(txn.backend_name) var(txn.lookup_key),map({{ "weighted-multi-backend.map" | get_path("map") }}) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
+
+      # BACKEND qualifier: direct routing
+      # Format: BACKEND:<backend_name>
+      # Field 2 = backend name
+      # Result: sets txn.backend_name directly
+      http-request set-var(txn.backend_name) var(txn.path_match),field(2,:) if { var(txn.path_match_qualifier) -m str BACKEND }
+
+      # Use backend from txn.backend_name (set by qualifier logic above)
+      # Falls through to default_backend if backend_name is empty
+      use_backend %[var(txn.backend_name)] if { var(txn.backend_name) -m found }
 
   backend-servers:
     template: |
@@ -128,6 +150,16 @@ maps:
       {#- Resource libraries populate this map via map-entry-path-regex-* snippets #}
       {%- from "macros" import include_matching -%}
       {{- include_matching("map-entry-path-regex-*") -}}
+
+  weighted-multi-backend.map:
+    template: |
+      # Weighted multi-backend routing map
+      # Maps random_number:route_key to backend name for MULTIBACKEND qualifier
+      # Format: <0 to total_weight-1>:<namespace>_<resource>_<rule_idx> <backend_name>
+      # Entries are expanded: weight N generates N consecutive entries
+      # Libraries populate via map-entries-weighted-multi-backend-* pattern
+      {% from "macros" import include_matching %}
+      {{- include_matching("map-entries-weighted-multi-backend-*") }}
 
 files:
   400.http:

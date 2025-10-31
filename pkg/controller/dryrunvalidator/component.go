@@ -441,7 +441,8 @@ func (c *Component) runValidationTests(requestID string) error {
 
 		// Collect failed test names
 		failedTestNames := make([]string, 0, testResults.FailedTests)
-		for _, result := range testResults.TestResults {
+		for i := range testResults.TestResults {
+			result := &testResults.TestResults[i]
 			if !result.Passed {
 				failedTestNames = append(failedTestNames, result.TestName)
 			}
@@ -467,7 +468,8 @@ func (c *Component) buildTestFailureError(testResults *testrunner.TestResults) e
 	errorMsg := fmt.Sprintf("Validation tests failed: %d/%d tests failed\n\nFailed tests:\n",
 		testResults.FailedTests, testResults.TotalTests)
 
-	for _, result := range testResults.TestResults {
+	for i := range testResults.TestResults {
+		result := &testResults.TestResults[i]
 		if !result.Passed {
 			errorMsg += fmt.Sprintf("\n- Test: %s\n", result.TestName)
 			if result.RenderError != "" {

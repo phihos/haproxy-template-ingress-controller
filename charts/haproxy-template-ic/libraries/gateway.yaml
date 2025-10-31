@@ -1,17 +1,24 @@
 # Gateway API template library for HAProxy Template Ingress Controller
-# Provides support for Kubernetes Gateway API (gateway.networking.k8s.io/v1)
+# Provides support for Kubernetes Gateway API v1.2.0 (gateway.networking.k8s.io/v1)
 # Implements the resource_gateway_* plugin interface for the base library
 #
-# Supported resources:
-# - HTTPRoute (Standard/GA): HTTP/HTTPS routing with path matching, header matching, traffic splitting
-# - GRPCRoute (Standard/GA): gRPC-specific routing with method matching
+# Full feature documentation: ../docs/gateway-api-support.md
 #
-# Features:
-# - Path matching (Exact, PathPrefix, RegularExpression)
-# - Header matching
-# - Traffic splitting using HAProxy server weights
-# - Host-based routing
-# - Gateway name filtering (routes attach to specific Gateway resources)
+# Supported resources:
+# - HTTPRoute: HTTP/HTTPS routing with path matching and weighted traffic splitting
+# - GRPCRoute: gRPC backend generation with HTTP/2 protocol support
+#
+# Key features:
+# - Path matching: Exact, PathPrefix, RegularExpression (HTTPRoute only)
+# - Weighted traffic splitting: backendRefs with weights for both HTTPRoute and GRPCRoute
+# - Host-based routing: Multiple hostnames per route
+# - Backend deduplication: Prevents duplicate backend definitions
+# - Optimized routing: Single backends use BACKEND qualifier, multiple use MULTIBACKEND
+#
+# Known limitations:
+# - Header and query parameter matching not implemented
+# - Filters (header modification, redirects, etc.) not implemented
+# - GRPCRoute method-based routing not implemented (all traffic to hostname routes to same backend)
 
 watchedResources:
   httproutes:
@@ -29,10 +36,20 @@ watchedResources:
     indexBy: ["metadata.namespace", "metadata.name"]
     enableValidationWebhook: true
 
+  services:
+    apiVersion: v1
+    resources: services
+    indexBy: ["metadata.namespace", "metadata.name"]
+
+  endpoints:
+    apiVersion: discovery.k8s.io/v1
+    resources: endpointslices
+    indexBy: ["metadata.namespace", "metadata.labels.kubernetes\\.io/service-name"]
+
 templateSnippets:
   resource_gateway_backend-name:
     template: >-
-      {{- " " -}}gtw_{{ route.metadata.namespace }}_{{ route.metadata.name }}_{{ backend.name }}_{{ backend.port }}
+      {{- "" -}}gtw_{{ route.metadata.namespace }}_{{ route.metadata.name }}_{{ backend.name }}_{{ backend.port }}
 
   resource_gateway_backends:
     template: |
@@ -95,23 +112,49 @@ templateSnippets:
 
   resource_gateway_path-map-entry:
     template: |
-      {#- Generate HTTPRoute path matching map entries #}
+      {#- Generate HTTPRoute path matching map entries with qualifiers #}
+      {#- Single backend: BACKEND:<backend_name> #}
+      {#- Multiple backends: MULTIBACKEND:<total_weight>:<route_key> #}
       {#- Usage: {% include "resource_gateway_path-map-entry" with context %} where path_type = "Exact" or "PathPrefix" #}
+
       {%- for route in resources.httproutes.List() %}
       {%- for hostname in (route.spec.hostnames | default([""])) %}
       {%- for rule in (route.spec.rules | default([])) %}
-      {%- if rule.backendRefs %}
-      {%- set first_backend = rule.backendRefs[0] %}
-      {%- set backend = {"name": first_backend.name, "port": first_backend.port} %}
-      {%- for match in (rule.matches | default([{}])) %}
-      {%- if match.path and match.path.type == path_type %}
-      {{ hostname }}{{ match.path.value | default("/") }} {% include "resource_gateway_backend-name" %}{{ suffix }}
-      {% elif not match.path and path_type == "PathPrefix" %}
-      {#- Default match (no path specified means match all) #}
-      {{ hostname }}/ {% include "resource_gateway_backend-name" %}{{ suffix }}
-      {% endif %}
-      {%- endfor %}
-      {%- endif %}
+        {%- if rule.backendRefs %}
+
+        {#- Normalize matches: default to PathPrefix / if no path matchers -#}
+        {%- set matches_list = rule.matches | default([]) %}
+        {%- set path_matches = matches_list | selectattr("path") | list %}
+        {%- if path_matches | length == 0 %}
+          {%- set path_matches = [{"path": {"type": "PathPrefix", "value": "/"}}] %}
+        {%- endif %}
+
+        {%- if (rule.backendRefs | length) == 1 %}
+          {#- Single backend: use BACKEND qualifier -#}
+          {%- set backend = {"name": rule.backendRefs[0].name, "port": rule.backendRefs[0].port} %}
+          {%- for match in path_matches %}
+          {%- if match.path.type == path_type %}
+      {{ hostname }}{{ match.path.value | default("/") }} BACKEND:{% include "resource_gateway_backend-name" %}{{ suffix }}
+          {% endif %}
+          {%- endfor %}
+
+        {%- else %}
+          {#- Multiple backends: use MULTIBACKEND qualifier -#}
+          {%- set ns = namespace(total_weight=0) %}
+          {%- for ref in rule.backendRefs %}
+            {%- set ns.total_weight = ns.total_weight + (ref.weight | default(1)) %}
+          {%- endfor %}
+          {%- set route_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ loop.index0 %}
+
+          {%- for match in path_matches %}
+          {%- if match.path.type == path_type %}
+      {{ hostname }}{{ match.path.value | default("/") }}{{ suffix }} MULTIBACKEND:{{ ns.total_weight }}:{{ route_key }}
+          {% endif %}
+          {%- endfor %}
+
+        {%- endif %}
+
+        {%- endif %}
       {%- endfor %}
       {%- endfor %}
       {%- endfor %}
@@ -170,6 +213,36 @@ templateSnippets:
       {%- endfor %}
       {%- endfor %}
 
+  map-entries-weighted-multi-backend-gateway:
+    template: |
+      {#- Generate expanded weighted backend entries for HTTPRoute #}
+      {#- Format: <random_number>:<route_key> <backend_name> #}
+      {#- Each weight N generates N consecutive entries pointing to same backend #}
+      {#- This allows O(1) weighted selection via single map lookup #}
+
+      {%- for route in resources.httproutes.List() %}
+      {%- for rule in (route.spec.rules | default([])) %}
+        {%- if rule.backendRefs and (rule.backendRefs | length) > 1 %}
+
+          {%- set route_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ loop.index0 %}
+          {%- set ns = namespace(cumulative=0) %}
+
+          {%- for backendRef in rule.backendRefs %}
+            {%- set backend = {"name": backendRef.name, "port": backendRef.port} %}
+            {%- set weight = backendRef.weight | default(1) %}
+
+            {#- Generate <weight> consecutive entries for this backend -#}
+            {%- for i in range(ns.cumulative, ns.cumulative + weight) -%}
+      {{ i }}:{{ route_key }} {{ "" }}{% include "resource_gateway_backend-name" %}{{ "\n" -}}
+            {%- endfor %}
+
+            {%- set ns.cumulative = ns.cumulative + weight %}
+          {%- endfor %}
+
+        {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+
 validationTests:
   test-httproute-duplicate-backend-different-ports:
     description: HTTPRoute with multiple rules to same service but different ports (tests deduplication)
@@ -188,6 +261,21 @@ validationTests:
               - name: admin
                 port: 81
                 targetPort: 8081
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-svc-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: api-svc
+          endpoints:
+            - addresses: ["10.0.0.1"]
+              targetRef:
+                name: api-pod-1
+          ports:
+            - port: 8080
+            - port: 8081
       httproutes:
         - apiVersion: gateway.networking.k8s.io/v1
           kind: HTTPRoute
@@ -228,17 +316,17 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "backend gw_default_multi-port_api-svc_80"
+        pattern: "backend gtw_default_multi-port_api-svc_80"
         description: Must generate backend for port 80
 
       - type: contains
         target: haproxy.cfg
-        pattern: "backend gw_default_multi-port_api-svc_81"
+        pattern: "backend gtw_default_multi-port_api-svc_81"
         description: Must generate backend for port 81
 
       - type: match_count
         target: haproxy.cfg
-        pattern: "^backend gw_default_multi-port_api-svc_"
+        pattern: "(?m)^backend gtw_default_multi-port_api-svc_"
         expected: "2"
         description: Must generate exactly 2 backends (deduplication test)
 
@@ -259,6 +347,21 @@ validationTests:
               - name: grpc-admin
                 port: 9091
                 targetPort: 9091
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: grpc-svc-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: grpc-svc
+          endpoints:
+            - addresses: ["10.0.0.2"]
+              targetRef:
+                name: grpc-pod-1
+          ports:
+            - port: 9090
+            - port: 9091
       grpcroutes:
         - apiVersion: gateway.networking.k8s.io/v1
           kind: GRPCRoute
@@ -302,16 +405,379 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "backend gw_default_multi-port_grpc-svc_9090"
+        pattern: "backend gtw_default_multi-port_grpc-svc_9090"
         description: Must generate backend for port 9090
 
       - type: contains
         target: haproxy.cfg
-        pattern: "backend gw_default_multi-port_grpc-svc_9091"
+        pattern: "backend gtw_default_multi-port_grpc-svc_9091"
         description: Must generate backend for port 9091
 
       - type: match_count
         target: haproxy.cfg
-        pattern: "^backend gw_default_multi-port_grpc-svc_"
+        pattern: "(?m)^backend gtw_default_multi-port_grpc-svc_"
         expected: "2"
         description: Must generate exactly 2 backends (deduplication test)
+
+  test-httproute-weight-two-backends:
+    description: HTTPRoute with two weighted backends (70/30 split)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: app-v1
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: app-v2
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-v1-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app-v1
+          endpoints:
+            - addresses: ["10.0.1.1"]
+              targetRef:
+                name: app-v1-pod-1
+          ports:
+            - port: 8080
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-v2-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app-v2
+          endpoints:
+            - addresses: ["10.0.2.1"]
+              targetRef:
+                name: app-v2-pod-1
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: split-route
+            namespace: default
+          spec:
+            parentRefs:
+              - name: gateway
+                namespace: default
+            hostnames:
+              - split.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /app
+                backendRefs:
+                  - name: app-v1
+                    port: 80
+                    weight: 70
+                  - name: app-v2
+                    port: 80
+                    weight: 30
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend gtw_default_split-route_app-v1_80"
+        description: Must generate backend for app-v1
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend gtw_default_split-route_app-v2_80"
+        description: Must generate backend for app-v2
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "split.example.com/app MULTIBACKEND:100:default_split-route_0"
+        description: Path map must use MULTIBACKEND qualifier with total weight 100
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "0:default_split-route_0 gtw_default_split-route_app-v1_80"
+        description: Weighted map must contain first entry for v1
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "69:default_split-route_0 gtw_default_split-route_app-v1_80"
+        description: Weighted map must contain last entry for v1 (weight 70 = entries 0-69)
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "70:default_split-route_0 gtw_default_split-route_app-v2_80"
+        description: Weighted map must contain first entry for v2
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "99:default_split-route_0 gtw_default_split-route_app-v2_80"
+        description: Weighted map must contain last entry for v2 (weight 30 = entries 70-99)
+
+      - type: not_contains
+        target: map:weighted-multi-backend.map
+        pattern: "0:default_split-route_0 gtw_default_split-route_app-v1_801:default_split-route_0"
+        description: Entries must be on separate lines (not concatenated)
+
+      - type: not_contains
+        target: map:weighted-multi-backend.map
+        pattern: "69:default_split-route_0 gtw_default_split-route_app-v1_8070:default_split-route_0"
+        description: Boundary entries (v1 end / v2 start) must be on separate lines
+
+  test-httproute-weight-no-matches:
+    description: HTTPRoute with no matches block defaults to PathPrefix /
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: app-v1
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: app-v2
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-v1-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app-v1
+          endpoints:
+            - addresses: ["10.0.1.1"]
+              targetRef:
+                name: app-v1-pod-1
+          ports:
+            - port: 8080
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-v2-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app-v2
+          endpoints:
+            - addresses: ["10.0.2.1"]
+              targetRef:
+                name: app-v2-pod-1
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: default-path
+            namespace: default
+          spec:
+            parentRefs:
+              - name: gateway
+                namespace: default
+            hostnames:
+              - default.example.com
+            rules:
+              - backendRefs:
+                  - name: app-v1
+                    port: 80
+                    weight: 50
+                  - name: app-v2
+                    port: 80
+                    weight: 50
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "default.example.com/ MULTIBACKEND:100:default_default-path_0"
+        description: Missing matches must default to PathPrefix / with weight 100
+
+  test-httproute-weight-default:
+    description: HTTPRoute with default weights (omitted weight defaults to 1)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: app-v1
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: app-v2
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-v1-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app-v1
+          endpoints:
+            - addresses: ["10.0.1.1"]
+              targetRef:
+                name: app-v1-pod-1
+          ports:
+            - port: 8080
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-v2-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app-v2
+          endpoints:
+            - addresses: ["10.0.2.1"]
+              targetRef:
+                name: app-v2-pod-1
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: default-weight
+            namespace: default
+          spec:
+            parentRefs:
+              - name: gateway
+                namespace: default
+            hostnames:
+              - weight.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: Exact
+                      value: /test
+                backendRefs:
+                  - name: app-v1
+                    port: 80
+                  - name: app-v2
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: map:path-exact.map
+        pattern: "weight.example.com/test MULTIBACKEND:2:default_default-weight_0"
+        description: Omitted weights must default to 1 (total weight = 2)
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "0:default_default-weight_0 gtw_default_default-weight_app-v1_80"
+        description: Default weight creates single entry for v1
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "1:default_default-weight_0 gtw_default_default-weight_app-v2_80"
+        description: Default weight creates single entry for v2
+
+  test-httproute-single-backend:
+    description: HTTPRoute with single backend uses BACKEND qualifier
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: app
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app
+          endpoints:
+            - addresses: ["10.0.3.1"]
+              targetRef:
+                name: app-pod-1
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: single-backend
+            namespace: default
+          spec:
+            parentRefs:
+              - name: gateway
+                namespace: default
+            hostnames:
+              - single.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                backendRefs:
+                  - name: app
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend gtw_default_single-backend_app_80"
+        description: Must generate backend for single backend
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "single.example.com/ BACKEND:gtw_default_single-backend_app_80/"
+        description: Single backend must use BACKEND qualifier (not MULTIBACKEND)
+
+      - type: not_contains
+        target: map:weighted-multi-backend.map
+        pattern: "default_single-backend"
+        description: Single backend must not generate weighted-multi-backend entries

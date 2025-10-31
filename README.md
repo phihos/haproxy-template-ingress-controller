@@ -24,7 +24,7 @@ The controller watches Kubernetes resources you specify (Ingress, Service, Secre
 - **Template-driven configuration**: Use Jinja2-like syntax to generate HAProxy configurations from any Kubernetes resources
 - **Flexible resource watching**: Monitor any Kubernetes resource type (Ingress, Service, Secrets, CRDs) as input to your templates
 - **Multi-phase validation**: Configurations are validated by the client-native parser and HAProxy binary before deployment
-- **Embedded validation tests**: Write tests directly in your HAProxyTemplateConfig with fixtures and assertions to catch template errors in CI/CD
+- **Embedded validation tests**: Write tests directly in your HAProxyTemplateConfig with fixtures and assertions to catch template errors in CI/CD. Includes debugging flags (`--verbose`, `--dump-rendered`, `--trace-templates`) for troubleshooting failures
 - **Zero-reload optimization**: Uses HAProxy runtime API for server weight, address, and maintenance state changes
 - **High availability**: Leader election with multiple controller replicas for automatic failover and zero-downtime upgrades
 - **Smart deployment scheduling**: Rate limiting prevents concurrent deployments, periodic drift detection corrects external modifications

@@ -117,6 +117,18 @@ type TestResult struct {
 
 	// RenderError is set if template rendering failed.
 	RenderError string
+
+	// RenderedConfig contains the rendered HAProxy configuration (for --dump-rendered).
+	RenderedConfig string `json:"renderedConfig,omitempty" yaml:"renderedConfig,omitempty"`
+
+	// RenderedMaps contains rendered map files (for --dump-rendered).
+	RenderedMaps map[string]string `json:"renderedMaps,omitempty" yaml:"renderedMaps,omitempty"`
+
+	// RenderedFiles contains rendered general files (for --dump-rendered).
+	RenderedFiles map[string]string `json:"renderedFiles,omitempty" yaml:"renderedFiles,omitempty"`
+
+	// RenderedCerts contains rendered SSL certificates (for --dump-rendered).
+	RenderedCerts map[string]string `json:"renderedCerts,omitempty" yaml:"renderedCerts,omitempty"`
 }
 
 // AssertionResult contains the result of running a single assertion.
@@ -132,6 +144,15 @@ type AssertionResult struct {
 
 	// Error contains the failure message if assertion failed.
 	Error string
+
+	// Target is the assertion target (e.g., "haproxy.cfg", "map:path-prefix.map").
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+
+	// TargetSize is the size of the target content in bytes.
+	TargetSize int `json:"targetSize,omitempty" yaml:"targetSize,omitempty"`
+
+	// TargetPreview is a preview of the target content (first 200 chars, only for failed assertions).
+	TargetPreview string `json:"targetPreview,omitempty" yaml:"targetPreview,omitempty"`
 }
 
 // New creates a new test runner.
@@ -322,20 +343,17 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 		})
 		// Don't return early - continue to run assertions
 		// Some tests expect rendering to fail (negative tests with rendering_error assertions)
+	} else {
+		// Store rendered content for --dump-rendered flag
+		result.RenderedConfig = haproxyConfig
+		r.storeAuxiliaryFiles(&result, auxiliaryFiles)
 	}
 
 	// 3. Build template context for JSONPath assertions
 	templateContext := r.buildRenderingContext(stores)
 
 	// 4. Run all assertions (whether rendering succeeded or failed)
-	for i := range test.Assertions {
-		assertionResult := r.runAssertion(ctx, &test.Assertions[i], haproxyConfig, auxiliaryFiles, templateContext, result.RenderError)
-		result.Assertions = append(result.Assertions, assertionResult)
-
-		if !assertionResult.Passed {
-			result.Passed = false
-		}
-	}
+	r.executeAssertions(ctx, &result, &test, haproxyConfig, auxiliaryFiles, templateContext)
 
 	// Test passes if either:
 	// - Rendering succeeded AND all assertions passed
@@ -346,6 +364,56 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 
 	result.Duration = time.Since(startTime)
 	return result
+}
+
+// storeAuxiliaryFiles stores rendered auxiliary files in the test result for --dump-rendered flag.
+func (r *Runner) storeAuxiliaryFiles(result *TestResult, auxiliaryFiles *dataplane.AuxiliaryFiles) {
+	if auxiliaryFiles == nil {
+		return
+	}
+
+	// Store rendered maps
+	if len(auxiliaryFiles.MapFiles) > 0 {
+		result.RenderedMaps = make(map[string]string)
+		for _, mapFile := range auxiliaryFiles.MapFiles {
+			result.RenderedMaps[mapFile.Path] = mapFile.Content
+		}
+	}
+
+	// Store rendered general files
+	if len(auxiliaryFiles.GeneralFiles) > 0 {
+		result.RenderedFiles = make(map[string]string)
+		for _, file := range auxiliaryFiles.GeneralFiles {
+			result.RenderedFiles[file.Filename] = file.Content
+		}
+	}
+
+	// Store rendered SSL certificates
+	if len(auxiliaryFiles.SSLCertificates) > 0 {
+		result.RenderedCerts = make(map[string]string)
+		for _, cert := range auxiliaryFiles.SSLCertificates {
+			result.RenderedCerts[cert.Path] = cert.Content
+		}
+	}
+}
+
+// executeAssertions runs all assertions for a test and updates the result.
+func (r *Runner) executeAssertions(
+	ctx context.Context,
+	result *TestResult,
+	test *config.ValidationTest,
+	haproxyConfig string,
+	auxiliaryFiles *dataplane.AuxiliaryFiles,
+	templateContext map[string]interface{},
+) {
+	for i := range test.Assertions {
+		assertionResult := r.runAssertion(ctx, &test.Assertions[i], haproxyConfig, auxiliaryFiles, templateContext, result.RenderError)
+		result.Assertions = append(result.Assertions, assertionResult)
+
+		if !assertionResult.Passed {
+			result.Passed = false
+		}
+	}
 }
 
 // hasRenderingErrorAssertions checks if the test has any assertions targeting rendering_error.

@@ -222,6 +222,179 @@ unable to load file '/etc/haproxy/maps/host.map'
 - Check service names are correct
 - Ensure DNS resolution works for service names
 
+### Validation Test Failures
+
+**Symptoms:**
+- `controller validate` command fails
+- Webhook rejecting HAProxyTemplateConfig updates
+- Assertion failures in validation tests
+- Template rendering errors in tests
+
+**Diagnosis:**
+
+```bash
+# Run validation tests with default output
+controller validate -f config.yaml
+```
+
+**Common Causes:**
+
+**1. Pattern not found in rendered output:**
+
+```
+✗ Backend pattern test
+  Error: pattern "backend api-.*" not found in haproxy.cfg (target size: 1234 bytes).
+         Hint: Use --verbose to see content preview
+```
+
+**Solution:**
+```bash
+# Step 1: See what was actually rendered
+controller validate -f config.yaml --verbose
+
+# Example output:
+# ✗ Backend pattern test
+#   Error: pattern "backend api-.*" not found in haproxy.cfg (target size: 1234 bytes)
+#   Target: haproxy.cfg (1234 bytes)
+#   Content preview:
+#     global
+#       daemon
+#     defaults
+#       mode http
+
+# Step 2: If preview isn't enough, see full content
+controller validate -f config.yaml --dump-rendered
+
+# Step 3: Check which templates executed
+controller validate -f config.yaml --trace-templates
+
+# Example trace:
+# Rendering: haproxy.cfg
+# Completed: haproxy.cfg (0.007ms)
+# Rendering: backends.cfg
+# Completed: backends.cfg (0.005ms)
+```
+
+**2. Empty map files or missing content:**
+
+```
+✗ Map contains routing entry
+  Error: pattern "api.example.com" not found in map:host-routing.map (target size: 0 bytes)
+```
+
+**Solution:**
+```bash
+# Check what was rendered in the map
+controller validate -f config.yaml --dump-rendered
+
+# Look for the map file section:
+# ### Map Files
+# #### map:host-routing.map
+# (empty)
+
+# Common causes of empty maps:
+# - Loop condition never true (no resources match)
+# - Missing `| default([])` on array variables
+# - Incorrect template logic
+```
+
+**3. Template execution errors:**
+
+```
+✗ Basic rendering
+  Error: Service 'nonexistent' not found in namespace 'default'
+```
+
+**Solution:**
+```bash
+# Check test fixtures - ensure required resources are defined
+# In config.yaml:
+validationTests:
+  - name: "basic rendering"
+    fixtures:
+      services:
+        - metadata:
+            name: nonexistent
+            namespace: default
+          spec:
+            clusterIP: 10.0.0.1
+```
+
+**4. Slow templates affecting validation:**
+
+```bash
+# Identify slow templates
+controller validate -f config.yaml --trace-templates
+
+# Example output showing slow template:
+# Rendering: haproxy.cfg (0.005ms)
+# Rendering: complex-backends.cfg (45.123ms)  ← Needs optimization
+```
+
+**Solution:**
+- Simplify loops in slow templates
+- Reduce nested includes
+- Cache repeated computations with `{% set %}`
+- See [Templating Guide](./templating.md#tips--tricks)
+
+**5. HAProxy syntax validation failures:**
+
+```
+✗ Config must be syntactically valid
+  Error: HAProxy validation failed (config size: 1234 bytes):
+         maxconn: integer expected, got 'invalid' (line 15)
+```
+
+**Solution:**
+```bash
+# See the problematic line
+controller validate -f config.yaml --dump-rendered | grep -A2 -B2 "line 15"
+
+# Test HAProxy config locally
+haproxy -c -f /tmp/haproxy.cfg
+```
+
+**Debugging Workflow:**
+
+```bash
+# 1. Start with enhanced error messages (no flags)
+controller validate -f config.yaml
+# Output: "pattern X not found in map:foo.map (target size: 61 bytes). Hint: Use --verbose"
+
+# 2. Enable verbose for content preview
+controller validate -f config.yaml --verbose
+# Output: Shows first 200 chars of failing target
+
+# 3. Dump full content if preview isn't enough
+controller validate -f config.yaml --dump-rendered
+# Output: Complete haproxy.cfg, all maps, files, certs
+
+# 4. Check template execution
+controller validate -f config.yaml --trace-templates
+# Output: Template names and timing
+
+# 5. Combine flags for comprehensive debugging
+controller validate -f config.yaml --verbose --dump-rendered --trace-templates
+```
+
+**Output Formats:**
+
+For CI/CD integration, use structured output:
+
+```bash
+# JSON output
+controller validate -f config.yaml --output json > results.json
+
+# YAML output
+controller validate -f config.yaml --output yaml > results.yaml
+
+# Both formats include:
+# - Test results (pass/fail)
+# - Assertion details
+# - Rendered content
+# - Error messages
+```
+
 ## HAProxy Pod Issues
 
 ### Cannot Connect to HAProxy Dataplane API

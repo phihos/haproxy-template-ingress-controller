@@ -32,7 +32,7 @@ templateSnippets:
       {%- for ingress in resources.ingresses.List() %}
       {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
       {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
-      {{ rule.host }}{{ path.path }} {% include "resource_ingress_backend-name" -%}{{ suffix }}
+      {{ rule.host }}{{ path.path }} BACKEND:{% include "resource_ingress_backend-name" -%}{{ suffix }}
       {% endfor %}
       {% endfor %}
       {% endfor %}
@@ -195,3 +195,33 @@ validationTests:
         pattern: "backend ing_default_multi-port_api-svc_"
         expected: "2"
         description: Must generate exactly 2 backends (deduplication test)
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "example.com/api BACKEND:ing_default_multi-port_api-svc_80/"
+        description: Path prefix map must use BACKEND qualifier for /api
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "example.com/admin BACKEND:ing_default_multi-port_api-svc_81/"
+        description: Path prefix map must use BACKEND qualifier for /admin
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "example.com/app BACKEND:ing_default_multi-port_api-svc_80/"
+        description: Path prefix map must use BACKEND qualifier for /app
+
+      - type: contains
+        target: map:path-prefix-exact.map
+        pattern: "example.com/api BACKEND:ing_default_multi-port_api-svc_80"
+        description: Path prefix-exact map must use BACKEND qualifier for /api
+
+      - type: contains
+        target: map:path-prefix-exact.map
+        pattern: "example.com/admin BACKEND:ing_default_multi-port_api-svc_81"
+        description: Path prefix-exact map must use BACKEND qualifier for /admin
+
+      - type: contains
+        target: map:path-prefix-exact.map
+        pattern: "example.com/app BACKEND:ing_default_multi-port_api-svc_80"
+        description: Path prefix-exact map must use BACKEND qualifier for /app

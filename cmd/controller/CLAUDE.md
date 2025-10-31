@@ -23,9 +23,96 @@ Modify this package when:
 
 ```
 cmd/controller/
-├── main.go            # Main entry point
+├── main.go            # Main entry point (controller daemon)
+├── validate.go        # Validate command (CLI tool)
 ├── flags.go           # Command-line flags (if separated)
 └── CLAUDE.md          # This file
+```
+
+## Commands
+
+### Main Controller (main.go)
+
+The primary controller daemon that watches Kubernetes resources and manages HAProxy configuration.
+
+### Validate Command (validate.go)
+
+CLI tool for validating HAProxyTemplateConfig CRDs with embedded validation tests.
+
+**Usage:**
+```bash
+controller validate -f config.yaml [flags]
+```
+
+**Observability Flags:**
+
+```bash
+# Show rendered content preview for failed assertions (first 200 chars)
+controller validate -f config.yaml --verbose
+
+# Dump complete rendered content (haproxy.cfg, maps, files, certs)
+controller validate -f config.yaml --dump-rendered
+
+# Show template execution trace with timing
+controller validate -f config.yaml --trace-templates
+
+# Combine flags for comprehensive debugging
+controller validate -f config.yaml --verbose --dump-rendered --trace-templates
+```
+
+**Flag Details:**
+
+- `--verbose` - Shows content preview for failed assertions
+  - Displays target name and size
+  - Shows first 200 characters of content
+  - Includes hints for further debugging
+  - Default: false
+
+- `--dump-rendered` - Dumps all rendered content
+  - HAProxy configuration (haproxy.cfg)
+  - Map files with full content
+  - General files with full content
+  - SSL certificates with full content
+  - Shown after test results
+  - Default: false
+
+- `--trace-templates` - Shows template execution trace
+  - Template names and render order
+  - Timing information in milliseconds
+  - Useful for identifying slow templates
+  - Default: false
+
+**Enhanced Error Messages:**
+
+All validation errors include helpful context by default (no flags needed):
+
+```
+Error: pattern "backend api-.*" not found in haproxy.cfg (target size: 1234 bytes).
+       Hint: Use --verbose to see content preview
+```
+
+**Implementation:**
+
+The validate command uses `pkg/controller/testrunner` to execute tests and format results. It creates a temporary directory for HAProxy validation and cleans up afterward.
+
+**Example Debugging Workflow:**
+
+```bash
+# 1. Run tests and see enhanced error messages
+controller validate -f config.yaml
+# Output: "pattern X not found in map:foo.map (target size: 61 bytes). Hint: Use --verbose"
+
+# 2. Enable verbose mode to see content preview
+controller validate -f config.yaml --verbose
+# Output: Shows first 200 chars of map:foo.map
+
+# 3. See full content if needed
+controller validate -f config.yaml --dump-rendered
+# Output: Complete content of all rendered files
+
+# 4. Identify slow templates
+controller validate -f config.yaml --trace-templates
+# Output: Template execution trace with timing
 ```
 
 ## Key Responsibilities

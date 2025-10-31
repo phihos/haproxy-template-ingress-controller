@@ -36,24 +36,33 @@ const (
 	OutputFormatYAML OutputFormat = "yaml"
 )
 
-// FormatResults formats test results according to the specified format.
-func FormatResults(results *TestResults, format OutputFormat) (string, error) {
-	switch format {
+// OutputOptions configures output formatting.
+type OutputOptions struct {
+	// Format specifies the output format (summary, json, yaml).
+	Format OutputFormat
+
+	// Verbose enables showing rendered content previews for failed assertions.
+	Verbose bool
+}
+
+// FormatResults formats test results according to the specified options.
+func FormatResults(results *TestResults, options OutputOptions) (string, error) {
+	switch options.Format {
 	case OutputFormatSummary:
-		return formatSummary(results), nil
+		return formatSummary(results, options.Verbose), nil
 	case OutputFormatJSON:
 		return formatJSON(results)
 	case OutputFormatYAML:
 		return formatYAML(results)
 	default:
-		return "", fmt.Errorf("unknown output format: %s", format)
+		return "", fmt.Errorf("unknown output format: %s", options.Format)
 	}
 }
 
 // formatSummary formats results as a human-readable summary.
 //
 //nolint:revive // Complexity acceptable for formatting with multiple output conditions
-func formatSummary(results *TestResults) string {
+func formatSummary(results *TestResults, verbose bool) string {
 	var out strings.Builder
 
 	if results.TotalTests == 0 {
@@ -62,7 +71,8 @@ func formatSummary(results *TestResults) string {
 	}
 
 	// Print each test result
-	for _, test := range results.TestResults {
+	for i := range results.TestResults {
+		test := &results.TestResults[i]
 		// Test header
 		if test.Passed {
 			out.WriteString(fmt.Sprintf("✓ %s (%.3fs)\n", test.TestName, test.Duration.Seconds()))
@@ -97,6 +107,24 @@ func formatSummary(results *TestResults) string {
 				}
 				if assertion.Error != "" {
 					out.WriteString(fmt.Sprintf("    Error: %s\n", assertion.Error))
+				}
+
+				// Verbose mode: show target metadata for failed assertions
+				if verbose {
+					if assertion.Target != "" {
+						out.WriteString(fmt.Sprintf("    Target: %s (%d bytes)\n", assertion.Target, assertion.TargetSize))
+					}
+					if assertion.TargetPreview != "" {
+						out.WriteString("    Content preview:\n")
+						// Indent each line of the preview
+						lines := strings.Split(assertion.TargetPreview, "\n")
+						for _, line := range lines {
+							out.WriteString(fmt.Sprintf("      %s\n", line))
+						}
+					}
+					if assertion.TargetSize > 200 {
+						out.WriteString("    Hint: Use --dump-rendered to see full content\n")
+					}
 				}
 			}
 		}
@@ -142,7 +170,8 @@ func formatJSON(results *TestResults) (string, error) {
 		Tests:       make([]jsonTestResult, 0, len(results.TestResults)),
 	}
 
-	for _, test := range results.TestResults {
+	for i := range results.TestResults {
+		test := &results.TestResults[i]
 		jr.Tests = append(jr.Tests, jsonTestResult{
 			TestName:    test.TestName,
 			Description: test.Description,
@@ -189,7 +218,8 @@ func formatYAML(results *TestResults) (string, error) {
 		Tests:       make([]yamlTestResult, 0, len(results.TestResults)),
 	}
 
-	for _, test := range results.TestResults {
+	for i := range results.TestResults {
+		test := &results.TestResults[i]
 		yr.Tests = append(yr.Tests, yamlTestResult{
 			TestName:    test.TestName,
 			Description: test.Description,

@@ -154,6 +154,282 @@ Should test:
 - Webhook validation with embedded tests
 - Full validation flow with HAProxy binary
 
+## Observability Features
+
+The test runner provides rich observability to help debug failing tests, both via CLI flags and programmatically.
+
+### Content Preview in Assertions
+
+All assertions populate target metadata for observability:
+
+```go
+type AssertionResult struct {
+    Type        string
+    Description string
+    Passed      bool
+    Error       string
+
+    // Observability fields
+    Target        string  // e.g., "map:path-prefix.map"
+    TargetSize    int     // Content size in bytes
+    TargetPreview string  // First 200 chars (failed assertions only)
+}
+```
+
+**Implementation:**
+- `populateTargetMetadata()` called by all assertion methods
+- Preview only for failed assertions (keeps output manageable)
+- Truncated to 200 chars to prevent huge outputs
+
+**Usage in assertions:**
+```go
+// Example from assertContains
+func (r *Runner) assertContains(...) AssertionResult {
+    target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles, renderError)
+
+    matched, err := regexp.MatchString(assertion.Pattern, target)
+    if !matched {
+        result.Passed = false
+        result.Error = fmt.Sprintf("pattern %q not found in %s (target size: %d bytes). Hint: Use --verbose to see content preview",
+            assertion.Pattern, assertion.Target, len(target))
+    }
+
+    // Populate target metadata for observability
+    r.populateTargetMetadata(&result, target, assertion.Target, !matched)
+
+    return result
+}
+```
+
+### Rendered Content Storage
+
+Test results include complete rendered content for debugging:
+
+```go
+type TestResult struct {
+    // ... existing fields ...
+
+    // Rendered content (for --dump-rendered)
+    RenderedConfig string              // HAProxy configuration
+    RenderedMaps   map[string]string   // Map files (path → content)
+    RenderedFiles  map[string]string   // General files (filename → content)
+    RenderedCerts  map[string]string   // SSL certificates (path → content)
+}
+```
+
+**Populated in `runSingleTest()`:**
+- Captured immediately after successful rendering
+- Only populated on successful render (empty if render fails)
+- Maps use file path/name as key
+- Available in JSON/YAML output formats
+
+**Example population:**
+```go
+// After successful rendering
+if err == nil {
+    result.RenderedConfig = haproxyConfig
+
+    if len(auxiliaryFiles.MapFiles) > 0 {
+        result.RenderedMaps = make(map[string]string)
+        for _, mapFile := range auxiliaryFiles.MapFiles {
+            result.RenderedMaps[mapFile.Path] = mapFile.Content
+        }
+    }
+}
+```
+
+### Verbose Mode
+
+Verbose mode shows target metadata for failed assertions:
+
+```go
+output, err := testrunner.FormatResults(results, testrunner.OutputOptions{
+    Format:  testrunner.OutputFormatSummary,
+    Verbose: true,  // Enable verbose mode
+})
+```
+
+**Output formatting** (`formatSummary()` in output.go):
+- Shows target name and size for all failed assertions
+- Shows content preview if available
+- Adds hint about --dump-rendered for large targets (>200 chars)
+
+**Example verbose output:**
+```
+✗ Path map must use MULTIBACKEND qualifier
+  Error: pattern "..." not found in map:path-prefix.map (target size: 61 bytes)
+  Target: map:path-prefix.map (61 bytes)
+  Content preview:
+    split.example.com/app MULTIBACKEND:0:default_split-route_0/
+  Hint: Use --dump-rendered to see full content
+```
+
+### Enhanced Error Messages
+
+All assertion methods produce enhanced error messages by default:
+
+**Pattern not found:**
+```
+pattern "X" not found in map:path-prefix.map (target size: 61 bytes).
+Hint: Use --verbose to see content preview
+```
+
+**Match count:**
+```
+expected 2 matches, got 0 matches of pattern "X" in map:path-prefix.map (target size: 61 bytes).
+Hint: Use --verbose to see content preview
+```
+
+**HAProxy validation:**
+```
+HAProxy validation failed (config size: 1234 bytes): maxconn: integer expected
+```
+
+**Benefits:**
+- Users immediately see target size without flags
+- Clear hint about --verbose flag
+- Context included in all error messages
+- Discoverability of debugging features
+
+### Template Tracing Integration
+
+If the template engine has tracing enabled, render operations are traced:
+
+```go
+engine.EnableTracing()
+
+// All Render() calls are traced
+runner := testrunner.New(cfg, engine, paths, options)
+results, _ := runner.RunTests(ctx, "")
+
+// Get trace output
+trace := engine.GetTraceOutput()
+fmt.Println(trace)
+```
+
+**Trace output shows:**
+- Which templates were rendered
+- Render duration in milliseconds
+- Nesting depth (for includes)
+
+**Example trace:**
+```
+Rendering: haproxy.cfg
+Completed: haproxy.cfg (0.007ms)
+Rendering: path-prefix.map
+Completed: path-prefix.map (3.347ms)
+```
+
+### Programmatic Usage
+
+**Enable verbose output:**
+```go
+results, err := runner.RunTests(ctx, "")
+
+output, err := testrunner.FormatResults(results, testrunner.OutputOptions{
+    Format:  testrunner.OutputFormatSummary,
+    Verbose: true,
+})
+```
+
+**Access rendered content:**
+```go
+for _, test := range results.TestResults {
+    if !test.Passed {
+        fmt.Printf("Test %s failed\n", test.TestName)
+        fmt.Printf("Rendered config:\n%s\n", test.RenderedConfig)
+
+        for mapName, content := range test.RenderedMaps {
+            fmt.Printf("Map %s:\n%s\n", mapName, content)
+        }
+    }
+}
+```
+
+**Access assertion metadata:**
+```go
+for _, assertion := range test.Assertions {
+    if !assertion.Passed {
+        fmt.Printf("Assertion failed: %s\n", assertion.Description)
+        fmt.Printf("Target: %s (%d bytes)\n", assertion.Target, assertion.TargetSize)
+        if assertion.TargetPreview != "" {
+            fmt.Printf("Preview: %s\n", assertion.TargetPreview)
+        }
+    }
+}
+```
+
+## Common Debugging Patterns
+
+### Debugging Empty Map Files
+
+```bash
+# 1. Check what was rendered
+controller validate -f config.yaml --dump-rendered
+
+# 2. See if template executed
+controller validate -f config.yaml --trace-templates
+
+# 3. Look for template errors in verbose output
+controller validate -f config.yaml --verbose
+```
+
+**Common causes:**
+- Empty loops (no resources match filters)
+- Incorrect variable names in templates
+- Missing `| default([])` filters on arrays
+- Conditional logic preventing execution
+
+### Debugging Pattern Mismatches
+
+```bash
+# See actual content vs expected pattern
+controller validate -f config.yaml --verbose
+```
+
+**Look for:**
+- Whitespace differences (extra newlines, trailing spaces)
+- Case sensitivity issues
+- Regex special characters that need escaping
+- Multiline patterns missing `(?m)` flag
+
+**Example:**
+```
+Expected: "backend foo"
+Got:      " backend foo"  (extra leading space)
+```
+
+### Debugging Slow Tests
+
+```bash
+# See template render times
+controller validate -f config.yaml --trace-templates
+```
+
+**Templates taking >10ms may need optimization:**
+- Simplify complex loops
+- Reduce nested includes
+- Avoid expensive filters in loops
+- Cache repeated computations
+
+**Example trace showing slow template:**
+```
+Rendering: haproxy.cfg (0.005ms)
+Rendering: backends.cfg (45.123ms)  ← Needs optimization
+```
+
+### Debugging Test Fixtures
+
+```bash
+# Dump rendered content to see if fixtures loaded correctly
+controller validate -f config.yaml --dump-rendered
+```
+
+**Common fixture issues:**
+- Missing `apiVersion` or `kind` fields
+- Incorrect index keys (resource not findable)
+- Wrong namespace or name in fixture data
+
 ## Common Patterns
 
 ### Running All Tests
