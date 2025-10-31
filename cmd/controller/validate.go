@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -34,10 +35,13 @@ import (
 )
 
 var (
-	validateConfigFile    string
-	validateTestName      string
-	validateOutputFormat  string
-	validateHAProxyBinary string
+	validateConfigFile     string
+	validateTestName       string
+	validateOutputFormat   string
+	validateHAProxyBinary  string
+	validateVerbose        bool
+	validateDumpRendered   bool
+	validateTraceTemplates bool
 )
 
 // validateCmd represents the validate command.
@@ -76,6 +80,9 @@ func init() {
 	validateCmd.Flags().StringVar(&validateTestName, "test", "", "Run specific test by name (optional)")
 	validateCmd.Flags().StringVarP(&validateOutputFormat, "output", "o", "summary", "Output format: summary, json, yaml")
 	validateCmd.Flags().StringVar(&validateHAProxyBinary, "haproxy-binary", "haproxy", "Path to HAProxy binary for validation")
+	validateCmd.Flags().BoolVar(&validateVerbose, "verbose", false, "Show rendered content preview for failed assertions")
+	validateCmd.Flags().BoolVar(&validateDumpRendered, "dump-rendered", false, "Dump all rendered content (haproxy.cfg, maps, files)")
+	validateCmd.Flags().BoolVar(&validateTraceTemplates, "trace-templates", false, "Show template execution trace")
 
 	_ = validateCmd.MarkFlagRequired("file")
 }
@@ -89,34 +96,78 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}))
 	slog.SetDefault(logger)
 
-	// Load HAProxyTemplateConfig from file
-	configSpec, err := loadConfigFromFile(validateConfigFile)
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Check if config has validation tests
-	if len(configSpec.ValidationTests) == 0 {
-		return fmt.Errorf("no validation tests found in config")
-	}
-
-	// Setup validation paths in temp directory
-	validationPaths, cleanupFunc, err := setupValidationPaths()
+	// Setup validation environment
+	configSpec, engine, validationPaths, cleanupFunc, err := setupValidation(logger)
 	if err != nil {
 		return err
 	}
 	defer cleanupFunc()
 
-	// Create template engine with custom filters
-	engine, err := createTemplateEngine(configSpec, validationPaths, logger)
+	// Run tests
+	results, err := runValidationTests(ctx, configSpec, engine, validationPaths, logger)
 	if err != nil {
 		return err
 	}
 
+	// Output results and optional content
+	if err := outputResults(results, engine); err != nil {
+		return err
+	}
+
+	// Exit with error code if tests failed
+	if !results.AllPassed() {
+		return fmt.Errorf("validation tests failed: %d/%d tests passed", results.PassedTests, results.TotalTests)
+	}
+
+	return nil
+}
+
+// setupValidation loads config, creates engine, and sets up validation paths.
+func setupValidation(logger *slog.Logger) (*v1alpha1.HAProxyTemplateConfigSpec, *templating.TemplateEngine, dataplane.ValidationPaths, func(), error) {
+	// Load HAProxyTemplateConfig from file
+	configSpec, err := loadConfigFromFile(validateConfigFile)
+	if err != nil {
+		return nil, nil, dataplane.ValidationPaths{}, nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Check if config has validation tests
+	if len(configSpec.ValidationTests) == 0 {
+		return nil, nil, dataplane.ValidationPaths{}, nil, fmt.Errorf("no validation tests found in config")
+	}
+
+	// Setup validation paths in temp directory
+	validationPaths, cleanupFunc, err := setupValidationPaths()
+	if err != nil {
+		return nil, nil, dataplane.ValidationPaths{}, nil, err
+	}
+
+	// Create template engine with custom filters
+	engine, err := createTemplateEngine(configSpec, validationPaths, logger)
+	if err != nil {
+		cleanupFunc()
+		return nil, nil, dataplane.ValidationPaths{}, nil, err
+	}
+
+	// Enable template tracing if requested
+	if validateTraceTemplates {
+		engine.EnableTracing()
+	}
+
+	return configSpec, engine, validationPaths, cleanupFunc, nil
+}
+
+// runValidationTests executes the validation test suite.
+func runValidationTests(
+	ctx context.Context,
+	configSpec *v1alpha1.HAProxyTemplateConfigSpec,
+	engine *templating.TemplateEngine,
+	validationPaths dataplane.ValidationPaths,
+	logger *slog.Logger,
+) (*testrunner.TestResults, error) {
 	// Convert CRD spec to internal config format
 	cfg, err := testrunner.ConvertSpecToInternalConfig(configSpec)
 	if err != nil {
-		return fmt.Errorf("failed to convert config: %w", err)
+		return nil, fmt.Errorf("failed to convert config: %w", err)
 	}
 
 	// Create test runner
@@ -136,11 +187,19 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	results, err := runner.RunTests(ctx, validateTestName)
 	if err != nil {
-		return fmt.Errorf("test execution failed: %w", err)
+		return nil, fmt.Errorf("test execution failed: %w", err)
 	}
 
+	return results, nil
+}
+
+// outputResults formats and prints test results, and optionally dumps rendered content and trace.
+func outputResults(results *testrunner.TestResults, engine *templating.TemplateEngine) error {
 	// Format output
-	output, err := testrunner.FormatResults(results, testrunner.OutputFormat(validateOutputFormat))
+	output, err := testrunner.FormatResults(results, testrunner.OutputOptions{
+		Format:  testrunner.OutputFormat(validateOutputFormat),
+		Verbose: validateVerbose,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to format results: %w", err)
 	}
@@ -148,12 +207,77 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	// Print results to stdout
 	fmt.Print(output)
 
-	// Exit with error code if tests failed
-	if !results.AllPassed() {
-		return fmt.Errorf("validation tests failed: %d/%d tests passed", results.PassedTests, results.TotalTests)
+	// Dump rendered content if requested
+	if validateDumpRendered {
+		dumpRenderedContent(results)
+	}
+
+	// Output template trace if requested
+	if validateTraceTemplates {
+		outputTemplateTrace(engine)
 	}
 
 	return nil
+}
+
+// dumpRenderedContent prints all rendered content from test results.
+func dumpRenderedContent(results *testrunner.TestResults) {
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("RENDERED CONTENT")
+	fmt.Println(strings.Repeat("=", 80))
+
+	for i := range results.TestResults {
+		test := &results.TestResults[i]
+		fmt.Printf("\n## Test: %s\n\n", test.TestName)
+
+		if test.RenderedConfig != "" {
+			fmt.Println("### haproxy.cfg")
+			fmt.Println(strings.Repeat("-", 80))
+			fmt.Println(test.RenderedConfig)
+			fmt.Println(strings.Repeat("-", 80))
+		}
+
+		if len(test.RenderedMaps) > 0 {
+			fmt.Println("\n### Map Files")
+			for name, content := range test.RenderedMaps {
+				fmt.Printf("\n#### %s\n", name)
+				fmt.Println(strings.Repeat("-", 80))
+				fmt.Println(content)
+				fmt.Println(strings.Repeat("-", 80))
+			}
+		}
+
+		if len(test.RenderedFiles) > 0 {
+			fmt.Println("\n### General Files")
+			for name, content := range test.RenderedFiles {
+				fmt.Printf("\n#### %s\n", name)
+				fmt.Println(strings.Repeat("-", 80))
+				fmt.Println(content)
+				fmt.Println(strings.Repeat("-", 80))
+			}
+		}
+
+		if len(test.RenderedCerts) > 0 {
+			fmt.Println("\n### SSL Certificates")
+			for name, content := range test.RenderedCerts {
+				fmt.Printf("\n#### %s\n", name)
+				fmt.Println(strings.Repeat("-", 80))
+				fmt.Println(content)
+				fmt.Println(strings.Repeat("-", 80))
+			}
+		}
+	}
+}
+
+// outputTemplateTrace prints template execution trace if available.
+func outputTemplateTrace(engine *templating.TemplateEngine) {
+	trace := engine.GetTraceOutput()
+	if trace != "" {
+		fmt.Println("\n" + strings.Repeat("=", 80))
+		fmt.Println("TEMPLATE EXECUTION TRACE")
+		fmt.Println(strings.Repeat("=", 80))
+		fmt.Println(trace)
+	}
 }
 
 // loadConfigFromFile loads a HAProxyTemplateConfig from a YAML file.

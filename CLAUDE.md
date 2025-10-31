@@ -63,6 +63,53 @@ func ProcessResource(ctx context.Context, resource Resource) error {
 }
 ```
 
+## Pre-commit and CI Requirements
+
+**CRITICAL**: All code must pass linting and security checks before committing.
+
+### Pre-commit Hooks
+
+Pre-commit hooks run automatically via git hooks and enforce:
+- **golangci-lint**: Code quality, style, and common mistakes
+- **govulncheck**: Security vulnerability scanning
+
+### Commit Requirements
+
+- **NEVER use `git commit --no-verify`** to bypass pre-commit hooks
+- **Fix all linting issues** reported by `make lint` before committing
+- **Address security vulnerabilities** reported by `govulncheck`
+- **Run `gofmt` and `goimports`** to fix formatting issues
+- **Refactor code** to resolve complexity and maintainability issues
+
+### Why This Matters
+
+**CI pipeline will fail** if code contains:
+- Linting violations (golangci-lint errors)
+- Security vulnerabilities (govulncheck findings)
+- Formatting issues (gofmt/goimports)
+- Test failures
+
+Bypassing pre-commit hooks with `--no-verify` only delays the problem until CI runs, wasting time and blocking PR merges.
+
+### Fixing Common Issues
+
+```bash
+# Run linting and see all issues
+make lint
+
+# Fix formatting automatically
+gofmt -w .
+goimports -w .
+
+# Check for security vulnerabilities
+govulncheck ./...
+
+# Run all checks locally before committing
+make check-all
+```
+
+**If extensive refactoring is needed**: Create separate commits/PRs for linting fixes rather than bypassing checks.
+
 ## Event-Driven Architecture Principles
 
 ### Pure Components Pattern

@@ -121,6 +121,20 @@ make build
 
 `helm template` outputs **all** Kubernetes resources (Deployment, Service, ConfigMap, etc.). The `controller validate` command expects a single HAProxyTemplateConfig resource, so we filter for it using yq.
 
+**IMPORTANT: Testing Gateway API Library**
+
+When testing the Gateway API library, you MUST include the `--api-versions` flag to simulate the presence of Gateway API CRDs. Without this flag, Helm's Capabilities check will skip merging the gateway library, and gateway validation tests will not be available.
+
+```bash
+# Render with Gateway API library
+helm template charts/haproxy-template-ic \
+  --api-versions=gateway.networking.k8s.io/v1/GatewayClass \
+  | yq 'select(.kind == "HAProxyTemplateConfig")' \
+  > /tmp/gateway-config.yaml
+```
+
+This flag is already used in CI (see `.github/workflows/ci.yml:119`). The gateway library uses a Capabilities check (`templates/_helpers.tpl:86`) to only merge when Gateway API CRDs are detected.
+
 ### Testing Specific Libraries
 
 Enable/disable libraries to test specific combinations:

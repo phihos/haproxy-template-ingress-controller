@@ -111,15 +111,40 @@ func New(
 
 ```go
 type Options struct {
-    // TestName filters tests to run. If empty, all tests run.
-    TestName string
-
     // Logger for structured logging. If nil, uses default logger.
     Logger *slog.Logger
 }
 ```
 
 Configuration options for the test runner.
+
+#### OutputOptions
+
+```go
+type OutputOptions struct {
+    // Format specifies output format (summary, json, yaml)
+    Format OutputFormat
+
+    // Verbose enables showing rendered content previews for failed assertions
+    Verbose bool
+}
+```
+
+Controls output formatting and verbosity for test results.
+
+**Example:**
+```go
+// Standard output
+output, _ := testrunner.FormatResults(results, testrunner.OutputOptions{
+    Format: testrunner.OutputFormatSummary,
+})
+
+// Verbose output with content previews
+output, _ := testrunner.FormatResults(results, testrunner.OutputOptions{
+    Format:  testrunner.OutputFormatSummary,
+    Verbose: true,
+})
+```
 
 #### TestResults
 
@@ -168,10 +193,19 @@ type TestResult struct {
 
     // RenderError is set if template rendering failed.
     RenderError string
+
+    // Rendered content (populated for observability)
+    RenderedConfig string              // HAProxy configuration
+    RenderedMaps   map[string]string   // Map files (path → content)
+    RenderedFiles  map[string]string   // General files (filename → content)
+    RenderedCerts  map[string]string   // SSL certificates (path → content)
 }
 ```
 
 Result of running a single validation test.
+
+**Rendered Content Fields:**
+Populated after successful rendering for debugging with `--dump-rendered` flag or programmatic access. Empty if rendering fails.
 
 #### AssertionResult
 
@@ -188,10 +222,18 @@ type AssertionResult struct {
 
     // Error contains the failure message if assertion failed.
     Error string
+
+    // Target metadata (populated for observability)
+    Target        string  // Target name (e.g., "map:path-prefix.map")
+    TargetSize    int     // Content size in bytes
+    TargetPreview string  // First 200 chars (failed assertions only)
 }
 ```
 
 Result of running a single assertion.
+
+**Target Metadata Fields:**
+Populated automatically for all assertions to aid debugging. Content preview only populated for failed assertions when verbose mode is enabled.
 
 ### Methods
 
@@ -480,6 +522,109 @@ testResults:
     passed: true
     duration: 12ms
     assertions: [...]
+```
+
+## Observability
+
+The test runner provides rich observability features to help debug failing tests.
+
+### Enhanced Error Messages
+
+All assertions include helpful context in error messages by default:
+
+```
+✗ Path map must use MULTIBACKEND qualifier
+  Error: pattern "..." not found in map:path-prefix.map (target size: 61 bytes).
+         Hint: Use --verbose to see content preview
+```
+
+### Verbose Mode
+
+Enable verbose mode to see content previews for failed assertions:
+
+```go
+output, err := testrunner.FormatResults(results, testrunner.OutputOptions{
+    Format:  testrunner.OutputFormatSummary,
+    Verbose: true,
+})
+```
+
+**Output includes:**
+- Target name and size
+- First 200 characters of content
+- Hint about `--dump-rendered` for full content
+
+### Accessing Rendered Content
+
+Programmatically access rendered content for debugging:
+
+```go
+results, err := runner.RunTests(ctx, "")
+
+for _, test := range results.TestResults {
+    if !test.Passed {
+        // Access rendered HAProxy config
+        fmt.Printf("Config:\n%s\n", test.RenderedConfig)
+
+        // Access map files
+        for mapName, content := range test.RenderedMaps {
+            fmt.Printf("Map %s:\n%s\n", mapName, content)
+        }
+
+        // Access general files
+        for filename, content := range test.RenderedFiles {
+            fmt.Printf("File %s:\n%s\n", filename, content)
+        }
+
+        // Access certificates
+        for certPath, content := range test.RenderedCerts {
+            fmt.Printf("Cert %s:\n%s\n", certPath, content)
+        }
+    }
+}
+```
+
+### Accessing Assertion Metadata
+
+Access detailed metadata for failed assertions:
+
+```go
+for _, assertion := range test.Assertions {
+    if !assertion.Passed {
+        fmt.Printf("Assertion: %s\n", assertion.Description)
+        fmt.Printf("Type: %s\n", assertion.Type)
+        fmt.Printf("Target: %s (%d bytes)\n", assertion.Target, assertion.TargetSize)
+
+        if assertion.TargetPreview != "" {
+            fmt.Printf("Preview:\n%s\n", assertion.TargetPreview)
+        }
+    }
+}
+```
+
+### Template Tracing
+
+Enable template tracing for execution visibility:
+
+```go
+// Enable tracing on engine
+engine.EnableTracing()
+
+// Run tests
+runner := testrunner.New(config, engine, paths, options)
+results, _ := runner.RunTests(ctx, "")
+
+// Get trace output
+trace := engine.GetTraceOutput()
+fmt.Println(trace)
+```
+
+**Trace output:**
+```
+Rendering: haproxy.cfg
+Completed: haproxy.cfg (0.007ms)
+Rendering: path-prefix.map
+Completed: path-prefix.map (3.347ms)
 ```
 
 ## Performance

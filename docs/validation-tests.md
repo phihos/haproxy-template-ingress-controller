@@ -500,6 +500,252 @@ tests:
     assertions: [ ... ]
 ```
 
+## Debugging Failed Tests
+
+When validation tests fail, the `controller validate` command provides several flags to help diagnose issues quickly.
+
+### Quick Debugging with --verbose
+
+The `--verbose` flag shows rendered content preview for failed assertions:
+
+```bash
+controller validate -f config.yaml --verbose
+```
+
+**Example output:**
+
+```
+✗ test-gateway-routing (0.004s)
+  ✗ Path map must use MULTIBACKEND qualifier with total weight 100
+    Error: pattern "split.example.com/app MULTIBACKEND:100:default_split-route_0/" not found in map:path-prefix.map (target size: 61 bytes). Hint: Use --verbose to see content preview
+    Target: map:path-prefix.map (61 bytes)
+    Content preview:
+      split.example.com/app MULTIBACKEND:0:default_split-route_0/
+
+    Hint: Use --dump-rendered to see full content
+```
+
+**What it shows:**
+- Target file name and size (61 bytes)
+- First 200 characters of actual rendered content
+- Hint about `--dump-rendered` for full content
+
+**When to use:**
+- First step when tests fail
+- Quick check of what was actually rendered vs expected
+- Debugging pattern mismatches or unexpected values
+
+### Complete Output with --dump-rendered
+
+The `--dump-rendered` flag outputs all rendered content after test results:
+
+```bash
+controller validate -f config.yaml --dump-rendered
+```
+
+**Output structure:**
+
+```
+Tests: 0 passed, 1 failed, 1 total (0.003s)
+
+================================================================================
+RENDERED CONTENT
+================================================================================
+
+## Test: test-gateway-routing
+
+### haproxy.cfg
+--------------------------------------------------------------------------------
+global
+  daemon
+  maxconn 4000
+
+defaults
+  mode http
+  timeout connect 5s
+--------------------------------------------------------------------------------
+
+### Map Files
+
+#### path-prefix.map
+--------------------------------------------------------------------------------
+split.example.com/app MULTIBACKEND:0:default_split-route_0/
+
+--------------------------------------------------------------------------------
+```
+
+**What it shows:**
+- Complete HAProxy configuration
+- All map files with names
+- General files (error pages, etc.)
+- SSL certificates
+
+**When to use:**
+- Need to see complete rendered output
+- Debugging complex template logic
+- Verifying exact output format
+- Creating bug reports with full context
+
+### Template Execution Trace
+
+The `--trace-templates` flag shows which templates were rendered and timing information:
+
+```bash
+controller validate -f config.yaml --trace-templates
+```
+
+**Output:**
+
+```
+TEMPLATE EXECUTION TRACE
+================================================================================
+Rendering: haproxy.cfg
+Completed: haproxy.cfg (0.007ms)
+Rendering: path-prefix.map
+Completed: path-prefix.map (3.347ms)
+Rendering: weighted-multi-backend.map
+Completed: weighted-multi-backend.map (2.105ms)
+```
+
+**What it shows:**
+- Order of template rendering
+- Duration for each template in milliseconds
+- Nesting depth for includes (shown via indentation)
+
+**When to use:**
+- Understanding template execution order
+- Performance debugging (identify slow templates)
+- Verifying template includes work correctly
+- Debugging missing or unexpected renders
+
+### Enhanced Default Error Messages
+
+All error messages now include helpful context without requiring any flags:
+
+**Before (old format):**
+```
+Error: pattern "X" not found in map:path-prefix.map
+```
+
+**After (enhanced format):**
+```
+Error: pattern "X" not found in map:path-prefix.map (target size: 61 bytes). Hint: Use --verbose to see content preview
+```
+
+**Benefits:**
+- Immediate visibility into target size
+- Clear hints about available debugging options
+- No need to re-run with flags for basic info
+
+### Combining Flags
+
+Flags can be combined for comprehensive debugging:
+
+```bash
+controller validate -f config.yaml --verbose --dump-rendered --trace-templates
+```
+
+This provides:
+1. Content previews for all failed assertions (`--verbose`)
+2. Complete rendered files (`--dump-rendered`)
+3. Template execution trace (`--trace-templates`)
+
+**Recommended workflow:**
+1. Start with `--verbose` for quick diagnosis
+2. Add `--dump-rendered` if you need full content
+3. Add `--trace-templates` for performance or execution flow issues
+
+### Structured Output with Rendered Content
+
+JSON and YAML output formats now include rendered content and target metadata:
+
+```bash
+controller validate -f config.yaml --output yaml
+```
+
+**New fields in output:**
+
+```yaml
+tests:
+  - testName: test-gateway-routing
+    passed: false
+    # Rendered content (available for all tests)
+    renderedConfig: |
+      global
+        daemon
+    renderedMaps:
+      path-prefix.map: |
+        split.example.com/app MULTIBACKEND:0:default_split-route_0/
+    renderedFiles: {}
+    renderedCerts: {}
+
+    assertions:
+      - type: contains
+        passed: false
+        error: "pattern not found"
+        # Target metadata (available for all assertions)
+        target: "map:path-prefix.map"
+        targetSize: 61
+        targetPreview: "split.example.com/app MULTIBACKEND:0:..."
+```
+
+**Use cases:**
+- CI/CD integration with detailed failure context
+- Automated debugging scripts
+- Archiving test results with full rendered content
+
+### Troubleshooting Tips
+
+**Map file appears empty or has unexpected content:**
+
+```bash
+# See exactly what was rendered
+controller validate -f config.yaml --dump-rendered
+```
+
+Check for:
+- Missing template logic
+- Empty loops (no resources match)
+- Incorrect variable names
+
+**Template not generating expected output:**
+
+```bash
+# See which templates were actually rendered
+controller validate -f config.yaml --trace-templates
+```
+
+If a template is missing from the trace:
+- Check template name spelling
+- Verify includes are correct
+- Check conditional logic preventing execution
+
+**Pattern not matching rendered content:**
+
+```bash
+# See actual content vs expected pattern
+controller validate -f config.yaml --verbose
+```
+
+Common issues:
+- Whitespace differences (extra newlines, spaces)
+- Case sensitivity in patterns
+- Regex special characters need escaping
+- Multiline patterns require `(?m)` flag
+
+**Slow validation or timeouts:**
+
+```bash
+# Identify slow templates
+controller validate -f config.yaml --trace-templates
+```
+
+Templates taking >10ms may need optimization:
+- Simplify complex loops
+- Reduce nested includes
+- Cache expensive computations
+- Split large templates
+
 ## Best Practices
 
 ### 1. Test Early and Often

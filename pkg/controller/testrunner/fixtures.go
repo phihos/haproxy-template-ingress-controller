@@ -30,6 +30,13 @@ import (
 // This converts the test fixtures (map of resource type → list of resources)
 // into resource stores that can be used for template rendering.
 //
+// Implementation:
+//   - Phase 1: Create empty stores for ALL watched resources
+//   - Phase 2: Populate stores with fixture data where provided
+//
+// This ensures templates can safely call .List() on any watched resource type,
+// even if that resource type is not present in test fixtures.
+//
 // Parameters:
 //   - fixtures: Map of resource type names to lists of Kubernetes resources
 //
@@ -41,15 +48,30 @@ import (
 func (r *Runner) createStoresFromFixtures(fixtures map[string][]interface{}) (map[string]types.Store, error) {
 	stores := make(map[string]types.Store)
 
+	// PHASE 1: Create empty stores for ALL watched resources
+	// This ensures templates can safely reference any watched resource type
+	for resourceType, watchedResource := range r.config.WatchedResources {
+		r.logger.Debug("Creating empty store for watched resource",
+			"resource_type", resourceType)
+
+		// Use number of index fields for numKeys parameter
+		numKeys := len(watchedResource.IndexBy)
+		if numKeys < 1 {
+			numKeys = 1
+		}
+		stores[resourceType] = store.NewMemoryStore(numKeys)
+	}
+
+	// PHASE 2: Populate stores with fixture data
 	for resourceType, resources := range fixtures {
-		r.logger.Debug("Creating fixture store",
+		r.logger.Debug("Populating fixture store",
 			"resource_type", resourceType,
 			"count", len(resources))
 
-		// Find watched resource config for this resource type
+		// Verify resource type is in watched resources
 		watchedResource, exists := r.config.WatchedResources[resourceType]
 		if !exists {
-			return nil, fmt.Errorf("resource type %q not found in watched resources", resourceType)
+			return nil, fmt.Errorf("resource type %q in fixtures not found in watched resources", resourceType)
 		}
 
 		// Create indexer for this resource type
@@ -61,13 +83,8 @@ func (r *Runner) createStoresFromFixtures(fixtures map[string][]interface{}) (ma
 			return nil, fmt.Errorf("failed to create indexer for %s: %w", resourceType, err)
 		}
 
-		// Create store with indexing configuration from watched resource
-		// Use number of index fields for numKeys parameter
-		numKeys := len(watchedResource.IndexBy)
-		if numKeys < 1 {
-			numKeys = 1
-		}
-		storeInstance := store.NewMemoryStore(numKeys)
+		// Get the existing empty store created in Phase 1
+		storeInstance := stores[resourceType]
 
 		// Add all fixture resources to the store
 		for i, resourceObj := range resources {
@@ -107,8 +124,6 @@ func (r *Runner) createStoresFromFixtures(fixtures map[string][]interface{}) (ma
 				return nil, fmt.Errorf("failed to add fixture resource to %s store: %w", resourceType, err)
 			}
 		}
-
-		stores[resourceType] = storeInstance
 	}
 
 	return stores, nil

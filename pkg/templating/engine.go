@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/nikolalohinski/gonja/v2/builtins"
 	"github.com/nikolalohinski/gonja/v2/config"
@@ -67,6 +69,16 @@ type TemplateEngine struct {
 
 	// compiledTemplates stores pre-compiled templates by name
 	compiledTemplates map[string]*exec.Template
+
+	// tracing controls template execution tracing
+	tracing *tracingConfig
+}
+
+// tracingConfig holds template tracing configuration.
+type tracingConfig struct {
+	enabled bool
+	depth   int // Current nesting depth for indentation
+	builder *strings.Builder
 }
 
 // testInFixed implements a fixed "in" test that compares string values for lists.
@@ -378,6 +390,18 @@ func createCustomDictMethods() *exec.MethodSet[map[string]interface{}] {
 //	}
 //	fmt.Println(output) // Output: Hello World!
 func (e *TemplateEngine) Render(templateName string, context map[string]interface{}) (string, error) {
+	// Tracing: log render start
+	if e.tracing != nil && e.tracing.enabled {
+		e.tracef("Rendering: %s", templateName)
+		e.tracing.depth++
+		startTime := time.Now()
+		defer func() {
+			duration := time.Since(startTime)
+			e.tracing.depth--
+			e.tracef("Completed: %s (%.3fms)", templateName, float64(duration.Microseconds())/1000.0)
+		}()
+	}
+
 	// Look up the compiled template
 	template, exists := e.compiledTemplates[templateName]
 	if !exists {
@@ -496,4 +520,52 @@ func wrapGlobalFunction(customFunc GlobalFunc) func(_ *exec.Evaluator, params *e
 		// Return result as Value
 		return exec.AsValue(result)
 	}
+}
+
+// EnableTracing enables template execution tracing.
+// Trace output can be retrieved with GetTraceOutput().
+func (e *TemplateEngine) EnableTracing() {
+	if e.tracing == nil {
+		e.tracing = &tracingConfig{
+			enabled: true,
+			depth:   0,
+			builder: &strings.Builder{},
+		}
+	} else {
+		e.tracing.enabled = true
+		e.tracing.depth = 0
+		e.tracing.builder.Reset()
+	}
+}
+
+// DisableTracing disables template execution tracing.
+func (e *TemplateEngine) DisableTracing() {
+	if e.tracing != nil {
+		e.tracing.enabled = false
+	}
+}
+
+// GetTraceOutput returns the accumulated trace output and resets the trace buffer.
+func (e *TemplateEngine) GetTraceOutput() string {
+	if e.tracing == nil || e.tracing.builder == nil {
+		return ""
+	}
+
+	output := e.tracing.builder.String()
+	e.tracing.builder.Reset()
+	return output
+}
+
+// trace logs a trace message with proper indentation based on nesting depth.
+func (e *TemplateEngine) tracef(format string, args ...interface{}) {
+	if e.tracing == nil || !e.tracing.enabled {
+		return
+	}
+
+	// Create indentation based on depth
+	indent := strings.Repeat("  ", e.tracing.depth)
+
+	// Format and write the trace message
+	msg := fmt.Sprintf(format, args...)
+	fmt.Fprintf(e.tracing.builder, "%s%s\n", indent, msg)
 }

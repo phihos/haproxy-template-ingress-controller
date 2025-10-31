@@ -167,20 +167,23 @@ This automatically:
 
 ### Gateway API Features
 
-When the gateway library is enabled, the controller supports:
+When the gateway library is enabled, the controller supports Gateway API v1.2.0 resources. See [Gateway API Support Documentation](./docs/gateway-api-support.md) for complete feature matrix.
 
 **HTTPRoute:**
-- Path matching (Exact, PathPrefix)
+- Path matching: Exact, PathPrefix, RegularExpression
 - Host-based routing via `hostnames`
-- Traffic splitting with `backendRefs` weights
-- Header matching (future)
-- Query parameter matching (future)
+- Weighted traffic splitting with `backendRefs`
+- Backend deduplication
 
 **GRPCRoute:**
-- gRPC method matching
 - Host-based routing
-- Traffic splitting with server weights
-- HTTP/2 backend connections
+- Weighted traffic splitting
+- HTTP/2 backend connections (`proto h2`)
+
+**Known Limitations:**
+- Header and query parameter matching not implemented
+- Filters (header modification, redirects, etc.) not implemented
+- GRPCRoute method-based routing not implemented
 
 **Example HTTPRoute:**
 
