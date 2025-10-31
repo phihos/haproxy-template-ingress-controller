@@ -19,6 +19,7 @@ templateSnippets:
       {#- Backend selection logic with qualifier system and performance-first ordering #}
       {#- Supports BACKEND and MULTIBACKEND qualifiers #}
       {#- Overrides base library: Exact > Prefix > Regex (regex moved to last) #}
+      # path-regex-last/use-backend-selection
 
       # Set variables for path-based routing
       http-request set-var(txn.base) base
