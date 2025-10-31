@@ -172,7 +172,6 @@ maps:
 files:
   400.http:
     template: |
-      # base/400.http
       HTTP/1.0 400 Bad Request
       Cache-Control: no-cache
       Connection: close
@@ -184,7 +183,6 @@ files:
 
   403.http:
     template: |
-      # base/403.http
       HTTP/1.0 403 Forbidden
       Cache-Control: no-cache
       Connection: close
@@ -196,7 +194,6 @@ files:
 
   408.http:
     template: |
-      # base/408.http
       HTTP/1.0 408 Request Time-out
       Cache-Control: no-cache
       Connection: close
@@ -208,7 +205,6 @@ files:
 
   500.http:
     template: |
-      # base/500.http
       HTTP/1.0 500 Internal Server Error
       Cache-Control: no-cache
       Connection: close
@@ -220,7 +216,6 @@ files:
 
   502.http:
     template: |
-      # base/502.http
       HTTP/1.0 502 Bad Gateway
       Cache-Control: no-cache
       Connection: close
@@ -232,7 +227,6 @@ files:
 
   503.http:
     template: |
-      # base/503.http
       HTTP/1.0 503 Service Unavailable
       Cache-Control: no-cache
       Connection: close
@@ -244,7 +238,6 @@ files:
 
   504.http:
     template: |
-      # base/504.http
       HTTP/1.0 504 Gateway Time-out
       Cache-Control: no-cache
       Connection: close
