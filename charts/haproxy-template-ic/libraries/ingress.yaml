@@ -31,19 +31,27 @@ templateSnippets:
       {#- Usage: {% include "resource_ingress_path-map-entry" with context %} where path_types = ["Exact"] or ["Prefix", "ImplementationSpecific"] #}
       {%- for ingress in resources.ingresses.List() %}
       {#- Count matching paths for this ingress -#}
-      {%- set all_paths = [] %}
+      {%- set ns_paths = namespace(all_paths=[]) %}
       {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
-        {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
-          {%- set _ = all_paths.append(path) %}
-        {%- endfor %}
+      {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined")) %}
+      {%- for check_type in path_types %}
+      {%- if path.pathType == check_type %}
+      {%- set ns_paths.all_paths = ns_paths.all_paths.append(path) %}
+      {%- endif %}
       {%- endfor %}
-      {%- if all_paths | length > 0 %}
-      # Ingress: {{ ingress.metadata.namespace }}/{{ ingress.metadata.name }} ({{ all_paths | length }} paths)
-        {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
-          {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined") | selectattr("pathType", "in", path_types)) %}
+      {% endfor %}
+      {% endfor %}
+      {%- if ns_paths.all_paths | length > 0 %}
+      # Ingress: {{ ingress.metadata.namespace }}/{{ ingress.metadata.name }} ({{ ns_paths.all_paths | length }} paths)
+      {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
+      {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined")) %}
+      {%- for check_type in path_types %}
+      {%- if path.pathType == check_type %}
       {{ rule.host }}{{ path.path }} BACKEND:{% include "resource_ingress_backend-name" -%}{{ suffix }}
-          {%- endfor %}
-        {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+      {% endfor %}
+      {% endfor %}
       {%- endif %}
       {%- endfor %}
 
