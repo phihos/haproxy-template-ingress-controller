@@ -45,6 +45,7 @@ const (
 // is needed.
 type DriftPreventionMonitor struct {
 	eventBus                *busevents.EventBus
+	eventChan               <-chan busevents.Event // Event subscription channel (subscribed in constructor)
 	logger                  *slog.Logger
 	driftPreventionInterval time.Duration
 
@@ -68,6 +69,7 @@ type DriftPreventionMonitor struct {
 func NewDriftPreventionMonitor(eventBus *busevents.EventBus, logger *slog.Logger, driftPreventionInterval time.Duration) *DriftPreventionMonitor {
 	return &DriftPreventionMonitor{
 		eventBus:                eventBus,
+		eventChan:               eventBus.Subscribe(DriftMonitorEventBufferSize),
 		logger:                  logger.With("component", "drift-prevention-monitor"),
 		driftPreventionInterval: driftPreventionInterval,
 	}
@@ -76,7 +78,7 @@ func NewDriftPreventionMonitor(eventBus *busevents.EventBus, logger *slog.Logger
 // Start begins the drift prevention monitor's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to deployment events and manages the drift prevention timer.
+// It processes events from the subscription channel established in the constructor.
 //
 // Parameters:
 //   - ctx: Context for cancellation and lifecycle management
@@ -88,14 +90,12 @@ func (m *DriftPreventionMonitor) Start(ctx context.Context) error {
 	m.logger.Info("DriftPreventionMonitor starting",
 		"drift_prevention_interval_ms", m.driftPreventionInterval.Milliseconds())
 
-	eventChan := m.eventBus.Subscribe(DriftMonitorEventBufferSize)
-
 	// Start initial drift prevention timer
 	m.resetDriftTimer()
 
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-m.eventChan:
 			m.handleEvent(event)
 
 		case <-m.getDriftTimerChan():

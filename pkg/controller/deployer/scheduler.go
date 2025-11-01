@@ -53,6 +53,7 @@ type scheduledDeployment struct {
 // The component publishes DeploymentScheduledEvent when a deployment should execute.
 type DeploymentScheduler struct {
 	eventBus              *busevents.EventBus
+	eventChan             <-chan busevents.Event // Event subscription channel (subscribed in constructor)
 	logger                *slog.Logger
 	minDeploymentInterval time.Duration
 	ctx                   context.Context // Main event loop context for scheduling
@@ -85,6 +86,7 @@ type DeploymentScheduler struct {
 func NewDeploymentScheduler(eventBus *busevents.EventBus, logger *slog.Logger, minDeploymentInterval time.Duration) *DeploymentScheduler {
 	return &DeploymentScheduler{
 		eventBus:              eventBus,
+		eventChan:             eventBus.Subscribe(SchedulerEventBufferSize),
 		logger:                logger.With("component", "deployment-scheduler"),
 		minDeploymentInterval: minDeploymentInterval,
 	}
@@ -93,7 +95,7 @@ func NewDeploymentScheduler(eventBus *busevents.EventBus, logger *slog.Logger, m
 // Start begins the deployment scheduler's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to the EventBus and processes events that trigger deployments.
+// It processes events from the subscription channel established in the constructor.
 //
 // Parameters:
 //   - ctx: Context for cancellation and lifecycle management
@@ -107,11 +109,9 @@ func (s *DeploymentScheduler) Start(ctx context.Context) error {
 	s.logger.Info("DeploymentScheduler starting",
 		"min_deployment_interval_ms", s.minDeploymentInterval.Milliseconds())
 
-	eventChan := s.eventBus.Subscribe(SchedulerEventBufferSize)
-
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-s.eventChan:
 			s.handleEvent(ctx, event)
 
 		case <-ctx.Done():

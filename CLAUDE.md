@@ -518,6 +518,8 @@ logger.Error("reconciliation failed",
 - **Don't block in event handlers** - Process events quickly or spawn goroutines
 - **Buffer sizing matters** - Small buffers (10-50) for control events, large buffers (200+) for high-volume events
 - **Always call EventBus.Start()** after all components subscribe (prevents lost events during startup)
+- **Subscribe in constructors, not in Start()** - Leader-only components must subscribe BEFORE `startLeaderOnlyComponents()` to avoid missing state replay events (e.g., `HAProxyPodsDiscoveredEvent` published on `BecameLeaderEvent`). Subscribing in `Start()` which runs asynchronously creates race conditions.
+- **Never use timing-based solutions** - Do not use `time.Sleep()` or delays to fix event ordering issues. These are brittle, non-deterministic, and bad practice. Fix the root cause by ensuring proper subscription ordering.
 
 ### Context
 

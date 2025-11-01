@@ -84,6 +84,7 @@ templateSnippets:
               {#- Fetch secret from store #}
               {%- set secret = resources.secrets.GetSingle(secret_namespace, secret_name) %}
               {%- if secret %}
+      # haproxytech/top-level-annotation-haproxytech-auth
 
       userlist {{ userlist_name }}
                 {%- for username in secret.data | default({}) %}
@@ -127,6 +128,7 @@ templateSnippets:
           {#- Generate userlist name using macro #}
           {%- include "auth-userlist-name" -%}
           {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
+      # haproxytech/backend-annotation-haproxytech-auth
       http-request auth realm "{{ auth_realm }}" unless { http_auth({{ userlist_name }}) }
         {%- endif %}
       {%- endif %}

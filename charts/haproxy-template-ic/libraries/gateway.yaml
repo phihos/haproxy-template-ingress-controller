@@ -59,6 +59,7 @@ templateSnippets:
 
       {#- Use namespace with string tracking for seen backends #}
       {%- set ns = namespace(seen="") %}
+      # gateway/resource_gateway_backends
 
       {#- HTTPRoute backends #}
       {%- for route in resources.httproutes.List() %}
@@ -116,9 +117,32 @@ templateSnippets:
       {#- Single backend: BACKEND:<backend_name> #}
       {#- Multiple backends: MULTIBACKEND:<total_weight>:<route_key> #}
       {#- Usage: {% include "resource_gateway_path-map-entry" with context %} where path_type = "Exact" or "PathPrefix" #}
+      # gateway/resource_gateway_path-map-entry
 
       {%- for route in resources.httproutes.List() %}
+      {#- Count matching entries for this route -#}
+      {%- set ns_outer = namespace(entry_count=0) %}
       {%- for hostname in (route.spec.hostnames | default([""])) %}
+        {%- for rule in (route.spec.rules | default([])) %}
+          {%- if rule.backendRefs %}
+            {%- set matches_list = rule.matches | default([]) %}
+            {%- set path_matches = matches_list | selectattr("path") | list %}
+            {%- if path_matches | length == 0 %}
+              {%- set path_matches = [{"path": {"type": "PathPrefix", "value": "/"}}] %}
+            {%- endif %}
+            {%- for match in path_matches %}
+              {%- if match.path.type == path_type %}
+                {%- set ns_outer.entry_count = ns_outer.entry_count + 1 %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+      {#- Generate entries with comment if there are any -#}
+      {%- if ns_outer.entry_count > 0 %}
+      # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ ns_outer.entry_count }} paths)
+      {% endif %}
+      {% for hostname in (route.spec.hostnames | default([""])) %}
       {%- for rule in (route.spec.rules | default([])) %}
         {%- if rule.backendRefs %}
 
@@ -162,20 +186,30 @@ templateSnippets:
   map-entry-host-gateway:
     template: |
       {#- Generate host map entries for Gateway API routes #}
+      # gateway/map-entry-host-gateway
       {%- for route in resources.httproutes.List() %}
-      {%- for hostname in (route.spec.hostnames | default([])) %}
+      {%- set hostnames = route.spec.hostnames | default([]) %}
+      {%- if hostnames | length > 0 %}
+      # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ hostnames | length }} hosts)
+      {% for hostname in hostnames %}
       {{ hostname }} {{ hostname }}
-      {% endfor %}
-      {% endfor %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
       {%- for route in resources.grpcroutes.List() %}
-      {%- for hostname in (route.spec.hostnames | default([])) %}
+      {%- set hostnames = route.spec.hostnames | default([]) %}
+      {%- if hostnames | length > 0 %}
+      # GRPCRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ hostnames | length }} hosts)
+      {% for hostname in hostnames %}
       {{ hostname }} {{ hostname }}
-      {% endfor %}
-      {% endfor %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
 
   map-entry-path-exact-gateway:
     template: |
       {#- Generate exact path map entries for HTTPRoute #}
+      # gateway/map-entry-path-exact-gateway
       {% set path_type = "Exact" %}
       {%- set suffix = "" %}
       {% include "resource_gateway_path-map-entry" %}
@@ -183,6 +217,7 @@ templateSnippets:
   map-entry-path-prefix-exact-gateway:
     template: |
       {#- Generate prefix-exact path map entries for HTTPRoute #}
+      # gateway/map-entry-path-prefix-exact-gateway
       {% set path_type = "PathPrefix" %}
       {%- set suffix = "" %}
       {% include "resource_gateway_path-map-entry" %}
@@ -190,6 +225,7 @@ templateSnippets:
   map-entry-path-prefix-gateway:
     template: |
       {#- Generate prefix path map entries with trailing slash for HTTPRoute #}
+      # gateway/map-entry-path-prefix-gateway
       {% set path_type = "PathPrefix" %}
       {%- set suffix = "/" %}
       {% include "resource_gateway_path-map-entry" %}
@@ -197,7 +233,24 @@ templateSnippets:
   map-entry-path-regex-gateway:
     template: |
       {#- Generate regex path map entries for HTTPRoute with RegularExpression type #}
+      # gateway/map-entry-path-regex-gateway
       {%- for route in resources.httproutes.List() %}
+      {#- Count regex path entries for this route -#}
+      {%- set ns_outer = namespace(entry_count=0) %}
+      {%- for hostname in (route.spec.hostnames | default([""])) %}
+        {%- for rule in (route.spec.rules | default([])) %}
+          {%- if rule.backendRefs %}
+            {%- for match in (rule.matches | default([{}])) %}
+              {%- if match.path and match.path.type == "RegularExpression" %}
+                {%- set ns_outer.entry_count = ns_outer.entry_count + 1 %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+      {%- if ns_outer.entry_count > 0 %}
+      # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ ns_outer.entry_count }} regex paths)
+      {%- endif %}
       {%- for hostname in (route.spec.hostnames | default([""])) %}
       {%- for rule in (route.spec.rules | default([])) %}
       {%- if rule.backendRefs %}
@@ -219,9 +272,20 @@ templateSnippets:
       {#- Format: <random_number>:<route_key> <backend_name> #}
       {#- Each weight N generates N consecutive entries pointing to same backend #}
       {#- This allows O(1) weighted selection via single map lookup #}
+      # gateway/map-entries-weighted-multi-backend-gateway
 
       {%- for route in resources.httproutes.List() %}
+      {#- Count weighted rules for this route -#}
+      {%- set weighted_rules = [] %}
       {%- for rule in (route.spec.rules | default([])) %}
+        {%- if rule.backendRefs and (rule.backendRefs | length) > 1 %}
+          {%- set _ = weighted_rules.append(rule) %}
+        {%- endif %}
+      {%- endfor %}
+      {%- if weighted_rules | length > 0 %}
+      # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ weighted_rules | length }} weighted rules)
+      {% endif %}
+      {% for rule in (route.spec.rules | default([])) %}
         {%- if rule.backendRefs and (rule.backendRefs | length) > 1 %}
 
           {%- set route_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ loop.index0 %}
@@ -542,6 +606,37 @@ validationTests:
         target: map:weighted-multi-backend.map
         pattern: "69:default_split-route_0 gtw_default_split-route_app-v1_8070:default_split-route_0"
         description: Boundary entries (v1 end / v2 start) must be on separate lines
+
+      # Map Formatting Tests - Ensure comments don't concatenate with entries
+      - type: not_contains
+        target: map:host.map
+        pattern: "hosts\\)\\S"
+        description: Host map comments must not concatenate with entries (Gateway API)
+
+      - type: not_contains
+        target: map:path-prefix.map
+        pattern: "paths\\)\\S"
+        description: Path prefix map comments must not concatenate with entries (Gateway API)
+
+      - type: not_contains
+        target: map:weighted-multi-backend.map
+        pattern: "rules\\)\\S"
+        description: Weighted map comments must not concatenate with entries
+
+      - type: contains
+        target: map:host.map
+        pattern: "(?m)^split\\.example\\.com split\\.example\\.com$"
+        description: Host map entries must start at beginning of line (Gateway API)
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "(?m)^split\\.example\\.com/app MULTIBACKEND:"
+        description: Path map entries must start at beginning of line (Gateway API)
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "(?m)^\\d+:default_split-route_0 gtw_"
+        description: Weighted map entries must start at beginning of line
 
   test-httproute-weight-no-matches:
     description: HTTPRoute with no matches block defaults to PathPrefix /

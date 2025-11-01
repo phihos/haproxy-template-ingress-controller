@@ -44,13 +44,13 @@ const (
 	DefaultLeaderElectionLeaseName = "haproxy-template-ic-leader"
 
 	// DefaultLeaderElectionLeaseDuration is the default lease duration.
-	DefaultLeaderElectionLeaseDuration = 60 * time.Second
+	DefaultLeaderElectionLeaseDuration = 15 * time.Second
 
 	// DefaultLeaderElectionRenewDeadline is the default renew deadline.
-	DefaultLeaderElectionRenewDeadline = 15 * time.Second
+	DefaultLeaderElectionRenewDeadline = 10 * time.Second
 
 	// DefaultLeaderElectionRetryPeriod is the default retry period.
-	DefaultLeaderElectionRetryPeriod = 5 * time.Second
+	DefaultLeaderElectionRetryPeriod = 2 * time.Second
 )
 
 // setDefaults applies default values to unset configuration fields.
