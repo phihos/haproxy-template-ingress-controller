@@ -394,7 +394,7 @@ func NewHAProxyTemplateConfig(namespace, name, secretName string, leaderElection
 				LeaderElection: haproxyv1alpha1.LeaderElectionConfig{
 					Enabled:       &enabled,
 					LeaseName:     "haproxy-template-ic-leader",
-					LeaseDuration: "10s",
+					LeaseDuration: "15s",
 					RenewDeadline: "10s",
 					RetryPeriod:   "2s",
 				},
