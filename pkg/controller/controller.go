@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -246,6 +247,7 @@ type componentSetup struct {
 	IterCtx               context.Context
 	Cancel                context.CancelFunc
 	ConfigChangeCh        chan *coreconfig.Config
+	ErrGroup              *errgroup.Group // Tracks all background goroutines for graceful shutdown
 }
 
 // setupComponents creates and starts all event-driven components.
@@ -295,19 +297,46 @@ func setupComponents(
 	// Start components in goroutines with iteration-specific context
 	iterCtx, cancel := context.WithCancel(ctx)
 
-	go eventCommentator.Start(iterCtx)
-	go configLoaderComponent.Start(iterCtx)
-	go credentialsLoaderComponent.Start(iterCtx)
-	go basicValidator.Start(iterCtx)
-	go templateValidator.Start(iterCtx)
-	go jsonpathValidator.Start(iterCtx)
-	go func() {
-		if err := basicWebhookValidator.Start(iterCtx); err != nil {
+	// Create errgroup to track all background goroutines for graceful shutdown
+	g, gCtx := errgroup.WithContext(iterCtx)
+
+	// Start components in errgroup (these return nil on graceful shutdown)
+	g.Go(func() error {
+		eventCommentator.Start(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		configLoaderComponent.Start(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		credentialsLoaderComponent.Start(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		basicValidator.Start(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		templateValidator.Start(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		jsonpathValidator.Start(gCtx)
+		return nil
+	})
+	g.Go(func() error {
+		if err := basicWebhookValidator.Start(gCtx); err != nil {
 			logger.Error("basic webhook validator failed", "error", err)
 			cancel()
+			return err
 		}
-	}()
-	go configChangeHandlerComponent.Start(iterCtx)
+		return nil
+	})
+	g.Go(func() error {
+		configChangeHandlerComponent.Start(gCtx)
+		return nil
+	})
 
 	logger.Debug("All components started")
 
@@ -321,9 +350,10 @@ func setupComponents(
 		MetricsRegistry:       registry,
 		IntrospectionRegistry: introspectionRegistry,
 		StoreManager:          storeManager,
-		IterCtx:               iterCtx,
+		IterCtx:               gCtx, // Use errgroup context so cancellation propagates
 		Cancel:                cancel,
 		ConfigChangeCh:        configChangeCh,
+		ErrGroup:              g,
 	}
 }
 
@@ -943,6 +973,7 @@ func setupLeaderElection(
 	eventBus *busevents.EventBus,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
+	g *errgroup.Group,
 ) (*leaderOnlyComponents, *sync.Mutex) {
 	var leaderComponents *leaderOnlyComponents
 	var leaderComponentsMutex sync.Mutex
@@ -1002,12 +1033,15 @@ func setupLeaderElection(
 			return nil, &leaderComponentsMutex
 		}
 
-		// Start leader election loop in background
-		go func() {
+		// Start leader election loop in errgroup for graceful shutdown
+		// This ensures the elector can release the lease on context cancellation
+		g.Go(func() error {
 			if err := elector.Run(iterCtx); err != nil {
 				logger.Error("leader election failed", "error", err)
+				return err
 			}
-		}()
+			return nil
+		})
 
 		logger.Info("Leader election initialized", "identity", podName, "lease_name", leConfig.LeaseName, "lease_namespace", leConfig.LeaseNamespace)
 	} else {
@@ -1134,7 +1168,7 @@ func runIteration(
 	// 6.5. Setup leader election (Stage 0 - before everything else ideally, but we need cfg)
 	logger.Info("Stage 0: Initializing leader election")
 	leaderComponents, leaderComponentsMutex := setupLeaderElection(
-		setup.IterCtx, cfg, k8sClient, reconComponents, setup.Bus, logger, setup.Cancel,
+		setup.IterCtx, cfg, k8sClient, reconComponents, setup.Bus, logger, setup.Cancel, setup.ErrGroup,
 	)
 
 	// 7. Setup webhook validation if enabled
@@ -1151,36 +1185,79 @@ func runIteration(
 	// 9. Wait for config change signal or context cancellation
 	select {
 	case <-setup.IterCtx.Done():
-		logger.Info("Controller iteration cancelled", "reason", setup.IterCtx.Err())
-
-		// Cleanup leader-only components if still running
-		leaderComponentsMutex.Lock()
-		if leaderComponents != nil {
-			stopLeaderOnlyComponents(leaderComponents, logger)
-		}
-		leaderComponentsMutex.Unlock()
-
+		handleIterationCancellation(leaderComponents, leaderComponentsMutex, setup, logger)
 		return nil
 
 	case newConfig := <-setup.ConfigChangeCh:
 		logger.Info("Configuration change detected, triggering reinitialization",
 			"new_config_version", fmt.Sprintf("%p", newConfig))
-
-		// Stop leader-only components before canceling context
-		leaderComponentsMutex.Lock()
-		if leaderComponents != nil {
-			stopLeaderOnlyComponents(leaderComponents, logger)
-		}
-		leaderComponentsMutex.Unlock()
-
-		// Cancel iteration context to stop all components and watchers
-		setup.Cancel()
-
-		// Brief pause to allow cleanup
-		time.Sleep(500 * time.Millisecond)
-
-		logger.Info("Reinitialization triggered - starting new iteration")
+		handleConfigurationChange(leaderComponents, leaderComponentsMutex, setup, logger)
 		return nil
+	}
+}
+
+// handleIterationCancellation handles cleanup when the controller iteration is cancelled.
+func handleIterationCancellation(
+	leaderComponents *leaderOnlyComponents,
+	leaderComponentsMutex *sync.Mutex,
+	setup *componentSetup,
+	logger *slog.Logger,
+) {
+	logger.Info("Controller iteration cancelled", "reason", setup.IterCtx.Err())
+
+	// Cleanup leader-only components if still running
+	leaderComponentsMutex.Lock()
+	if leaderComponents != nil {
+		stopLeaderOnlyComponents(leaderComponents, logger)
+	}
+	leaderComponentsMutex.Unlock()
+
+	// Wait for all goroutines to finish gracefully
+	waitForGoroutinesToFinish(setup.ErrGroup, logger, "Shutdown")
+}
+
+// handleConfigurationChange handles cleanup and reinitialization when configuration changes.
+func handleConfigurationChange(
+	leaderComponents *leaderOnlyComponents,
+	leaderComponentsMutex *sync.Mutex,
+	setup *componentSetup,
+	logger *slog.Logger,
+) {
+	// Stop leader-only components before canceling context
+	leaderComponentsMutex.Lock()
+	if leaderComponents != nil {
+		stopLeaderOnlyComponents(leaderComponents, logger)
+	}
+	leaderComponentsMutex.Unlock()
+
+	// Cancel iteration context to stop all components and watchers
+	setup.Cancel()
+
+	// Wait for all goroutines to finish before reinitializing
+	waitForGoroutinesToFinish(setup.ErrGroup, logger, "Reinitialization")
+
+	logger.Info("Reinitialization triggered - starting new iteration")
+}
+
+// waitForGoroutinesToFinish waits for all goroutines in errgroup to finish with a timeout.
+// This is CRITICAL for lease release - elector needs time to call ReleaseOnCancel.
+func waitForGoroutinesToFinish(errGroup *errgroup.Group, logger *slog.Logger, prefix string) {
+	logger.Info(fmt.Sprintf("Waiting for goroutines to finish %s...", strings.ToLower(prefix)))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- errGroup.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			logger.Warn(fmt.Sprintf("Goroutines finished with error during %s", strings.ToLower(prefix)), "error", err)
+		} else {
+			logger.Info("All goroutines finished gracefully")
+		}
+	case <-time.After(30 * time.Second):
+		logger.Warn(fmt.Sprintf("%s timeout exceeded (30s) - some goroutines may not have finished", prefix))
 	}
 }
 

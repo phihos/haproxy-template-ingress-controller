@@ -141,8 +141,8 @@ templateSnippets:
       {#- Generate entries with comment if there are any -#}
       {%- if ns_outer.entry_count > 0 %}
       # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ ns_outer.entry_count }} paths)
-      {%- endif %}
-      {%- for hostname in (route.spec.hostnames | default([""])) %}
+      {% endif %}
+      {% for hostname in (route.spec.hostnames | default([""])) %}
       {%- for rule in (route.spec.rules | default([])) %}
         {%- if rule.backendRefs %}
 
@@ -191,18 +191,18 @@ templateSnippets:
       {%- set hostnames = route.spec.hostnames | default([]) %}
       {%- if hostnames | length > 0 %}
       # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ hostnames | length }} hosts)
-        {%- for hostname in hostnames %}
+      {% for hostname in hostnames %}
       {{ hostname }} {{ hostname }}
-        {%- endfor %}
+      {%- endfor %}
       {%- endif %}
       {%- endfor %}
       {%- for route in resources.grpcroutes.List() %}
       {%- set hostnames = route.spec.hostnames | default([]) %}
       {%- if hostnames | length > 0 %}
       # GRPCRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ hostnames | length }} hosts)
-        {%- for hostname in hostnames %}
+      {% for hostname in hostnames %}
       {{ hostname }} {{ hostname }}
-        {%- endfor %}
+      {%- endfor %}
       {%- endif %}
       {%- endfor %}
 
@@ -284,8 +284,8 @@ templateSnippets:
       {%- endfor %}
       {%- if weighted_rules | length > 0 %}
       # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ weighted_rules | length }} weighted rules)
-      {%- endif %}
-      {%- for rule in (route.spec.rules | default([])) %}
+      {% endif %}
+      {% for rule in (route.spec.rules | default([])) %}
         {%- if rule.backendRefs and (rule.backendRefs | length) > 1 %}
 
           {%- set route_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ loop.index0 %}
@@ -606,6 +606,37 @@ validationTests:
         target: map:weighted-multi-backend.map
         pattern: "69:default_split-route_0 gtw_default_split-route_app-v1_8070:default_split-route_0"
         description: Boundary entries (v1 end / v2 start) must be on separate lines
+
+      # Map Formatting Tests - Ensure comments don't concatenate with entries
+      - type: not_contains
+        target: map:host.map
+        pattern: "hosts\\)\\S"
+        description: Host map comments must not concatenate with entries (Gateway API)
+
+      - type: not_contains
+        target: map:path-prefix.map
+        pattern: "paths\\)\\S"
+        description: Path prefix map comments must not concatenate with entries (Gateway API)
+
+      - type: not_contains
+        target: map:weighted-multi-backend.map
+        pattern: "rules\\)\\S"
+        description: Weighted map comments must not concatenate with entries
+
+      - type: contains
+        target: map:host.map
+        pattern: "(?m)^split\\.example\\.com split\\.example\\.com$"
+        description: Host map entries must start at beginning of line (Gateway API)
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "(?m)^split\\.example\\.com/app MULTIBACKEND:"
+        description: Path map entries must start at beginning of line (Gateway API)
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "(?m)^\\d+:default_split-route_0 gtw_"
+        description: Weighted map entries must start at beginning of line
 
   test-httproute-weight-no-matches:
     description: HTTPRoute with no matches block defaults to PathPrefix /

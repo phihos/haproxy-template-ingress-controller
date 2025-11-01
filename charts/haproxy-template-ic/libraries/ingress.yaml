@@ -43,7 +43,7 @@ templateSnippets:
       {% endfor %}
       {%- if ns_paths.all_paths | length > 0 %}
       # Ingress: {{ ingress.metadata.namespace }}/{{ ingress.metadata.name }} ({{ ns_paths.all_paths | length }} paths)
-      {%- for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
+      {% for rule in (ingress.spec.rules | default([]) | selectattr("http", "defined")) %}
       {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined")) %}
       {%- for check_type in path_types %}
       {%- if path.pathType == check_type %}
@@ -103,10 +103,10 @@ templateSnippets:
       {%- set rules_with_http = ingress.spec.rules | default([]) | selectattr("http", "defined") | list %}
       {%- if rules_with_http | length > 0 %}
       # Ingress: {{ ingress.metadata.namespace }}/{{ ingress.metadata.name }} ({{ rules_with_http | length }} hosts)
-        {%- for rule in rules_with_http %}
+      {% for rule in rules_with_http %}
       {%- set host_without_asterisk = rule.host | replace('*', '', 1) %}
       {{ host_without_asterisk }} {{ host_without_asterisk }}
-        {%- endfor %}
+      {%- endfor %}
       {%- endif %}
       {%- endfor %}
 
@@ -256,3 +256,34 @@ validationTests:
         target: map:path-prefix-exact.map
         pattern: "example.com/app BACKEND:ing_default_multi-port_api-svc_80"
         description: Path prefix-exact map must use BACKEND qualifier for /app
+
+      # Map Formatting Tests - Ensure proper line separation
+      - type: not_contains
+        target: map:host.map
+        pattern: "hosts\\)\\S"
+        description: Host map comments must not concatenate with entries (no non-whitespace immediately after comment)
+
+      - type: not_contains
+        target: map:path-prefix.map
+        pattern: "paths\\)\\S"
+        description: Path prefix map comments must not concatenate with entries
+
+      - type: not_contains
+        target: map:path-prefix-exact.map
+        pattern: "paths\\)\\S"
+        description: Path prefix-exact map comments must not concatenate with entries
+
+      - type: contains
+        target: map:host.map
+        pattern: "(?m)^example\\.com example\\.com$"
+        description: Host map entries must start at beginning of line and be properly formatted
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "(?m)^example\\.com/api BACKEND:"
+        description: Path prefix map entries must start at beginning of line
+
+      - type: contains
+        target: map:path-prefix-exact.map
+        pattern: "(?m)^example\\.com/api BACKEND:"
+        description: Path prefix-exact map entries must start at beginning of line

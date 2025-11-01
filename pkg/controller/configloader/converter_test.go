@@ -73,9 +73,9 @@ func TestConvertCRDToConfig(t *testing.T) {
 					LeaderElection: v1alpha1.LeaderElectionConfig{
 						Enabled:       boolPtr(true),
 						LeaseName:     "haproxy-leader",
-						LeaseDuration: "60s",
-						RenewDeadline: "15s",
-						RetryPeriod:   "5s",
+						LeaseDuration: "15s",
+						RenewDeadline: "10s",
+						RetryPeriod:   "2s",
 					},
 				},
 				Logging: v1alpha1.LoggingConfig{
@@ -131,9 +131,9 @@ func TestConvertCRDToConfig(t *testing.T) {
 					LeaderElection: config.LeaderElectionConfig{
 						Enabled:       true,
 						LeaseName:     "haproxy-leader",
-						LeaseDuration: "60s",
-						RenewDeadline: "15s",
-						RetryPeriod:   "5s",
+						LeaseDuration: "15s",
+						RenewDeadline: "10s",
+						RetryPeriod:   "2s",
 					},
 				},
 				Logging: config.LoggingConfig{

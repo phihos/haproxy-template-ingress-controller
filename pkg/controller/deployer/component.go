@@ -50,6 +50,7 @@ const (
 // The component publishes deployment result events for observability.
 type Component struct {
 	eventBus             *busevents.EventBus
+	eventChan            <-chan busevents.Event // Event subscription channel (subscribed in constructor)
 	logger               *slog.Logger
 	deploymentInProgress atomic.Bool // Defensive: prevents concurrent deployments if scheduler has bugs
 }
@@ -64,15 +65,16 @@ type Component struct {
 //   - A new Component instance ready to be started
 func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 	return &Component{
-		eventBus: eventBus,
-		logger:   logger.With("component", "deployer"),
+		eventBus:  eventBus,
+		eventChan: eventBus.Subscribe(EventBufferSize),
+		logger:    logger.With("component", "deployer"),
 	}
 }
 
 // Start begins the deployer's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to the EventBus and processes deployment events.
+// It processes events from the subscription channel established in the constructor.
 //
 // Parameters:
 //   - ctx: Context for cancellation and lifecycle management
@@ -83,11 +85,9 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 func (c *Component) Start(ctx context.Context) error {
 	c.logger.Info("Deployer starting")
 
-	eventChan := c.eventBus.Subscribe(EventBufferSize)
-
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-c.eventChan:
 			c.handleEvent(ctx, event)
 
 		case <-ctx.Done():
