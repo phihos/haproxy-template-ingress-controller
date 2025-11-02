@@ -550,6 +550,43 @@ logger.Error("reconciliation failed",
 - **Handle resource versions** - They're not monotonic across resource types
 - **Field selectors are limited** - Not all fields support field selectors (use label selectors instead)
 
+### Development Practices
+
+**CRITICAL - Task Completion Standards:**
+
+- **NEVER mark a task as completed without verifying it actually works**
+  - Run tests to confirm the implementation is correct
+  - Test the actual behavior, not just that code compiles
+  - Verify edge cases and error conditions
+
+- **NEVER take shortcuts by skipping hard parts of implementation**
+  - If a test fails, FIX the code to make it pass correctly
+  - Do NOT change the test to match broken behavior
+  - Do NOT add TODO comments for things that should be fixed immediately
+  - If something is genuinely out of scope, discuss with the user first
+
+- **ALWAYS inform the user about incomplete or buggy implementations**
+  - If you discover a bug during implementation, fix it
+  - If you can't complete a task, explain why and what remains
+  - Do NOT hide problems behind TODO comments
+  - Transparency builds trust
+
+**Example of UNACCEPTABLE behavior:**
+1. Test fails because routes are in wrong order
+2. Change test to validate the wrong order
+3. Add TODO comment saying "should fix this later"
+4. Mark task as completed
+5. Don't tell user about the bug
+
+**Example of CORRECT behavior:**
+1. Test fails because routes are in wrong order
+2. Debug the sorting logic to find root cause
+3. Fix the sorting implementation
+4. Verify test passes with correct behavior
+5. Mark task as completed
+
+**Why this matters:** Taking shortcuts wastes time. The bug will eventually need to be fixed, and by then the context is lost, making it harder. Do it right the first time.
+
 ## Resources
 
 - Architecture: `docs/development/design.md`

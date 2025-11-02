@@ -14,6 +14,16 @@ templateSnippets:
       {%- endfor %}
       {%- endmacro -%}
 
+  regex-sanitize:
+    template: |
+      {#- Macro to sanitize regex patterns for HAProxy double-quoted context #}
+      {#- Escapes $ as \$ to prevent environment variable substitution #}
+      {#- Usage: {% from "regex-sanitize" import sanitize_regex %}{{ sanitize_regex(pattern) }} #}
+      {%- macro sanitize_regex(pattern) -%}
+      {%- set result = pattern | replace("$", "\\$") -%}
+      {{- result -}}
+      {%- endmacro -%}
+
   use-backend-selection:
     template: |
       {#- Backend selection logic with qualifier system #}

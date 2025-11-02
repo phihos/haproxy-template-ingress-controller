@@ -838,6 +838,11 @@ func evaluateExpression(item interface{}, expr string) interface{} {
 		return nil
 	}
 
+	// Unwrap *exec.Value if needed
+	if execVal, ok := item.(*exec.Value); ok {
+		item = execVal.Interface()
+	}
+
 	// Handle concatenation operator ~
 	if strings.Contains(expr, " ~ ") {
 		return handleConcatenation(item, expr)
