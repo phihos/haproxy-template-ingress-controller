@@ -683,9 +683,13 @@ deploy_gateway_demo() {
 	ok "Gateway API demo resources deployed"
 	echo "Gateway: dev-gateway"
 	echo "HTTPRoutes:"
-	echo "  - echo-basic (echo-gateway.localdev.me)"
-	echo "  - echo-paths (echo-paths.localdev.me)"
-	echo "  - echo-split (echo-split.localdev.me - 70/30 traffic split)"
+	echo "  - echo-basic (echo-gateway.localdev.me) - Basic routing"
+	echo "  - echo-paths (echo-paths.localdev.me) - Path matching variants"
+	echo "  - echo-split (echo-split.localdev.me) - Traffic splitting 70/30"
+	echo "  - echo-methods (echo-methods.localdev.me) - HTTP method matching"
+	echo "  - echo-headers (echo-headers.localdev.me) - Header matching"
+	echo "  - echo-query (echo-query.localdev.me) - Query parameter matching"
+	echo "  - echo-combined (echo-combined.localdev.me) - Combined matchers"
 }
 
 deploy_echo_server() {
@@ -1135,9 +1139,24 @@ post_deploy_tips() {
 	echo "    Traffic splitting (70% v1 / 30% v2):"
 	echo "      for i in {1..10}; do curl -s -H 'Host: echo-split.localdev.me' http://localhost:30080 | grep -o 'ENVIRONMENT.*'; done"
 	echo
+	echo "    HTTP method matching:"
+	echo "      curl -X GET -H 'Host: echo-methods.localdev.me' http://localhost:30080/api  # Routes to v2"
+	echo "      curl -X POST -H 'Host: echo-methods.localdev.me' http://localhost:30080/api  # Routes to v1"
+	echo
+	echo "    Header matching:"
+	echo "      curl -H 'Host: echo-headers.localdev.me' -H 'X-Api-Version: v2' http://localhost:30080  # Routes to v2"
+	echo "      curl -H 'Host: echo-headers.localdev.me' -H 'X-User-Agent: mobile-app-ios' http://localhost:30080  # Routes to v2"
+	echo
+	echo "    Query parameter matching:"
+	echo "      curl -H 'Host: echo-query.localdev.me' 'http://localhost:30080/search?version=beta'  # Routes to v2"
+	echo "      curl -H 'Host: echo-query.localdev.me' 'http://localhost:30080/search?debug=true'  # Routes to v2"
+	echo
+	echo "    Combined matchers (method + headers + query):"
+	echo "      curl -X POST -H 'Host: echo-combined.localdev.me' -H 'Content-Type: application/json' 'http://localhost:30080/api?token=secret123'"
+	echo
 	echo "  Browser test:"
 	echo "    Add to /etc/hosts:"
-	echo "      127.0.0.1 echo.localdev.me echo-auth.localdev.me echo-gateway.localdev.me echo-paths.localdev.me echo-split.localdev.me"
+	echo "      127.0.0.1 echo.localdev.me echo-auth.localdev.me echo-gateway.localdev.me echo-paths.localdev.me echo-split.localdev.me echo-methods.localdev.me echo-headers.localdev.me echo-query.localdev.me echo-combined.localdev.me"
 	echo "    Visit: http://echo.localdev.me:30080 (Ingress, no auth)"
 	echo "    Visit: http://echo-auth.localdev.me:30080 (Ingress, basic auth)"
 	echo "    Visit: http://echo-gateway.localdev.me:30080 (HTTPRoute, basic)"

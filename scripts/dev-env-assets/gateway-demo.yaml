@@ -3,6 +3,9 @@
 # - Basic path-based routing
 # - Path matching variants (Exact, PathPrefix)
 # - Traffic splitting with weighted backends
+# - HTTP method matching (GET, POST, etc.)
+# - Header matching (exact and regex)
+# - Query parameter matching (exact and regex)
 #
 # Prerequisites:
 # - Gateway API CRDs must be installed
@@ -159,3 +162,175 @@ spec:
     - name: http
       port: 80
       targetPort: 80
+
+---
+# HTTPRoute 4: HTTP method matching
+# Demonstrates: Routing based on HTTP methods (GET vs POST)
+# Test with: curl -X GET http://localhost:30080/api -H "Host: echo-methods.localdev.me"
+#            curl -X POST http://localhost:30080/api -H "Host: echo-methods.localdev.me"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-methods
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-methods.localdev.me"
+  rules:
+    # Route POST requests to primary echo-server
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          method: POST
+      backendRefs:
+        - name: echo-server
+          port: 80
+    # Route GET requests to v2 echo-server
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          method: GET
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Default for other methods
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 5: Header matching (exact and regex)
+# Demonstrates: Routing based on request headers
+# Test with: curl http://localhost:30080 -H "Host: echo-headers.localdev.me" -H "X-Api-Version: v2"
+#            curl http://localhost:30080 -H "Host: echo-headers.localdev.me" -H "X-User-Agent: mobile-app-ios"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-headers
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-headers.localdev.me"
+  rules:
+    # Exact header match: X-Api-Version: v2
+    - matches:
+        - headers:
+            - type: Exact
+              name: X-Api-Version
+              value: v2
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Regex header match: X-User-Agent contains "mobile"
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: X-User-Agent
+              value: ".*mobile.*"
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Default for requests without special headers
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 6: Query parameter matching
+# Demonstrates: Routing based on query parameters
+# Test with: curl "http://localhost:30080/search?version=beta" -H "Host: echo-query.localdev.me"
+#            curl "http://localhost:30080/search?debug=true" -H "Host: echo-query.localdev.me"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-query
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-query.localdev.me"
+  rules:
+    # Exact query param match: version=beta
+    - matches:
+        - queryParams:
+            - type: Exact
+              name: version
+              value: beta
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Regex query param match: debug parameter with any true-ish value
+    - matches:
+        - queryParams:
+            - type: RegularExpression
+              name: debug
+              value: "^(true|1|yes)$"
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Default for requests without special query params
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 7: Combined matchers
+# Demonstrates: Multiple matcher types in a single rule (method + headers + query)
+# Test with: curl -X POST "http://localhost:30080/api?token=secret123" \
+#              -H "Host: echo-combined.localdev.me" \
+#              -H "Content-Type: application/json"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-combined
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-combined.localdev.me"
+  rules:
+    # Complex rule: POST + Content-Type header + token query param
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          method: POST
+          headers:
+            - type: Exact
+              name: Content-Type
+              value: application/json
+          queryParams:
+            - type: RegularExpression
+              name: token
+              value: "^secret[0-9]+$"
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Default fallback
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
