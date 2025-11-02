@@ -31,12 +31,10 @@ import (
 	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
-var (
-	// validationMutex ensures only one validation runs at a time.
-	// This prevents concurrent writes to /etc/haproxy/ directories which could
-	// cause validation failures or incorrect results.
-	validationMutex sync.Mutex
-)
+// haproxyCheckMutex serializes HAProxy validation to work around issues with
+// concurrent haproxy -c execution. Without this, concurrent validations can
+// interfere with each other even though they use isolated temp directories.
+var haproxyCheckMutex sync.Mutex
 
 // ValidationPaths holds the filesystem paths for HAProxy validation.
 // These paths must match the HAProxy Dataplane API server's resource configuration.
@@ -53,22 +51,18 @@ type ValidationPaths struct {
 // Phase 1.5: API schema validation using OpenAPI spec (patterns, formats, required fields)
 // Phase 2: Semantic validation using haproxy binary (-c flag)
 //
-// The validation writes files to the actual HAProxy directories specified in paths.
-// A mutex ensures only one validation runs at a time to prevent concurrent writes.
+// The validation writes files to the directories specified in paths. Callers must ensure
+// that paths are isolated (e.g., per-worker temp directories) to allow parallel execution.
 //
 // Parameters:
 //   - mainConfig: The rendered HAProxy configuration (haproxy.cfg content)
 //   - auxFiles: All auxiliary files (maps, certificates, general files)
-//   - paths: Filesystem paths for validation (must match Dataplane API configuration)
+//   - paths: Filesystem paths for validation (must be isolated for parallel execution)
 //
 // Returns:
 //   - nil if validation succeeds
 //   - ValidationError with phase information if validation fails
 func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
-	// Acquire lock to ensure only one validation runs at a time
-	validationMutex.Lock()
-	defer validationMutex.Unlock()
-
 	// Phase 1: Syntax validation with client-native parser
 	// This also returns the parsed configuration for Phase 1.5
 	parsedConfig, err := validateSyntax(mainConfig)
@@ -735,28 +729,10 @@ func clearValidationDirectories(paths ValidationPaths) error {
 		}
 	}
 
-	// Clear config directory (for relative paths)
-	// Create directory if it doesn't exist
+	// Create config directory if it doesn't exist
+	// (No need to clear it - we already cleared the specific validation directories above)
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create config directory %s: %w", configDir, err)
-	}
-
-	// Remove subdirectories that might contain auxiliary files (maps/, certs/, etc.)
-	entries, err := os.ReadDir(configDir)
-	if err != nil {
-		return fmt.Errorf("failed to read config directory %s: %w", configDir, err)
-	}
-
-	for _, entry := range entries {
-		// Only remove directories, not files (leave config file alone if it exists)
-		if !entry.IsDir() {
-			continue
-		}
-
-		path := filepath.Join(configDir, entry.Name())
-		if err := os.RemoveAll(path); err != nil {
-			return fmt.Errorf("failed to remove %s: %w", path, err)
-		}
 	}
 
 	// Remove old config file if it exists
@@ -803,6 +779,10 @@ func writeFileWithDir(path, content, fileType string) error {
 
 // writeAuxiliaryFiles writes all auxiliary files to their respective directories.
 func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+	if auxFiles == nil {
+		return nil // No auxiliary files to write
+	}
+
 	configDir := filepath.Dir(paths.ConfigFile)
 
 	// Write map files
@@ -836,6 +816,10 @@ func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error 
 // The configuration can reference auxiliary files using relative paths
 // (e.g., maps/host.map) which will be resolved relative to the config file directory.
 func runHAProxyCheck(configPath, configContent string) error {
+	// Serialize HAProxy execution to work around concurrent execution issues
+	haproxyCheckMutex.Lock()
+	defer haproxyCheckMutex.Unlock()
+
 	// Find haproxy binary
 	haproxyBin, err := exec.LookPath("haproxy")
 	if err != nil {

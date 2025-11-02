@@ -121,6 +121,7 @@ func convertAssertions(crdAssertions []v1alpha1.ValidationAssertion) []config.Va
 			Pattern:     a.Pattern,
 			Expected:    a.Expected,
 			JSONPath:    a.JSONPath,
+			Patterns:    a.Patterns,
 		}
 	}
 	return assertions

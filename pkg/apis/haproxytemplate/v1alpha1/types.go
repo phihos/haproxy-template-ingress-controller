@@ -466,8 +466,9 @@ type ValidationAssertion struct {
 	//   - equals: Checks if target equals expected value
 	//   - jsonpath: Evaluates JSONPath expression against target
 	//   - match_count: Counts how many times pattern matches in target (regex)
+	//   - match_order: Validates that patterns appear in specified order
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=haproxy_valid;contains;not_contains;equals;jsonpath;match_count
+	// +kubebuilder:validation:Enum=haproxy_valid;contains;not_contains;equals;jsonpath;match_count;match_order
 	Type string `json:"type"`
 
 	// Description explains what this assertion validates.
@@ -494,6 +495,11 @@ type ValidationAssertion struct {
 	// JSONPath is the JSONPath expression for jsonpath assertions.
 	// +optional
 	JSONPath string `json:"jsonpath,omitempty"`
+
+	// Patterns is a list of regex patterns for match_order assertions.
+	// The patterns must appear in the target in the order specified.
+	// +optional
+	Patterns []string `json:"patterns,omitempty"`
 }
 
 // HAProxyTemplateConfigStatus defines the observed state of HAProxyTemplateConfig.

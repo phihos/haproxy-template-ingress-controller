@@ -1,8 +1,10 @@
 package templating
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -536,4 +538,429 @@ func TestNewWithFilters_NilFilters(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "Hello World", output)
+}
+
+// ============================================================================
+// compute_once tag tests
+// ============================================================================
+
+func TestComputeOnce_ExecutesOnlyOnce(t *testing.T) {
+	// This test verifies that compute_once executes the body only once,
+	// even when the template is included multiple times
+	templates := map[string]string{
+		"main": `
+{%- set counter = namespace(value=0) %}
+{%- include "use_counter" -%}
+{%- include "use_counter" -%}
+{%- include "use_counter" -%}
+Result: {{ counter.value }}`,
+		"use_counter": `
+{%- compute_once counter %}
+  {%- set counter.value = counter.value + 1 %}
+{%- endcompute_once -%}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	output, err := engine.Render("main", nil)
+	require.NoError(t, err)
+
+	// If compute_once works correctly, counter.value should be 1
+	// If it executed 3 times, counter.value would be 3
+	assert.Contains(t, output, "Result: 1")
+}
+
+func TestComputeOnce_SharesResultAcrossTemplates(t *testing.T) {
+	// This test verifies that the result is available across different template includes
+	templates := map[string]string{
+		"main": `
+{%- set data = namespace(value="", count=0) %}
+{%- include "compute" -%}
+{%- include "compute" -%}
+{%- include "use_result" -%}`,
+		"compute": `
+{%- compute_once data %}
+  {%- set data.value = "computed" %}
+  {%- set data.count = 42 %}
+{%- endcompute_once -%}`,
+		"use_result": `
+Value: {{ data.value }}, Count: {{ data.count }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	output, err := engine.Render("main", nil)
+	require.NoError(t, err)
+
+	assert.Contains(t, output, "Value: computed")
+	assert.Contains(t, output, "Count: 42")
+}
+
+func TestComputeOnce_RequiresResultVariable(t *testing.T) {
+	// This test verifies that an error is returned if the variable doesn't exist before compute_once
+	templates := map[string]string{
+		"main": `
+{%- compute_once data %}
+  {%- set data = "value" %}
+{%- endcompute_once -%}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	_, err = engine.Render("main", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "variable 'data' must be created before compute_once block")
+}
+
+func TestComputeOnce_IsolatedBetweenRenders(t *testing.T) {
+	// This test verifies that the cache is cleared between different Render() calls
+	templates := map[string]string{
+		"main": `
+{%- set data = namespace(value="") %}
+{%- compute_once data %}
+  {%- set data.value = input_value %}
+{%- endcompute_once -%}
+Result: {{ data.value }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	// First render with input_value = "first"
+	output1, err := engine.Render("main", map[string]interface{}{
+		"input_value": "first",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, output1, "Result: first")
+
+	// Second render with input_value = "second"
+	// Should get "second", not "first" (proves cache was cleared)
+	output2, err := engine.Render("main", map[string]interface{}{
+		"input_value": "second",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, output2, "Result: second")
+	assert.NotContains(t, output2, "Result: first")
+}
+
+func TestComputeOnce_ComplexComputation(t *testing.T) {
+	// This test verifies that compute_once works with complex nested operations
+	templates := map[string]string{
+		"main": `
+{%- set analysis = namespace(items=[], total=0) %}
+{%- include "use_analysis" -%}
+{%- include "use_analysis" -%}`,
+		"use_analysis": `
+{%- compute_once analysis %}
+  {%- for item in input_items %}
+    {%- set analysis.items = analysis.items.append(item.name) %}
+    {%- set analysis.total = analysis.total + item.value %}
+  {%- endfor %}
+{%- endcompute_once -%}
+Total: {{ analysis.total }}, Count: {{ analysis.items | length }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	output, err := engine.Render("main", map[string]interface{}{
+		"input_items": []map[string]interface{}{
+			{"name": "item1", "value": 10},
+			{"name": "item2", "value": 20},
+			{"name": "item3", "value": 30},
+		},
+	})
+	require.NoError(t, err)
+
+	// Both includes should show the same totals (proof it ran once)
+	// Count the occurrences
+	totalCount := strings.Count(output, "Total: 60")
+	itemCount := strings.Count(output, "Count: 3")
+	assert.Equal(t, 2, totalCount, "Should appear twice (once per include)")
+	assert.Equal(t, 2, itemCount, "Should appear twice (once per include)")
+}
+
+func TestComputeOnce_WithMacro(t *testing.T) {
+	// This test simulates the real-world gateway.yaml use case with a macro
+	templates := map[string]string{
+		"main": `
+{%- set analysis = namespace(output="") %}
+{%- include "snippet1" -%}
+{%- include "snippet2" -%}`,
+		"macros": `
+{%- macro analyze(data) -%}
+  {%- for item in data %}
+    {{- item.name -}}
+  {%- endfor %}
+{%- endmacro -%}`,
+		"snippet1": `
+{%- compute_once analysis %}
+  {%- from "macros" import analyze %}
+  {%- set analysis.output = analyze(resources) %}
+{%- endcompute_once -%}
+Snippet1: {{ analysis.output }}`,
+		"snippet2": `
+{%- compute_once analysis %}
+  {%- from "macros" import analyze %}
+  {%- set analysis.output = analyze(resources) %}
+{%- endcompute_once -%}
+Snippet2: {{ analysis.output }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	output, err := engine.Render("main", map[string]interface{}{
+		"resources": []map[string]interface{}{
+			{"name": "route1"},
+			{"name": "route2"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Both snippets should have the same analysis output
+	assert.Contains(t, output, "Snippet1: route1route2")
+	assert.Contains(t, output, "Snippet2: route1route2")
+}
+
+func TestComputeOnce_SyntaxError_MissingVariableName(t *testing.T) {
+	// This test verifies proper error when variable name is missing
+	templates := map[string]string{
+		"main": `
+{%- compute_once %}
+  {%- set data = "value" %}
+{%- endcompute_once -%}`,
+	}
+
+	_, err := New(EngineTypeGonja, templates, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compute_once requires variable name")
+}
+
+func TestComputeOnce_SyntaxError_ExtraArguments(t *testing.T) {
+	// This test verifies proper error when extra arguments are provided
+	templates := map[string]string{
+		"main": `
+{%- compute_once data extra_arg %}
+  {%- set data = "value" %}
+{%- endcompute_once -%}`,
+	}
+
+	_, err := New(EngineTypeGonja, templates, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no additional arguments")
+}
+
+func TestComputeOnce_Integration_WithTracing(t *testing.T) {
+	// This integration test verifies compute_once behavior and demonstrates tracing functionality
+	templates := map[string]string{
+		"main": `
+{%- set routes = namespace(analyzed=[], count=0) %}
+{%- include "frontend-1" -%}
+{%- include "frontend-2" -%}
+{%- include "frontend-3" -%}
+Total analyzed: {{ routes.count }}`,
+		"frontend-1": `
+{%- include "analyze" -%}
+Frontend 1 routes: {{ routes.count }}
+`,
+		"frontend-2": `
+{%- include "analyze" -%}
+Frontend 2 routes: {{ routes.count }}
+`,
+		"frontend-3": `
+{%- include "analyze" -%}
+Frontend 3 routes: {{ routes.count }}
+`,
+		"analyze": `
+{%- compute_once routes %}
+  {%- include "expensive-analysis" %}
+{%- endcompute_once -%}`,
+		"expensive-analysis": `
+{%- for route in input_routes %}
+  {%- set routes.analyzed = routes.analyzed.append(route.name) %}
+  {%- set routes.count = routes.count + 1 %}
+{%- endfor -%}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	// Enable tracing to observe template execution
+	engine.EnableTracing()
+
+	output, err := engine.Render("main", map[string]interface{}{
+		"input_routes": []map[string]interface{}{
+			{"name": "route1"},
+			{"name": "route2"},
+			{"name": "route3"},
+		},
+	})
+	require.NoError(t, err)
+
+	// CRITICAL: Verify the computation ran ONCE and all frontends see the same result
+	// If compute_once didn't work, count would be 9 (3 routes × 3 frontends)
+	// With compute_once working, count is 3 (computed once, shared across all frontends)
+	assert.Contains(t, output, "Total analyzed: 3")
+	assert.Contains(t, output, "Frontend 1 routes: 3")
+	assert.Contains(t, output, "Frontend 2 routes: 3")
+	assert.Contains(t, output, "Frontend 3 routes: 3")
+
+	// Verify tracing captured the main render
+	trace := engine.GetTraceOutput()
+	assert.Contains(t, trace, "Rendering: main")
+	assert.Contains(t, trace, "Completed: main")
+
+	// Note: Tracing only captures top-level Render() calls, not internal Gonja includes.
+	// The important verification is the output above - compute_once prevented redundant
+	// computation as evidenced by count=3 instead of count=9.
+}
+
+func TestComputeOnce_Integration_MultipleRenders(t *testing.T) {
+	// This test demonstrates tracing across multiple independent renders
+	templates := map[string]string{
+		"template1": `{%- set data = namespace(value="") %}{%- compute_once data %}{%- set data.value = "template1" %}{%- endcompute_once -%}Result: {{ data.value }}`,
+		"template2": `{%- set data = namespace(value="") %}{%- compute_once data %}{%- set data.value = "template2" %}{%- endcompute_once -%}Result: {{ data.value }}`,
+		"template3": `{%- set data = namespace(value="") %}{%- compute_once data %}{%- set data.value = "template3" %}{%- endcompute_once -%}Result: {{ data.value }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	// Enable tracing
+	engine.EnableTracing()
+
+	// Render multiple templates
+	output1, err := engine.Render("template1", nil)
+	require.NoError(t, err)
+	assert.Contains(t, output1, "Result: template1")
+
+	output2, err := engine.Render("template2", nil)
+	require.NoError(t, err)
+	assert.Contains(t, output2, "Result: template2")
+
+	output3, err := engine.Render("template3", nil)
+	require.NoError(t, err)
+	assert.Contains(t, output3, "Result: template3")
+
+	// Get trace - should show all three renders
+	trace := engine.GetTraceOutput()
+	assert.Contains(t, trace, "Rendering: template1")
+	assert.Contains(t, trace, "Completed: template1")
+	assert.Contains(t, trace, "Rendering: template2")
+	assert.Contains(t, trace, "Completed: template2")
+	assert.Contains(t, trace, "Rendering: template3")
+	assert.Contains(t, trace, "Completed: template3")
+
+	// Each render should have its own compute_once cache (verified by correct output values)
+	// This proves compute_once markers are cleared between renders
+}
+
+func TestTracing_ConcurrentRenders(t *testing.T) {
+	// This test verifies that tracing is thread-safe when multiple goroutines
+	// call Render() concurrently. Run with: go test -race
+	templates := map[string]string{
+		"template1": `Result: {{ value }}`,
+		"template2": `Output: {{ value | upper }}`,
+		"template3": `Value: {{ value | length }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	// Enable tracing
+	engine.EnableTracing()
+
+	// Run concurrent renders
+	const numGoroutines = 10
+	done := make(chan bool, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer func() { done <- true }()
+
+			// Each goroutine renders multiple templates
+			for j := 0; j < 5; j++ {
+				tmpl := fmt.Sprintf("template%d", (j%3)+1)
+				context := map[string]interface{}{
+					"value": fmt.Sprintf("goroutine-%d-iteration-%d", id, j),
+				}
+
+				output, err := engine.Render(tmpl, context)
+				assert.NoError(t, err)
+				assert.NotEmpty(t, output)
+			}
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Get trace output (should contain entries from all renders)
+	trace := engine.GetTraceOutput()
+	assert.NotEmpty(t, trace)
+
+	// Verify trace contains entries for all three templates
+	assert.Contains(t, trace, "Rendering: template1")
+	assert.Contains(t, trace, "Rendering: template2")
+	assert.Contains(t, trace, "Rendering: template3")
+
+	// Verify trace contains completion entries
+	assert.Contains(t, trace, "Completed: template1")
+	assert.Contains(t, trace, "Completed: template2")
+	assert.Contains(t, trace, "Completed: template3")
+
+	// Count total render entries (should be 50: 10 goroutines * 5 renders each)
+	renderCount := strings.Count(trace, "Rendering:")
+	assert.Equal(t, 50, renderCount, "Should have 50 render entries")
+
+	completedCount := strings.Count(trace, "Completed:")
+	assert.Equal(t, 50, completedCount, "Should have 50 completion entries")
+}
+
+func TestTracing_ConcurrentEnableDisable(t *testing.T) {
+	// This test verifies that EnableTracing/DisableTracing are thread-safe
+	// when called concurrently with Render()
+	templates := map[string]string{
+		"test": `Value: {{ value }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	done := make(chan bool)
+
+	// Goroutine 1: Continuously enable/disable tracing
+	go func() {
+		for i := 0; i < 100; i++ {
+			engine.EnableTracing()
+			time.Sleep(time.Microsecond)
+			engine.DisableTracing()
+			time.Sleep(time.Microsecond)
+		}
+		done <- true
+	}()
+
+	// Goroutine 2: Continuously render templates
+	go func() {
+		for i := 0; i < 100; i++ {
+			_, err := engine.Render("test", map[string]interface{}{
+				"value": i,
+			})
+			assert.NoError(t, err)
+			time.Sleep(time.Microsecond)
+		}
+		done <- true
+	}()
+
+	// Wait for both goroutines
+	<-done
+	<-done
+
+	// If we get here without panics or race conditions, the test passes
 }

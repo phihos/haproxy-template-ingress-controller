@@ -34,6 +34,7 @@ func (r *Runner) assertHAProxyValid(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	assertion *config.ValidationAssertion,
+	validationPaths dataplane.ValidationPaths,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "haproxy_valid",
@@ -45,8 +46,8 @@ func (r *Runner) assertHAProxyValid(
 		result.Description = "HAProxy configuration must be syntactically valid"
 	}
 
-	// Use dataplane.ValidateConfiguration to validate HAProxy config
-	err := dataplane.ValidateConfiguration(haproxyConfig, auxiliaryFiles, r.validationPaths)
+	// Use dataplane.ValidateConfiguration to validate HAProxy config with worker-specific paths
+	err := dataplane.ValidateConfiguration(haproxyConfig, auxiliaryFiles, validationPaths)
 	failed := err != nil
 	if failed {
 		result.Passed = false
@@ -299,6 +300,98 @@ func (r *Runner) assertJSONPath(
 	return result
 }
 
+// assertMatchOrder validates that patterns appear in the specified order in the target content.
+// This is critical for Gateway API precedence rules where more specific routes must be checked
+// before less specific ones (first match wins in HAProxy).
+func (r *Runner) assertMatchOrder(
+	haproxyConfig string,
+	auxiliaryFiles *dataplane.AuxiliaryFiles,
+	assertion *config.ValidationAssertion,
+	renderError string,
+) AssertionResult {
+	result := AssertionResult{
+		Type:        "match_order",
+		Description: assertion.Description,
+		Passed:      true,
+	}
+
+	if result.Description == "" {
+		result.Description = fmt.Sprintf("Patterns in target %s must appear in specified order", assertion.Target)
+	}
+
+	// Resolve target to actual content
+	target := r.resolveTarget(assertion.Target, haproxyConfig, auxiliaryFiles, renderError)
+
+	// Check that we have patterns to match
+	if len(assertion.Patterns) == 0 {
+		result.Passed = false
+		result.Error = "no patterns specified for match_order assertion"
+		r.populateTargetMetadata(&result, target, assertion.Target, true)
+		return result
+	}
+
+	// Find the position of each pattern's first match
+	type patternMatch struct {
+		pattern string
+		index   int
+		found   bool
+	}
+	matches := make([]patternMatch, len(assertion.Patterns))
+
+	for i, pattern := range assertion.Patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			result.Passed = false
+			result.Error = fmt.Sprintf("invalid regex pattern %q: %v", pattern, err)
+			r.populateTargetMetadata(&result, target, assertion.Target, true)
+			return result
+		}
+
+		loc := re.FindStringIndex(target)
+		if loc == nil {
+			matches[i] = patternMatch{
+				pattern: pattern,
+				index:   -1,
+				found:   false,
+			}
+		} else {
+			matches[i] = patternMatch{
+				pattern: pattern,
+				index:   loc[0],
+				found:   true,
+			}
+		}
+	}
+
+	// Check if all patterns were found
+	for i, match := range matches {
+		if !match.found {
+			result.Passed = false
+			result.Error = fmt.Sprintf("pattern %d %q not found in %s (target size: %d bytes). Hint: Use --verbose to see content preview",
+				i+1, match.pattern, assertion.Target, len(target))
+			r.populateTargetMetadata(&result, target, assertion.Target, true)
+			return result
+		}
+	}
+
+	// Verify patterns appear in order
+	for i := 1; i < len(matches); i++ {
+		if matches[i].index < matches[i-1].index {
+			result.Passed = false
+			result.Error = fmt.Sprintf("patterns out of order: pattern %d %q (at position %d) appears before pattern %d %q (at position %d) in %s. Expected order: 1→2→3...",
+				i+1, matches[i].pattern, matches[i].index,
+				i, matches[i-1].pattern, matches[i-1].index,
+				assertion.Target)
+			r.populateTargetMetadata(&result, target, assertion.Target, true)
+			return result
+		}
+	}
+
+	// All patterns found in correct order
+	r.populateTargetMetadata(&result, target, assertion.Target, false)
+	return result
+}
+
 // resolveTarget resolves the target content based on the target specification.
 //
 // Target format: "haproxy.cfg" or "map:<name>" or "file:<name>" or "cert:<name>" or "rendering_error".
@@ -322,6 +415,11 @@ func (r *Runner) resolveTarget(target, haproxyConfig string, auxiliaryFiles *dat
 
 // resolveAuxiliaryFile resolves auxiliary file content based on target prefix.
 func (r *Runner) resolveAuxiliaryFile(target string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	// Handle nil auxiliaryFiles (can happen when rendering fails)
+	if auxiliaryFiles == nil {
+		return ""
+	}
+
 	if strings.HasPrefix(target, "map:") {
 		return r.findMapFile(strings.TrimPrefix(target, "map:"), auxiliaryFiles)
 	}
@@ -339,6 +437,9 @@ func (r *Runner) resolveAuxiliaryFile(target string, auxiliaryFiles *dataplane.A
 
 // findMapFile searches for a map file by name.
 func (r *Runner) findMapFile(mapName string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	if auxiliaryFiles == nil {
+		return ""
+	}
 	for _, mapFile := range auxiliaryFiles.MapFiles {
 		if mapFile.Path == mapName {
 			return mapFile.Content
@@ -349,6 +450,9 @@ func (r *Runner) findMapFile(mapName string, auxiliaryFiles *dataplane.Auxiliary
 
 // findGeneralFile searches for a general file by filename.
 func (r *Runner) findGeneralFile(fileName string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	if auxiliaryFiles == nil {
+		return ""
+	}
 	for _, generalFile := range auxiliaryFiles.GeneralFiles {
 		if generalFile.Filename == fileName {
 			return generalFile.Content
@@ -359,6 +463,9 @@ func (r *Runner) findGeneralFile(fileName string, auxiliaryFiles *dataplane.Auxi
 
 // findCertificate searches for a certificate by path.
 func (r *Runner) findCertificate(certName string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	if auxiliaryFiles == nil {
+		return ""
+	}
 	for _, sslCert := range auxiliaryFiles.SSLCertificates {
 		if sslCert.Path == certName {
 			return sslCert.Content

@@ -42,6 +42,7 @@ var (
 	validateVerbose        bool
 	validateDumpRendered   bool
 	validateTraceTemplates bool
+	validateWorkers        int
 )
 
 // validateCmd represents the validate command.
@@ -83,6 +84,7 @@ func init() {
 	validateCmd.Flags().BoolVar(&validateVerbose, "verbose", false, "Show rendered content preview for failed assertions")
 	validateCmd.Flags().BoolVar(&validateDumpRendered, "dump-rendered", false, "Dump all rendered content (haproxy.cfg, maps, files)")
 	validateCmd.Flags().BoolVar(&validateTraceTemplates, "trace-templates", false, "Show template execution trace")
+	validateCmd.Flags().IntVar(&validateWorkers, "workers", 0, "Number of parallel test workers (0=auto-detect CPUs, 1=sequential)")
 
 	_ = validateCmd.MarkFlagRequired("file")
 }
@@ -176,7 +178,8 @@ func runValidationTests(
 		engine,
 		validationPaths,
 		testrunner.Options{
-			Logger: logger,
+			Logger:  logger,
+			Workers: validateWorkers,
 		},
 	)
 

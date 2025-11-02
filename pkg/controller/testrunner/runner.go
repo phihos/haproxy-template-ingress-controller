@@ -32,6 +32,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -48,8 +51,10 @@ import (
 // It's a pure component with no EventBus dependency, designed to be called
 // directly from the CLI or from the DryRunValidator.
 type Runner struct {
-	engine          *templating.TemplateEngine
-	validationPaths dataplane.ValidationPaths
+	// engineTemplate is a pre-compiled template engine WITHOUT path filters.
+	// Workers will create their own engines with worker-specific paths.
+	engineTemplate  *templating.TemplateEngine
+	validationPaths dataplane.ValidationPaths // Base paths (used to create worker-specific paths)
 	config          *config.Config
 	logger          *slog.Logger
 	workers         int
@@ -178,16 +183,123 @@ func New(
 
 	workers := options.Workers
 	if workers <= 0 {
-		workers = 4 // Default to 4 workers
+		workers = runtime.NumCPU() // Default to number of CPUs
 	}
 
 	return &Runner{
-		engine:          engine,
+		engineTemplate:  engine,
 		validationPaths: validationPaths,
 		config:          cfg,
 		logger:          logger.With("component", "test-runner"),
 		workers:         workers,
 	}
+}
+
+// createWorkerEngine creates a template engine with test-specific path filters.
+//
+// Each test needs its own engine because the `get_path` filter must resolve
+// to test-specific directories. This ensures HAProxy can find auxiliary files
+// in the correct test subdirectories.
+//
+// createWorkerEngine creates a template engine with per-test PathResolver for isolated validation.
+// Each engine instance clones gonja's builtin filters to avoid global state conflicts during
+// concurrent test execution. This allows true parallel execution across multiple workers.
+func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templating.TemplateEngine, error) {
+	// Extract all template sources (same as in validate.go)
+	templates := make(map[string]string)
+
+	// Main HAProxy config template
+	templates["haproxy.cfg"] = r.config.HAProxyConfig.Template
+
+	// Template snippets
+	for name, snippet := range r.config.TemplateSnippets {
+		templates[name] = snippet.Template
+	}
+
+	// Map files
+	for name, mapFile := range r.config.Maps {
+		templates[name] = mapFile.Template
+	}
+
+	// General files
+	for name, file := range r.config.Files {
+		templates[name] = file.Template
+	}
+
+	// SSL certificates
+	for name, cert := range r.config.SSLCertificates {
+		templates[name] = cert.Template
+	}
+
+	// Create path resolver with test-specific paths
+	pathResolver := &templating.PathResolver{
+		MapsDir:    testPaths.MapsDir,
+		SSLDir:     testPaths.SSLCertsDir,
+		GeneralDir: testPaths.GeneralStorageDir,
+	}
+
+	// Register custom filters with test-specific paths
+	filters := map[string]templating.FilterFunc{
+		"get_path":   pathResolver.GetPath,
+		"glob_match": templating.GlobMatch,
+		"b64decode":  templating.B64Decode,
+	}
+
+	// Register custom global functions
+	functions := map[string]templating.GlobalFunc{
+		"fail": func(args ...interface{}) (interface{}, error) {
+			if len(args) == 0 {
+				return nil, fmt.Errorf("template evaluation failed")
+			}
+			return nil, fmt.Errorf("%v", args[0])
+		},
+	}
+
+	// Compile all templates with worker-specific filters
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile templates for worker: %w", err)
+	}
+
+	return engine, nil
+}
+
+// createTestPaths creates per-test temp directories for isolated HAProxy validation.
+//
+// This creates a subdirectory structure under the base temp directory:
+//
+//	<base>/worker-<workerID>/test-<testNum>/maps/
+//	<base>/worker-<workerID>/test-<testNum>/ssl/
+//	<base>/worker-<workerID>/test-<testNum>/files/
+//	<base>/worker-<workerID>/test-<testNum>/haproxy.cfg
+//
+// Each test gets its own isolated directories to prevent file conflicts during
+// parallel test execution, even when multiple tests are processed by the same worker.
+func (r *Runner) createTestPaths(workerID, testNum int) (dataplane.ValidationPaths, error) {
+	// Extract base temp directory from the shared validation paths
+	baseTempDir := filepath.Dir(r.validationPaths.ConfigFile)
+
+	// Create test-specific subdirectory within worker space
+	testDir := filepath.Join(baseTempDir, fmt.Sprintf("worker-%d", workerID), fmt.Sprintf("test-%d", testNum))
+
+	// Create subdirectories for auxiliary files
+	mapsDir := filepath.Join(testDir, "maps")
+	sslDir := filepath.Join(testDir, "ssl")
+	filesDir := filepath.Join(testDir, "files")
+
+	// Create all directories
+	for _, dir := range []string{mapsDir, sslDir, filesDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return dataplane.ValidationPaths{}, fmt.Errorf("failed to create test directory %s: %w", dir, err)
+		}
+	}
+
+	return dataplane.ValidationPaths{
+		MapsDir:           mapsDir,
+		SSLCertsDir:       sslDir,
+		GeneralStorageDir: filesDir,
+		ConfigFile:        filepath.Join(testDir, "haproxy.cfg"),
+	}, nil
 }
 
 // RunTests executes all validation tests (or a specific test if filtered).
@@ -247,7 +359,7 @@ func (r *Runner) RunTests(ctx context.Context, testName string) (*TestResults, e
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go r.testWorker(ctx, testChan, resultChan, &wg)
+		go r.testWorker(ctx, i, testChan, resultChan, &wg)
 	}
 
 	// Send tests to workers
@@ -284,18 +396,96 @@ func (r *Runner) RunTests(ctx context.Context, testName string) (*TestResults, e
 }
 
 // testWorker is a worker goroutine that processes tests from the test channel.
-func (r *Runner) testWorker(ctx context.Context, tests <-chan testEntry, results chan<- TestResult, wg *sync.WaitGroup) {
+// Each test gets its own isolated temp directory and template engine to prevent file conflicts.
+func (r *Runner) testWorker(ctx context.Context, workerID int, tests <-chan testEntry, results chan<- TestResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	r.logger.Debug("Worker started", "worker_id", workerID)
+
+	testNum := 0
 	for entry := range tests {
 		select {
 		case <-ctx.Done():
 			// Context cancelled, stop processing
 			return
 		default:
-			r.logger.Debug("Worker processing test", "test", entry.name)
-			result := r.runSingleTest(ctx, entry.name, entry.test)
+			testStartTime := time.Now()
+			r.logger.Debug("Worker processing test",
+				"worker_id", workerID,
+				"test_num", testNum,
+				"test", entry.name)
+
+			// Create unique temp directory for this specific test
+			dirCreateStart := time.Now()
+			testPaths, err := r.createTestPaths(workerID, testNum)
+			dirCreateDuration := time.Since(dirCreateStart)
+
+			if err != nil {
+				r.logger.Error("Failed to create test paths",
+					"worker_id", workerID,
+					"test_num", testNum,
+					"test", entry.name,
+					"error", err,
+					"duration_ms", dirCreateDuration.Milliseconds())
+				results <- TestResult{
+					TestName:    entry.name,
+					Description: entry.test.Description,
+					Passed:      false,
+					RenderError: fmt.Sprintf("failed to create test temp directory: %v", err),
+				}
+				testNum++
+				continue
+			}
+
+			r.logger.Debug("Created test paths",
+				"worker_id", workerID,
+				"test_num", testNum,
+				"test", entry.name,
+				"config_file", testPaths.ConfigFile,
+				"duration_ms", dirCreateDuration.Milliseconds())
+
+			// Create unique template engine for this specific test
+			engineCreateStart := time.Now()
+			testEngine, err := r.createWorkerEngine(testPaths)
+			engineCreateDuration := time.Since(engineCreateStart)
+
+			if err != nil {
+				r.logger.Error("Failed to create test engine",
+					"worker_id", workerID,
+					"test_num", testNum,
+					"test", entry.name,
+					"error", err,
+					"duration_ms", engineCreateDuration.Milliseconds())
+				results <- TestResult{
+					TestName:    entry.name,
+					Description: entry.test.Description,
+					Passed:      false,
+					RenderError: fmt.Sprintf("failed to create template engine: %v", err),
+				}
+				testNum++
+				continue
+			}
+
+			r.logger.Debug("Created template engine",
+				"worker_id", workerID,
+				"test_num", testNum,
+				"test", entry.name,
+				"duration_ms", engineCreateDuration.Milliseconds())
+
+			// Run test with isolated paths and engine
+			result := r.runSingleTest(ctx, entry.name, entry.test, testEngine, testPaths)
+
+			testDuration := time.Since(testStartTime)
+			r.logger.Debug("Test completed",
+				"worker_id", workerID,
+				"test_num", testNum,
+				"test", entry.name,
+				"passed", result.Passed,
+				"total_duration_ms", testDuration.Milliseconds())
+
 			results <- result
+
+			testNum++
 		}
 	}
 }
@@ -309,8 +499,8 @@ func (r *Runner) filterTests(tests map[string]config.ValidationTest, name string
 	return filtered
 }
 
-// runSingleTest executes a single validation test.
-func (r *Runner) runSingleTest(ctx context.Context, testName string, test config.ValidationTest) TestResult {
+// runSingleTest executes a single validation test using worker-specific engine and validation paths.
+func (r *Runner) runSingleTest(ctx context.Context, testName string, test config.ValidationTest, engine *templating.TemplateEngine, validationPaths dataplane.ValidationPaths) TestResult {
 	startTime := time.Now()
 
 	result := TestResult{
@@ -329,8 +519,8 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 		return result
 	}
 
-	// 2. Render HAProxy configuration and auxiliary files
-	haproxyConfig, auxiliaryFiles, err := r.renderWithStores(stores)
+	// 2. Render HAProxy configuration and auxiliary files (using worker-specific engine)
+	haproxyConfig, auxiliaryFiles, err := r.renderWithStores(engine, stores)
 	if err != nil {
 		result.RenderError = dataplane.SimplifyRenderingError(err)
 
@@ -353,7 +543,7 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 	templateContext := r.buildRenderingContext(stores)
 
 	// 4. Run all assertions (whether rendering succeeded or failed)
-	r.executeAssertions(ctx, &result, &test, haproxyConfig, auxiliaryFiles, templateContext)
+	r.executeAssertions(ctx, &result, &test, haproxyConfig, auxiliaryFiles, templateContext, validationPaths)
 
 	// Test passes if either:
 	// - Rendering succeeded AND all assertions passed
@@ -405,9 +595,10 @@ func (r *Runner) executeAssertions(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	templateContext map[string]interface{},
+	validationPaths dataplane.ValidationPaths,
 ) {
 	for i := range test.Assertions {
-		assertionResult := r.runAssertion(ctx, &test.Assertions[i], haproxyConfig, auxiliaryFiles, templateContext, result.RenderError)
+		assertionResult := r.runAssertion(ctx, &test.Assertions[i], haproxyConfig, auxiliaryFiles, templateContext, result.RenderError, validationPaths)
 		result.Assertions = append(result.Assertions, assertionResult)
 
 		if !assertionResult.Passed {
@@ -427,24 +618,30 @@ func hasRenderingErrorAssertions(assertions []config.ValidationAssertion) bool {
 	return false
 }
 
-// renderWithStores renders HAProxy configuration using test fixture stores.
+// renderWithStores renders HAProxy configuration using test fixture stores and worker-specific engine.
 //
 // This follows the same pattern as DryRunValidator.renderWithOverlayStores.
-func (r *Runner) renderWithStores(stores map[string]types.Store) (string, *dataplane.AuxiliaryFiles, error) {
+func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[string]types.Store) (string, *dataplane.AuxiliaryFiles, error) {
 	// Build rendering context with fixture stores
 	context := r.buildRenderingContext(stores)
 
-	// Render main HAProxy configuration
-	haproxyConfig, err := r.engine.Render("haproxy.cfg", context)
+	// Render main HAProxy configuration using worker-specific engine
+	haproxyConfig, err := engine.Render("haproxy.cfg", context)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to render haproxy.cfg: %w", err)
 	}
 
-	// Render auxiliary files
-	auxiliaryFiles, err := r.renderAuxiliaryFiles(context)
+	// Render auxiliary files using worker-specific engine
+	auxiliaryFiles, err := r.renderAuxiliaryFiles(engine, context)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to render auxiliary files: %w", err)
 	}
+
+	// Debug logging
+	r.logger.Debug("Rendered auxiliary files",
+		"map_count", len(auxiliaryFiles.MapFiles),
+		"file_count", len(auxiliaryFiles.GeneralFiles),
+		"cert_count", len(auxiliaryFiles.SSLCertificates))
 
 	return haproxyConfig, auxiliaryFiles, nil
 }
@@ -494,13 +691,13 @@ func (r *Runner) sortSnippetsByPriority() []string {
 	return names
 }
 
-// renderAuxiliaryFiles renders all auxiliary files (maps, general files, SSL certificates).
-func (r *Runner) renderAuxiliaryFiles(context map[string]interface{}) (*dataplane.AuxiliaryFiles, error) {
+// renderAuxiliaryFiles renders all auxiliary files (maps, general files, SSL certificates) using worker-specific engine.
+func (r *Runner) renderAuxiliaryFiles(engine *templating.TemplateEngine, context map[string]interface{}) (*dataplane.AuxiliaryFiles, error) {
 	auxFiles := &dataplane.AuxiliaryFiles{}
 
-	// Render map files
+	// Render map files using worker-specific engine
 	for name := range r.config.Maps {
-		rendered, err := r.engine.Render(name, context)
+		rendered, err := engine.Render(name, context)
 		if err != nil {
 			return nil, fmt.Errorf("failed to render map file %s: %w", name, err)
 		}
@@ -511,9 +708,9 @@ func (r *Runner) renderAuxiliaryFiles(context map[string]interface{}) (*dataplan
 		})
 	}
 
-	// Render general files
+	// Render general files using worker-specific engine
 	for name := range r.config.Files {
-		rendered, err := r.engine.Render(name, context)
+		rendered, err := engine.Render(name, context)
 		if err != nil {
 			return nil, fmt.Errorf("failed to render general file %s: %w", name, err)
 		}
@@ -524,9 +721,9 @@ func (r *Runner) renderAuxiliaryFiles(context map[string]interface{}) (*dataplan
 		})
 	}
 
-	// Render SSL certificates
+	// Render SSL certificates using worker-specific engine
 	for name := range r.config.SSLCertificates {
-		rendered, err := r.engine.Render(name, context)
+		rendered, err := engine.Render(name, context)
 		if err != nil {
 			return nil, fmt.Errorf("failed to render SSL certificate %s: %w", name, err)
 		}
@@ -548,6 +745,7 @@ func (r *Runner) runAssertion(
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	templateContext map[string]interface{},
 	renderError string,
+	validationPaths dataplane.ValidationPaths,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        assertion.Type,
@@ -557,7 +755,7 @@ func (r *Runner) runAssertion(
 
 	switch assertion.Type {
 	case "haproxy_valid":
-		result = r.assertHAProxyValid(ctx, haproxyConfig, auxiliaryFiles, assertion)
+		result = r.assertHAProxyValid(ctx, haproxyConfig, auxiliaryFiles, assertion, validationPaths)
 
 	case "contains":
 		result = r.assertContains(haproxyConfig, auxiliaryFiles, assertion, renderError)
@@ -573,6 +771,9 @@ func (r *Runner) runAssertion(
 
 	case "jsonpath":
 		result = r.assertJSONPath(templateContext, assertion)
+
+	case "match_order":
+		result = r.assertMatchOrder(haproxyConfig, auxiliaryFiles, assertion, renderError)
 
 	default:
 		result.Passed = false

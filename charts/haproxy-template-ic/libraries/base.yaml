@@ -39,6 +39,21 @@ templateSnippets:
       # Empty string if no path match - falls through gracefully
       http-request set-var(txn.path_match_qualifier) var(txn.path_match),field(1,:)
 
+      # VAR qualifier: set request-scoped disambiguation variable
+      # Format: VAR:<variable_name>:<variable_value>
+      # Example: VAR:httproute_route_id:ns1_route1_0__ns2_route2_1
+      # The value contains all conflicting rules: {namespace}_{route_name}_{rule_index}
+      # Store variable name and value in fixed variables for advanced matchers to use
+      http-request set-var(req.conflict_var_name) var(txn.path_match),field(2,:) if { var(txn.path_match_qualifier) -m str VAR }
+      http-request set-var(req.conflict_var_value) var(txn.path_match),field(3,:) if { var(txn.path_match_qualifier) -m str VAR }
+
+      # Extension point for advanced matchers (method/header/query)
+      # Libraries can inject ordered http-request statements here
+      {%- from "macros" import include_matching -%}
+      {%- filter indent(6, first=True) %}
+      {{ include_matching("advanced-matcher-*") }}
+      {%- endfilter %}
+
       # MULTIBACKEND qualifier: weighted routing
       # Format: MULTIBACKEND:<total_weight>:<route_key>
       # Field 2 = total_weight, Field 3 = route_key
@@ -70,7 +85,8 @@ templateSnippets:
       {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
         {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
           {%- for address in (endpoint.addresses | default([])) %}
-            {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint.targetRef.name, 'address': address, 'port': port}] %}
+            {%- set endpoint_name = endpoint.targetRef.name if endpoint.targetRef else address %}
+            {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint_name, 'address': address, 'port': port}] %}
           {%- endfor %}
         {%- endfor %}
       {%- endfor %}
@@ -293,6 +309,12 @@ haproxyConfig:
         {%- filter indent(8, first=False) %}
         {% include "use-backend-selection" -%}
         {%- endfilter %}
+
+        # Debug headers (when enabled via config)
+        {%- if config.debug.headers.enabled | default(false) %}
+        http-response set-header X-Gateway-Matched-Route %[var(txn.matched_route)] if { var(txn.matched_route) -m found }
+        http-response set-header X-Gateway-Match-Reason %[var(txn.match_reason)] if { var(txn.match_reason) -m found }
+        {%- endif %}
 
         # Default backend
         default_backend default_backend

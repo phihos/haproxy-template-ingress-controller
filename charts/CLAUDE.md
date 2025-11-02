@@ -95,11 +95,38 @@ templateSnippets:
 
 Since libraries are merged at Helm render time, you must test the **merged output**, not individual library files.
 
-**Workflow:**
+**Recommended: Use the Test Script**
+
+The `scripts/test-templates.sh` script automates the correct workflow (helm template + yq + controller validate):
+
+```bash
+# Run all validation tests
+./scripts/test-templates.sh
+
+# Run specific test
+./scripts/test-templates.sh --test test-httproute-method-matching
+
+# Run test with debugging output
+./scripts/test-templates.sh --test test-httproute-method-matching --dump-rendered --verbose
+
+# Show all available tests
+./scripts/test-templates.sh --output yaml | yq '.tests[].name'
+```
+
+**Why use the script?**
+- Ensures you don't forget the helm template step
+- Automatically includes `--api-versions` flag for Gateway API tests
+- Handles error checking and temp file cleanup
+- Provides helpful error messages
+
+**Manual Workflow (Advanced)**
+
+If you need custom Helm values or specific library combinations:
 
 ```bash
 # 1. Render merged config with Helm and extract HAProxyTemplateConfig
 helm template charts/haproxy-template-ic \
+  --api-versions=gateway.networking.k8s.io/v1/GatewayClass \
   --set controller.templateLibraries.ingress.enabled=true \
   --set controller.templateLibraries.gateway.enabled=false \
   | yq 'select(.kind == "HAProxyTemplateConfig")' \
@@ -112,21 +139,20 @@ make build
 # 3. Run specific validation test
 ./bin/controller validate -f /tmp/merged-config.yaml \
   --test test-ingress-duplicate-backend-different-ports
-
-# 4. View all available tests
-./bin/controller validate -f /tmp/merged-config.yaml --output yaml | yq '.tests[].name'
 ```
 
 **Why use `yq 'select(.kind == "HAProxyTemplateConfig")'`?**
 
 `helm template` outputs **all** Kubernetes resources (Deployment, Service, ConfigMap, etc.). The `controller validate` command expects a single HAProxyTemplateConfig resource, so we filter for it using yq.
 
-**IMPORTANT: Testing Gateway API Library**
+**IMPORTANT: Gateway API Tests**
 
-When testing the Gateway API library, you MUST include the `--api-versions` flag to simulate the presence of Gateway API CRDs. Without this flag, Helm's Capabilities check will skip merging the gateway library, and gateway validation tests will not be available.
+Gateway API tests require the `--api-versions=gateway.networking.k8s.io/v1/GatewayClass` flag to simulate the presence of Gateway API CRDs. Without this flag, Helm's Capabilities check will skip merging the gateway library, and gateway validation tests will not be available.
+
+The test script includes this flag automatically. If using the manual workflow, you MUST include it:
 
 ```bash
-# Render with Gateway API library
+# Manual workflow - MUST include --api-versions flag
 helm template charts/haproxy-template-ic \
   --api-versions=gateway.networking.k8s.io/v1/GatewayClass \
   | yq 'select(.kind == "HAProxyTemplateConfig")' \
@@ -338,6 +364,134 @@ templateSnippets:
 
 **Note**: This uses the string-based deduplication pattern with delimiters. Backend keys generated from template expressions hit Gonja PyString compatibility issues with list membership checks. See [String-Based vs List-Based Deduplication](#string-based-vs-list-based-deduplication) for details.
 
+### Optimizing Expensive Computations with compute_once
+
+The `compute_once` custom tag prevents redundant execution of expensive template computations when the same template section is included multiple times.
+
+**Problem**: Complex route analysis that runs 4 times per render
+
+Without optimization, if you analyze routes in multiple places, the analysis runs every time:
+
+```jinja2
+{# snippet1.yaml #}
+{%- from "analyze_routes" import analyze_routes %}
+{%- set analysis = namespace(path_groups={}, sorted_routes=[]) %}
+{{- analyze_routes(analysis, resources) -}}  {# Analyzes ALL routes #}
+
+{# snippet2.yaml #}
+{%- from "analyze_routes" import analyze_routes %}
+{%- set analysis = namespace(path_groups={}, sorted_routes=[]) %}
+{{- analyze_routes(analysis, resources) -}}  {# Analyzes ALL routes AGAIN #}
+
+{# Result: analyze_routes runs N times for N snippets #}
+```
+
+**Solution**: Use `compute_once` to execute expensive computations only once
+
+```jinja2
+{# main template or early in base.yaml #}
+{%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+
+{# snippet1.yaml #}
+{%- compute_once analysis %}
+  {%- from "analyze_routes" import analyze_routes %}
+  {{- analyze_routes(analysis, resources) -}}
+{%- endcompute_once %}
+{# Use analysis.sorted_routes here #}
+
+{# snippet2.yaml #}
+{%- compute_once analysis %}
+  {%- from "analyze_routes" import analyze_routes %}
+  {{- analyze_routes(analysis, resources) -}}  {# SKIPPED - already computed #}
+{%- endcompute_once %}
+{# Uses same analysis results #}
+```
+
+**Key Points:**
+
+1. **Variable must be created BEFORE compute_once block**:
+   ```jinja2
+   {%- set analysis = namespace(path_groups={}) %}  {# Create first #}
+   {%- compute_once analysis %}  {# Then guard computation #}
+     {%- set analysis.path_groups = ... %}
+   {%- endcompute_once %}
+   ```
+
+2. **Use namespace() for mutable state**:
+   - Allows modifications to persist across includes
+   - Same namespace variable shared across all templates in one render
+
+3. **Computation runs once per Render() call**:
+   - First include executes the body
+   - Subsequent includes skip the body
+   - Cache automatically cleared between renders
+
+**Real-World Example from gateway.yaml**:
+
+The Gateway API library uses `compute_once` to optimize route analysis (see `libraries/gateway.yaml:323-328`, `499-504`):
+
+```jinja2
+{#- gateway.yaml lines 323-328 -#}
+{%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+{%- compute_once analysis %}
+  {%- from "analyze_routes" import analyze_routes %}
+  {{- analyze_routes(analysis, resources) -}}
+{%- endcompute_once %}
+
+{#- Used in resource_gateway_path-map-entry (called 3 times for different map files) -#}
+{%- for route in analysis.sorted_routes %}
+  {# Generate path map entries #}
+{%- endfor %}
+
+{#- Used in advanced-matcher-gateway (called 1 time) -#}
+{%- for route in analysis.sorted_routes %}
+  {# Generate advanced matchers #}
+{%- endfor %}
+```
+
+**Performance Impact**: Reduces analyze_routes calls from 4 to 1 per render (75% reduction).
+
+**When to Use compute_once**:
+
+✅ **Good use cases:**
+- Expensive loops over large resource lists (all HTTPRoutes, all Ingresses)
+- Complex sorting, grouping, or conflict detection
+- Template sections included from multiple places
+- Macros that perform heavy computation
+
+❌ **Don't use for:**
+- Simple variable assignments
+- Computations that need different inputs each time
+- Code that should run multiple times with different state
+
+**Debugging**:
+
+Enable template tracing to verify the optimization:
+
+```go
+engine.EnableTracing()
+output, _ := engine.Render("haproxy.cfg", context)
+trace := engine.GetTraceOutput()
+
+// Verify expensive template only appears once in trace
+// (Note: tracing shows top-level renders, not individual includes)
+```
+
+**Common Mistake**:
+
+```jinja2
+{# WRONG - variable doesn't exist before compute_once #}
+{%- compute_once analysis %}
+  {%- set analysis = namespace(...) %}  {# ERROR: can't create here #}
+{%- endcompute_once %}
+
+{# CORRECT - create variable first #}
+{%- set analysis = namespace(...) %}
+{%- compute_once analysis %}
+  {%- set analysis.data = expensive_computation() %}
+{%- endcompute_once %}
+```
+
 ## Gonja/Jinja2 Templating Pitfalls
 
 These are common mistakes when writing Gonja templates. Understanding these will prevent bugs and make your templates more reliable.
@@ -360,9 +514,62 @@ These are common mistakes when writing Gonja templates. Understanding these will
 {%- endfor %}
 ```
 
-**Why**: Gonja's list type has an `append()` method that modifies the list in place. The `+` operator creates a new list but doesn't update the namespace variable. The `append()` method returns `None`, so we assign to `_` to discard the return value.
+**Why**: Gonja's list type has an `append()` method that modifies the list in place. The `+` operator creates a new list but doesn't update the namespace variable.
 
 **Documentation**: https://github.com/NikolaLohinski/gonja/blob/master/docs/methods.md#the-list-type
+
+**CRITICAL - Namespace Attributes Return Copies:**
+
+When you access a namespace attribute in a loop, Gonja gives you a **COPY**, not a reference. This means modifications to the copy are lost:
+
+```gonja
+{# WRONG - modifications lost each iteration! #}
+{%- set ns = namespace(items=[]) %}
+{%- for item in collection %}
+  {%- set _ = ns.items.append(item) %}  {# Modifies COPY, lost next iteration #}
+{%- endfor %}
+{{ ns.items | length }}  {# Still 0! #}
+
+{# CORRECT - reassign the returned value #}
+{%- set ns = namespace(items=[]) %}
+{%- for item in collection %}
+  {%- set ns.items = ns.items.append(item) %}  {# Returns modified copy, reassign to namespace #}
+{%- endfor %}
+{{ ns.items | length }}  {# Correct! #}
+
+{# ALSO CORRECT - for dicts #}
+{%- set ns = namespace(config={}) %}
+{%- for item in items %}
+  {%- set ns.config = ns.config.update({item.key: item.value}) %}
+{%- endfor %}
+```
+
+**Why This Matters**: Our custom `append()` and `update()` methods return the modified collection specifically to enable this reassignment pattern. Without the reassignment, changes are lost because you're modifying a copy that gets discarded at the end of each iteration.
+
+**When to Use Each Pattern:**
+- **Regular variables**: Use `{%- set _ = list.append(item) %}` (in-place modification works)
+- **Namespace attributes**: Use `{%- set ns.list = ns.list.append(item) %}` (must reassign returned value)
+- **Lists nested in dicts in namespaces**: Use get-append-update pattern (see below)
+
+**Lists Nested in Dicts (Advanced Pattern):**
+
+When you have a dict in a namespace, and that dict contains lists as values, you need a three-step pattern:
+
+```gonja
+{# WRONG - modifications lost! #}
+{%- set ns = namespace(groups={}) %}
+{%- set ns.groups = ns.groups.update({"key": []}) %}
+{%- set _ = ns.groups["key"].append(item) %}  {# ns.groups["key"] returns COPY! #}
+
+{# CORRECT - get, append with reassignment, update #}
+{%- set ns = namespace(groups={}) %}
+{%- set ns.groups = ns.groups.update({"key": []}) %}
+{%- set current_list = ns.groups["key"] %}            {# Get copy of list #}
+{%- set current_list = current_list.append(item) %}   {# Append returns modified copy #}
+{%- set ns.groups = ns.groups.update({"key": current_list}) %}  {# Update dict with new list #}
+```
+
+**Why**: `ns.groups["key"]` returns a COPY of the list. Appending to this copy doesn't modify the dict. You must extract the list, modify it, then update the dict with the modified list.
 
 ### Mutable State with `namespace()`
 
@@ -384,9 +591,38 @@ These are common mistakes when writing Gonja templates. Understanding these will
 {{ ns.count }}  {# Correct value! #}
 ```
 
+**CRITICAL - Dictionaries Also Need Namespace**:
+
+```gonja
+{# WRONG - dict doesn't persist across iterations! #}
+{%- set groups = {} %}
+{%- for item in items %}
+  {%- set groups = groups.update({item.key: item.value}) %}  {# Creates NEW dict each time #}
+{%- endfor %}
+{{ groups }}  {# Empty dict! #}
+
+{# CORRECT - wrap dict in namespace #}
+{%- set ns = namespace(groups={}) %}
+{%- for item in items %}
+  {%- set ns.groups = ns.groups.update({item.key: item.value}) %}
+{%- endfor %}
+{{ ns.groups }}  {# Contains all items! #}
+
+{# ALSO CORRECT - for complex dict building #}
+{%- set ns_groups = namespace(data={}) %}
+{%- for item in items %}
+  {%- if item.key not in ns_groups.data %}
+    {%- set ns_groups.data = ns_groups.data.update({item.key: []}) %}
+  {%- endif %}
+  {%- set _ = ns_groups.data[item.key].append(item.value) %}
+{%- endfor %}
+{%- set final_groups = ns_groups.data %}  {# Extract final dict #}
+```
+
 **When to Use**:
 - Counters and accumulators
 - Deduplication tracking (seen lists/strings)
+- Building dictionaries/maps dynamically
 - Any state that needs to persist across loop iterations or conditional blocks
 
 **Common Namespace Patterns**:
@@ -395,6 +631,7 @@ These are common mistakes when writing Gonja templates. Understanding these will
     count=0,
     seen=[],
     items=[],
+    groups={},
     found=false
 ) %}
 ```

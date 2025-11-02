@@ -398,6 +398,17 @@ make test-coverage
 
 # Build Docker image
 make docker-build
+
+# Test template libraries (Helm charts)
+# IMPORTANT: Use this script when testing template changes to ensure
+# proper helm rendering. Do NOT test library files directly.
+./scripts/test-templates.sh
+
+# Test specific template validation test
+./scripts/test-templates.sh --test test-httproute-method-matching
+
+# Test with debug output
+./scripts/test-templates.sh --test test-httproute-method-matching --dump-rendered --verbose
 ```
 
 ## Development Environment

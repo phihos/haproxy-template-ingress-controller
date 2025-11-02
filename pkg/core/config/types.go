@@ -94,7 +94,7 @@ type ValidationTest struct {
 
 // ValidationAssertion defines a single validation check.
 type ValidationAssertion struct {
-	// Type is the assertion type: "haproxy_valid", "contains", "not_contains", "equals", "jsonpath".
+	// Type is the assertion type: "haproxy_valid", "contains", "not_contains", "match_count", "equals", "jsonpath", "match_order".
 	Type string `yaml:"type"`
 
 	// Description explains what this assertion validates.
@@ -112,6 +112,9 @@ type ValidationAssertion struct {
 
 	// JSONPath is the JSONPath expression to query (for "jsonpath").
 	JSONPath string `yaml:"jsonpath"`
+
+	// Patterns is a list of regex patterns that must appear in the specified order (for "match_order").
+	Patterns []string `yaml:"patterns"`
 }
 
 // PodSelector identifies which HAProxy pods to configure.

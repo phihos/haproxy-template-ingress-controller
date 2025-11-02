@@ -10,7 +10,7 @@ This package provides a Go template engine with Jinja2-like syntax through the G
 - You're building a system that renders the same templates repeatedly with different data
 - You need features like loops, conditionals, filters, and macros in your templates
 
-The engine is thread-safe, so you can render templates concurrently from multiple goroutines without additional synchronization.
+The engine is thread-safe, so you can render templates concurrently from multiple goroutines without additional synchronization. This includes all features: rendering, tracing, and template management operations.
 
 ## Features
 
@@ -901,6 +901,123 @@ Main content here
 
 **Note**: The current API requires all templates to be provided at initialization. Plan your template structure accordingly.
 
+### Custom Tags
+
+#### compute_once - Optimize Expensive Computations
+
+The `compute_once` custom tag prevents redundant execution of expensive template computations. When a template section is wrapped in `compute_once`, it executes only on the first call and skips execution on subsequent calls during the same render.
+
+**Syntax:**
+
+```jinja2
+{%- set result = namespace(data=[], processed=False) %}
+{%- compute_once result %}
+  {# Expensive computation that only runs once #}
+  {%- set result.processed = True %}
+  {%- for item in large_dataset %}
+    {%- set result.data = result.data.append(process(item)) %}
+  {%- endfor %}
+{%- endcompute_once %}
+```
+
+**Key points:**
+- Variable MUST be created before the `compute_once` block
+- Use `namespace()` to create mutable state that persists across includes
+- The tag tracks execution with a marker variable
+- Cache is automatically cleared between `Render()` calls
+
+**Use Cases:**
+
+**1. Prevent redundant analysis across multiple includes:**
+
+```jinja2
+{# main.cfg #}
+{%- set analysis = namespace(routes=[], groups={}) %}
+{%- include "frontend-http" %}
+{%- include "frontend-https" %}
+{%- include "backend-routing" %}
+
+{# frontend-http #}
+{%- compute_once analysis %}
+  {# Analyze all routes once instead of 3 times #}
+  {%- from "route-analyzer" import analyze_routes %}
+  {{- analyze_routes(analysis, all_routes) -}}
+{%- endcompute_once %}
+Use analysis here...
+
+{# frontend-https #}
+{%- compute_once analysis %}
+  {# Skipped - already computed #}
+  {%- from "route-analyzer" import analyze_routes %}
+  {{- analyze_routes(analysis, all_routes) -}}
+{%- endcompute_once %}
+Use same analysis results...
+```
+
+**2. Real-world example from Gateway API:**
+
+The Gateway API template library uses `compute_once` to optimize route analysis. Without it, the `analyze_routes` macro would run 4 times per configuration render, each time iterating over all HTTPRoutes and GRPCRoutes:
+
+```jinja2
+{# gateway.yaml library #}
+{%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+
+{# Used in multiple places - only analyzes once #}
+{%- compute_once analysis %}
+  {%- from "analyze_routes" import analyze_routes %}
+  {{- analyze_routes(analysis, resources) -}}
+{%- endcompute_once %}
+
+{# All subsequent uses see the same analysis results #}
+{% for route in analysis.sorted_routes %}
+  {# Generate HAProxy configuration from analyzed routes #}
+{% endfor %}
+```
+
+This optimization reduces the work by 75% in scenarios with many routes.
+
+**3. Cache expensive filtering or sorting:**
+
+```jinja2
+{%- set filtered = namespace(items=[]) %}
+{%- compute_once filtered %}
+  {%- for item in large_list %}
+    {%- if expensive_condition(item) %}
+      {%- set filtered.items = filtered.items.append(item) %}
+    {%- endif %}
+  {%- endfor %}
+{%- endcompute_once %}
+
+{# Use filtered.items multiple times without recomputing #}
+```
+
+**Performance Impact:**
+
+With `compute_once`, expensive computations execute exactly once regardless of how many templates include them. Without it, each include would re-execute the computation.
+
+**Example impact** (4 call sites with 100 HTTPRoutes):
+- Without `compute_once`: 400 route iterations
+- With `compute_once`: 100 route iterations (75% reduction)
+
+**Debugging:**
+
+Enable template tracing to verify compute_once optimization:
+
+```go
+engine.EnableTracing()
+output, _ := engine.Render("main", context)
+trace := engine.GetTraceOutput()
+
+// Verify expensive computation only appears once
+fmt.Println(trace)
+```
+
+**Limitations:**
+
+- Variable must exist before `compute_once` block (the tag cannot create it)
+- Only works within a single `Render()` call (cache cleared between renders)
+- Not suitable for computations that should run multiple times with different inputs
+
 ## Performance
 
 The library is designed for high performance:
@@ -908,7 +1025,7 @@ The library is designed for high performance:
 - **Compilation**: Templates are compiled once at initialization (~1-10ms per template)
 - **Rendering**: Pre-compiled templates render in microseconds (~10-100µs for typical templates)
 - **Memory**: Compiled templates are cached in memory for zero-cost lookups
-- **Concurrency**: The `TemplateEngine` is safe for concurrent use from multiple goroutines
+- **Concurrency**: The `TemplateEngine` is safe for concurrent use from multiple goroutines. All operations (rendering, tracing, template lookups) use proper synchronization and have been validated with Go's race detector.
 
 **Benchmark example:**
 ```go

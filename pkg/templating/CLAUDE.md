@@ -393,25 +393,52 @@ fmt.Println(trace)
 **Tracing configuration:**
 ```go
 type tracingConfig struct {
-    enabled bool                // Tracing on/off
-    depth   int                 // Current nesting level
-    builder *strings.Builder    // Accumulated trace output
+    enabled bool           // Tracing on/off (protected by mu)
+    mu      sync.Mutex     // Protects enabled flag and traces slice
+    traces  []string       // Accumulated trace outputs from all renders
 }
 ```
+
+**Thread-safety approach:**
+- Per-render state (depth, builder) stored in execution context (isolated per `Render()` call)
+- Shared state (enabled flag, traces slice) protected by mutex
+- Tracing enabled/disabled flag snapshot taken at render start to avoid repeated locking
+- Completed traces appended to shared slice under mutex lock
 
 **Render method integration:**
 ```go
 func (e *TemplateEngine) Render(templateName string, context map[string]interface{}) (string, error) {
-    if e.tracing != nil && e.tracing.enabled {
-        e.trace("Rendering: %s", templateName)
-        e.tracing.depth++
-        startTime := time.Now()
+    // Take thread-safe snapshot of enabled flag
+    e.tracing.mu.Lock()
+    tracingEnabled := e.tracing.enabled
+    e.tracing.mu.Unlock()
 
+    // If tracing is enabled, attach per-render trace state to context
+    var traceBuilder *strings.Builder
+    if tracingEnabled {
+        traceBuilder = &strings.Builder{}
+        ctx.Set("_trace_depth", 0)
+        ctx.Set("_trace_builder", traceBuilder)
+        ctx.Set("_trace_enabled", true)
+
+        e.tracef(ctx, "Rendering: %s", templateName)
+        // Increment depth in context
+        ctx.Set("_trace_depth", 1)
+
+        startTime := time.Now()
         defer func() {
             duration := time.Since(startTime)
-            e.tracing.depth--
-            e.trace("Completed: %s (%.3fms)", templateName,
+            // Decrement depth in context
+            ctx.Set("_trace_depth", 0)
+            e.tracef(ctx, "Completed: %s (%.3fms)", templateName,
                 float64(duration.Microseconds())/1000.0)
+
+            // Store completed trace thread-safely
+            if traceBuilder != nil && traceBuilder.Len() > 0 {
+                e.tracing.mu.Lock()
+                e.tracing.traces = append(e.tracing.traces, traceBuilder.String())
+                e.tracing.mu.Unlock()
+            }
         }()
     }
 
@@ -421,18 +448,21 @@ func (e *TemplateEngine) Render(templateName string, context map[string]interfac
 ```
 
 **Key design decisions:**
+- Per-render isolation: Each `Render()` call gets its own trace builder and depth counter in execution context
+- No shared mutable state during render: Depth and builder are context-local, preventing race conditions
+- Mutex-protected aggregation: Completed traces collected into shared slice under lock
+- Single snapshot: Enabled flag read once per render, stored in context to avoid re-checking shared state
 - Uses `defer` to ensure completion logging even on errors
-- Depth tracking via counter (incremented on entry, decremented on exit)
-- String builder for efficient accumulation
-- Thread-safe: tracing state protected by engine immutability during render
+- Thread-safe for concurrent renders with race detector validation
 
 ### Performance Overhead
 
 Tracing overhead is minimal:
-- Simple render: ~0.001ms overhead per template
+- Simple render: ~0.001-0.002ms overhead per template
 - Complex render: <1% overhead
 - String builder prevents repeated allocations
-- No goroutines or locks during tracing
+- Two mutex operations per render when enabled (snapshot flag, append trace)
+- No contention during rendering (trace building happens in context-local storage)
 
 **Recommendation**: Safe to leave enabled for debugging, but disable in performance-critical production paths.
 
@@ -452,6 +482,7 @@ Tracing overhead is minimal:
 
 ### Testing Tracing
 
+**Basic tracing test:**
 ```go
 func TestTemplateEngine_Tracing(t *testing.T) {
     templates := map[string]string{
@@ -459,7 +490,7 @@ func TestTemplateEngine_Tracing(t *testing.T) {
         "sub":  "content",
     }
 
-    engine, _ := templating.New(templating.EngineTypeGonja, templates)
+    engine, _ := templating.New(templating.EngineTypeGonja, templates, nil, nil)
     engine.EnableTracing()
 
     _, err := engine.Render("main", nil)
@@ -475,6 +506,209 @@ func TestTemplateEngine_Tracing(t *testing.T) {
 
     // Verify nesting (sub should be indented)
     assert.Contains(t, trace, "  Rendering: sub")
+}
+```
+
+**Concurrent tracing test (race detector validation):**
+```go
+func TestTracing_ConcurrentRenders(t *testing.T) {
+    templates := map[string]string{
+        "template1": `Result: {{ value }}`,
+        "template2": `Output: {{ value | upper }}`,
+    }
+
+    engine, _ := templating.New(templating.EngineTypeGonja, templates, nil, nil)
+    engine.EnableTracing()
+
+    // Run concurrent renders
+    const numGoroutines = 10
+    done := make(chan bool, numGoroutines)
+
+    for i := 0; i < numGoroutines; i++ {
+        go func(id int) {
+            defer func() { done <- true }()
+
+            for j := 0; j < 5; j++ {
+                tmpl := fmt.Sprintf("template%d", (j%2)+1)
+                output, err := engine.Render(tmpl, map[string]interface{}{
+                    "value": fmt.Sprintf("goroutine-%d", id),
+                })
+                assert.NoError(t, err)
+                assert.NotEmpty(t, output)
+            }
+        }(i)
+    }
+
+    // Wait for all goroutines to complete
+    for i := 0; i < numGoroutines; i++ {
+        <-done
+    }
+
+    // Verify trace contains entries from all renders
+    trace := engine.GetTraceOutput()
+    assert.NotEmpty(t, trace)
+    assert.Contains(t, trace, "Rendering: template1")
+    assert.Contains(t, trace, "Rendering: template2")
+
+    // Run with race detector: go test -race
+}
+```
+
+## Custom Tags
+
+### compute_once Tag
+
+The `compute_once` custom tag optimizes template rendering by executing expensive computations only once per render, even when the template section is included multiple times.
+
+#### Implementation
+
+The tag is implemented as a Gonja control structure in `engine.go`:
+
+```go
+type ComputeOnceControlStructure struct {
+    location *tokens.Token
+    varName  string          // Variable name to check
+    wrapper  *nodes.Wrapper  // Template body to execute
+}
+
+func (cs *ComputeOnceControlStructure) Execute(r *exec.Renderer, tag *nodes.ControlStructureBlock) error {
+    markerName := "_computed_" + cs.varName
+
+    if r.Environment.Context.Has(markerName) {
+        return nil  // Already computed, skip
+    }
+
+    // Execute body and mark as done
+    err := r.ExecuteWrapper(cs.wrapper)
+    if err != nil {
+        return err
+    }
+
+    r.Environment.Context.Set(markerName, true)
+    return nil
+}
+```
+
+**Key design decisions:**
+
+1. **Marker-based tracking**: Uses hidden `_computed_<varname>` marker in context instead of checking variable state
+2. **Variable must pre-exist**: User creates namespace before compute_once block
+3. **Simple syntax**: Just `{% compute_once varname %}`, no "as" keyword
+4. **Context persistence**: Marker stored in context, cleared automatically between renders
+
+#### Usage Pattern
+
+```go
+// Template setup
+templates := map[string]string{
+    "main": `
+{%- set analysis = namespace(data=[]) %}
+{%- include "expensive" %}
+{%- include "expensive" %}`,
+    "expensive": `
+{%- compute_once analysis %}
+  {%- for item in items %}
+    {%- set analysis.data = analysis.data.append(item) %}
+  {%- endfor %}
+{%- endcompute_once %}`,
+}
+
+// The expensive loop runs only ONCE, not twice
+```
+
+#### Why This Design
+
+**Alternative considered**: Convention-based variable name inside body (e.g., expect body to set "result")
+
+**Problem**: Gonja's `{% set %}` inside `ExecuteWrapper()` creates local variables that don't persist to parent context.
+
+**Solution**: Require variable creation before compute_once, use marker to track execution state.
+
+**Benefits:**
+- Works with Gonja's scoping rules (not against them)
+- Clear ownership (user creates variable, compute_once guards execution)
+- Reliable detection (marker-based, not heuristic)
+- Simple error messages (can check if variable exists)
+
+#### Testing
+
+```go
+func TestComputeOnce_ExecutesOnlyOnce(t *testing.T) {
+    templates := map[string]string{
+        "main": `
+{%- set counter = namespace(value=0) %}
+{%- include "increment" -%}
+{%- include "increment" -%}
+{%- include "increment" -%}
+Result: {{ counter.value }}`,
+        "increment": `
+{%- compute_once counter %}
+  {%- set counter.value = counter.value + 1 %}
+{%- endcompute_once -%}`,
+    }
+
+    engine, _ := templating.New(templating.EngineTypeGonja, templates)
+    output, _ := engine.Render("main", nil)
+
+    // Without compute_once: counter.value would be 3
+    // With compute_once: counter.value is 1
+    assert.Contains(t, output, "Result: 1")
+}
+```
+
+#### Real-World Use Case
+
+Gateway API route analysis optimization (gateway.yaml:323-328, 499-504):
+
+```jinja2
+{#- Compute route analysis once per render (cached across all includes) #}
+{%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+{%- compute_once analysis %}
+  {%- from "analyze_routes" import analyze_routes %}
+  {{- analyze_routes(analysis, resources) -}}
+{%- endcompute_once %}
+```
+
+**Impact:** Reduces analyze_routes calls from 4 to 1 per render (75% reduction).
+
+#### Extension Pattern
+
+To add new custom tags, follow this pattern:
+
+1. **Define control structure type:**
+```go
+type MyCustomTag struct {
+    location *tokens.Token
+    // ... tag-specific fields
+    wrapper  *nodes.Wrapper
+}
+```
+
+2. **Implement Execute method:**
+```go
+func (t *MyCustomTag) Execute(r *exec.Renderer, tag *nodes.ControlStructureBlock) error {
+    // Tag logic here
+    return r.ExecuteWrapper(t.wrapper)
+}
+```
+
+3. **Implement parser:**
+```go
+func myCustomTagParser(p *parser.Parser, args *parser.Parser) (nodes.ControlStructure, error) {
+    // Parse tag syntax
+    wrapper, _, err := p.WrapUntil("endmycustomtag")
+    if err != nil {
+        return nil, err
+    }
+    return &MyCustomTag{wrapper: wrapper}, nil
+}
+```
+
+4. **Register in environment creation:**
+```go
+customControlStructures := map[string]parser.ControlStructureParser{
+    "compute_once": computeOnceParser,
+    "mycustomtag": myCustomTagParser,  // Add new tag
 }
 ```
 

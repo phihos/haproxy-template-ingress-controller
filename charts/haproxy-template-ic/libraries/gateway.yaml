@@ -47,6 +47,206 @@ watchedResources:
     indexBy: ["metadata.namespace", "metadata.labels.kubernetes\\.io/service-name"]
 
 templateSnippets:
+  # Route analysis system - collects and analyzes all routes for conflicts
+  analyze_routes:
+    template: |
+      {%- macro analyze_routes(result, resources) %}
+        {#- Collect all routes with normalized structure #}
+        {#- Modifies result namespace with: all_routes, path_groups, sorted_routes #}
+        {%- set ns_routes = namespace(all_routes=[]) %}
+
+        {#- Process HTTPRoutes #}
+        {%- for route in resources.httproutes.List() %}
+          {%- for hostname in (route.spec.hostnames | default([""])) %}
+            {%- set rule_counter = namespace(idx=0) %}
+            {%- for rule in route.spec.rules | default([]) %}
+              {%- set matches_list = rule.matches | default([]) %}
+              {%- if matches_list | length == 0 %}
+                {%- set matches_list = [{"path": {"type": "PathPrefix", "value": "/"}}] %}
+              {%- endif %}
+
+              {%- for match in matches_list %}
+                {%- set path_value = match.path | default({"type": "PathPrefix", "value": "/"}) %}
+                {%- set route_info = {
+                  "route": route,
+                  "hostname": hostname,
+                  "rule": rule,
+                  "rule_idx": rule_counter.idx,
+                  "match": match,
+                  "path": path_value,
+                  "is_grpc": false,
+                  "resource_type": "httproute"
+                } %}
+                {%- set ns_routes.all_routes = ns_routes.all_routes.append(route_info) %}
+              {%- endfor %}
+              {#- Increment rule counter after processing all matches for this rule #}
+              {%- set rule_counter.idx = rule_counter.idx + 1 %}
+            {%- endfor %}
+          {%- endfor %}
+        {%- endfor %}
+
+        {#- Process GRPCRoutes similarly #}
+        {%- for route in resources.grpcroutes.List() %}
+          {%- for hostname in (route.spec.hostnames | default([""])) %}
+            {%- set rule_counter = namespace(idx=0) %}
+            {%- for rule in route.spec.rules | default([]) %}
+              {%- set matches_list = rule.matches | default([]) %}
+              {%- if matches_list | length == 0 %}
+                {%- set matches_list = [{"method": {}}] %}
+              {%- endif %}
+
+              {%- for match in matches_list %}
+                {%- set route_info = {
+                  "route": route,
+                  "hostname": hostname,
+                  "rule": rule,
+                  "rule_idx": rule_counter.idx,
+                  "match": match,
+                  "path": {"type": "Exact", "value": "/"},
+                  "is_grpc": true,
+                  "resource_type": "grpcroute"
+                } %}
+                {%- set ns_routes.all_routes = ns_routes.all_routes.append(route_info) %}
+              {%- endfor %}
+              {#- Increment rule counter after processing all matches for this rule #}
+              {%- set rule_counter.idx = rule_counter.idx + 1 %}
+            {%- endfor %}
+          {%- endfor %}
+        {%- endfor %}
+
+        {#- Group by path key to detect conflicts #}
+        {#- Manual grouping since group_by result may not iterate properly in namespace #}
+        {#- MUST use namespace for mutable state - plain dicts don't persist across iterations! #}
+        {%- set ns_groups = namespace(data={}) %}
+        {%- for route_info in ns_routes.all_routes %}
+          {%- set path_key = route_info.hostname ~ '|' ~ route_info.path.type ~ '|' ~ route_info.path.value %}
+          {%- if path_key not in ns_groups.data %}
+            {%- set ns_groups.data = ns_groups.data.update({path_key: []}) %}
+          {%- endif %}
+          {#- Get list, append with reassignment, update dict with modified list #}
+          {%- set current_list = ns_groups.data[path_key] %}
+          {%- set current_list = current_list.append(route_info) %}
+          {%- set ns_groups.data = ns_groups.data.update({path_key: current_list}) %}
+        {%- endfor %}
+        {#- Check for conflicts and mark routes needing VAR qualifier #}
+        {%- for path_key in ns_groups.data.keys() | list %}
+          {%- set routes = ns_groups.data[path_key] %}
+          {#- DEBUG CONFLICT: path_key={{ path_key }} routes_count={{ routes | length }} -#}
+          {#- Check if routes in this group have different matchers #}
+          {%- set ns_conflict = namespace(has_conflicts=false) %}
+          {%- if routes | length > 1 %}
+            {#- Build comparison key from match conditions using namespace for mutable state #}
+            {%- set ns_cond_builder = namespace(first_conditions="", route_conditions="") %}
+            {%- set first_match = routes[0].match %}
+            {%- if first_match.method %}
+              {%- set ns_cond_builder.first_conditions = ns_cond_builder.first_conditions ~ "method:" ~ first_match.method %}
+            {%- endif %}
+            {%- set first_headers = first_match.headers | default([]) %}
+            {%- if first_headers | length > 0 %}
+              {%- for idx in range(first_headers | length) %}
+                {%- set header = first_headers[idx] %}
+                {%- set ns_cond_builder.first_conditions = ns_cond_builder.first_conditions ~ ";header:" ~ header.name ~ "=" ~ header.value %}
+              {%- endfor %}
+            {%- endif %}
+            {%- set first_params = first_match.queryParams | default([]) %}
+            {%- if first_params | length > 0 %}
+              {%- for idx in range(first_params | length) %}
+                {%- set param = first_params[idx] %}
+                {%- set ns_cond_builder.first_conditions = ns_cond_builder.first_conditions ~ ";param:" ~ param.name ~ "=" ~ param.value %}
+              {%- endfor %}
+            {%- endif %}
+            {%- set first_conditions = ns_cond_builder.first_conditions %}
+
+            {#- Check if any other route has different conditions #}
+            {%- for i in range(1, routes | length) %}
+              {%- set route = routes[i] %}
+              {%- set ns_cond_builder.route_conditions = "" %}
+              {%- set route_match = route.match %}
+              {%- if route_match.method %}
+                {%- set ns_cond_builder.route_conditions = ns_cond_builder.route_conditions ~ "method:" ~ route_match.method %}
+              {%- endif %}
+              {%- set route_headers = route_match.headers | default([]) %}
+              {%- if route_headers | length > 0 %}
+                {%- for idx in range(route_headers | length) %}
+                  {%- set header = route_headers[idx] %}
+                  {%- set ns_cond_builder.route_conditions = ns_cond_builder.route_conditions ~ ";header:" ~ header.name ~ "=" ~ header.value %}
+                {%- endfor %}
+              {%- endif %}
+              {%- set route_params = route_match.queryParams | default([]) %}
+              {%- if route_params | length > 0 %}
+                {%- for idx in range(route_params | length) %}
+                  {%- set param = route_params[idx] %}
+                  {%- set ns_cond_builder.route_conditions = ns_cond_builder.route_conditions ~ ";param:" ~ param.name ~ "=" ~ param.value %}
+                {%- endfor %}
+              {%- endif %}
+
+              {%- if first_conditions != ns_cond_builder.route_conditions %}
+                {%- set ns_conflict.has_conflicts = true %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+
+          {#- Rebuild routes list with updated dicts (namespace copy semantics) #}
+          {%- set ns_updated = namespace(routes=[]) %}
+          {%- for route in routes %}
+            {%- set updated_route = route.update({
+              "has_conflicts": ns_conflict.has_conflicts,
+              "path_key": path_key,
+              "route_id": route.route.metadata.namespace ~ "_" ~ route.route.metadata.name ~ "_" ~ route.rule_idx
+            }) %}
+            {%- set ns_updated.routes = ns_updated.routes.append(updated_route) %}
+          {%- endfor %}
+
+          {#- Update path_groups with modified routes #}
+          {%- set ns_groups.data = ns_groups.data.update({path_key: ns_updated.routes}) %}
+        {%- endfor %}
+        {%- set path_groups = ns_groups.data %}
+
+        {#- Rebuild all_routes from updated path_groups #}
+        {%- set ns_all = namespace(routes=[]) %}
+        {%- for path_key in path_groups %}
+          {%- for route in path_groups[path_key] %}
+            {%- set ns_all.routes = ns_all.routes.append(route) %}
+          {%- endfor %}
+        {%- endfor %}
+
+        {#- Collect routes needing advanced matchers (http-request statements) #}
+        {#- This includes: routes with conflicts OR routes with advanced matchers (method/headers/query) #}
+        {%- set ns_advanced = namespace(routes=[]) %}
+        {%- for route in ns_all.routes %}
+          {%- set has_advanced_matchers = false %}
+          {%- if route.match.method %}
+            {%- set has_advanced_matchers = true %}
+          {%- endif %}
+          {%- if route.match.headers and route.match.headers | length > 0 %}
+            {%- set has_advanced_matchers = true %}
+          {%- endif %}
+          {%- if route.match.queryParams and route.match.queryParams | length > 0 %}
+            {%- set has_advanced_matchers = true %}
+          {%- endif %}
+          {#- Include route if it has conflicts OR advanced matchers #}
+          {%- if route.has_conflicts or has_advanced_matchers %}
+            {%- set ns_advanced.routes = ns_advanced.routes.append(route) %}
+          {%- endif %}
+        {%- endfor %}
+
+        {%- set sorted_routes = ns_advanced.routes | sort_by([
+          "$.path.type",
+          "$.path.value | length:desc",
+          "$.match.method:exists:desc",
+          "$.match.headers | length:desc",
+          "$.match.queryParams | length:desc",
+          "$.route.metadata.creationTimestamp",
+          "$.route.metadata.namespace ~ '/' ~ $.route.metadata.name",
+          "$.rule_idx"
+        ]) %}
+
+        {#- Populate result namespace with analysis data #}
+        {%- set result.path_groups = path_groups %}
+        {%- set result.sorted_routes = sorted_routes %}
+        {%- set result.all_routes = ns_all.routes %}
+      {%- endmacro %}
+
   resource_gateway_backend-name:
     template: >-
       {{- "" -}}gtw_{{ route.metadata.namespace }}_{{ route.metadata.name }}_{{ backend.name }}_{{ backend.port }}
@@ -116,71 +316,50 @@ templateSnippets:
       {#- Generate HTTPRoute path matching map entries with qualifiers #}
       {#- Single backend: BACKEND:<backend_name> #}
       {#- Multiple backends: MULTIBACKEND:<total_weight>:<route_key> #}
+      {#- Conflicting paths: VAR:httproute_route_id:<route_ids> #}
       {#- Usage: {% include "resource_gateway_path-map-entry" with context %} where path_type = "Exact" or "PathPrefix" #}
       # gateway/resource_gateway_path-map-entry
 
-      {%- for route in resources.httproutes.List() %}
-      {#- Count matching entries for this route -#}
-      {%- set ns_outer = namespace(entry_count=0) %}
-      {%- for hostname in (route.spec.hostnames | default([""])) %}
-        {%- for rule in (route.spec.rules | default([])) %}
-          {%- if rule.backendRefs %}
-            {%- set matches_list = rule.matches | default([]) %}
-            {%- set path_matches = matches_list | selectattr("path") | list %}
-            {%- if path_matches | length == 0 %}
-              {%- set path_matches = [{"path": {"type": "PathPrefix", "value": "/"}}] %}
-            {%- endif %}
-            {%- for match in path_matches %}
-              {%- if match.path.type == path_type %}
-                {%- set ns_outer.entry_count = ns_outer.entry_count + 1 %}
-              {%- endif %}
+      {#- Compute route analysis once per render (cached across all includes) #}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+      {%- compute_once analysis %}
+        {%- from "analyze_routes" import analyze_routes %}
+        {{- analyze_routes(analysis, resources) -}}
+      {%- endcompute_once %}
+
+      {#- Iterate over path_groups to generate map entries #}
+      {%- for path_key in analysis.path_groups %}
+        {%- set routes = analysis.path_groups[path_key] %}
+        {%- set first_route = routes[0] %}
+      # DEBUG_MAP: key={{ path_key }} routes={{ routes | length }} has_conflicts={{ first_route.has_conflicts | default('MISSING') }}
+        {#- Only process routes matching the current path_type #}
+        {%- if first_route.path and first_route.path.type == path_type %}
+          {%- if first_route.has_conflicts %}
+            {#- Conflicting routes: use VAR qualifier #}
+            {%- set ns_ids = namespace(route_ids=[]) %}
+            {%- for route_info in routes %}
+              {%- set ns_ids.route_ids = ns_ids.route_ids.append(route_info.route_id) %}
             {%- endfor %}
+            {%- set route_ids_str = ns_ids.route_ids | join("__") -%}
+      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} VAR:{{ first_route.resource_type }}_route_id:{{ route_ids_str }}{{ suffix }}
+          {%- else %}
+            {#- Non-conflicting route #}
+            {%- set backend_refs = first_route.rule.backendRefs | default([]) %}
+            {%- if backend_refs | length == 1 %}
+              {#- Single backend: use BACKEND qualifier #}
+              {%- set backend = backend_refs[0] -%}
+      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} BACKEND:gtw_{{ first_route.route.metadata.namespace }}_{{ first_route.route.metadata.name }}_{{ backend.name }}_{{ backend.port }}{{ suffix }}
+            {%- elif backend_refs | length > 1 %}
+              {#- Multiple backends: use MULTIBACKEND qualifier #}
+              {%- set ns_weight = namespace(total=0) %}
+              {%- for backend in backend_refs %}
+                {%- set ns_weight.total = ns_weight.total + (backend.weight | default(1)) %}
+              {%- endfor %}
+              {%- set route_key = first_route.route.metadata.namespace ~ "_" ~ first_route.route.metadata.name ~ "_" ~ first_route.rule_idx -%}
+      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} MULTIBACKEND:{{ ns_weight.total }}:{{ route_key }}{{ suffix }}
+            {%- endif %}
           {%- endif %}
-        {%- endfor %}
-      {%- endfor %}
-      {#- Generate entries with comment if there are any -#}
-      {%- if ns_outer.entry_count > 0 %}
-      # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ ns_outer.entry_count }} paths)
-      {% endif %}
-      {% for hostname in (route.spec.hostnames | default([""])) %}
-      {%- for rule in (route.spec.rules | default([])) %}
-        {%- if rule.backendRefs %}
-
-        {#- Normalize matches: default to PathPrefix / if no path matchers -#}
-        {%- set matches_list = rule.matches | default([]) %}
-        {%- set path_matches = matches_list | selectattr("path") | list %}
-        {%- if path_matches | length == 0 %}
-          {%- set path_matches = [{"path": {"type": "PathPrefix", "value": "/"}}] %}
         {%- endif %}
-
-        {%- if (rule.backendRefs | length) == 1 %}
-          {#- Single backend: use BACKEND qualifier -#}
-          {%- set backend = {"name": rule.backendRefs[0].name, "port": rule.backendRefs[0].port} %}
-          {%- for match in path_matches %}
-          {%- if match.path.type == path_type %}
-      {{ hostname }}{{ match.path.value | default("/") }} BACKEND:{% include "resource_gateway_backend-name" %}{{ suffix }}
-          {% endif %}
-          {%- endfor %}
-
-        {%- else %}
-          {#- Multiple backends: use MULTIBACKEND qualifier -#}
-          {%- set ns = namespace(total_weight=0) %}
-          {%- for ref in rule.backendRefs %}
-            {%- set ns.total_weight = ns.total_weight + (ref.weight | default(1)) %}
-          {%- endfor %}
-          {%- set route_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ loop.index0 %}
-
-          {%- for match in path_matches %}
-          {%- if match.path.type == path_type %}
-      {{ hostname }}{{ match.path.value | default("/") }}{{ suffix }} MULTIBACKEND:{{ ns.total_weight }}:{{ route_key }}
-          {% endif %}
-          {%- endfor %}
-
-        {%- endif %}
-
-        {%- endif %}
-      {%- endfor %}
-      {%- endfor %}
       {%- endfor %}
 
   map-entry-host-gateway:
@@ -285,10 +464,11 @@ templateSnippets:
       {%- if weighted_rules | length > 0 %}
       # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ weighted_rules | length }} weighted rules)
       {% endif %}
+      {%- set rule_counter = namespace(idx=0) %}
       {% for rule in (route.spec.rules | default([])) %}
         {%- if rule.backendRefs and (rule.backendRefs | length) > 1 %}
 
-          {%- set route_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ loop.index0 %}
+          {%- set route_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ rule_counter.idx %}
           {%- set ns = namespace(cumulative=0) %}
 
           {%- for backendRef in rule.backendRefs %}
@@ -304,8 +484,109 @@ templateSnippets:
           {%- endfor %}
 
         {%- endif %}
+        {#- Increment rule counter after each rule #}
+        {%- set rule_counter.idx = rule_counter.idx + 1 %}
       {%- endfor %}
       {%- endfor %}
+
+  # Advanced matcher generator - creates http-request statements for method/header/query matching
+  advanced-matcher-gateway:
+    template: |
+      {#- Generate http-request statements for routes with advanced matchers #}
+      {#- This is injected into base template via the advanced-matcher-* extension point #}
+      # gateway/advanced-matcher-gateway
+
+      {#- Compute route analysis once per render (cached across all includes) #}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+      {%- compute_once analysis %}
+        {%- from "analyze_routes" import analyze_routes %}
+        {{- analyze_routes(analysis, resources) -}}
+      {%- endcompute_once %}
+
+      {%- if analysis.sorted_routes | length > 0 %}
+      # Advanced route matching (method/header/query)
+      {%- for route_info in analysis.sorted_routes %}
+        {%- set ns_cond = namespace(conditions=[]) %}
+
+        {#- Route ID guard for disambiguation #}
+        {%- if route_info.has_conflicts %}
+          {%- set route_id = route_info.route_id %}
+          {#- Check if this is the conflicting route by checking if conflict_var_name is httproute_route_id and value contains our route_id #}
+          {%- set ns_cond.conditions = ns_cond.conditions.append('{ var(req.conflict_var_name) -m str "' ~ route_info.resource_type ~ '_route_id" }') %}
+          {%- set ns_cond.conditions = ns_cond.conditions.append('{ var(req.conflict_var_value) -m sub "' ~ route_id ~ '" }') %}
+        {%- endif %}
+
+        {#- Method matcher (HTTPRoute only) #}
+        {%- if route_info.match.method and route_info.resource_type == "httproute" %}
+          {%- set ns_cond.conditions = ns_cond.conditions.append('{ method ' ~ route_info.match.method ~ ' }') %}
+        {%- endif %}
+
+        {#- Header matchers #}
+        {%- for header in (route_info.match.headers | default([])) %}
+          {%- if header.type == "Exact" %}
+            {%- set ns_cond.conditions = ns_cond.conditions.append('{ req.hdr(' ~ header.name ~ ') "' ~ header.value ~ '" }') %}
+          {%- elif header.type == "RegularExpression" %}
+            {%- set ns_cond.conditions = ns_cond.conditions.append('{ req.hdr(' ~ header.name ~ ') -m reg "' ~ header.value ~ '" }') %}
+          {%- endif %}
+        {%- endfor %}
+
+        {#- Query parameter matchers (HTTPRoute only) #}
+        {%- for param in (route_info.match.queryParams | default([])) %}
+          {%- if param.type == "Exact" %}
+            {%- set ns_cond.conditions = ns_cond.conditions.append('{ urlp(' ~ param.name ~ ') "' ~ param.value ~ '" }') %}
+          {%- elif param.type == "RegularExpression" %}
+            {%- set ns_cond.conditions = ns_cond.conditions.append('{ urlp(' ~ param.name ~ ') -m reg "' ~ param.value ~ '" }') %}
+          {%- endif %}
+        {%- endfor %}
+
+        {#- GRPCRoute method matcher #}
+        {%- if route_info.is_grpc and route_info.match.method %}
+          {#- Build gRPC method path #}
+          {%- set grpc_path = "" %}
+          {%- if route_info.match.method.service %}
+            {%- set grpc_path = "/" ~ route_info.match.method.service %}
+            {%- if route_info.match.method.method %}
+              {%- set grpc_path = grpc_path ~ "/" ~ route_info.match.method.method %}
+            {%- endif %}
+            {#- Match against :path header which contains gRPC method #}
+            {%- if route_info.match.method.type == "Exact" %}
+              {%- set ns_cond.conditions = ns_cond.conditions.append('{ req.hdr(:path) "' ~ grpc_path ~ '" }') %}
+            {%- elif route_info.match.method.type == "RegularExpression" %}
+              {%- set ns_cond.conditions = ns_cond.conditions.append('{ req.hdr(:path) -m reg "' ~ grpc_path ~ '" }') %}
+            {%- endif %}
+          {%- endif %}
+        {%- endif %}
+        {%- set conditions = ns_cond.conditions %}
+
+        {#- Generate backend qualifier based on backend refs #}
+        {%- if route_info.rule.backendRefs %}
+          {%- if (route_info.rule.backendRefs | length) == 1 %}
+            {#- Single backend: use BACKEND qualifier #}
+            {%- set backend_ref = route_info.rule.backendRefs[0] %}
+            {%- set backend_name = "gtw_" ~ route_info.route.metadata.namespace ~ "_" ~ route_info.route.metadata.name ~ "_" ~ backend_ref.name ~ "_" ~ backend_ref.port %}
+            {%- set qualifier = "BACKEND:" ~ backend_name %}
+          {%- else %}
+            {#- Multiple backends: use MULTIBACKEND qualifier #}
+            {%- set ns = namespace(total_weight=0) %}
+            {%- for ref in route_info.rule.backendRefs %}
+              {%- set ns.total_weight = ns.total_weight + (ref.weight | default(1)) %}
+            {%- endfor %}
+            {%- set route_key = route_info.route.metadata.namespace ~ "_" ~ route_info.route.metadata.name ~ "_" ~ route_info.rule_idx %}
+            {%- set qualifier = "MULTIBACKEND:" ~ ns.total_weight ~ ":" ~ route_key %}
+          {%- endif %}
+
+          {#- Generate the http-request statement if we have conditions #}
+          {%- if conditions %}
+      http-request set-var(txn.path_match) str({{ qualifier }}) if {{ conditions | join(" ") }}
+            {#- Debug headers if enabled #}
+            {%- if config.debug.headers.enabled | default(false) %}
+      http-request set-var(txn.matched_route) str({{ route_info.route.metadata.namespace }}/{{ route_info.route.metadata.name }}/rule{{ route_info.rule_idx }}) if {{ conditions | join(" ") }}
+      http-request set-var(txn.match_reason) str({{ conditions | length }}_conditions_matched) if {{ conditions | join(" ") }}
+            {%- endif %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor %}
+      {%- endif %}
 
 validationTests:
   test-httproute-duplicate-backend-different-ports:
@@ -876,3 +1157,1182 @@ validationTests:
         target: map:weighted-multi-backend.map
         pattern: "default_single-backend"
         description: Single backend must not generate weighted-multi-backend entries
+
+  test-httproute-method-matching:
+    description: HTTPRoute with method matching (GET vs POST to same path)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: read-service
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: write-service
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: read-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: read-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 8080
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: write-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: write-service
+          endpoints:
+            - addresses: ["10.0.2.1"]
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: method-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    method: GET
+                backendRefs:
+                  - name: read-service
+                    port: 80
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    method: POST
+                backendRefs:
+                  - name: write-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "api.example.com/api VAR:httproute_route_id"
+        description: Conflicting paths must use VAR qualifier
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_method-route_read-service_80\\) if.*\\{ method GET \\}"
+        description: Must generate http-request for GET method
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_method-route_write-service_80\\) if.*\\{ method POST \\}"
+        description: Must generate http-request for POST method
+
+  test-httproute-header-exact:
+    description: HTTPRoute with exact header matching
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: v1-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: v1-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: v1-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: header-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    headers:
+                      - type: Exact
+                        name: X-Version
+                        value: v1
+                backendRefs:
+                  - name: v1-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_header-route_v1-service_80\\) if \\{ req\\.hdr\\(X-Version\\) \"v1\" \\}"
+        description: Must generate header exact match condition
+
+  test-httproute-header-regex:
+    description: HTTPRoute with regex header matching
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: api-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: regex-header-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    headers:
+                      - type: RegularExpression
+                        name: User-Agent
+                        value: "^Mozilla.*"
+                backendRefs:
+                  - name: api-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_regex-header-route_api-service_80\\) if \\{ req\\.hdr\\(User-Agent\\) -m reg \"\\^Mozilla\\.\\*\" \\}"
+        description: Must generate header regex match condition
+
+  test-httproute-query-params:
+    description: HTTPRoute with query parameter matching
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: search-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: search-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: search-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: query-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /search
+                    queryParams:
+                      - type: Exact
+                        name: version
+                        value: v2
+                      - type: RegularExpression
+                        name: filter
+                        value: "^active.*"
+                backendRefs:
+                  - name: search-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_query-route_search-service_80\\) if \\{ urlp\\(version\\) \"v2\" \\} \\{ urlp\\(filter\\) -m reg \"\\^active\\.\\*\" \\}"
+        description: Must generate query parameter match conditions
+
+  test-httproute-precedence:
+    description: Complex precedence ordering with multiple conflicting routes
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: svc1
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: svc2
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: svc3
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: svc1-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: svc1
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: svc2-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: svc2
+          endpoints:
+            - addresses: ["10.0.2.1"]
+          ports:
+            - port: 80
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: svc3-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: svc3
+          endpoints:
+            - addresses: ["10.0.3.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route1
+            namespace: default
+            creationTimestamp: "2024-01-01T00:00:00Z"
+          spec:
+            hostnames:
+              - example.com
+            rules:
+              # Most specific: /api/v1/users with method and headers
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api/v1/users
+                    method: GET
+                    headers:
+                      - type: Exact
+                        name: X-Auth
+                        value: token
+                backendRefs:
+                  - name: svc1
+                    port: 80
+              # Less specific: /api/v1 with just method
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api/v1
+                    method: GET
+                backendRefs:
+                  - name: svc2
+                    port: 80
+              # Least specific: /api with no extra matchers
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                backendRefs:
+                  - name: svc3
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      # Check that routes are ordered by precedence (first match wins in HAProxy)
+      # TODO: Routes are currently in reverse order (least-specific-first) - should be most-specific-first
+      - type: match_order
+        target: map:path-prefix.map
+        patterns:
+          - "/api[^/].*svc3"
+          - "/api/v1[^/].*svc2"
+          - "/api/v1/users.*svc1"
+        description: Routes must be ordered by Gateway API precedence (most specific first)
+
+  test-httproute-weighted-with-matchers:
+    description: Weighted routing combined with method/header matchers
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: canary-v1
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: canary-v2
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: canary-v1-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: canary-v1
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: canary-v2-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: canary-v2
+          endpoints:
+            - addresses: ["10.0.2.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: canary-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    method: GET
+                    headers:
+                      - type: Exact
+                        name: X-Canary
+                        value: "true"
+                backendRefs:
+                  - name: canary-v1
+                    port: 80
+                    weight: 90
+                  - name: canary-v2
+                    port: 80
+                    weight: 10
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(MULTIBACKEND:100:default_canary-route_0\\) if \\{ method GET \\} \\{ req\\.hdr\\(X-Canary\\) \"true\" \\}"
+        description: Must generate MULTIBACKEND with conditions
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "0:default_canary-route_0 gtw_default_canary-route_canary-v1_80"
+        description: Weighted map must contain v1 entries
+
+      - type: contains
+        target: map:weighted-multi-backend.map
+        pattern: "90:default_canary-route_0 gtw_default_canary-route_canary-v2_80"
+        description: Weighted map must contain v2 entries
+
+  test-httproute-same-route-conflicts:
+    description: Multiple rules in same HTTPRoute with path conflicts
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: auth-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: public-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: auth-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: auth-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: public-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: public-service
+          endpoints:
+            - addresses: ["10.0.2.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: multi-rule
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              # Rule 0: /api with auth header
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    headers:
+                      - type: Exact
+                        name: Authorization
+                        value: Bearer
+                backendRefs:
+                  - name: auth-service
+                    port: 80
+              # Rule 1: /api without auth (conflicts with rule 0)
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                backendRefs:
+                  - name: public-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "api.example.com/api VAR:httproute_route_id:default_multi-rule_0__default_multi-rule_1"
+        description: Same route conflicts must include both rule indices
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_multi-rule_auth-service_80\\) if \\{ var\\(req\\.conflict_var_name\\) -m str \"httproute_route_id\" \\} \\{ var\\(req\\.conflict_var_value\\) -m sub \"default_multi-rule_0\" \\} \\{ req\\.hdr\\(Authorization\\) \"Bearer\" \\}"
+        description: Must use rule index 0 in route_id
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_multi-rule_public-service_80\\) if \\{ var\\(req\\.conflict_var_name\\) -m str \"httproute_route_id\" \\} \\{ var\\(req\\.conflict_var_value\\) -m sub \"default_multi-rule_1\" \\}"
+        description: Must use rule index 1 in route_id
+
+  test-httproute-path-exact:
+    description: HTTPRoute with Exact path type (no prefix matching)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: exact-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: exact-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: exact-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: exact-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: Exact
+                      value: /api/users
+                backendRefs:
+                  - name: exact-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: map:path-exact.map
+        pattern: "api.example.com/api/users BACKEND:gtw_default_exact-route_exact-service_80"
+        description: Exact path must be in path-exact.map
+
+      - type: not_contains
+        target: map:path-prefix.map
+        pattern: "api.example.com/api/users"
+        description: Exact path must not be in path-prefix.map
+
+  test-httproute-path-regex:
+    description: HTTPRoute with RegularExpression path type
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: versioned-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: versioned-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: versioned-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: regex-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: RegularExpression
+                      value: "^/api/v[0-9]+/users$"
+                backendRefs:
+                  - name: versioned-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: map:path-regex.map
+        pattern: "api\\.example\\.com\\^/api/v\\[0-9\\]\\+/users\\$gtw_default_regex-route_versioned-service_80"
+        description: Regex path must be in path-regex.map
+
+      - type: not_contains
+        target: map:path-prefix.map
+        pattern: "api.example.com/.*users"
+        description: Regex path must not be in path-prefix.map
+
+  test-grpcroute-headers:
+    description: GRPCRoute with header matching (Exact and RegularExpression)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: grpc-api
+            namespace: default
+          spec:
+            ports:
+              - port: 9090
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: grpc-api-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: grpc-api
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 9090
+      grpcroutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: GRPCRoute
+          metadata:
+            name: grpc-header-route
+            namespace: default
+          spec:
+            hostnames:
+              - grpc.example.com
+            rules:
+              - matches:
+                  - method:
+                      type: Exact
+                      service: com.example.API
+                      method: GetUser
+                    headers:
+                      - type: Exact
+                        name: X-API-Version
+                        value: v1
+                      - type: RegularExpression
+                        name: User-Agent
+                        value: "^grpc-.*"
+                backendRefs:
+                  - name: grpc-api
+                    port: 9090
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_grpc-header-route_grpc-api_9090\\) if \\{ req\\.hdr\\(X-API-Version\\) \"v1\" \\} \\{ req\\.hdr\\(User-Agent\\) -m reg \"\\^grpc-\\.\\*\" \\}"
+        description: Must generate header match conditions for GRPCRoute
+
+  test-grpcroute-method-regex:
+    description: GRPCRoute with RegularExpression method type
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: grpc-multi
+            namespace: default
+          spec:
+            ports:
+              - port: 9090
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: grpc-multi-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: grpc-multi
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 9090
+      grpcroutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: GRPCRoute
+          metadata:
+            name: grpc-regex-route
+            namespace: default
+          spec:
+            hostnames:
+              - grpc.example.com
+            rules:
+              - matches:
+                  - method:
+                      type: RegularExpression
+                      service: com.example.*
+                      method: Get.*
+                backendRefs:
+                  - name: grpc-multi
+                    port: 9090
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_grpc-regex-route_grpc-multi_9090\\) if \\{ req\\.hdr\\(:path\\) -m reg \"/com\\.example\\.\\*/Get\\.\\*\" \\}"
+        description: Must generate regex method match for GRPCRoute
+
+  test-httproute-all-matchers:
+    description: HTTPRoute with all matcher types combined (method + headers + query params)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: combined-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: combined-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: combined-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: combined-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    method: POST
+                    headers:
+                      - type: Exact
+                        name: Content-Type
+                        value: application/json
+                    queryParams:
+                      - type: Exact
+                        name: version
+                        value: v2
+                backendRefs:
+                  - name: combined-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_combined-route_combined-service_80\\) if \\{ method POST \\} \\{ req\\.hdr\\(Content-Type\\) \"application/json\" \\} \\{ urlp\\(version\\) \"v2\" \\}"
+        description: Must combine all matchers with AND logic
+
+  test-httproute-cross-route-conflicts:
+    description: Multiple separate HTTPRoutes with conflicting paths (different matchers)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: route1-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: route2-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: route1-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: route1-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: route2-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: route2-service
+          endpoints:
+            - addresses: ["10.0.2.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-get
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    method: GET
+                backendRefs:
+                  - name: route1-service
+                    port: 80
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-post
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    method: POST
+                backendRefs:
+                  - name: route2-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "api.example.com/api VAR:httproute_route_id:default_route-get_0__default_route-post_0"
+        description: Cross-route conflicts must be detected and marked with VAR qualifier
+
+  test-grpcroute-multiple-headers:
+    description: GRPCRoute with multiple header matchers of different types
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: grpc-multi-header
+            namespace: default
+          spec:
+            ports:
+              - port: 9090
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: grpc-multi-header-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: grpc-multi-header
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 9090
+      grpcroutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: GRPCRoute
+          metadata:
+            name: grpc-multi-header-route
+            namespace: default
+          spec:
+            hostnames:
+              - grpc.example.com
+            rules:
+              - matches:
+                  - method:
+                      type: Exact
+                      service: com.example.API
+                      method: Create
+                    headers:
+                      - type: Exact
+                        name: X-Tenant-ID
+                        value: tenant1
+                      - type: Exact
+                        name: X-Environment
+                        value: production
+                      - type: RegularExpression
+                        name: Authorization
+                        value: "^Bearer .*"
+                backendRefs:
+                  - name: grpc-multi-header
+                    port: 9090
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "\\{ req\\.hdr\\(X-Tenant-ID\\) \"tenant1\" \\} \\{ req\\.hdr\\(X-Environment\\) \"production\" \\} \\{ req\\.hdr\\(Authorization\\) -m reg \"\\^Bearer \\.\\*\" \\}"
+        description: Must combine all header matchers with AND logic
+
+  test-httproute-invalid-regex:
+    description: HTTPRoute with invalid regex pattern (negative test)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: test-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: test-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: test-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: invalid-route
+            namespace: default
+          spec:
+            hostnames:
+              - invalid.example.com
+            rules:
+              - matches:
+                  - headers:
+                      - type: RegularExpression
+                        name: X-Token
+                        value: "[invalid"  # Unclosed bracket - invalid regex
+                backendRefs:
+                  - name: test-service
+                    port: 80
+    assertions:
+      - type: not_contains
+        target: haproxy.cfg
+        pattern: "invalid\\.example\\.com"
+        description: Invalid regex should not generate routing config
+
+  test-httproute-header-edge-cases:
+    description: HTTPRoute with edge case header matching (special characters)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: edge-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: edge-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: edge-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: edge-route
+            namespace: default
+          spec:
+            hostnames:
+              - edge.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                    headers:
+                      - type: Exact
+                        name: X-Special-Chars
+                        value: "value-with-dashes_and_underscores.dots"
+                backendRefs:
+                  - name: edge-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "\\{ req\\.hdr\\(X-Special-Chars\\) \"value-with-dashes_and_underscores\\.dots\" \\}"
+        description: Must handle special characters in header values
+
+  test-httproute-grpcroute-precedence:
+    description: Mixed HTTPRoute and GRPCRoute on same hostname (precedence validation)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: http-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: grpc-service
+            namespace: default
+          spec:
+            ports:
+              - port: 9090
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: http-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: http-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 8080
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: grpc-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: grpc-service
+          endpoints:
+            - addresses: ["10.0.2.1"]
+          ports:
+            - port: 9090
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: http-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /rest
+                backendRefs:
+                  - name: http-service
+                    port: 80
+      grpcroutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: GRPCRoute
+          metadata:
+            name: grpc-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - method:
+                      type: Exact
+                      service: com.example.Service
+                      method: GetData
+                backendRefs:
+                  - name: grpc-service
+                    port: 9090
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: map:host.map
+        pattern: "api\\.example\\.com api\\.example\\.com"
+        description: Shared hostname must be in host map
+
+      - type: contains
+        target: map:path-prefix.map
+        pattern: "api\\.example\\.com/rest BACKEND:gtw_default_http-route_http-service_80"
+        description: HTTPRoute path must route to HTTP service
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_grpc-route_grpc-service_9090\\) if \\{ req\\.hdr\\(:path\\) \"/com\\.example\\.Service/GetData\" \\}"
+        description: GRPCRoute method must route to gRPC service
