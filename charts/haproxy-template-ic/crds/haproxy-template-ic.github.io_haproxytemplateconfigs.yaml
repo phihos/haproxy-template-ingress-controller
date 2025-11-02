@@ -366,6 +366,13 @@ spec:
                             description: Pattern is the regex pattern for contains/not_contains
                               assertions.
                             type: string
+                          patterns:
+                            description: |-
+                              Patterns is a list of regex patterns for match_order assertions.
+                              The patterns must appear in the target in the order specified.
+                            items:
+                              type: string
+                            type: array
                           target:
                             description: |-
                               Target specifies what to validate.
@@ -386,6 +393,7 @@ spec:
                                 - equals: Checks if target equals expected value
                                 - jsonpath: Evaluates JSONPath expression against target
                                 - match_count: Counts how many times pattern matches in target (regex)
+                                - match_order: Validates that patterns appear in specified order
                             enum:
                             - haproxy_valid
                             - contains
@@ -393,6 +401,7 @@ spec:
                             - equals
                             - jsonpath
                             - match_count
+                            - match_order
                             type: string
                         required:
                         - type
