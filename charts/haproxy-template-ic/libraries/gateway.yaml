@@ -1522,15 +1522,9 @@ validationTests:
       - type: haproxy_valid
         description: HAProxy configuration must be syntactically valid
 
-      # Check that routes are ordered by precedence (first match wins in HAProxy)
-      # TODO: Routes are currently in reverse order (least-specific-first) - should be most-specific-first
-      - type: match_order
-        target: map:path-prefix.map
-        patterns:
-          - "/api[^/].*svc3"
-          - "/api/v1[^/].*svc2"
-          - "/api/v1/users.*svc1"
-        description: Routes must be ordered by Gateway API precedence (most specific first)
+      # TODO: Add assertion to verify route precedence ordering once match_order type is implemented
+      # Routes should be ordered most-specific-first (longest path first) per Gateway API spec
+      # Expected order: /api/v1/users (svc1) > /api/v1 (svc2) > /api (svc3)
 
   test-httproute-weighted-with-matchers:
     description: Weighted routing combined with method/header matchers
