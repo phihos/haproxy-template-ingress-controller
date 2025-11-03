@@ -126,3 +126,37 @@ jobs:
 
           # Validate the merged configuration
           ./bin/controller validate -f /tmp/merged-config.yaml
+
+  test-routes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kind
+        run: |
+          # Install kind for creating local Kubernetes cluster
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Start dev environment
+        run: |
+          # Start dev environment (creates cluster, builds image, deploys controller)
+          ./scripts/start-dev-env.sh
+
+      - name: Run route tests
+        run: |
+          # Test all ingress and HTTPRoute resources
+          ./scripts/test-routes.sh
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # Delete kind cluster
+          kind delete cluster --name haproxy-template-ic-dev || true

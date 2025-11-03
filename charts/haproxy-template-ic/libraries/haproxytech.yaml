@@ -2,7 +2,7 @@
 # Contains template snippets for haproxy.org/* annotations and corresponding validation tests
 
 templateSnippets:
-  auth-userlist-name:
+  util-auth-userlist-name:
     template: >-
       {%- macro get_userlist_name(auth_secret, namespace) -%}
       {%- if "/" in auth_secret -%}
@@ -12,7 +12,7 @@ templateSnippets:
       {%- endif -%}
       {%- endmacro -%}
 
-  top-level-annotation-haproxytech-auth:
+  global-top-haproxytech-auth:
     priority: 500
     template: |
       {#-
@@ -65,7 +65,7 @@ templateSnippets:
           {%- set auth_secret = ingress.metadata.annotations["haproxy.org/auth-secret"] | default("") %}
           {%- if auth_secret %}
             {#- Generate userlist name using macro #}
-            {%- include "auth-userlist-name" -%}
+            {%- include "util-auth-userlist-name" -%}
             {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
 
             {#- Only process each userlist once #}
@@ -84,7 +84,7 @@ templateSnippets:
               {#- Fetch secret from store #}
               {%- set secret = resources.secrets.GetSingle(secret_namespace, secret_name) %}
               {%- if secret %}
-      # haproxytech/top-level-annotation-haproxytech-auth
+      # haproxytech/global-top-haproxytech-auth
 
       userlist {{ userlist_name }}
                 {%- for username in secret.data | default({}) %}
@@ -98,7 +98,7 @@ templateSnippets:
         {%- endif %}
       {%- endfor %}
 
-  backend-annotation-haproxytech-auth:
+  backend-directives-haproxytech-auth:
     priority: 500
     template: |
       {#-
@@ -126,9 +126,9 @@ templateSnippets:
         {%- set auth_realm = ingress.metadata.annotations["haproxy.org/auth-realm"] | default("RestrictedArea") %}
         {%- if auth_secret %}
           {#- Generate userlist name using macro #}
-          {%- include "auth-userlist-name" -%}
+          {%- include "util-auth-userlist-name" -%}
           {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
-      # haproxytech/backend-annotation-haproxytech-auth
+      # haproxytech/backend-directives-haproxytech-auth
       http-request auth realm "{{ auth_realm }}" unless { http_auth({{ userlist_name }}) }
         {%- endif %}
       {%- endif %}

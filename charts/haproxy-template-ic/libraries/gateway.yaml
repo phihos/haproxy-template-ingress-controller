@@ -49,7 +49,7 @@ watchedResources:
 
 templateSnippets:
   # Route analysis system - collects and analyzes all routes for conflicts
-  analyze_routes:
+  util-analyze-routes:
     template: |
       {%- macro analyze_routes(result, resources) %}
         {#-
@@ -272,11 +272,11 @@ templateSnippets:
         {%- set result.all_routes = ns_all.routes %}
       {%- endmacro %}
 
-  resource_gateway_backend-name:
+  util-backend-name-gateway:
     template: >-
       {{- "" -}}gtw_{{ route.metadata.namespace }}_{{ route.metadata.name }}_{{ backend.name }}_{{ backend.port }}
 
-  generate_gateway_backends_macro:
+  util-generate-backends-gateway:
     template: |
       {#- Macro to generate backends for Gateway API routes (HTTPRoute/GRPCRoute) #}
       {#- Deduplicates backends across all routes using shared namespace.seen tracking #}
@@ -294,14 +294,14 @@ templateSnippets:
       {%- if ("|" ~ backend_key ~ "|") not in ns.seen %}
       {%- set ns.seen = ns.seen ~ "|" ~ backend_key ~ "|" %}
 
-      backend {%+ include "resource_gateway_backend-name" +%}
+      backend {%+ include "util-backend-name-gateway" +%}
         balance roundrobin
         default-server check{{ " proto " ~ proto_flag if proto_flag else "" }}
         {%- filter indent(2, first=True) %}
-        {% include "backend-annotations" %}
+        {% include "backend-directives" %}
         {% set service_name = backend.name %}
         {% set port = backend.port %}
-        {% include "backend-servers" %}
+        {% include "util-backend-servers" %}
         {%- endfilter %}
       {%- endif %}
       {%- endfor %}
@@ -310,18 +310,18 @@ templateSnippets:
       {%- endfor %}
       {%- endmacro -%}
 
-  resource_gateway_backends:
+  backends-gateway:
     template: |
       {#- Generate backend definitions from HTTPRoute and GRPCRoute resources #}
+      {#- Implements backends-* extension point from base library #}
       {#- Deduplicates backends: one backend per unique (namespace, route, service, port) combination #}
-      {#- Usage: {% include "resource_gateway_backends" %} #}
 
       {#- Import backend generation macro #}
-      {%- from "generate_gateway_backends_macro" import generate_gateway_backends %}
+      {%- from "util-generate-backends-gateway" import generate_gateway_backends %}
 
       {#- Use namespace with string tracking for seen backends (shared across both route types) #}
       {%- set ns = namespace(seen="") %}
-      # gateway/resource_gateway_backends
+      # gateway/backends-gateway
 
       {#- HTTPRoute backends (HTTP protocol) #}
       {{- generate_gateway_backends(resources.httproutes.List(), "", ns) -}}
@@ -329,19 +329,19 @@ templateSnippets:
       {#- GRPCRoute backends (HTTP/2 protocol) #}
       {{- generate_gateway_backends(resources.grpcroutes.List(), "h2", ns) -}}
 
-  resource_gateway_path-map-entry:
+  util-path-map-entry-gateway:
     template: |
       {#- Generate HTTPRoute path matching map entries with qualifiers #}
       {#- Single backend: BACKEND:<backend_name> #}
       {#- Multiple backends: MULTIBACKEND:<total_weight>:<route_key> #}
       {#- Conflicting paths: GW_ROUTE_ID:<route_type>:<route_ids> #}
-      {#- Usage: {% include "resource_gateway_path-map-entry" with context %} where path_type = "Exact" or "PathPrefix" #}
-      # gateway/resource_gateway_path-map-entry
+      {#- Usage: {% include "util-path-map-entry-gateway" with context %} where path_type = "Exact" or "PathPrefix" #}
+      # gateway/util-path-map-entry-gateway
 
       {#- Compute route analysis once per render (cached across all includes) #}
       {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
       {%- compute_once analysis %}
-        {%- from "analyze_routes" import analyze_routes %}
+        {%- from "util-analyze-routes" import analyze_routes %}
         {{- analyze_routes(analysis, resources) -}}
       {%- endcompute_once %}
 
@@ -367,7 +367,7 @@ templateSnippets:
         {%- endif %}
       {%- endfor %}
 
-  generate_host_map_macro:
+  util-generate-host-map-gateway:
     template: |
       {#- Macro to generate host map entries for Gateway API routes #}
       {#- Parameters: #}
@@ -385,42 +385,42 @@ templateSnippets:
       {%- endfor %}
       {%- endmacro -%}
 
-  map-entry-host-gateway:
+  map-host-gateway:
     template: |
       {#- Generate host map entries for Gateway API routes #}
-      {%- from "generate_host_map_macro" import generate_host_map %}
-      # gateway/map-entry-host-gateway
+      {%- from "util-generate-host-map-gateway" import generate_host_map %}
+      # gateway/map-host-gateway
       {{- generate_host_map(resources.httproutes.List(), "HTTPRoute") -}}
       {{- generate_host_map(resources.grpcroutes.List(), "GRPCRoute") -}}
 
-  map-entry-path-exact-gateway:
+  map-path-exact-gateway:
     template: |
       {#- Generate exact path map entries for HTTPRoute #}
-      # gateway/map-entry-path-exact-gateway
+      # gateway/map-path-exact-gateway
       {% set path_type = "Exact" %}
       {%- set suffix = "" %}
-      {% include "resource_gateway_path-map-entry" %}
+      {% include "util-path-map-entry-gateway" %}
 
-  map-entry-path-prefix-exact-gateway:
+  map-path-prefix-exact-gateway:
     template: |
       {#- Generate prefix-exact path map entries for HTTPRoute #}
-      # gateway/map-entry-path-prefix-exact-gateway
+      # gateway/map-path-prefix-exact-gateway
       {% set path_type = "PathPrefix" %}
       {%- set suffix = "" %}
-      {% include "resource_gateway_path-map-entry" %}
+      {% include "util-path-map-entry-gateway" %}
 
-  map-entry-path-prefix-beg-gateway:
+  map-path-prefix-gateway:
     template: |
       {#- Generate prefix path map entries with trailing slash for HTTPRoute #}
-      # gateway/map-entry-path-prefix-beg-gateway
+      # gateway/map-path-prefix-gateway
       {% set path_type = "PathPrefix" %}
       {%- set suffix = "/" %}
-      {% include "resource_gateway_path-map-entry" %}
+      {% include "util-path-map-entry-gateway" %}
 
-  map-entry-path-regex-gateway:
+  map-path-regex-gateway:
     template: |
       {#- Generate regex path map entries for HTTPRoute with RegularExpression type #}
-      # gateway/map-entry-path-regex-gateway
+      # gateway/map-path-regex-gateway
       {%- for route in resources.httproutes.List() %}
       {#- Count regex path entries for this route -#}
       {%- set ns_outer = namespace(entry_count=0) %}
@@ -445,7 +445,7 @@ templateSnippets:
       {%- set backend = {"name": first_backend.name, "port": first_backend.port} %}
       {%- for match in (rule.matches | default([{}])) %}
       {%- if match.path and match.path.type == "RegularExpression" %}
-      {{ hostname }}{{ match.path.value | default("/") }} {% include "resource_gateway_backend-name" %}
+      {{ hostname }}{{ match.path.value | default("/") }} {% include "util-backend-name-gateway" %}
       {% endif %}
       {%- endfor %}
       {%- endif %}
@@ -453,13 +453,13 @@ templateSnippets:
       {%- endfor %}
       {%- endfor %}
 
-  map-entries-weighted-multi-backend-gateway:
+  map-weighted-backend-gateway:
     template: |
       {#- Generate expanded weighted backend entries for HTTPRoute #}
       {#- Format: <random_number>:<route_key> <backend_name> #}
       {#- Each weight N generates N consecutive entries pointing to same backend #}
       {#- This allows O(1) weighted selection via single map lookup #}
-      # gateway/map-entries-weighted-multi-backend-gateway
+      # gateway/map-weighted-backend-gateway
 
       {%- for route in resources.httproutes.List() %}
       {#- Count weighted rules for this route -#}
@@ -485,7 +485,7 @@ templateSnippets:
 
             {#- Generate <weight> consecutive entries for this backend -#}
             {%- for i in range(ns.cumulative, ns.cumulative + weight) -%}
-      {{ i }}:{{ route_key }} {{ "" }}{% include "resource_gateway_backend-name" %}{{ "\n" -}}
+      {{ i }}:{{ route_key }} {{ "" }}{% include "util-backend-name-gateway" %}{{ "\n" -}}
             {%- endfor %}
 
             {%- set ns.cumulative = ns.cumulative + weight %}
@@ -497,30 +497,31 @@ templateSnippets:
       {%- endfor %}
       {%- endfor %}
 
-  # Advanced matcher setup - processes GW_ROUTE_ID qualifier (runs early via 000 prefix)
-  advanced-matcher-000-gw-route-id-setup:
+  # Advanced matcher setup - processes GW_ROUTE_ID qualifier (runs early via priority)
+  frontend-matchers-advanced-gateway-route-id-setup:
+    priority: 10
     template: |
       {#- Process GW_ROUTE_ID qualifier to extract route type and route ID #}
       {#- Format: GW_ROUTE_ID:<route_type>:<route_ids> #}
       {#- Example: GW_ROUTE_ID:http:ns1_route1_0__ns2_route2_1 #}
-      {#- This runs early (000 prefix) to set variables used by later matchers #}
-      # gateway/advanced-matcher-000-gw-route-id-setup
+      {#- This runs early (priority 10) to set variables used by later matchers #}
+      # gateway/frontend-matchers-advanced-gateway-route-id-setup
       http-request set-var(req.gw_route_type) var(txn.path_match),field(2,:) if { var(txn.path_match),field(1,:) -m str GW_ROUTE_ID }
       http-request set-var(req.gw_route_id) var(txn.path_match),field(3,:) if { var(txn.path_match),field(1,:) -m str GW_ROUTE_ID }
 
   # Advanced matcher generator - creates http-request statements for method/header/query matching
-  advanced-matcher-gateway:
+  frontend-matchers-advanced-gateway:
     template: |
       {#- Generate http-request statements for routes with advanced matchers #}
       {#- This is injected into base template via the advanced-matcher-* extension point #}
       # gateway/advanced-matcher-gateway
 
-      {%- from "regex-sanitize" import sanitize_regex %}
+      {%- from "util-regex-sanitize" import sanitize_regex %}
 
       {#- Compute route analysis once per render (cached across all includes) #}
       {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
       {%- compute_once analysis %}
-        {%- from "analyze_routes" import analyze_routes %}
+        {%- from "util-analyze-routes" import analyze_routes %}
         {{- analyze_routes(analysis, resources) -}}
       {%- endcompute_once %}
 
@@ -603,15 +604,16 @@ templateSnippets:
       {%- endif %}
 
   # Path match setting - sets txn.path_match based on winning rule ID
-  advanced-matcher-zzz-path-match-gateway:
+  frontend-matchers-advanced-gateway-path-match:
+    priority: 900
     template: |
       {#- Set txn.path_match for backend selection based on winning rule #}
-      {#- Runs after advanced-matcher-gateway sets req.gw_rule_id (zzz ensures late ordering) #}
-      # gateway/advanced-matcher-zzz-path-match-gateway
+      {#- Runs after frontend-matchers-advanced-gateway sets req.gw_rule_id (priority ensures late ordering) #}
+      # gateway/frontend-matchers-advanced-gateway-path-match
 
       {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
       {%- compute_once analysis %}
-        {%- from "analyze_routes" import analyze_routes %}
+        {%- from "util-analyze-routes" import analyze_routes %}
         {{- analyze_routes(analysis, resources) -}}
       {%- endcompute_once %}
 
@@ -639,19 +641,19 @@ templateSnippets:
       {%- endif %}
 
   # Filter: RequestHeaderModifier - modifies request headers before backend selection
-  advanced-matcher-filter-request-header:
+  frontend-filters-gateway-request-header:
     template: |
       {#- Generate http-request header modification statements #}
-      {#- This is injected into base template via the advanced-matcher-* extension point #}
-      {#- Runs AFTER advanced-matcher-gateway due to alphabetical ordering #}
-      # gateway/advanced-matcher-filter-request-header
+      {#- This is injected into base template via the frontend-filters-* extension point #}
+      {#- Runs AFTER routing decisions, BEFORE backend selection #}
+      # gateway/frontend-filters-gateway-request-header
 
-      {%- from "regex-sanitize" import sanitize_regex %}
+      {%- from "util-regex-sanitize" import sanitize_regex %}
 
       {#- Compute route analysis once per render (cached across all includes) #}
       {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
       {%- compute_once analysis %}
-        {%- from "analyze_routes" import analyze_routes %}
+        {%- from "util-analyze-routes" import analyze_routes %}
         {{- analyze_routes(analysis, resources) -}}
       {%- endcompute_once %}
 
@@ -701,19 +703,19 @@ templateSnippets:
       {%- endif %}
 
   # Filter: ResponseHeaderModifier - modifies response headers before sending to client
-  advanced-matcher-filter-response-header:
+  frontend-filters-gateway-response-header:
     template: |
       {#- Generate http-response header modification statements #}
-      {#- This is injected into base template via the advanced-matcher-* extension point #}
-      {#- Runs AFTER request filters due to alphabetical ordering #}
-      # gateway/advanced-matcher-filter-response-header
+      {#- This is injected into base template via the frontend-filters-* extension point #}
+      {#- Runs AFTER routing decisions, BEFORE backend selection #}
+      # gateway/frontend-filters-gateway-response-header
 
-      {%- from "regex-sanitize" import sanitize_regex %}
+      {%- from "util-regex-sanitize" import sanitize_regex %}
 
       {#- Compute route analysis once per render (cached across all includes) #}
       {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
       {%- compute_once analysis %}
-        {%- from "analyze_routes" import analyze_routes %}
+        {%- from "util-analyze-routes" import analyze_routes %}
         {{- analyze_routes(analysis, resources) -}}
       {%- endcompute_once %}
 
@@ -763,19 +765,19 @@ templateSnippets:
       {%- endif %}
 
   # Filter: RequestRedirect - redirects requests to different locations
-  advanced-matcher-filter-redirect:
+  frontend-filters-gateway-redirect:
     template: |
       {#- Generate http-request redirect statements #}
-      {#- This is injected into base template via the advanced-matcher-* extension point #}
-      {#- Runs AFTER header filters, BEFORE backend selection #}
-      # gateway/advanced-matcher-filter-redirect
+      {#- This is injected into base template via the frontend-filters-* extension point #}
+      {#- Runs AFTER routing decisions, BEFORE backend selection #}
+      # gateway/frontend-filters-gateway-redirect
 
-      {%- from "regex-sanitize" import sanitize_regex %}
+      {%- from "util-regex-sanitize" import sanitize_regex %}
 
       {#- Compute route analysis once per render (cached across all includes) #}
       {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
       {%- compute_once analysis %}
-        {%- from "analyze_routes" import analyze_routes %}
+        {%- from "util-analyze-routes" import analyze_routes %}
         {{- analyze_routes(analysis, resources) -}}
       {%- endcompute_once %}
 
@@ -857,19 +859,19 @@ templateSnippets:
       {%- endif %}
 
   # Filter: URLRewrite - rewrites request URLs before sending to backend
-  advanced-matcher-filter-urlrewrite:
+  frontend-filters-gateway-urlrewrite:
     template: |
       {#- Generate http-request URL rewrite statements #}
-      {#- This is injected into base template via the advanced-matcher-* extension point #}
-      {#- Runs AFTER redirect filters, BEFORE backend selection #}
-      # gateway/advanced-matcher-filter-urlrewrite
+      {#- This is injected into base template via the frontend-filters-* extension point #}
+      {#- Runs AFTER routing decisions, BEFORE backend selection #}
+      # gateway/frontend-filters-gateway-urlrewrite
 
-      {%- from "regex-sanitize" import sanitize_regex %}
+      {%- from "util-regex-sanitize" import sanitize_regex %}
 
       {#- Compute route analysis once per render (cached across all includes) #}
       {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
       {%- compute_once analysis %}
-        {%- from "analyze_routes" import analyze_routes %}
+        {%- from "util-analyze-routes" import analyze_routes %}
         {{- analyze_routes(analysis, resources) -}}
       {%- endcompute_once %}
 

@@ -14,12 +14,12 @@
 #         enabled: true
 
 templateSnippets:
-  use-backend-selection:
+  frontend-routing-logic:
     template: |
-      {#- Backend selection logic with qualifier system and performance-first ordering #}
+      {#- Frontend routing logic with qualifier system and performance-first ordering #}
       {#- Supports BACKEND and MULTIBACKEND qualifiers #}
       {#- Overrides base library: Exact > Prefix > Regex (regex moved to last) #}
-      # path-regex-last/use-backend-selection
+      # path-regex-last/frontend-routing-logic
 
       # Set variables for path-based routing
       http-request set-var(txn.base) base
