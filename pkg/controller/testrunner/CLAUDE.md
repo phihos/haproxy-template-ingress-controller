@@ -97,12 +97,6 @@ Implements 5 assertion types:
 - `file:<name>` - General file content
 - `cert:<name>` - SSL certificate content
 
-### converter.go - CRD to Internal Config
-
-**Purpose**: Converts `v1alpha1.HAProxyTemplateConfigSpec` to `config.Config` format expected by the renderer.
-
-**Why Needed**: The renderer was designed to work with the internal `config.Config` type, not directly with CRD types.
-
 ### output.go - Result Formatting
 
 Formats test results in three modes:

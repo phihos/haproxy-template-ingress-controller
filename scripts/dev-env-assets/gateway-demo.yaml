@@ -3,11 +3,32 @@
 # - Basic path-based routing
 # - Path matching variants (Exact, PathPrefix)
 # - Traffic splitting with weighted backends
+# - HTTP method matching (GET, POST, etc.)
+# - Header matching (exact and regex)
+# - Query parameter matching (exact and regex)
 #
 # Prerequisites:
 # - Gateway API CRDs must be installed
 # - Gateway library must be enabled in controller config
 # - echo-server service must exist
+#
+# Debug Headers:
+# When config.debug.headers.enabled is true (as in dev environment), HAProxy adds
+# response headers showing internal routing decisions:
+#
+#   X-HAProxy-Backend            - Selected backend name (e.g., "gtw_echo_echo-split_echo-server_80")
+#   X-HAProxy-Host-Match         - Matched hostname from host.map
+#   X-HAProxy-Path-Match         - Path match result with qualifier (e.g., "BACKEND:...")
+#   X-HAProxy-Path-Match-Qualifier - Match qualifier type (BACKEND, MULTIBACKEND, VAR)
+#   X-HAProxy-Total-Weight       - Total weight for MULTIBACKEND routes
+#   X-HAProxy-Random-Weight      - Random weight selected for traffic split
+#   X-HAProxy-Route-Key          - Route key for weighted routing
+#   X-Gateway-Matched-Route      - Gateway route that matched (e.g., "echo/echo-split/rule0")
+#   X-Gateway-Match-Reason       - Types of matchers used (e.g., "method,header,query")
+#   X-Gateway-Filters-Applied    - Filters applied (e.g., "RequestHeaderModifier,ResponseHeaderModifier")
+#
+# Inspect headers with:
+#   curl -I http://echo-gateway.localdev.me/path
 
 ---
 # Base Gateway resource that HTTPRoutes will attach to
@@ -159,3 +180,291 @@ spec:
     - name: http
       port: 80
       targetPort: 80
+
+---
+# HTTPRoute 4: HTTP method matching
+# Demonstrates: Routing based on HTTP methods (GET vs POST)
+# Test with: curl -X GET http://localhost:30080/api -H "Host: echo-methods.localdev.me"
+#            curl -X POST http://localhost:30080/api -H "Host: echo-methods.localdev.me"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-methods
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-methods.localdev.me"
+  rules:
+    # Route POST requests to primary echo-server
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          method: POST
+      backendRefs:
+        - name: echo-server
+          port: 80
+    # Route GET requests to v2 echo-server
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          method: GET
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Default for other methods
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 5: Header matching (exact and regex)
+# Demonstrates: Routing based on request headers
+# Test with: curl http://localhost:30080 -H "Host: echo-headers.localdev.me" -H "X-Api-Version: v2"
+#            curl http://localhost:30080 -H "Host: echo-headers.localdev.me" -H "X-User-Agent: mobile-app-ios"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-headers
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-headers.localdev.me"
+  rules:
+    # Exact header match: X-Api-Version: v2
+    - matches:
+        - headers:
+            - type: Exact
+              name: X-Api-Version
+              value: v2
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Regex header match: X-User-Agent contains "mobile"
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: X-User-Agent
+              value: ".*mobile.*"
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Default for requests without special headers
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 6: Query parameter matching
+# Demonstrates: Routing based on query parameters
+# Test with: curl "http://localhost:30080/search?version=beta" -H "Host: echo-query.localdev.me"
+#            curl "http://localhost:30080/search?debug=true" -H "Host: echo-query.localdev.me"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-query
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-query.localdev.me"
+  rules:
+    # Exact query param match: version=beta
+    - matches:
+        - queryParams:
+            - type: Exact
+              name: version
+              value: beta
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Regex query param match: debug parameter with any true-ish value
+    - matches:
+        - queryParams:
+            - type: RegularExpression
+              name: debug
+              value: "^(true|1|yes)$"
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Default for requests without special query params
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 7: Combined matchers
+# Demonstrates: Multiple matcher types in a single rule (method + headers + query)
+# Test with: curl -X POST "http://localhost:30080/api?token=secret123" \
+#              -H "Host: echo-combined.localdev.me" \
+#              -H "Content-Type: application/json"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-combined
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-combined.localdev.me"
+  rules:
+    # Complex rule: POST + Content-Type header + token query param
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          method: POST
+          headers:
+            - type: Exact
+              name: Content-Type
+              value: application/json
+          queryParams:
+            - type: RegularExpression
+              name: token
+              value: "^secret[0-9]+$"
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+    # Default fallback
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+---
+# HTTPRoute 8: Conflict resolution via precedence
+# Demonstrates: Gateway API precedence when multiple rules match the same path
+#
+# Gateway API Precedence Rules (applied in order):
+#   1. Path type (Exact > PathPrefix)
+#   2. Path length (longer > shorter)
+#   3. Method matcher exists (with method > without)
+#   4. Number of header matchers (more > fewer)
+#   5. Number of query param matchers (more > fewer)
+#   6. Creation timestamp (older > newer)
+#   7. Namespace/name (alphabetically)
+#   8. Rule index (lower > higher)
+#
+# All rules below have the SAME path (/) - precedence is determined by matchers.
+# Rules are intentionally declared in RANDOM order to demonstrate HAProxy's sorting.
+#
+# Expected order after sorting (most to least specific):
+#   Rule 2: GET + 2 headers + 1 query → echo-server-v2
+#   Rule 0: GET + 1 header → echo-server
+#   Rule 3: GET only → echo-server-v2
+#   Rule 1: No matchers (catch-all) → echo-server
+#
+# Test commands:
+#   # Rule 2 (most specific): GET + X-Version + X-Environment + debug=true
+#   curl -I "http://localhost:30080/?debug=true" \
+#     -H "Host: echo-precedence.localdev.me" \
+#     -H "X-Version: v2" \
+#     -H "X-Environment: prod"
+#   # Should route to echo-server-v2, X-Gateway-Matched-Route: echo/echo-precedence/rule2
+#
+#   # Rule 0: GET + X-Version only
+#   curl -I http://localhost:30080/ \
+#     -H "Host: echo-precedence.localdev.me" \
+#     -H "X-Version: v1"
+#   # Should route to echo-server, X-Gateway-Matched-Route: echo/echo-precedence/rule0
+#
+#   # Rule 3: GET only (no headers/query)
+#   curl -I http://localhost:30080/ \
+#     -H "Host: echo-precedence.localdev.me"
+#   # Should route to echo-server-v2, X-Gateway-Matched-Route: echo/echo-precedence/rule3
+#
+#   # Rule 1: POST (no matchers, different method)
+#   curl -I -X POST http://localhost:30080/ \
+#     -H "Host: echo-precedence.localdev.me"
+#   # Should route to echo-server, X-Gateway-Matched-Route: echo/echo-precedence/rule1
+#
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-precedence
+  namespace: echo
+spec:
+  parentRefs:
+    - name: dev-gateway
+  hostnames:
+    - "echo-precedence.localdev.me"
+  rules:
+    # RULE 0: Medium precedence - GET + 1 header
+    # Declared FIRST but should be sorted to position 2 (after rule 2)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+          method: GET
+          headers:
+            - type: Exact
+              name: X-Version
+              value: v1
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+    # RULE 1: Lowest precedence - No matchers (catch-all)
+    # Declared SECOND but should be sorted to position 4 (last)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: echo-server
+          port: 80
+
+    # RULE 2: Highest precedence - GET + 2 headers + 1 query param
+    # Declared THIRD but should be sorted to position 1 (first)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+          method: GET
+          headers:
+            - type: Exact
+              name: X-Version
+              value: v2
+            - type: Exact
+              name: X-Environment
+              value: prod
+          queryParams:
+            - type: Exact
+              name: debug
+              value: "true"
+      backendRefs:
+        - name: echo-server-v2
+          port: 80
+
+    # RULE 3: Low precedence - GET only
+    # Declared FOURTH but should be sorted to position 3 (before catch-all)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+          method: GET
+      backendRefs:
+        - name: echo-server-v2
+          port: 80

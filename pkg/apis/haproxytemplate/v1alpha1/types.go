@@ -79,6 +79,10 @@ type HAProxyTemplateConfigSpec struct {
 	// +optional
 	Dataplane DataplaneConfig `json:"dataplane,omitempty"`
 
+	// TemplatingSettings configures template rendering behavior and custom variables.
+	// +optional
+	TemplatingSettings TemplatingSettings `json:"templatingSettings,omitempty"`
+
 	// WatchedResourcesIgnoreFields specifies JSONPath expressions for fields
 	// to remove from all watched resources to reduce memory usage.
 	//
@@ -300,6 +304,28 @@ type DataplaneConfig struct {
 	ConfigFile string `json:"configFile,omitempty"`
 }
 
+// TemplatingSettings configures template rendering behavior.
+type TemplatingSettings struct {
+	// ExtraContext provides custom variables that are passed to all templates.
+	//
+	// This allows users to add arbitrary data to the template context without
+	// modifying controller code. Values can be any valid JSON type (string, number,
+	// boolean, object, array).
+	//
+	// Example:
+	//   extraContext:
+	//     debug:
+	//       enabled: true
+	//     environment: production
+	//     customValue: 42
+	//
+	// Templates can then reference these as: {{ debug.enabled }}, {{ environment }}, etc.
+	// +optional
+	// +kubebuilder:validation:Type=object
+	// +kubebuilder:pruning:PreserveUnknownFields
+	ExtraContext runtime.RawExtension `json:"extraContext,omitempty"`
+}
+
 // WatchedResource configures watching for a specific Kubernetes resource type.
 type WatchedResource struct {
 	// APIVersion is the Kubernetes API version (e.g., "networking.k8s.io/v1").
@@ -466,8 +492,9 @@ type ValidationAssertion struct {
 	//   - equals: Checks if target equals expected value
 	//   - jsonpath: Evaluates JSONPath expression against target
 	//   - match_count: Counts how many times pattern matches in target (regex)
+	//   - match_order: Validates that patterns appear in specified order
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=haproxy_valid;contains;not_contains;equals;jsonpath;match_count
+	// +kubebuilder:validation:Enum=haproxy_valid;contains;not_contains;equals;jsonpath;match_count;match_order
 	Type string `json:"type"`
 
 	// Description explains what this assertion validates.
@@ -494,6 +521,11 @@ type ValidationAssertion struct {
 	// JSONPath is the JSONPath expression for jsonpath assertions.
 	// +optional
 	JSONPath string `json:"jsonpath,omitempty"`
+
+	// Patterns is a list of regex patterns for match_order assertions.
+	// The patterns must appear in the target in the order specified.
+	// +optional
+	Patterns []string `json:"patterns,omitempty"`
 }
 
 // HAProxyTemplateConfigStatus defines the observed state of HAProxyTemplateConfig.

@@ -16,6 +16,10 @@ controller:
     logging:
       verbose: 2  # DEBUG level
 
+    templatingSettings:
+      extraContext:
+        debug: true  # Enable introspection headers for development
+
 # Resource limits for development (allow more flexibility)
 resources:
   limits:

@@ -109,18 +109,154 @@ spec:
           port: 8080
 ```
 
-### spec.rules[].matches - Header and Query Matching
+### spec.rules[].matches - Method, Header and Query Matching
 
 | Field | Status | Notes |
 |-------|--------|-------|
-| `matches[].headers[]` | ❌ Not Implemented | Header-based routing not supported |
-| `matches[].headers[].type` | ❌ Not Implemented | Exact/RegularExpression not available |
-| `matches[].headers[].name` | ❌ Not Implemented | |
-| `matches[].headers[].value` | ❌ Not Implemented | |
-| `matches[].queryParams[]` | ❌ Not Implemented | Query parameter matching not supported |
-| `matches[].queryParams[].type` | ❌ Not Implemented | |
-| `matches[].queryParams[].name` | ❌ Not Implemented | |
-| `matches[].queryParams[].value` | ❌ Not Implemented | |
+| `matches[].method` | ✅ Supported | HTTP method matching (GET, POST, etc.) |
+| `matches[].headers[]` | ✅ Supported | Header-based routing with exact and regex matching |
+| `matches[].headers[].type: Exact` | ✅ Supported | Exact header value matching |
+| `matches[].headers[].type: RegularExpression` | ✅ Supported | Regex header value matching |
+| `matches[].headers[].name` | ✅ Supported | Case-insensitive header name |
+| `matches[].headers[].value` | ✅ Supported | Header value to match |
+| `matches[].queryParams[]` | ✅ Supported | Query parameter matching |
+| `matches[].queryParams[].type: Exact` | ✅ Supported | Exact query parameter value matching |
+| `matches[].queryParams[].type: RegularExpression` | ✅ Supported | Regex query parameter matching |
+| `matches[].queryParams[].name` | ✅ Supported | Query parameter name |
+| `matches[].queryParams[].value` | ✅ Supported | Query parameter value to match |
+
+**Match Precedence (Gateway API v1 spec):**
+
+When multiple routes match the same request, ties are broken in the following order:
+1. **Path specificity** - Exact > RegularExpression > PathPrefix (by length)
+2. **Method matchers** - Routes with method matchers have higher priority
+3. **Header matchers** - More header matchers = higher priority
+4. **Query parameter matchers** - More query matchers = higher priority
+5. **Creation timestamp** - Older routes have priority
+6. **Alphabetical order** - By namespace/name as final tie-breaker
+
+**Example - Method matching:**
+
+```yaml
+spec:
+  rules:
+    # Match only GET requests
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          method: GET
+      backendRefs:
+        - name: api-read-svc
+          port: 8080
+
+    # Match only POST requests
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          method: POST
+      backendRefs:
+        - name: api-write-svc
+          port: 8080
+```
+
+**Example - Header matching:**
+
+```yaml
+spec:
+  rules:
+    # Exact header match
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          headers:
+            - name: X-API-Version
+              type: Exact
+              value: "v2"
+      backendRefs:
+        - name: api-v2-svc
+          port: 8080
+
+    # Regex header match
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          headers:
+            - name: User-Agent
+              type: RegularExpression
+              value: ".*Mobile.*"
+      backendRefs:
+        - name: mobile-api-svc
+          port: 8080
+```
+
+**Example - Query parameter matching:**
+
+```yaml
+spec:
+  rules:
+    # Exact query parameter match
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /search
+          queryParams:
+            - name: category
+              type: Exact
+              value: electronics
+      backendRefs:
+        - name: electronics-search-svc
+          port: 8080
+
+    # Regex query parameter match
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+          queryParams:
+            - name: version
+              type: RegularExpression
+              value: "^v[2-3]$"
+      backendRefs:
+        - name: modern-api-svc
+          port: 8080
+```
+
+**Example - Complex matching with precedence:**
+
+```yaml
+spec:
+  rules:
+    # Higher priority: method + headers + query
+    - matches:
+        - path:
+            type: Exact
+            value: /api/users
+          method: POST
+          headers:
+            - name: Content-Type
+              type: Exact
+              value: application/json
+          queryParams:
+            - name: action
+              type: Exact
+              value: create
+      backendRefs:
+        - name: user-create-svc
+          port: 8080
+
+    # Lower priority: only path matching
+    - matches:
+        - path:
+            type: Exact
+            value: /api/users
+      backendRefs:
+        - name: user-generic-svc
+          port: 8080
+```
 
 ### spec.rules[].filters
 
@@ -214,13 +350,57 @@ Internal route identifiers use the format `namespace_routename_ruleindex` to ens
 
 | Field | Status | Notes |
 |-------|--------|-------|
-| `matches[].method.type: Exact` | ❌ Not Implemented | Method matching fields exist but no routing logic |
-| `matches[].method.type: RegularExpression` | ❌ Not Implemented | Regex method matching not implemented |
-| `matches[].method.service` | ❌ Not Implemented | gRPC service name not used for routing |
-| `matches[].method.method` | ❌ Not Implemented | gRPC method name not used for routing |
-| `matches[].headers[]` | ❌ Not Implemented | Header matching not implemented |
+| `matches[].method.type: Exact` | ✅ Supported | Exact match for gRPC service/method |
+| `matches[].method.type: RegularExpression` | ✅ Supported | Regex match for gRPC service/method |
+| `matches[].method.service` | ✅ Supported | gRPC service name (e.g., `com.example.User`) |
+| `matches[].method.method` | ✅ Supported | gRPC method name (e.g., `GetUser`) |
+| `matches[].headers[]` | ✅ Supported | Header matching (same as HTTPRoute) |
 
-**Important:** Validation tests reference `method` fields but no template logic implements method-based routing. Backends are generated with HTTP/2 protocol support, but all gRPC requests to a hostname route to the same backend regardless of service/method.
+**gRPC Method Routing:**
+
+The gateway library now supports routing based on gRPC service and method names. The gRPC path format `/package.Service/Method` is used for matching.
+
+**Example - gRPC method routing:**
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-users
+spec:
+  hostnames:
+    - "api.example.com"
+  rules:
+    # Route GetUser calls to read-only service
+    - matches:
+        - method:
+            type: Exact
+            service: com.example.UserService
+            method: GetUser
+      backendRefs:
+        - name: user-read-svc
+          port: 9090
+
+    # Route CreateUser calls to write service
+    - matches:
+        - method:
+            type: Exact
+            service: com.example.UserService
+            method: CreateUser
+      backendRefs:
+        - name: user-write-svc
+          port: 9090
+
+    # Route all other UserService calls with regex
+    - matches:
+        - method:
+            type: RegularExpression
+            service: com\.example\.UserService
+            # Matches any method
+      backendRefs:
+        - name: user-general-svc
+          port: 9090
+```
 
 ### spec.rules[].filters
 
@@ -254,15 +434,33 @@ spec:
           port: 9090
 ```
 
+## Debug Headers
+
+When debug headers are enabled, the gateway library adds response headers to help troubleshoot routing decisions:
+
+```yaml
+# values.yaml
+controller:
+  config:
+    debug:
+      headers:
+        enabled: true
+```
+
+**Response Headers:**
+- `X-Gateway-Matched-Route` - The namespace/name of the matched HTTPRoute or GRPCRoute
+- `X-Gateway-Match-Reason` - Additional information about why the route was selected (e.g., "method match", "header match")
+
+These headers are useful for:
+- Verifying which route handled a request
+- Understanding precedence when multiple routes match
+- Debugging complex routing configurations
+
 ## Known Limitations
 
 ### Critical Gaps
 
-1. **GRPCRoute method routing not implemented** - While backends are generated with HTTP/2 support, the `matches[].method` fields are not used for routing decisions. All gRPC traffic to a hostname goes to the same backend.
-
-2. **No filter support** - All filter types (header modification, redirects, rewrites, mirroring) are not implemented for either HTTPRoute or GRPCRoute.
-
-3. **No header/query parameter matching** - HTTPRoute cannot route based on HTTP headers or query parameters, only path matching is supported.
+1. **No filter support** - All filter types (header modification, redirects, rewrites, mirroring) are not implemented for either HTTPRoute or GRPCRoute.
 
 ### Untested Features
 
@@ -277,27 +475,32 @@ The gateway library includes comprehensive validation tests:
 
 **Well-tested:**
 - HTTPRoute path matching (Exact, PathPrefix, RegularExpression)
+- HTTPRoute method matching (GET, POST, etc.)
+- HTTPRoute header matching (Exact and RegularExpression types)
+- HTTPRoute query parameter matching (Exact and RegularExpression types)
 - HTTPRoute weighted backends (various weight combinations, defaults)
 - HTTPRoute default behaviors (no matches → PathPrefix /)
+- HTTPRoute match precedence and tie-breaking rules
 - Backend deduplication (multiple routes to same service+port)
 - GRPCRoute backend generation with HTTP/2
+- GRPCRoute method-based routing (service and method matching)
+- Complex route conflict resolution with VAR qualifiers
 
 **Untested:**
-- GRPCRoute method-based routing (no tests verify method matching)
 - Cross-namespace references
 - Wildcard hostnames
 - Any filter types
-- Header or query parameter matching
 
 ## Future Development
 
 Priority areas for future enhancement:
 
-1. **GRPCRoute method routing** - Implement routing based on `matches[].method.service` and `matches[].method.method`
-2. **Request header matching** - Support HTTPRoute and GRPCRoute header-based routing
-3. **Basic filters** - Start with `RequestHeaderModifier` and `ResponseHeaderModifier`
-4. **Query parameter matching** - Add HTTPRoute query param support
+1. **Basic filters** - Start with `RequestHeaderModifier` and `ResponseHeaderModifier`
+2. **Request redirect** - Implement `RequestRedirect` filter for HTTP redirects
+3. **URL rewriting** - Support `URLRewrite` filter for path and hostname rewriting
+4. **Request mirroring** - Add `RequestMirror` filter for traffic shadowing
 5. **Cross-namespace testing** - Validate cross-namespace references work correctly
+6. **Wildcard hostname support** - Test and document wildcard hostname patterns
 
 ## See Also
 

@@ -45,6 +45,7 @@ import (
 	"haproxy-template-ic/pkg/controller/commentator"
 	"haproxy-template-ic/pkg/controller/configchange"
 	"haproxy-template-ic/pkg/controller/configloader"
+	"haproxy-template-ic/pkg/controller/conversion"
 	"haproxy-template-ic/pkg/controller/credentialsloader"
 	"haproxy-template-ic/pkg/controller/debug"
 	"haproxy-template-ic/pkg/controller/deployer"
@@ -1284,8 +1285,8 @@ func parseCRD(resource *unstructured.Unstructured) (*coreconfig.Config, error) {
 		return nil, fmt.Errorf("failed to convert unstructured to HAProxyTemplateConfig: %w", err)
 	}
 
-	// Convert CRD Spec to config.Config using the configloader converter
-	cfg, err := configloader.ConvertCRDToConfig(&crd.Spec)
+	// Convert CRD Spec to config.Config using the conversion package
+	cfg, err := conversion.ConvertSpec(&crd.Spec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert CRD spec to config: %w", err)
 	}

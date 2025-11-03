@@ -1,4 +1,4 @@
-package configloader
+package conversion
 
 import (
 	"testing"
@@ -10,7 +10,7 @@ import (
 	"haproxy-template-ic/pkg/core/config"
 )
 
-func TestConvertCRDToConfig(t *testing.T) {
+func TestConvertSpec(t *testing.T) {
 	tests := []struct {
 		name    string
 		spec    v1alpha1.HAProxyTemplateConfigSpec
@@ -225,7 +225,7 @@ func TestConvertCRDToConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ConvertCRDToConfig(&tt.spec)
+			got, err := ConvertSpec(&tt.spec)
 
 			if tt.wantErr {
 				require.Error(t, err)

@@ -337,6 +337,29 @@ spec:
 
                   Snippets can be included in other templates using {% include "name" %}.
                 type: object
+              templatingSettings:
+                description: TemplatingSettings configures template rendering behavior
+                  and custom variables.
+                properties:
+                  extraContext:
+                    description: |-
+                      ExtraContext provides custom variables that are passed to all templates.
+
+                      This allows users to add arbitrary data to the template context without
+                      modifying controller code. Values can be any valid JSON type (string, number,
+                      boolean, object, array).
+
+                      Example:
+                        extraContext:
+                          debug:
+                            enabled: true
+                          environment: production
+                          customValue: 42
+
+                      Templates can then reference these as: {{ debug }}, {{ environment }}, etc.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                type: object
               validationTests:
                 additionalProperties:
                   description: |-
@@ -366,6 +389,13 @@ spec:
                             description: Pattern is the regex pattern for contains/not_contains
                               assertions.
                             type: string
+                          patterns:
+                            description: |-
+                              Patterns is a list of regex patterns for match_order assertions.
+                              The patterns must appear in the target in the order specified.
+                            items:
+                              type: string
+                            type: array
                           target:
                             description: |-
                               Target specifies what to validate.
@@ -386,6 +416,7 @@ spec:
                                 - equals: Checks if target equals expected value
                                 - jsonpath: Evaluates JSONPath expression against target
                                 - match_count: Counts how many times pattern matches in target (regex)
+                                - match_order: Validates that patterns appear in specified order
                             enum:
                             - haproxy_valid
                             - contains
@@ -393,6 +424,7 @@ spec:
                             - equals
                             - jsonpath
                             - match_count
+                            - match_order
                             type: string
                         required:
                         - type

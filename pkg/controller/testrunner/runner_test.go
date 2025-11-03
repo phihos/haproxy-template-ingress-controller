@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
+	"haproxy-template-ic/pkg/controller/conversion"
 	"haproxy-template-ic/pkg/dataplane"
 	"haproxy-template-ic/pkg/templating"
 )
@@ -265,7 +266,7 @@ func TestRunner_RunTests(t *testing.T) {
 			require.NoError(t, err)
 
 			// Convert CRD spec to internal config format
-			cfg, err := ConvertSpecToInternalConfig(tt.config)
+			cfg, err := conversion.ConvertSpec(tt.config)
 			require.NoError(t, err)
 
 			// Create test runner
@@ -369,7 +370,7 @@ backend {{ svc.metadata.namespace }}-{{ svc.metadata.name }}
 	require.NoError(t, err)
 
 	// Convert CRD spec to internal config format
-	cfg, err := ConvertSpecToInternalConfig(config)
+	cfg, err := conversion.ConvertSpec(config)
 	require.NoError(t, err)
 
 	runner := New(
@@ -439,7 +440,7 @@ func TestRunner_RenderError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Convert CRD spec to internal config format
-	cfg, err := ConvertSpecToInternalConfig(config)
+	cfg, err := conversion.ConvertSpec(config)
 	require.NoError(t, err)
 
 	runner := New(

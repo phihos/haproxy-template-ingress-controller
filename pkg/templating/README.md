@@ -10,7 +10,7 @@ This package provides a Go template engine with Jinja2-like syntax through the G
 - You're building a system that renders the same templates repeatedly with different data
 - You need features like loops, conditionals, filters, and macros in your templates
 
-The engine is thread-safe, so you can render templates concurrently from multiple goroutines without additional synchronization.
+The engine is thread-safe, so you can render templates concurrently from multiple goroutines without additional synchronization. This includes all features: rendering, tracing, and template management operations.
 
 ## Features
 
@@ -476,6 +476,180 @@ use_backend %[req.hdr(host),map({{ "host.map" | get_path("map") }})]
 {# Output: use_backend %[req.hdr(host),map(/etc/haproxy/maps/host.map)] #}
 ```
 
+**regex_escape** - Escape strings for HAProxy regex patterns:
+
+```go
+// Usage: {{ string | regex_escape }}
+func RegexEscape(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Escapes special regex characters for safe use in HAProxy ACL patterns and path matching. Essential when constructing regex patterns from user-controlled data like path prefixes.
+
+**Example:**
+```jinja2
+{# Escape path for regex matching #}
+{% set path_pattern = path.path | regex_escape %}
+acl path_match path_reg ^{{ path_pattern }}
+
+{# Example: "/api/v1" becomes "\/api\/v1" #}
+{% set api_path = "/api/v1" | regex_escape %}
+{# Output: \/api\/v1 #}
+```
+
+**extract** - Extract values from objects using JSONPath expressions:
+
+```go
+// Usage: {{ items | extract("$.path.to.field") }}
+func Extract(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Extracts values from objects or arrays using JSONPath-like expressions. Supports array indexing (`[*]`), nested access (`$.a.b.c`), and automatic flattening of nested arrays.
+
+**Example:**
+```jinja2
+{# Extract all HTTP methods from routes #}
+{% set methods = routes | extract("$.rules[*].matches[*].method") %}
+{# Returns: ["GET", "POST", "PUT"] #}
+
+{# Extract single field #}
+{% set names = ingresses | extract("$.metadata.name") %}
+{# Returns: ["app1", "app2", "app3"] #}
+
+{# Extract nested values #}
+{% set ports = services | extract("$.spec.ports[*].port") %}
+{# Returns: [80, 443, 8080] #}
+```
+
+**sort_by** - Sort items by JSONPath expressions with multiple criteria:
+
+```go
+// Usage: {{ items | sort_by(["$.field1", "$.field2:desc"]) }}
+func SortBy(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Sorts arrays of objects using one or more JSONPath expressions as sort keys. Supports modifiers: `:desc` (descending order), `:exists` (check field presence), and `| length` (sort by collection size).
+
+**Example:**
+```jinja2
+{# Sort routes by priority (descending) then name #}
+{% set sorted_routes = routes | sort_by(["$.priority:desc", "$.name"]) %}
+
+{# Gateway API route precedence (method > headers > query > path) #}
+{% set sorted = routes | sort_by([
+    "$.match.method:exists:desc",
+    "$.match.headers | length:desc",
+    "$.match.queryParams | length:desc",
+    "$.match.path.value | length:desc"
+]) %}
+
+{# Sort by field existence #}
+{% set with_tls_first = ingresses | sort_by(["$.spec.tls:exists:desc"]) %}
+```
+
+**Modifiers:**
+- `:desc` - Sort in descending order
+- `:exists` - Check if field exists (true sorts before false)
+- `| length` - Sort by collection or string length
+
+**group_by** - Group items by JSONPath expression values:
+
+```go
+// Usage: {{ items | group_by("$.field") }}
+func GroupBy(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Groups array items by the value of a JSONPath expression. Returns a map where keys are the extracted values and values are arrays of items with that value.
+
+**Example:**
+```jinja2
+{# Group ingresses by namespace #}
+{% set by_namespace = ingresses | group_by("$.metadata.namespace") %}
+{% for namespace, ing_list in by_namespace.items() %}
+  {# Process {{ ing_list|length }} ingresses in {{ namespace }} #}
+{% endfor %}
+
+{# Group routes by priority #}
+{% set by_priority = routes | group_by("$.priority") %}
+{% for priority, routes in by_priority.items() %}
+  {# Routes with priority {{ priority }}: {{ routes|length }} #}
+{% endfor %}
+```
+
+**transform** - Transform string values with regex substitution:
+
+```go
+// Usage: {{ items | transform("pattern", "replacement") }}
+func Transform(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Applies regex substitution to array elements, replacing matches of a pattern with a replacement string. Supports capture group references (`$1`, `$2`, etc.).
+
+**Example:**
+```jinja2
+{# Strip prefixes from paths #}
+{% set paths = ["/api/v1/users", "/api/v1/posts"] %}
+{% set stripped = paths | transform("^/api/v1", "") %}
+{# Returns: ["/users", "/posts"] #}
+
+{# Extract version from names #}
+{% set versions = ["app-v1", "app-v2"] | transform("app-(v\\d+)", "$1") %}
+{# Returns: ["v1", "v2"] #}
+```
+
+**debug** - Dump variable structure as HAProxy comments:
+
+```go
+// Usage: {{ variable | debug("label") }}
+func Debug(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Formats variables as JSON and outputs them as HAProxy comments (prefixed with `#`). Useful for template debugging without breaking configuration syntax.
+
+**Example:**
+```jinja2
+{# Inspect route structure #}
+{{ routes | debug("all-routes") }}
+
+{# Output:
+# DEBUG all-routes:
+# [
+#   {
+#     "name": "api-route",
+#     "priority": 10,
+#     "match": {"method": "GET"}
+#   }
+# ]
+#}
+
+{# Debug transformation results #}
+{% set sorted = routes | sort_by(["$.priority:desc"]) %}
+{{ sorted | debug("after-sorting") }}
+```
+
+**eval** - Evaluate JSONPath expressions for debugging:
+
+```go
+// Usage: {{ item | eval("$.path.to.field") }}
+func Eval(in interface{}, args ...interface{}) (interface{}, error)
+```
+
+Evaluates a JSONPath expression and returns the result with type information. Useful for testing sort_by criteria and understanding why items are ordered a certain way.
+
+**Example:**
+```jinja2
+{# Test sort criteria before using in sort_by #}
+{% for route in routes %}
+  {{ route.name }}: {{ route | eval("$.priority:desc") }}
+  {# Output: api-route: 10 (int) #}
+  {{ route | eval("$.match.method:exists") }}
+  {# Output: true (bool) #}
+{% endfor %}
+
+{# Debug complex expressions #}
+{{ route | eval("$.match.headers | length") }}
+{# Output: 3 (int) #}
+```
+
 ### Types
 
 #### `EngineType`
@@ -901,6 +1075,123 @@ Main content here
 
 **Note**: The current API requires all templates to be provided at initialization. Plan your template structure accordingly.
 
+### Custom Tags
+
+#### compute_once - Optimize Expensive Computations
+
+The `compute_once` custom tag prevents redundant execution of expensive template computations. When a template section is wrapped in `compute_once`, it executes only on the first call and skips execution on subsequent calls during the same render.
+
+**Syntax:**
+
+```jinja2
+{%- set result = namespace(data=[], processed=False) %}
+{%- compute_once result %}
+  {# Expensive computation that only runs once #}
+  {%- set result.processed = True %}
+  {%- for item in large_dataset %}
+    {%- set result.data = result.data.append(process(item)) %}
+  {%- endfor %}
+{%- endcompute_once %}
+```
+
+**Key points:**
+- Variable MUST be created before the `compute_once` block
+- Use `namespace()` to create mutable state that persists across includes
+- The tag tracks execution with a marker variable
+- Cache is automatically cleared between `Render()` calls
+
+**Use Cases:**
+
+**1. Prevent redundant analysis across multiple includes:**
+
+```jinja2
+{# main.cfg #}
+{%- set analysis = namespace(routes=[], groups={}) %}
+{%- include "frontend-http" %}
+{%- include "frontend-https" %}
+{%- include "backend-routing" %}
+
+{# frontend-http #}
+{%- compute_once analysis %}
+  {# Analyze all routes once instead of 3 times #}
+  {%- from "route-analyzer" import analyze_routes %}
+  {{- analyze_routes(analysis, all_routes) -}}
+{%- endcompute_once %}
+Use analysis here...
+
+{# frontend-https #}
+{%- compute_once analysis %}
+  {# Skipped - already computed #}
+  {%- from "route-analyzer" import analyze_routes %}
+  {{- analyze_routes(analysis, all_routes) -}}
+{%- endcompute_once %}
+Use same analysis results...
+```
+
+**2. Real-world example from Gateway API:**
+
+The Gateway API template library uses `compute_once` to optimize route analysis. Without it, the `analyze_routes` macro would run 4 times per configuration render, each time iterating over all HTTPRoutes and GRPCRoutes:
+
+```jinja2
+{# gateway.yaml library #}
+{%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+
+{# Used in multiple places - only analyzes once #}
+{%- compute_once analysis %}
+  {%- from "analyze_routes" import analyze_routes %}
+  {{- analyze_routes(analysis, resources) -}}
+{%- endcompute_once %}
+
+{# All subsequent uses see the same analysis results #}
+{% for route in analysis.sorted_routes %}
+  {# Generate HAProxy configuration from analyzed routes #}
+{% endfor %}
+```
+
+This optimization reduces the work by 75% in scenarios with many routes.
+
+**3. Cache expensive filtering or sorting:**
+
+```jinja2
+{%- set filtered = namespace(items=[]) %}
+{%- compute_once filtered %}
+  {%- for item in large_list %}
+    {%- if expensive_condition(item) %}
+      {%- set filtered.items = filtered.items.append(item) %}
+    {%- endif %}
+  {%- endfor %}
+{%- endcompute_once %}
+
+{# Use filtered.items multiple times without recomputing #}
+```
+
+**Performance Impact:**
+
+With `compute_once`, expensive computations execute exactly once regardless of how many templates include them. Without it, each include would re-execute the computation.
+
+**Example impact** (4 call sites with 100 HTTPRoutes):
+- Without `compute_once`: 400 route iterations
+- With `compute_once`: 100 route iterations (75% reduction)
+
+**Debugging:**
+
+Enable template tracing to verify compute_once optimization:
+
+```go
+engine.EnableTracing()
+output, _ := engine.Render("main", context)
+trace := engine.GetTraceOutput()
+
+// Verify expensive computation only appears once
+fmt.Println(trace)
+```
+
+**Limitations:**
+
+- Variable must exist before `compute_once` block (the tag cannot create it)
+- Only works within a single `Render()` call (cache cleared between renders)
+- Not suitable for computations that should run multiple times with different inputs
+
 ## Performance
 
 The library is designed for high performance:
@@ -908,7 +1199,7 @@ The library is designed for high performance:
 - **Compilation**: Templates are compiled once at initialization (~1-10ms per template)
 - **Rendering**: Pre-compiled templates render in microseconds (~10-100µs for typical templates)
 - **Memory**: Compiled templates are cached in memory for zero-cost lookups
-- **Concurrency**: The `TemplateEngine` is safe for concurrent use from multiple goroutines
+- **Concurrency**: The `TemplateEngine` is safe for concurrent use from multiple goroutines. All operations (rendering, tracing, template lookups) use proper synchronization and have been validated with Go's race detector.
 
 **Benchmark example:**
 ```go

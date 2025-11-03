@@ -14,6 +14,16 @@ templateSnippets:
       {%- endfor %}
       {%- endmacro -%}
 
+  regex-sanitize:
+    template: |
+      {#- Macro to sanitize regex patterns for HAProxy double-quoted context #}
+      {#- Escapes $ as \$ to prevent environment variable substitution #}
+      {#- Usage: {% from "regex-sanitize" import sanitize_regex %}{{ sanitize_regex(pattern) }} #}
+      {%- macro sanitize_regex(pattern) -%}
+      {%- set result = pattern | replace("$", "\\$") -%}
+      {{- result -}}
+      {%- endmacro -%}
+
   use-backend-selection:
     template: |
       {#- Backend selection logic with qualifier system #}
@@ -37,6 +47,16 @@ templateSnippets:
 
       # Parse qualifier from path match (field 1 = qualifier type)
       # Empty string if no path match - falls through gracefully
+      http-request set-var(txn.path_match_qualifier) var(txn.path_match),field(1,:)
+
+      # Extension point for advanced matchers (method/header/query)
+      # Libraries can inject ordered http-request statements here
+      {%- from "macros" import include_matching -%}
+      {%- filter indent(6, first=True) %}
+      {{ include_matching("advanced-matcher-*") }}
+      {%- endfilter %}
+
+      # Re-parse path_match_qualifier after advanced matchers may have changed path_match
       http-request set-var(txn.path_match_qualifier) var(txn.path_match),field(1,:)
 
       # MULTIBACKEND qualifier: weighted routing
@@ -70,7 +90,8 @@ templateSnippets:
       {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
         {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
           {%- for address in (endpoint.addresses | default([])) %}
-            {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint.targetRef.name, 'address': address, 'port': port}] %}
+            {%- set endpoint_name = endpoint.targetRef.name if endpoint.targetRef else address %}
+            {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint_name, 'address': address, 'port': port}] %}
           {%- endfor %}
         {%- endfor %}
       {%- endfor %}
@@ -144,9 +165,9 @@ maps:
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
       # It should be used with the prefix string matcher. Example:
       #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
-      {#- Resource libraries populate this map via map-entry-path-prefix-* snippets #}
+      {#- Resource libraries populate this map via map-entry-path-prefix-beg-* snippets #}
       {%- from "macros" import include_matching -%}
-      {{- include_matching("map-entry-path-prefix-*") -}}
+      {{- include_matching("map-entry-path-prefix-beg-*") -}}
 
   path-regex.map:
     template: |
@@ -251,7 +272,6 @@ haproxyConfig:
   template: |
     global
         log stdout len 4096 local0 info
-        chroot /var/lib/haproxy
         user haproxy
         group haproxy
         daemon
@@ -293,6 +313,22 @@ haproxyConfig:
         {%- filter indent(8, first=False) %}
         {% include "use-backend-selection" -%}
         {%- endfilter %}
+
+        # Debug headers (when enabled via templating settings)
+        {%- if debug | default(false) %}
+        # HAProxy routing decision introspection
+        http-response set-header X-HAProxy-Backend %[var(txn.backend_name)] if { var(txn.backend_name) -m found }
+        http-response set-header X-HAProxy-Host-Match %[var(txn.host_match)] if { var(txn.host_match) -m found }
+        http-response set-header X-HAProxy-Path-Match %[var(txn.path_match)] if { var(txn.path_match) -m found }
+        http-response set-header X-HAProxy-Path-Match-Qualifier %[var(txn.path_match_qualifier)] if { var(txn.path_match_qualifier) -m found }
+        http-response set-header X-HAProxy-Total-Weight %[var(txn.total_weight)] if { var(txn.total_weight) -m found }
+        http-response set-header X-HAProxy-Random-Weight %[var(txn.random_weight)] if { var(txn.random_weight) -m found }
+        http-response set-header X-HAProxy-Route-Key %[var(txn.route_key)] if { var(txn.route_key) -m found }
+        # Gateway-specific headers (set by gateway.yaml advanced matchers)
+        http-response set-header X-Gateway-Matched-Route %[var(txn.matched_route)] if { var(txn.matched_route) -m found }
+        http-response set-header X-Gateway-Match-Reason %[var(txn.match_reason)] if { var(txn.match_reason) -m found }
+        http-response set-header X-Gateway-Filters-Applied %[var(txn.filters_applied)] if { var(txn.filters_applied) -m found }
+        {%- endif %}
 
         # Default backend
         default_backend default_backend

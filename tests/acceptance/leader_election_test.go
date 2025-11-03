@@ -887,4 +887,3 @@ watched_resources:
 
 	testEnv.Test(t, feature)
 }
-

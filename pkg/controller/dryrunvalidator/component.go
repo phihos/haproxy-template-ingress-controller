@@ -295,7 +295,8 @@ func (c *Component) renderWithOverlayStores(overlayStores map[string]types.Store
 
 // buildRenderingContext builds the template rendering context using overlay stores.
 //
-// This mirrors renderer.Component.buildRenderingContext but uses the provided stores.
+// This mirrors renderer.Component.buildRenderingContext and TestRunner.buildRenderingContext.
+// The context includes resources (overlay stores), template snippets, and controller configuration.
 func (c *Component) buildRenderingContext(stores map[string]types.Store) map[string]interface{} {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
@@ -315,6 +316,7 @@ func (c *Component) buildRenderingContext(stores map[string]types.Store) map[str
 	return map[string]interface{}{
 		"resources":         resources,
 		"template_snippets": snippetNames,
+		"config":            c.config,
 	}
 }
 

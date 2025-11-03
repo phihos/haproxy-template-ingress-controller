@@ -32,6 +32,7 @@ import (
 //	    // ... other watched resources
 //	  },
 //	  "template_snippets": ["snippet1", "snippet2", ...]  // Sorted by priority
+//	  "config": Config,  // Controller configuration (e.g., config.debug.headers.enabled)
 //	}
 //
 // Templates can access resources:
@@ -40,12 +41,18 @@ import (
 //	  {{ ingress.metadata.name }}
 //	{% endfor %}
 //
-// And iterate over matching template snippets:
+// Iterate over matching template snippets:
 //
 //	{%- set matching = template_snippets | glob_match("backend-annotation-*") %}
 //	{%- for snippet_name in matching %}
 //	  {% include snippet_name %}
 //	{%- endfor %}
+//
+// And access controller configuration:
+//
+//	{%- if config.debug.headers.enabled | default(false) %}
+//	  http-response set-header X-Debug-Info %[var(txn.backend_name)]
+//	{%- endif %}
 func (c *Component) buildRenderingContext() map[string]interface{} {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
@@ -72,6 +79,14 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 	context := map[string]interface{}{
 		"resources":         resources,
 		"template_snippets": snippetNames,
+	}
+
+	// Merge extraContext variables into top-level context
+	MergeExtraContextInto(context, c.config)
+
+	if c.config.TemplatingSettings.ExtraContext != nil {
+		c.logger.Info("added extra context variables to template context",
+			"variable_count", len(c.config.TemplatingSettings.ExtraContext))
 	}
 
 	return context
@@ -113,4 +128,18 @@ func sortSnippetsByPriority(snippets map[string]config.TemplateSnippet) []string
 	}
 
 	return names
+}
+
+// MergeExtraContextInto merges the extraContext variables from the config into the provided template context.
+//
+// This allows templates to access custom variables directly (e.g., {{ debug.enabled }})
+// instead of wrapping them in a "config" object.
+//
+// If extraContext is nil or empty, the context is left unchanged.
+func MergeExtraContextInto(context map[string]interface{}, cfg *config.Config) {
+	if cfg.TemplatingSettings.ExtraContext != nil {
+		for key, value := range cfg.TemplatingSettings.ExtraContext {
+			context[key] = value
+		}
+	}
 }

@@ -128,6 +128,51 @@ dataplane:
 - Paths must match HAProxy Dataplane API resource configuration
 - Duration strings use Go format: `500ms`, `2s`, `5m`, `1h`
 
+#### `templating_settings`
+
+Template rendering configuration and custom variables.
+
+| Field           | Type                    | Default | Description                                                             |
+|-----------------|-------------------------|---------|-------------------------------------------------------------------------|
+| `extra_context` | map[string]interface{}  | `{}`    | Custom variables merged into template context (available in all templates) |
+
+**Example**:
+
+```yaml
+templating_settings:
+  extra_context:
+    debug:
+      enabled: true
+      verbose_headers: false
+    environment: production
+    feature_flags:
+      rate_limiting: true
+      caching: false
+    custom_timeout: 30
+```
+
+**Usage in templates**:
+
+Custom variables are merged at the top level of the template context. Access them directly:
+
+```jinja2
+{% if debug.enabled %}
+  # Debug-specific configuration
+  http-response set-header X-HAProxy-Backend %[be_name]
+{% endif %}
+
+{% if environment == "production" %}
+  timeout client {{ custom_timeout }}s
+{% endif %}
+
+{% if feature_flags.rate_limiting %}
+  # Rate limiting configuration
+  stick-table type ip size 100k expire 30s store http_req_rate(10s)
+{% endif %}
+```
+
+See [Templating Guide](./templating.md#custom-template-variables) for detailed examples and use cases.
+
 #### `watched_resources_ignore_fields`
 
 JSONPath expressions for fields to remove from watched resources to reduce memory usage.
