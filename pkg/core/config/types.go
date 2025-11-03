@@ -32,6 +32,9 @@ type Config struct {
 	// Dataplane configures the Dataplane API for production HAProxy instances.
 	Dataplane DataplaneConfig `yaml:"dataplane"`
 
+	// TemplatingSettings configures template rendering behavior and custom variables.
+	TemplatingSettings TemplatingSettings `yaml:"templating_settings" json:"templatingSettings"`
+
 	// WatchedResourcesIgnoreFields specifies JSONPath expressions for fields
 	// to remove from all watched resources to reduce memory usage.
 	//
@@ -295,6 +298,25 @@ type SSLCertificate struct {
 type HAProxyConfig struct {
 	// Template is the template content that generates haproxy.cfg.
 	Template string `yaml:"template"`
+}
+
+// TemplatingSettings configures template rendering behavior and custom variables.
+type TemplatingSettings struct {
+	// ExtraContext provides custom variables that are passed to all templates.
+	//
+	// This allows users to add arbitrary data to the template context without
+	// modifying controller code. Values can be any valid JSON type (string, number,
+	// boolean, object, array).
+	//
+	// Example in YAML:
+	//   extra_context:
+	//     debug:
+	//       enabled: true
+	//     environment: production
+	//     custom_value: 42
+	//
+	// Templates can then reference these variables directly: {{ debug.enabled }}, {{ environment }}, etc.
+	ExtraContext map[string]interface{} `yaml:"extra_context" json:"extraContext"`
 }
 
 // Credentials contains HAProxy Dataplane API credentials.

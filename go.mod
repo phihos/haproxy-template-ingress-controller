@@ -1,6 +1,6 @@
 module haproxy-template-ic
 
-go 1.25
+go 1.25.3
 
 require (
 	github.com/KimMachineGun/automemlimit v0.7.4

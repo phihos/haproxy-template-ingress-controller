@@ -25,11 +25,11 @@ import (
 
 // HAProxyConfig holds configuration for deploying HAProxy
 type HAProxyConfig struct {
-	Image            string
-	DataplanePort    int32
-	DataplaneUser    string
-	DataplanePass    string
-	HAProxyStatPort  int32
+	Image           string
+	DataplanePort   int32
+	DataplaneUser   string
+	DataplanePass   string
+	HAProxyStatPort int32
 }
 
 // DefaultHAProxyConfig returns default HAProxy configuration
@@ -43,26 +43,26 @@ func DefaultHAProxyConfig() *HAProxyConfig {
 
 	return &HAProxyConfig{
 		// Use debian image which includes dataplaneapi binary
-		Image:            fmt.Sprintf("haproxytech/haproxy-debian:%s", version),
-		DataplanePort:    5555,
-		DataplaneUser:    "admin",
-		DataplanePass:    "adminpwd",
-		HAProxyStatPort:  8404,
+		Image:           fmt.Sprintf("haproxytech/haproxy-debian:%s", version),
+		DataplanePort:   5555,
+		DataplaneUser:   "admin",
+		DataplanePass:   "adminpwd",
+		HAProxyStatPort: 8404,
 	}
 }
 
 // HAProxyInstance represents a deployed HAProxy instance in Kubernetes
 type HAProxyInstance struct {
-	Name            string
-	Namespace       string
-	DataplanePort   int32
-	LocalPort       int32 // Port on localhost where dataplane is forwarded
-	DataplaneUser   string
-	DataplanePass   string
-	pod             *corev1.Pod
-	namespace       *Namespace
-	stopChan        chan struct{}
-	readyChan       chan struct{}
+	Name          string
+	Namespace     string
+	DataplanePort int32
+	LocalPort     int32 // Port on localhost where dataplane is forwarded
+	DataplaneUser string
+	DataplanePass string
+	pod           *corev1.Pod
+	namespace     *Namespace
+	stopChan      chan struct{}
+	readyChan     chan struct{}
 }
 
 // DeployHAProxy deploys an HAProxy instance to the given namespace
@@ -160,8 +160,8 @@ log_targets:
 			// Init container to set up directories
 			InitContainers: []corev1.Container{
 				{
-					Name:  "init-dirs",
-					Image: cfg.Image,
+					Name:    "init-dirs",
+					Image:   cfg.Image,
 					Command: []string{"/bin/sh", "-c"},
 					Args: []string{`
 						mkdir -p /etc/haproxy/maps /etc/haproxy/ssl /etc/haproxy/general /etc/haproxy/spoe
@@ -188,12 +188,12 @@ log_targets:
 			},
 			Containers: []corev1.Container{
 				{
-					Name:  "haproxy",
-					Image: cfg.Image,
+					Name:    "haproxy",
+					Image:   cfg.Image,
 					Command: []string{"/usr/local/sbin/haproxy"},
 					Args: []string{
-						"-W", // master-worker mode
-						"-db", // disable background mode
+						"-W",                                     // master-worker mode
+						"-db",                                    // disable background mode
 						"-S", "/etc/haproxy/haproxy-master.sock", // master socket
 						"--",
 						"/etc/haproxy/haproxy.cfg",
@@ -212,8 +212,8 @@ log_targets:
 					},
 				},
 				{
-					Name:  "dataplane",
-					Image: cfg.Image,
+					Name:    "dataplane",
+					Image:   cfg.Image,
 					Command: []string{"/usr/local/bin/dataplaneapi"},
 					Args:    []string{"-f", "/etc/haproxy/dataplaneapi.yaml"},
 					Ports: []corev1.ContainerPort{

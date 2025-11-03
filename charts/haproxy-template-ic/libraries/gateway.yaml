@@ -10,15 +10,16 @@
 #
 # Key features:
 # - Path matching: Exact, PathPrefix, RegularExpression (HTTPRoute only)
+# - Method, header, and query parameter matching (HTTPRoute and GRPCRoute)
+# - Core filters: RequestHeaderModifier, ResponseHeaderModifier, RequestRedirect, URLRewrite
 # - Weighted traffic splitting: backendRefs with weights for both HTTPRoute and GRPCRoute
 # - Host-based routing: Multiple hostnames per route
 # - Backend deduplication: Prevents duplicate backend definitions
 # - Optimized routing: Single backends use BACKEND qualifier, multiple use MULTIBACKEND
 #
 # Known limitations:
-# - Header and query parameter matching not implemented
-# - Filters (header modification, redirects, etc.) not implemented
-# - GRPCRoute method-based routing not implemented (all traffic to hostname routes to same backend)
+# - Extended filters not implemented: RequestMirror
+# - GRPCRoute method-based routing not fully implemented (partial support)
 
 watchedResources:
   httproutes:
@@ -51,8 +52,26 @@ templateSnippets:
   analyze_routes:
     template: |
       {%- macro analyze_routes(result, resources) %}
-        {#- Collect all routes with normalized structure #}
-        {#- Modifies result namespace with: all_routes, path_groups, sorted_routes #}
+        {#-
+          Gateway API Conflict Resolution Precedence
+
+          When multiple HTTPRoutes match the same host and path, the following
+          precedence order is used to select the winning route:
+
+          1. HTTP method specificity (routes with method matchers win over catch-all)
+          2. Number of header matchers (more specific matchers win)
+          3. Number of query parameter matchers (more specific matchers win)
+          4. Route order (older resources / earlier rules win as tie-breaker)
+
+          This implements Gateway API spec semantics for route precedence.
+
+          The analyze_routes macro:
+          - Collects all routes with normalized structure
+          - Detects conflicts (same host + path with different matchers)
+          - Builds conflict_group strings for VAR qualifier routing
+          - Sorts routes by precedence order for advanced matcher generation
+          - Modifies result namespace with: all_routes, path_groups, sorted_routes
+        -#}
         {%- set ns_routes = namespace(all_routes=[]) %}
 
         {#- Process HTTPRoutes #}
@@ -74,6 +93,7 @@ templateSnippets:
                   "rule_idx": rule_counter.idx,
                   "match": match,
                   "path": path_value,
+                  "filters": rule.filters | default([]),
                   "is_grpc": false,
                   "resource_type": "httproute"
                 } %}
@@ -103,6 +123,7 @@ templateSnippets:
                   "rule_idx": rule_counter.idx,
                   "match": match,
                   "path": {"type": "Exact", "value": "/"},
+                  "filters": rule.filters | default([]),
                   "is_grpc": true,
                   "resource_type": "grpcroute"
                 } %}
@@ -197,6 +218,22 @@ templateSnippets:
             {%- set ns_updated.routes = ns_updated.routes.append(updated_route) %}
           {%- endfor %}
 
+          {#- Build conflict_group string #}
+          {#- For conflicts: joined route_ids (e.g., "ns_route1_0__ns_route2_0") #}
+          {#- For single route: just the route_id (e.g., "ns_route1_0") #}
+          {%- set ns_ids = namespace(route_ids=[]) %}
+          {%- for route in ns_updated.routes %}
+            {%- set ns_ids.route_ids = ns_ids.route_ids.append(route.route_id) %}
+          {%- endfor %}
+          {%- set conflict_group = ns_ids.route_ids | join("__") %}
+          {#- Add conflict_group to each route #}
+          {%- set ns_final = namespace(routes=[]) %}
+          {%- for route in ns_updated.routes %}
+            {%- set route_with_group = route.update({"conflict_group": conflict_group}) %}
+            {%- set ns_final.routes = ns_final.routes.append(route_with_group) %}
+          {%- endfor %}
+          {%- set ns_updated.routes = ns_final.routes %}
+
           {#- Update path_groups with modified routes #}
           {%- set ns_groups.data = ns_groups.data.update({path_key: ns_updated.routes}) %}
         {%- endfor %}
@@ -210,24 +247,12 @@ templateSnippets:
           {%- endfor %}
         {%- endfor %}
 
-        {#- Collect routes needing advanced matchers (http-request statements) #}
-        {#- This includes: routes with conflicts OR routes with advanced matchers (method/headers/query) #}
+        {#- Collect ALL routes for advanced matcher generation #}
+        {#- Every route needs a matcher to set req.gw_rule_id, even routes without #}
+        {#- method/header/query conditions (they get default matcher with just guard conditions) #}
         {%- set ns_advanced = namespace(routes=[]) %}
         {%- for route in ns_all.routes %}
-          {%- set has_advanced_matchers = false %}
-          {%- if route.match.method %}
-            {%- set has_advanced_matchers = true %}
-          {%- endif %}
-          {%- if route.match.headers and route.match.headers | length > 0 %}
-            {%- set has_advanced_matchers = true %}
-          {%- endif %}
-          {%- if route.match.queryParams and route.match.queryParams | length > 0 %}
-            {%- set has_advanced_matchers = true %}
-          {%- endif %}
-          {#- Include route if it has conflicts OR advanced matchers #}
-          {%- if route.has_conflicts or has_advanced_matchers %}
-            {%- set ns_advanced.routes = ns_advanced.routes.append(route) %}
-          {%- endif %}
+          {%- set ns_advanced.routes = ns_advanced.routes.append(route) %}
         {%- endfor %}
 
         {%- set sorted_routes = ns_advanced.routes | sort_by([
@@ -251,72 +276,65 @@ templateSnippets:
     template: >-
       {{- "" -}}gtw_{{ route.metadata.namespace }}_{{ route.metadata.name }}_{{ backend.name }}_{{ backend.port }}
 
+  generate_gateway_backends_macro:
+    template: |
+      {#- Macro to generate backends for Gateway API routes (HTTPRoute/GRPCRoute) #}
+      {#- Deduplicates backends across all routes using shared namespace.seen tracking #}
+      {#- Parameters: #}
+      {#-   routes: list of routes to process (from resources.httproutes or resources.grpcroutes) #}
+      {#-   proto_flag: protocol flag for default-server ("" for HTTP, "h2" for gRPC) #}
+      {#-   ns: namespace object with seen="" for deduplication tracking (shared across calls) #}
+      {%- macro generate_gateway_backends(routes, proto_flag, ns) -%}
+      {%- for route in routes %}
+      {%- for rule in (route.spec.rules | default([])) %}
+      {%- if rule.backendRefs %}
+      {%- for backendRef in rule.backendRefs %}
+      {%- set backend = {"name": backendRef.name, "port": backendRef.port} %}
+      {%- set backend_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ backend.name ~ "_" ~ backend.port %}
+      {%- if ("|" ~ backend_key ~ "|") not in ns.seen %}
+      {%- set ns.seen = ns.seen ~ "|" ~ backend_key ~ "|" %}
+
+      backend {%+ include "resource_gateway_backend-name" +%}
+        balance roundrobin
+        default-server check{{ " proto " ~ proto_flag if proto_flag else "" }}
+        {%- filter indent(2, first=True) %}
+        {% include "backend-annotations" %}
+        {% set service_name = backend.name %}
+        {% set port = backend.port %}
+        {% include "backend-servers" %}
+        {%- endfilter %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+      {%- endmacro -%}
+
   resource_gateway_backends:
     template: |
       {#- Generate backend definitions from HTTPRoute and GRPCRoute resources #}
       {#- Deduplicates backends: one backend per unique (namespace, route, service, port) combination #}
       {#- Usage: {% include "resource_gateway_backends" %} #}
 
-      {#- Use namespace with string tracking for seen backends #}
+      {#- Import backend generation macro #}
+      {%- from "generate_gateway_backends_macro" import generate_gateway_backends %}
+
+      {#- Use namespace with string tracking for seen backends (shared across both route types) #}
       {%- set ns = namespace(seen="") %}
       # gateway/resource_gateway_backends
 
-      {#- HTTPRoute backends #}
-      {%- for route in resources.httproutes.List() %}
-      {%- for rule in (route.spec.rules | default([])) %}
-      {%- if rule.backendRefs %}
-      {%- for backendRef in rule.backendRefs %}
-      {%- set backend = {"name": backendRef.name, "port": backendRef.port} %}
-      {%- set backend_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ backend.name ~ "_" ~ backend.port %}
-      {%- if ("|" ~ backend_key ~ "|") not in ns.seen %}
-      {%- set ns.seen = ns.seen ~ "|" ~ backend_key ~ "|" %}
+      {#- HTTPRoute backends (HTTP protocol) #}
+      {{- generate_gateway_backends(resources.httproutes.List(), "", ns) -}}
 
-      backend {%+ include "resource_gateway_backend-name" +%}
-        balance roundrobin
-        default-server check
-        {%- filter indent(2, first=True) %}
-        {% include "backend-annotations" %}
-        {% set service_name = backend.name %}
-        {% set port = backend.port %}
-        {% include "backend-servers" %}
-        {%- endfilter %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endfor %}
-
-      {#- GRPCRoute backends #}
-      {%- for route in resources.grpcroutes.List() %}
-      {%- for rule in (route.spec.rules | default([])) %}
-      {%- if rule.backendRefs %}
-      {%- for backendRef in rule.backendRefs %}
-      {%- set backend = {"name": backendRef.name, "port": backendRef.port} %}
-      {%- set backend_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ backend.name ~ "_" ~ backend.port %}
-      {%- if ("|" ~ backend_key ~ "|") not in ns.seen %}
-      {%- set ns.seen = ns.seen ~ "|" ~ backend_key ~ "|" %}
-
-      backend {%+ include "resource_gateway_backend-name" +%}
-        balance roundrobin
-        default-server check proto h2
-        {%- filter indent(2, first=True) %}
-        {% include "backend-annotations" %}
-        {% set service_name = backend.name %}
-        {% set port = backend.port %}
-        {% include "backend-servers" %}
-        {%- endfilter %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endfor %}
+      {#- GRPCRoute backends (HTTP/2 protocol) #}
+      {{- generate_gateway_backends(resources.grpcroutes.List(), "h2", ns) -}}
 
   resource_gateway_path-map-entry:
     template: |
       {#- Generate HTTPRoute path matching map entries with qualifiers #}
       {#- Single backend: BACKEND:<backend_name> #}
       {#- Multiple backends: MULTIBACKEND:<total_weight>:<route_key> #}
-      {#- Conflicting paths: VAR:httproute_route_id:<route_ids> #}
+      {#- Conflicting paths: GW_ROUTE_ID:<route_type>:<route_ids> #}
       {#- Usage: {% include "resource_gateway_path-map-entry" with context %} where path_type = "Exact" or "PathPrefix" #}
       # gateway/resource_gateway_path-map-entry
 
@@ -327,9 +345,8 @@ templateSnippets:
         {{- analyze_routes(analysis, resources) -}}
       {%- endcompute_once %}
 
-      {#- Iterate over all routes: sorted_routes first (for ordering), then remaining path_groups #}
+      {#- Iterate over all routes in precedence order (sorted_routes contains all routes) #}
       {%- set ns_seen = namespace(paths="") %}
-      {#- First, process sorted_routes in order (routes with advanced matchers or conflicts) #}
       {%- for route_info in analysis.sorted_routes %}
         {%- set path_key = route_info.hostname ~ '|' ~ route_info.path.type ~ '|' ~ route_info.path.value %}
         {%- if ("|" ~ path_key ~ "|") not in ns_seen.paths %}
@@ -338,93 +355,43 @@ templateSnippets:
           {%- set first_route = routes[0] %}
         {#- Only process routes matching the current path_type #}
         {%- if first_route.path and first_route.path.type == path_type %}
-          {%- if first_route.has_conflicts %}
-            {#- Conflicting routes: use VAR qualifier #}
-            {%- set ns_ids = namespace(route_ids=[]) %}
-            {%- for route_info in routes %}
-              {%- set ns_ids.route_ids = ns_ids.route_ids.append(route_info.route_id) %}
-            {%- endfor %}
-            {%- set route_ids_str = ns_ids.route_ids | join("__") -%}
-      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} VAR:{{ first_route.resource_type }}_route_id:{{ route_ids_str }}{{ suffix }}
-          {%- else %}
-            {#- Non-conflicting route #}
-            {%- set backend_refs = first_route.rule.backendRefs | default([]) %}
-            {%- if backend_refs | length == 1 %}
-              {#- Single backend: use BACKEND qualifier #}
-              {%- set backend = backend_refs[0] -%}
-      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} BACKEND:gtw_{{ first_route.route.metadata.namespace }}_{{ first_route.route.metadata.name }}_{{ backend.name }}_{{ backend.port }}{{ suffix }}
-            {%- elif backend_refs | length > 1 %}
-              {#- Multiple backends: use MULTIBACKEND qualifier #}
-              {%- set ns_weight = namespace(total=0) %}
-              {%- for backend in backend_refs %}
-                {%- set ns_weight.total = ns_weight.total + (backend.weight | default(1)) %}
-              {%- endfor %}
-              {%- set route_key = first_route.route.metadata.namespace ~ "_" ~ first_route.route.metadata.name ~ "_" ~ first_route.rule_idx -%}
-      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} MULTIBACKEND:{{ ns_weight.total }}:{{ route_key }}{{ suffix }}
-            {%- endif %}
-          {%- endif %}
-        {%- endif %}
-        {%- endif %}
-      {%- endfor %}
-      {#- Second, process remaining path_groups (routes without advanced matchers or conflicts) #}
-      {%- for path_key in analysis.path_groups %}
-        {%- if ("|" ~ path_key ~ "|") not in ns_seen.paths %}
-          {%- set ns_seen.paths = ns_seen.paths ~ "|" ~ path_key ~ "|" %}
-          {%- set routes = analysis.path_groups[path_key] %}
-          {%- set first_route = routes[0] %}
-        {#- Only process routes matching the current path_type #}
-        {%- if first_route.path and first_route.path.type == path_type %}
-          {%- if first_route.has_conflicts %}
-            {#- Conflicting routes: use VAR qualifier #}
-            {%- set ns_ids = namespace(route_ids=[]) %}
-            {%- for route_info in routes %}
-              {%- set ns_ids.route_ids = ns_ids.route_ids.append(route_info.route_id) %}
-            {%- endfor %}
-            {%- set route_ids_str = ns_ids.route_ids | join("__") -%}
-      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} VAR:{{ first_route.resource_type }}_route_id:{{ route_ids_str }}{{ suffix }}
-          {%- else %}
-            {#- Non-conflicting route #}
-            {%- set backend_refs = first_route.rule.backendRefs | default([]) %}
-            {%- if backend_refs | length == 1 %}
-              {#- Single backend: use BACKEND qualifier #}
-              {%- set backend = backend_refs[0] -%}
-      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} BACKEND:gtw_{{ first_route.route.metadata.namespace }}_{{ first_route.route.metadata.name }}_{{ backend.name }}_{{ backend.port }}{{ suffix }}
-            {%- elif backend_refs | length > 1 %}
-              {#- Multiple backends: use MULTIBACKEND qualifier #}
-              {%- set ns_weight = namespace(total=0) %}
-              {%- for backend in backend_refs %}
-                {%- set ns_weight.total = ns_weight.total + (backend.weight | default(1)) %}
-              {%- endfor %}
-              {%- set route_key = first_route.route.metadata.namespace ~ "_" ~ first_route.route.metadata.name ~ "_" ~ first_route.rule_idx -%}
-      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} MULTIBACKEND:{{ ns_weight.total }}:{{ route_key }}{{ suffix }}
-            {%- endif %}
-          {%- endif %}
+          {#- Always use GW_ROUTE_ID qualifier for all Gateway API routes #}
+          {#- NOTE: Do NOT append suffix to GW_ROUTE_ID qualifier - it would break advanced matcher string matching #}
+          {%- set ns_ids = namespace(route_ids=[]) %}
+          {%- for route_info in routes %}
+            {%- set ns_ids.route_ids = ns_ids.route_ids.append(route_info.route_id) %}
+          {%- endfor %}
+          {%- set route_ids_str = ns_ids.route_ids | join("__") -%}
+      {{ "\n" }}{{ first_route.hostname }}{{ first_route.path.value }} GW_ROUTE_ID:{{ first_route.resource_type | replace("httproute", "http") | replace("grpcroute", "grpc") }}:{{ route_ids_str }}
         {%- endif %}
         {%- endif %}
       {%- endfor %}
 
+  generate_host_map_macro:
+    template: |
+      {#- Macro to generate host map entries for Gateway API routes #}
+      {#- Parameters: #}
+      {#-   routes: list of routes to process (from resources.httproutes or resources.grpcroutes) #}
+      {#-   route_type: route type name for comments ("HTTPRoute" or "GRPCRoute") #}
+      {%- macro generate_host_map(routes, route_type) -%}
+      {%- for route in routes %}
+      {%- set hostnames = route.spec.hostnames | default([]) %}
+      {%- if hostnames | length > 0 %}
+      # {{ route_type }}: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ hostnames | length }} hosts)
+      {% for hostname in hostnames %}
+      {{ hostname }} {{ hostname }}
+      {%- endfor %}
+      {%- endif %}
+      {%- endfor %}
+      {%- endmacro -%}
+
   map-entry-host-gateway:
     template: |
       {#- Generate host map entries for Gateway API routes #}
+      {%- from "generate_host_map_macro" import generate_host_map %}
       # gateway/map-entry-host-gateway
-      {%- for route in resources.httproutes.List() %}
-      {%- set hostnames = route.spec.hostnames | default([]) %}
-      {%- if hostnames | length > 0 %}
-      # HTTPRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ hostnames | length }} hosts)
-      {% for hostname in hostnames %}
-      {{ hostname }} {{ hostname }}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
-      {%- for route in resources.grpcroutes.List() %}
-      {%- set hostnames = route.spec.hostnames | default([]) %}
-      {%- if hostnames | length > 0 %}
-      # GRPCRoute: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ hostnames | length }} hosts)
-      {% for hostname in hostnames %}
-      {{ hostname }} {{ hostname }}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
+      {{- generate_host_map(resources.httproutes.List(), "HTTPRoute") -}}
+      {{- generate_host_map(resources.grpcroutes.List(), "GRPCRoute") -}}
 
   map-entry-path-exact-gateway:
     template: |
@@ -442,10 +409,10 @@ templateSnippets:
       {%- set suffix = "" %}
       {% include "resource_gateway_path-map-entry" %}
 
-  map-entry-path-prefix-gateway:
+  map-entry-path-prefix-beg-gateway:
     template: |
       {#- Generate prefix path map entries with trailing slash for HTTPRoute #}
-      # gateway/map-entry-path-prefix-gateway
+      # gateway/map-entry-path-prefix-beg-gateway
       {% set path_type = "PathPrefix" %}
       {%- set suffix = "/" %}
       {% include "resource_gateway_path-map-entry" %}
@@ -530,6 +497,17 @@ templateSnippets:
       {%- endfor %}
       {%- endfor %}
 
+  # Advanced matcher setup - processes GW_ROUTE_ID qualifier (runs early via 000 prefix)
+  advanced-matcher-000-gw-route-id-setup:
+    template: |
+      {#- Process GW_ROUTE_ID qualifier to extract route type and route ID #}
+      {#- Format: GW_ROUTE_ID:<route_type>:<route_ids> #}
+      {#- Example: GW_ROUTE_ID:http:ns1_route1_0__ns2_route2_1 #}
+      {#- This runs early (000 prefix) to set variables used by later matchers #}
+      # gateway/advanced-matcher-000-gw-route-id-setup
+      http-request set-var(req.gw_route_type) var(txn.path_match),field(2,:) if { var(txn.path_match),field(1,:) -m str GW_ROUTE_ID }
+      http-request set-var(req.gw_route_id) var(txn.path_match),field(3,:) if { var(txn.path_match),field(1,:) -m str GW_ROUTE_ID }
+
   # Advanced matcher generator - creates http-request statements for method/header/query matching
   advanced-matcher-gateway:
     template: |
@@ -549,15 +527,11 @@ templateSnippets:
       {%- if analysis.sorted_routes | length > 0 %}
       # Advanced route matching (method/header/query)
       {%- for route_info in analysis.sorted_routes %}
-        {%- set ns_cond = namespace(conditions=[]) %}
+        {#- Early exit: skip if another matcher already won #}
+        {%- set ns_cond = namespace(conditions=['!{ var(req.gw_rule_id) -m found }']) %}
 
-        {#- Route ID guard for disambiguation #}
-        {%- if route_info.has_conflicts %}
-          {%- set route_id = route_info.route_id %}
-          {#- Check if this is the conflicting route by checking if conflict_var_name is httproute_route_id and value contains our route_id #}
-          {%- set ns_cond.conditions = ns_cond.conditions.append('{ var(req.conflict_var_name) -m str "' ~ route_info.resource_type ~ '_route_id" }') %}
-          {%- set ns_cond.conditions = ns_cond.conditions.append('{ var(req.conflict_var_value) -m sub "' ~ route_id ~ '" }') %}
-        {%- endif %}
+        {#- Only run matcher if this route was matched by the map #}
+        {%- set ns_cond.conditions = ns_cond.conditions.append('{ var(req.gw_route_id) -m str "' ~ route_info.conflict_group ~ '" }') %}
 
         {#- Method matcher (HTTPRoute only) #}
         {%- if route_info.match.method and route_info.resource_type == "httproute" %}
@@ -601,15 +575,57 @@ templateSnippets:
         {%- endif %}
         {%- set conditions = ns_cond.conditions %}
 
-        {#- Generate backend qualifier based on backend refs #}
+        {#- Set req.gw_rule_id to mark this rule as winner #}
+        {%- if conditions %}
+      http-request set-var(req.gw_rule_id) str({{ route_info.route_id }}) if {{ conditions | join(" ") }}
+          {#- Debug headers if enabled #}
+          {%- if debug | default(false) %}
+            {#- Build detailed match reason #}
+            {%- set ns_match = namespace(types=[]) %}
+            {%- if route_info.match.method and route_info.resource_type == "httproute" %}
+              {%- set ns_match.types = ns_match.types.append("method") %}
+            {%- endif %}
+            {%- if route_info.match.headers %}
+              {%- set ns_match.types = ns_match.types.append("header") %}
+            {%- endif %}
+            {%- if route_info.match.queryParams %}
+              {%- set ns_match.types = ns_match.types.append("query") %}
+            {%- endif %}
+            {%- if route_info.is_grpc and route_info.match.method %}
+              {%- set ns_match.types = ns_match.types.append("grpc-method") %}
+            {%- endif %}
+            {%- set match_types_str = ns_match.types | join(",") if ns_match.types else "advanced" %}
+      http-request set-var(txn.matched_route) str({{ route_info.route.metadata.namespace }}/{{ route_info.route.metadata.name }}/rule{{ route_info.rule_idx }}) if {{ conditions | join(" ") }}
+      http-request set-var(txn.match_reason) str({{ match_types_str }}) if {{ conditions | join(" ") }}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor %}
+      {%- endif %}
+
+  # Path match setting - sets txn.path_match based on winning rule ID
+  advanced-matcher-zzz-path-match-gateway:
+    template: |
+      {#- Set txn.path_match for backend selection based on winning rule #}
+      {#- Runs after advanced-matcher-gateway sets req.gw_rule_id (zzz ensures late ordering) #}
+      # gateway/advanced-matcher-zzz-path-match-gateway
+
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+      {%- compute_once analysis %}
+        {%- from "analyze_routes" import analyze_routes %}
+        {{- analyze_routes(analysis, resources) -}}
+      {%- endcompute_once %}
+
+      {%- if analysis.all_routes | length > 0 %}
+      # Set txn.path_match for backend selection based on req.gw_rule_id
+      {%- for route_info in analysis.all_routes %}
         {%- if route_info.rule.backendRefs %}
           {%- if (route_info.rule.backendRefs | length) == 1 %}
-            {#- Single backend: use BACKEND qualifier #}
+            {#- Single backend: BACKEND qualifier #}
             {%- set backend_ref = route_info.rule.backendRefs[0] %}
             {%- set backend_name = "gtw_" ~ route_info.route.metadata.namespace ~ "_" ~ route_info.route.metadata.name ~ "_" ~ backend_ref.name ~ "_" ~ backend_ref.port %}
             {%- set qualifier = "BACKEND:" ~ backend_name %}
           {%- else %}
-            {#- Multiple backends: use MULTIBACKEND qualifier #}
+            {#- Multiple backends: MULTIBACKEND qualifier #}
             {%- set ns = namespace(total_weight=0) %}
             {%- for ref in route_info.rule.backendRefs %}
               {%- set ns.total_weight = ns.total_weight + (ref.weight | default(1)) %}
@@ -617,17 +633,295 @@ templateSnippets:
             {%- set route_key = route_info.route.metadata.namespace ~ "_" ~ route_info.route.metadata.name ~ "_" ~ route_info.rule_idx %}
             {%- set qualifier = "MULTIBACKEND:" ~ ns.total_weight ~ ":" ~ route_key %}
           {%- endif %}
+      http-request set-var(txn.path_match) str({{ qualifier }}) if { var(req.gw_rule_id) -m str "{{ route_info.route_id }}" }
+        {%- endif %}
+      {%- endfor %}
+      {%- endif %}
 
-          {#- Generate the http-request statement if we have conditions #}
-          {%- if conditions %}
-      http-request set-var(txn.path_match) str({{ qualifier }}) if {{ conditions | join(" ") }}
-            {#- Debug headers if enabled #}
-            {%- if config.debug.headers.enabled | default(false) %}
-      http-request set-var(txn.matched_route) str({{ route_info.route.metadata.namespace }}/{{ route_info.route.metadata.name }}/rule{{ route_info.rule_idx }}) if {{ conditions | join(" ") }}
-      http-request set-var(txn.match_reason) str({{ conditions | length }}_conditions_matched) if {{ conditions | join(" ") }}
+  # Filter: RequestHeaderModifier - modifies request headers before backend selection
+  advanced-matcher-filter-request-header:
+    template: |
+      {#- Generate http-request header modification statements #}
+      {#- This is injected into base template via the advanced-matcher-* extension point #}
+      {#- Runs AFTER advanced-matcher-gateway due to alphabetical ordering #}
+      # gateway/advanced-matcher-filter-request-header
+
+      {%- from "regex-sanitize" import sanitize_regex %}
+
+      {#- Compute route analysis once per render (cached across all includes) #}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+      {%- compute_once analysis %}
+        {%- from "analyze_routes" import analyze_routes %}
+        {{- analyze_routes(analysis, resources) -}}
+      {%- endcompute_once %}
+
+      {#- Process all routes that have RequestHeaderModifier filters #}
+      {%- set ns_has_filters = namespace(found=false) %}
+      {%- for route_info in analysis.all_routes %}
+        {%- for filter in route_info.filters %}
+          {%- if filter.type == "RequestHeaderModifier" %}
+            {%- set ns_has_filters.found = true %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+
+      {%- if ns_has_filters.found %}
+      # RequestHeaderModifier filters
+      {%- for route_info in analysis.all_routes %}
+        {%- for filter in route_info.filters %}
+          {%- if filter.type == "RequestHeaderModifier" %}
+            {#- Simple route ID check - all condition evaluation done by advanced matchers #}
+            {%- set conditions = ['{ var(req.gw_rule_id) -m str "' ~ route_info.route_id ~ '" }'] %}
+
+            {#- Generate header modification statements #}
+            {%- if filter.requestHeaderModifier %}
+              {#- Set headers (replace if exists) #}
+              {%- for header in (filter.requestHeaderModifier.set | default([])) %}
+      http-request set-header {{ header.name }} "{{ header.value }}" if {{ conditions | join(" ") }}
+              {%- endfor %}
+
+              {#- Add headers (append if exists) #}
+              {%- for header in (filter.requestHeaderModifier.add | default([])) %}
+      http-request add-header {{ header.name }} "{{ header.value }}" if {{ conditions | join(" ") }}
+              {%- endfor %}
+
+              {#- Remove headers #}
+              {%- for header_name in (filter.requestHeaderModifier.remove | default([])) %}
+      http-request del-header {{ header_name }} if {{ conditions | join(" ") }}
+              {%- endfor %}
+
+              {#- Debug: track filter application #}
+              {%- if debug | default(false) %}
+      http-request set-var(txn.filters_applied) str(RequestHeaderModifier) if {{ conditions | join(" ") }} !{ var(txn.filters_applied) -m found }
+              {%- endif %}
             {%- endif %}
           {%- endif %}
-        {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+      {%- endif %}
+
+  # Filter: ResponseHeaderModifier - modifies response headers before sending to client
+  advanced-matcher-filter-response-header:
+    template: |
+      {#- Generate http-response header modification statements #}
+      {#- This is injected into base template via the advanced-matcher-* extension point #}
+      {#- Runs AFTER request filters due to alphabetical ordering #}
+      # gateway/advanced-matcher-filter-response-header
+
+      {%- from "regex-sanitize" import sanitize_regex %}
+
+      {#- Compute route analysis once per render (cached across all includes) #}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+      {%- compute_once analysis %}
+        {%- from "analyze_routes" import analyze_routes %}
+        {{- analyze_routes(analysis, resources) -}}
+      {%- endcompute_once %}
+
+      {#- Process all routes that have ResponseHeaderModifier filters #}
+      {%- set ns_has_filters = namespace(found=false) %}
+      {%- for route_info in analysis.all_routes %}
+        {%- for filter in route_info.filters %}
+          {%- if filter.type == "ResponseHeaderModifier" %}
+            {%- set ns_has_filters.found = true %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+
+      {%- if ns_has_filters.found %}
+      # ResponseHeaderModifier filters
+      {%- for route_info in analysis.all_routes %}
+        {%- for filter in route_info.filters %}
+          {%- if filter.type == "ResponseHeaderModifier" %}
+            {#- Simple route ID check - all condition evaluation done by advanced matchers #}
+            {%- set conditions = ['{ var(req.gw_rule_id) -m str "' ~ route_info.route_id ~ '" }'] %}
+
+            {#- Generate response header modification statements #}
+            {%- if filter.responseHeaderModifier %}
+              {#- Debug: track filter application (must be http-request for txn variables) #}
+              {%- if debug | default(false) %}
+      http-request set-var(txn.filters_applied) str(ResponseHeaderModifier) if {{ conditions | join(" ") }} !{ var(txn.filters_applied) -m found }
+              {%- endif %}
+
+              {#- Set headers (replace if exists) #}
+              {%- for header in (filter.responseHeaderModifier.set | default([])) %}
+      http-response set-header {{ header.name }} "{{ header.value }}" if {{ conditions | join(" ") }}
+              {%- endfor %}
+
+              {#- Add headers (append if exists) #}
+              {%- for header in (filter.responseHeaderModifier.add | default([])) %}
+      http-response add-header {{ header.name }} "{{ header.value }}" if {{ conditions | join(" ") }}
+              {%- endfor %}
+
+              {#- Remove headers #}
+              {%- for header_name in (filter.responseHeaderModifier.remove | default([])) %}
+      http-response del-header {{ header_name }} if {{ conditions | join(" ") }}
+              {%- endfor %}
+            {%- endif %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+      {%- endif %}
+
+  # Filter: RequestRedirect - redirects requests to different locations
+  advanced-matcher-filter-redirect:
+    template: |
+      {#- Generate http-request redirect statements #}
+      {#- This is injected into base template via the advanced-matcher-* extension point #}
+      {#- Runs AFTER header filters, BEFORE backend selection #}
+      # gateway/advanced-matcher-filter-redirect
+
+      {%- from "regex-sanitize" import sanitize_regex %}
+
+      {#- Compute route analysis once per render (cached across all includes) #}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+      {%- compute_once analysis %}
+        {%- from "analyze_routes" import analyze_routes %}
+        {{- analyze_routes(analysis, resources) -}}
+      {%- endcompute_once %}
+
+      {#- Process all routes that have RequestRedirect filters #}
+      {%- set ns_has_filters = namespace(found=false) %}
+      {%- for route_info in analysis.all_routes %}
+        {%- for filter in route_info.filters %}
+          {%- if filter.type == "RequestRedirect" and route_info.resource_type == "httproute" %}
+            {%- set ns_has_filters.found = true %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+
+      {%- if ns_has_filters.found %}
+      # RequestRedirect filters
+      {%- for route_info in analysis.all_routes %}
+        {%- for filter in route_info.filters %}
+          {%- if filter.type == "RequestRedirect" and route_info.resource_type == "httproute" %}
+            {#- Simple route ID check - all condition evaluation done by advanced matchers #}
+            {%- set conditions = ['{ var(req.gw_rule_id) -m str "' ~ route_info.route_id ~ '" }'] %}
+
+            {#- Build redirect directive #}
+            {%- if filter.requestRedirect %}
+              {%- set redirect = filter.requestRedirect %}
+              {%- set status_code = redirect.statusCode | default(302) %}
+
+              {#- Build redirect location components #}
+              {%- set ns_redir = namespace(parts=[]) %}
+
+              {#- Scheme #}
+              {%- if redirect.scheme %}
+                {%- set ns_redir.parts = ns_redir.parts.append("scheme " ~ redirect.scheme) %}
+              {%- endif %}
+
+              {#- Path modification #}
+              {%- if redirect.path %}
+                {%- if redirect.path.type == "ReplaceFullPath" %}
+                  {#- Full path replacement: use location with scheme://host:port/newpath #}
+                  {%- set scheme = redirect.scheme | default("http") %}
+                  {%- set hostname = redirect.hostname | default("%[req.hdr(Host)]") %}
+                  {%- set port = redirect.port | default("") %}
+                  {%- if port %}
+                    {%- set location = scheme ~ "://" ~ hostname ~ ":" ~ port ~ redirect.path.replaceFullPath %}
+                  {%- else %}
+                    {%- set location = scheme ~ "://" ~ hostname ~ redirect.path.replaceFullPath %}
+                  {%- endif %}
+                  {%- set ns_redir.parts = ns_redir.parts.append('location "' ~ location ~ '"') %}
+                {%- elif redirect.path.type == "ReplacePrefixMatch" %}
+                  {#- Prefix replacement: use prefix #}
+                  {%- set ns_redir.parts = ns_redir.parts.append('prefix "' ~ redirect.path.replacePrefixMatch ~ '"') %}
+                {%- endif %}
+              {%- elif redirect.hostname or redirect.port %}
+                {#- Hostname/port change without path modification: construct full location #}
+                {%- set scheme = redirect.scheme | default("http") %}
+                {%- set hostname = redirect.hostname | default("%[req.hdr(Host)]") %}
+                {%- set port = redirect.port | default("") %}
+                {%- if port %}
+                  {%- set location = scheme ~ "://" ~ hostname ~ ":" ~ port ~ "%[path]" %}
+                {%- else %}
+                  {%- set location = scheme ~ "://" ~ hostname ~ "%[path]" %}
+                {%- endif %}
+                {%- set ns_redir.parts = ns_redir.parts.append('location "' ~ location ~ '"') %}
+              {%- endif %}
+
+              {#- Status code #}
+              {%- set ns_redir.parts = ns_redir.parts.append("code " ~ status_code) %}
+
+              {#- Debug: track filter application #}
+              {%- if debug | default(false) %}
+      http-request set-var(txn.filters_applied) str(RequestRedirect) if {{ conditions | join(" ") }} !{ var(txn.filters_applied) -m found }
+              {%- endif %}
+
+              {#- Generate redirect directive #}
+      http-request redirect {{ ns_redir.parts | join(" ") }} if {{ conditions | join(" ") }}
+            {%- endif %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+      {%- endif %}
+
+  # Filter: URLRewrite - rewrites request URLs before sending to backend
+  advanced-matcher-filter-urlrewrite:
+    template: |
+      {#- Generate http-request URL rewrite statements #}
+      {#- This is injected into base template via the advanced-matcher-* extension point #}
+      {#- Runs AFTER redirect filters, BEFORE backend selection #}
+      # gateway/advanced-matcher-filter-urlrewrite
+
+      {%- from "regex-sanitize" import sanitize_regex %}
+
+      {#- Compute route analysis once per render (cached across all includes) #}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
+      {%- compute_once analysis %}
+        {%- from "analyze_routes" import analyze_routes %}
+        {{- analyze_routes(analysis, resources) -}}
+      {%- endcompute_once %}
+
+      {#- Process all routes that have URLRewrite filters #}
+      {%- set ns_has_filters = namespace(found=false) %}
+      {%- for route_info in analysis.all_routes %}
+        {%- for filter in route_info.filters %}
+          {%- if filter.type == "URLRewrite" and route_info.resource_type == "httproute" %}
+            {%- set ns_has_filters.found = true %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endfor %}
+
+      {%- if ns_has_filters.found %}
+      # URLRewrite filters
+      {%- for route_info in analysis.all_routes %}
+        {%- for filter in route_info.filters %}
+          {%- if filter.type == "URLRewrite" and route_info.resource_type == "httproute" %}
+            {#- Simple route ID check - all condition evaluation done by advanced matchers #}
+            {%- set conditions = ['{ var(req.gw_rule_id) -m str "' ~ route_info.route_id ~ '" }'] %}
+
+            {#- Apply URL rewrite directives #}
+            {%- if filter.urlRewrite %}
+              {%- set rewrite = filter.urlRewrite %}
+
+              {#- Debug: track filter application #}
+              {%- if debug | default(false) %}
+      http-request set-var(txn.filters_applied) str(URLRewrite) if {{ conditions | join(" ") }} !{ var(txn.filters_applied) -m found }
+              {%- endif %}
+
+              {#- Hostname rewrite #}
+              {%- if rewrite.hostname %}
+      http-request set-header Host "{{ rewrite.hostname }}" if {{ conditions | join(" ") }}
+              {%- endif %}
+
+              {#- Path rewrite #}
+              {%- if rewrite.path %}
+                {%- if rewrite.path.type == "ReplaceFullPath" %}
+      http-request set-path "{{ rewrite.path.replaceFullPath }}" if {{ conditions | join(" ") }}
+                {%- elif rewrite.path.type == "ReplacePrefixMatch" %}
+                  {#- For prefix replacement, use replace-path to substitute the matched prefix #}
+                  {#- Match the route's path prefix and replace with new prefix #}
+                  {%- set original_prefix = route_info.path.value %}
+                  {%- set new_prefix = rewrite.path.replacePrefixMatch %}
+                  {#- Escape regex special chars in original prefix for matching #}
+                  {%- set regex_prefix = original_prefix | replace(".", "\\.") | replace("/", "\\/") %}
+      http-request replace-path "^{{ regex_prefix }}(.*)" "{{ new_prefix }}\\1" if {{ conditions | join(" ") }}
+                {%- endif %}
+              {%- endif %}
+            {%- endif %}
+          {%- endif %}
+        {%- endfor %}
       {%- endfor %}
       {%- endif %}
 
@@ -898,8 +1192,8 @@ validationTests:
 
       - type: contains
         target: map:path-prefix.map
-        pattern: "split.example.com/app MULTIBACKEND:100:default_split-route_0"
-        description: Path map must use MULTIBACKEND qualifier with total weight 100
+        pattern: "split.example.com/app GW_ROUTE_ID:http:default_split-route_0"
+        description: Path map must use GW_ROUTE_ID qualifier
 
       - type: contains
         target: map:weighted-multi-backend.map
@@ -954,7 +1248,7 @@ validationTests:
 
       - type: contains
         target: map:path-prefix.map
-        pattern: "(?m)^split\\.example\\.com/app MULTIBACKEND:"
+        pattern: "(?m)^split\\.example\\.com/app GW_ROUTE_ID:"
         description: Path map entries must start at beginning of line (Gateway API)
 
       - type: contains
@@ -1039,7 +1333,7 @@ validationTests:
 
       - type: contains
         target: map:path-prefix.map
-        pattern: "default.example.com/ MULTIBACKEND:100:default_default-path_0"
+        pattern: "default.example.com/ GW_ROUTE_ID:http:default_default-path_0"
         description: Missing matches must default to PathPrefix / with weight 100
 
   test-httproute-weight-default:
@@ -1121,7 +1415,7 @@ validationTests:
 
       - type: contains
         target: map:path-exact.map
-        pattern: "weight.example.com/test MULTIBACKEND:2:default_default-weight_0"
+        pattern: "weight.example.com/test GW_ROUTE_ID:http:default_default-weight_0"
         description: Omitted weights must default to 1 (total weight = 2)
 
       - type: contains
@@ -1193,8 +1487,8 @@ validationTests:
 
       - type: contains
         target: map:path-prefix.map
-        pattern: "single.example.com/ BACKEND:gtw_default_single-backend_app_80/"
-        description: Single backend must use BACKEND qualifier (not MULTIBACKEND)
+        pattern: "single.example.com/ GW_ROUTE_ID:http:default_single-backend_0"
+        description: Single backend must use GW_ROUTE_ID qualifier
 
       - type: not_contains
         target: map:weighted-multi-backend.map
@@ -1280,18 +1574,18 @@ validationTests:
 
       - type: contains
         target: map:path-prefix.map
-        pattern: "api.example.com/api VAR:httproute_route_id"
-        description: Conflicting paths must use VAR qualifier
+        pattern: "api.example.com/api GW_ROUTE_ID:http"
+        description: Conflicting paths must use GW_ROUTE_ID qualifier
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_method-route_read-service_80\\) if.*\\{ method GET \\}"
-        description: Must generate http-request for GET method
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_method-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_method-route_0__default_method-route_1\" \\} \\{ method GET \\}"
+        description: Must generate req.gw_rule_id for GET method
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_method-route_write-service_80\\) if.*\\{ method POST \\}"
-        description: Must generate http-request for POST method
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_method-route_1\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_method-route_0__default_method-route_1\" \\} \\{ method POST \\}"
+        description: Must generate req.gw_rule_id for POST method
 
   test-httproute-header-exact:
     description: HTTPRoute with exact header matching
@@ -1344,7 +1638,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_header-route_v1-service_80\\) if \\{ req\\.hdr\\(X-Version\\) \"v1\" \\}"
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_header-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_header-route_0\" \\} \\{ req\\.hdr\\(X-Version\\) \"v1\" \\}"
         description: Must generate header exact match condition
 
   test-httproute-header-regex:
@@ -1398,7 +1692,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_regex-header-route_api-service_80\\) if \\{ req\\.hdr\\(User-Agent\\) -m reg \"\\^Mozilla\\.\\*\" \\}"
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_regex-header-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_regex-header-route_0\" \\} \\{ req\\.hdr\\(User-Agent\\) -m reg \"\\^Mozilla\\.\\*\" \\}"
         description: Must generate header regex match condition
 
   test-httproute-query-params:
@@ -1455,7 +1749,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_query-route_search-service_80\\) if \\{ urlp\\(version\\) \"v2\" \\} \\{ urlp\\(filter\\) -m reg \"\\^active\\.\\*\" \\}"
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_query-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_query-route_0\" \\} \\{ urlp\\(version\\) \"v2\" \\} \\{ urlp\\(filter\\) -m reg \"\\^active\\.\\*\" \\}"
         description: Must generate query parameter match conditions
 
   test-httproute-regex-dollar-escaping:
@@ -1509,7 +1803,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_regex-dollar-route_api-service_80\\) if \\{ urlp\\(token\\) -m reg \"\\^secret\\[0-9\\]\\+\\\\\\$\" \\}"
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_regex-dollar-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_regex-dollar-route_0\" \\} \\{ urlp\\(token\\) -m reg \"\\^secret\\[0-9\\]\\+\\\\\\$\" \\}"
         description: Must generate query parameter regex with properly escaped dollar sign
 
   test-httproute-precedence:
@@ -1623,10 +1917,143 @@ validationTests:
       - type: match_order
         target: map:path-prefix.map
         patterns:
-          - "/api/v1/users.*svc1"   # Most specific: longest path + method + headers
-          - "/api/v1[^/].*svc2"      # Medium: medium path + method
-          - "/api[^/].*svc3"         # Least specific: shortest path, no extra matchers
+          - "/api/v1/users.*default_route1_0"   # Most specific: longest path + method + headers
+          - "/api/v1[^/].*default_route1_1"      # Medium: medium path + method
+          - "/api[^/].*default_route1_2"         # Least specific: shortest path, no extra matchers
         description: Routes must be ordered by Gateway API precedence (most specific first)
+
+  test-httproute-same-path-matcher-precedence:
+    description: Routes with SAME path sorted by matcher specificity (method/headers/query)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: svc-main
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: svc-v2
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: svc-main-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: svc-main
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 80
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: svc-v2-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: svc-v2
+          endpoints:
+            - addresses: ["10.0.2.1"]
+          ports:
+            - port: 80
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: precedence-test
+            namespace: default
+            creationTimestamp: "2024-01-01T00:00:00Z"
+          spec:
+            hostnames:
+              - test.example.com
+            rules:
+              # RULE 0: Medium precedence - GET + 1 header
+              # Declared FIRST but should sort to position 2
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                    method: GET
+                    headers:
+                      - type: Exact
+                        name: X-Version
+                        value: v1
+                backendRefs:
+                  - name: svc-main
+                    port: 80
+              # RULE 1: Lowest precedence - No matchers (catch-all)
+              # Declared SECOND but should sort to position 4 (last)
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                backendRefs:
+                  - name: svc-main
+                    port: 80
+              # RULE 2: Highest precedence - GET + 2 headers + 1 query
+              # Declared THIRD but should sort to position 1 (first)
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                    method: GET
+                    headers:
+                      - type: Exact
+                        name: X-Version
+                        value: v2
+                      - type: Exact
+                        name: X-Environment
+                        value: prod
+                    queryParams:
+                      - type: Exact
+                        name: debug
+                        value: "true"
+                backendRefs:
+                  - name: svc-v2
+                    port: 80
+              # RULE 3: Low precedence - GET only
+              # Declared FOURTH but should sort to position 3
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                    method: GET
+                backendRefs:
+                  - name: svc-v2
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      # Verify all 4 rules are present (including catch-all)
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'gw_rule_id.*precedence-test_0'
+        description: Rule 0 (GET + 1 header) must be present
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'gw_rule_id.*precedence-test_1'
+        description: Rule 1 (catch-all) must be present
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'gw_rule_id.*precedence-test_2'
+        description: Rule 2 (GET + 2 headers + 1 query) must be present
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'gw_rule_id.*precedence-test_3'
+        description: Rule 3 (GET only) must be present
 
   test-httproute-weighted-with-matchers:
     description: Weighted routing combined with method/header matchers
@@ -1703,8 +2130,8 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(MULTIBACKEND:100:default_canary-route_0\\) if \\{ method GET \\} \\{ req\\.hdr\\(X-Canary\\) \"true\" \\}"
-        description: Must generate MULTIBACKEND with conditions
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_canary-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_canary-route_0\" \\} \\{ method GET \\} \\{ req\\.hdr\\(X-Canary\\) \"true\" \\}"
+        description: Must generate req.gw_rule_id with conditions
 
       - type: contains
         target: map:weighted-multi-backend.map
@@ -1795,18 +2222,18 @@ validationTests:
 
       - type: contains
         target: map:path-prefix.map
-        pattern: "api.example.com/api VAR:httproute_route_id:default_multi-rule_0__default_multi-rule_1"
+        pattern: "api.example.com/api GW_ROUTE_ID:http:default_multi-rule_0__default_multi-rule_1"
         description: Same route conflicts must include both rule indices
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_multi-rule_auth-service_80\\) if \\{ var\\(req\\.conflict_var_name\\) -m str \"httproute_route_id\" \\} \\{ var\\(req\\.conflict_var_value\\) -m sub \"default_multi-rule_0\" \\} \\{ req\\.hdr\\(Authorization\\) \"Bearer\" \\}"
-        description: Must use rule index 0 in route_id
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_multi-rule_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_multi-rule_0__default_multi-rule_1\" \\} \\{ req\\.hdr\\(Authorization\\) \"Bearer\" \\}"
+        description: Must set req.gw_rule_id for rule index 0 with header matcher
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_multi-rule_public-service_80\\) if \\{ var\\(req\\.conflict_var_name\\) -m str \"httproute_route_id\" \\} \\{ var\\(req\\.conflict_var_value\\) -m sub \"default_multi-rule_1\" \\}"
-        description: Must use rule index 1 in route_id
+        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_multi-rule_public-service_80\\) if \\{ var\\(req\\.gw_rule_id\\) -m str \"default_multi-rule_1\" \\}"
+        description: Must set txn.path_match for rule index 1 based on req.gw_rule_id
 
   test-httproute-path-exact:
     description: HTTPRoute with Exact path type (no prefix matching)
@@ -1855,7 +2282,7 @@ validationTests:
 
       - type: contains
         target: map:path-exact.map
-        pattern: "api.example.com/api/users BACKEND:gtw_default_exact-route_exact-service_80"
+        pattern: "api.example.com/api/users GW_ROUTE_ID:http:default_exact-route_0"
         description: Exact path must be in path-exact.map
 
       - type: not_contains
@@ -1973,7 +2400,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_grpc-header-route_grpc-api_9090\\) if \\{ req\\.hdr\\(X-API-Version\\) \"v1\" \\} \\{ req\\.hdr\\(User-Agent\\) -m reg \"\\^grpc-\\.\\*\" \\}"
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_grpc-header-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\}.*\\{ req\\.hdr\\(X-API-Version\\) \"v1\" \\} \\{ req\\.hdr\\(User-Agent\\) -m reg \"\\^grpc-\\.\\*\" \\}"
         description: Must generate header match conditions for GRPCRoute
 
   test-grpcroute-method-regex:
@@ -2024,7 +2451,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_grpc-regex-route_grpc-multi_9090\\) if \\{ req\\.hdr\\(:path\\) -m reg \"/com\\.example\\.\\*/Get\\.\\*\" \\}"
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_grpc-regex-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_grpc-regex-route_0\" \\} \\{ req\\.hdr\\(:path\\) -m reg \"/com\\.example\\.\\*/Get\\.\\*\" \\}"
         description: Must generate regex method match for GRPCRoute
 
   test-httproute-all-matchers:
@@ -2083,7 +2510,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_combined-route_combined-service_80\\) if \\{ method POST \\} \\{ req\\.hdr\\(Content-Type\\) \"application/json\" \\} \\{ urlp\\(version\\) \"v2\" \\}"
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_combined-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_combined-route_0\" \\} \\{ method POST \\} \\{ req\\.hdr\\(Content-Type\\) \"application/json\" \\} \\{ urlp\\(version\\) \"v2\" \\}"
         description: Must combine all matchers with AND logic
 
   test-httproute-cross-route-conflicts:
@@ -2170,8 +2597,8 @@ validationTests:
 
       - type: contains
         target: map:path-prefix.map
-        pattern: "api.example.com/api VAR:httproute_route_id:default_route-get_0__default_route-post_0"
-        description: Cross-route conflicts must be detected and marked with VAR qualifier
+        pattern: "api.example.com/api GW_ROUTE_ID:http:default_route-get_0__default_route-post_0"
+        description: Cross-route conflicts must be detected and marked with GW_ROUTE_ID qualifier
 
   test-grpcroute-multiple-headers:
     description: GRPCRoute with multiple header matchers of different types
@@ -2425,10 +2852,278 @@ validationTests:
 
       - type: contains
         target: map:path-prefix.map
-        pattern: "api\\.example\\.com/rest BACKEND:gtw_default_http-route_http-service_80"
+        pattern: "api\\.example\\.com/rest GW_ROUTE_ID:http:default_http-route_0"
         description: HTTPRoute path must route to HTTP service
 
       - type: contains
         target: haproxy.cfg
-        pattern: "http-request set-var\\(txn\\.path_match\\) str\\(BACKEND:gtw_default_grpc-route_grpc-service_9090\\) if \\{ req\\.hdr\\(:path\\) \"/com\\.example\\.Service/GetData\" \\}"
+        pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_grpc-route_0\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_grpc-route_0\" \\} \\{ req\\.hdr\\(:path\\) \"/com\\.example\\.Service/GetData\" \\}"
         description: GRPCRoute method must route to gRPC service
+
+  test-httproute-request-header-modifier:
+    description: HTTPRoute with RequestHeaderModifier filter (add, set, remove headers)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: api-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: header-filter-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                filters:
+                  - type: RequestHeaderModifier
+                    requestHeaderModifier:
+                      add:
+                        - name: X-Custom-Header
+                          value: custom-value
+                      set:
+                        - name: X-Replace-Header
+                          value: new-value
+                      remove:
+                        - X-Remove-Header
+                backendRefs:
+                  - name: api-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request add-header X-Custom-Header "custom-value" if'
+        description: Must generate add-header directive for RequestHeaderModifier filter
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request set-header X-Replace-Header "new-value" if'
+        description: Must generate set-header directive for RequestHeaderModifier filter
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request del-header X-Remove-Header if'
+        description: Must generate del-header directive for RequestHeaderModifier filter
+
+  test-httproute-response-header-modifier:
+    description: HTTPRoute with ResponseHeaderModifier filter (add, set, remove response headers)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: api-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: response-filter-route
+            namespace: default
+          spec:
+            hostnames:
+              - api.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                filters:
+                  - type: ResponseHeaderModifier
+                    responseHeaderModifier:
+                      add:
+                        - name: X-Response-Header
+                          value: response-value
+                      set:
+                        - name: X-Replace-Response
+                          value: new-response
+                      remove:
+                        - X-Remove-Response
+                backendRefs:
+                  - name: api-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-response add-header X-Response-Header "response-value" if'
+        description: Must generate add-header directive for ResponseHeaderModifier filter
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-response set-header X-Replace-Response "new-response" if'
+        description: Must generate set-header directive for ResponseHeaderModifier filter
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-response del-header X-Remove-Response if'
+        description: Must generate del-header directive for ResponseHeaderModifier filter
+
+  test-httproute-request-redirect:
+    description: HTTPRoute with RequestRedirect filter (scheme, path, status code)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: api-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: redirect-route
+            namespace: default
+          spec:
+            hostnames:
+              - old.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /old
+                filters:
+                  - type: RequestRedirect
+                    requestRedirect:
+                      scheme: https
+                      hostname: new.example.com
+                      path:
+                        type: ReplacePrefixMatch
+                        replacePrefixMatch: /new
+                      statusCode: 301
+                backendRefs:
+                  - name: api-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request redirect scheme https prefix "/new" code 301 if'
+        description: Must generate redirect directive with scheme, prefix, and status code
+
+  test-httproute-url-rewrite:
+    description: HTTPRoute with URLRewrite filter (hostname and path rewrite)
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-service
+            namespace: default
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: api-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: api-service
+          endpoints:
+            - addresses: ["10.0.1.1"]
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: rewrite-route
+            namespace: default
+          spec:
+            hostnames:
+              - external.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api/v1
+                filters:
+                  - type: URLRewrite
+                    urlRewrite:
+                      hostname: internal.example.com
+                      path:
+                        type: ReplacePrefixMatch
+                        replacePrefixMatch: /api/v2
+                backendRefs:
+                  - name: api-service
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request set-header Host "internal.example.com" if'
+        description: Must generate hostname rewrite directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request replace-path'
+        description: Must generate path prefix replacement directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: '"/api/v2'
+        description: Must rewrite to new path prefix

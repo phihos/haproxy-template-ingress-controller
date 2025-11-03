@@ -964,3 +964,125 @@ func TestTracing_ConcurrentEnableDisable(t *testing.T) {
 
 	// If we get here without panics or race conditions, the test passes
 }
+
+func TestTracing_FilterOperations(t *testing.T) {
+	// Test that filter operations are captured in trace output
+	templates := map[string]string{
+		"test": `{%- set items = [
+			{"name": "low", "priority": 1},
+			{"name": "high", "priority": 10},
+			{"name": "medium", "priority": 5}
+		] %}
+{%- set sorted = items | sort_by(["priority:desc"]) %}
+{%- set grouped = items | group_by("priority") %}
+{%- set extracted = items | extract("name") %}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	// Enable tracing
+	engine.EnableTracing()
+
+	// Render template
+	_, err = engine.Render("test", nil)
+	require.NoError(t, err)
+
+	// Get trace output
+	trace := engine.GetTraceOutput()
+
+	// Verify filter operations are captured
+	assert.Contains(t, trace, "Filter: sort_by")
+	assert.Contains(t, trace, "priority:desc")
+	assert.Contains(t, trace, "Filter: group_by")
+	assert.Contains(t, trace, "priority")
+	assert.Contains(t, trace, "Filter: extract")
+	assert.Contains(t, trace, "name")
+
+	// Verify trace includes item counts
+	assert.Contains(t, trace, "3 items")
+}
+
+func TestFilterDebug_EnableDisable(t *testing.T) {
+	// Test that filter debug can be enabled and disabled
+	templates := map[string]string{
+		"test": `{%- set items = [{"priority": 2}, {"priority": 1}] -%}
+{%- set sorted = items | sort_by(["priority"]) -%}
+sorted_count={{ sorted | length }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	// Enable filter debug
+	engine.EnableFilterDebug()
+
+	// Render should succeed (debug logging happens via slog, not in template output)
+	output, err := engine.Render("test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "sorted_count=2", output)
+
+	// Disable filter debug
+	engine.DisableFilterDebug()
+
+	// Rendering should still work
+	output, err = engine.Render("test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "sorted_count=2", output)
+}
+
+func TestIsTracingEnabled(t *testing.T) {
+	templates := map[string]string{
+		"test": `{{ value }}`,
+	}
+
+	engine, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+
+	// Initially tracing should be disabled
+	assert.False(t, engine.IsTracingEnabled())
+
+	// Enable tracing
+	engine.EnableTracing()
+	assert.True(t, engine.IsTracingEnabled())
+
+	// Disable tracing
+	engine.DisableTracing()
+	assert.False(t, engine.IsTracingEnabled())
+}
+
+func TestAppendTraces(t *testing.T) {
+	// Test that traces from one engine can be appended to another
+	templates := map[string]string{
+		"test1": `{{ value1 }}`,
+		"test2": `{{ value2 }}`,
+	}
+
+	// Create two engines
+	engine1, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+	engine1.EnableTracing()
+
+	engine2, err := New(EngineTypeGonja, templates, nil, nil)
+	require.NoError(t, err)
+	engine2.EnableTracing()
+
+	// Render with both engines
+	_, err = engine1.Render("test1", map[string]interface{}{"value1": "a"})
+	require.NoError(t, err)
+
+	_, err = engine2.Render("test2", map[string]interface{}{"value2": "b"})
+	require.NoError(t, err)
+
+	// Append engine2's traces to engine1
+	engine1.AppendTraces(engine2)
+
+	// engine1 should now have both traces
+	trace := engine1.GetTraceOutput()
+	assert.Contains(t, trace, "test1")
+	assert.Contains(t, trace, "test2")
+
+	// engine2's traces should have been cleared by AppendTraces (via GetTraceOutput)
+	trace2 := engine2.GetTraceOutput()
+	assert.Empty(t, trace2)
+}

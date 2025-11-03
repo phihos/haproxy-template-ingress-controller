@@ -18,10 +18,10 @@ import (
 // TestGeneralFiles tests Create, Update, and Delete operations for general files
 func TestGeneralFiles(t *testing.T) {
 	testCases := []struct {
-		name        string
-		setup       func(t *testing.T, ctx context.Context, env fixenv.Env) // Setup initial state
-		operation   func(t *testing.T, ctx context.Context, env fixenv.Env) // Perform operation
-		verify      func(t *testing.T, ctx context.Context, env fixenv.Env) // Verify result
+		name      string
+		setup     func(t *testing.T, ctx context.Context, env fixenv.Env) // Setup initial state
+		operation func(t *testing.T, ctx context.Context, env fixenv.Env) // Perform operation
+		verify    func(t *testing.T, ctx context.Context, env fixenv.Env) // Verify result
 	}{
 		{
 			name: "create-single-file",
@@ -222,10 +222,10 @@ func TestGeneralFiles(t *testing.T) {
 // TestSSLCertificates tests Create, Update, and Delete operations for SSL certificates
 func TestSSLCertificates(t *testing.T) {
 	testCases := []struct {
-		name        string
-		setup       func(t *testing.T, ctx context.Context, env fixenv.Env)
-		operation   func(t *testing.T, ctx context.Context, env fixenv.Env)
-		verify      func(t *testing.T, ctx context.Context, env fixenv.Env)
+		name      string
+		setup     func(t *testing.T, ctx context.Context, env fixenv.Env)
+		operation func(t *testing.T, ctx context.Context, env fixenv.Env)
+		verify    func(t *testing.T, ctx context.Context, env fixenv.Env)
 	}{
 		{
 			name: "create-single-certificate",

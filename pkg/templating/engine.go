@@ -17,6 +17,7 @@ package templating
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -84,9 +85,52 @@ type TemplateEngine struct {
 // tracingConfig holds template tracing configuration.
 // Per-render trace state (depth, builder) is stored in the execution context to ensure thread-safety.
 type tracingConfig struct {
-	enabled bool
-	mu      sync.Mutex
-	traces  []string // Accumulated trace outputs from all renders
+	enabled      bool
+	debugFilters bool // Enable detailed filter operation logging
+	mu           sync.Mutex
+	traces       []string // Accumulated trace outputs from all renders
+}
+
+// recordFilter records a filter operation if tracing is enabled.
+// This is called by filters to add entries to the trace output.
+// ctx should be the execution context from exec.Evaluator.Environment.Context.
+func (tc *tracingConfig) recordFilter(ctx *exec.Context, filterName, inputType string, inputSize int, params []string) {
+	if ctx == nil {
+		return
+	}
+
+	// Check if tracing is enabled for this render (stored in context)
+	if enabled, ok := ctx.Get("_trace_enabled"); !ok || !enabled.(bool) {
+		return
+	}
+
+	// Get depth from context (per-render state)
+	depth := 0
+	if d, ok := ctx.Get("_trace_depth"); ok {
+		depth = d.(int)
+	}
+
+	// Get builder from context (per-render state)
+	var builder *strings.Builder
+	if b, ok := ctx.Get("_trace_builder"); ok {
+		builder = b.(*strings.Builder)
+	}
+	if builder == nil {
+		return
+	}
+
+	// Create indentation based on depth
+	indent := strings.Repeat("  ", depth)
+
+	// Format filter operation
+	var msg string
+	if len(params) > 0 {
+		msg = fmt.Sprintf("Filter: %s(%s, %d items) [%s]", filterName, inputType, inputSize, strings.Join(params, ", "))
+	} else {
+		msg = fmt.Sprintf("Filter: %s(%s, %d items)", filterName, inputType, inputSize)
+	}
+
+	fmt.Fprintf(builder, "%s%s\n", indent, msg)
 }
 
 // testInFixed implements a fixed "in" test that compares string values for lists.
@@ -224,6 +268,8 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 		"transform":  transformFilter,
 		"extract":    extractFilter,
 		"glob_match": globMatchFilter,
+		"debug":      debugFilter,
+		"eval":       evalFilter,
 	}
 	genericFilterSet := exec.NewFilterSet(genericFilterMap)
 	filters = filters.Update(genericFilterSet)
@@ -444,6 +490,9 @@ func (e *TemplateEngine) Render(templateName string, context map[string]interfac
 	tracingEnabled := e.tracing.enabled
 	e.tracing.mu.Unlock()
 
+	// Store tracing config reference in context for filters to access
+	ctx.Set("_tracing_config", e.tracing)
+
 	// If tracing is enabled, attach per-render trace state to context
 	var traceBuilder *strings.Builder
 	if tracingEnabled {
@@ -573,10 +622,24 @@ func sortByFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec
 		}
 	}
 
+	// Get tracing config from evaluator's environment context (if available)
+	var tracingCfg *tracingConfig
+	if e.Environment != nil && e.Environment.Context != nil {
+		if cfg, ok := e.Environment.Context.Get("_tracing_config"); ok {
+			if tc, ok := cfg.(*tracingConfig); ok {
+				tracingCfg = tc
+
+				// Record filter operation in trace
+				tc.recordFilter(e.Environment.Context, "sort_by", fmt.Sprintf("%T", items), len(itemsSlice), criteria)
+			}
+		}
+	}
+
 	// Create a sortable wrapper
 	sortable := &sortableItems{
 		items:    itemsSlice,
 		criteria: criteria,
+		tracing:  tracingCfg,
 	}
 
 	// Sort using the criteria
@@ -603,6 +666,15 @@ func groupByFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exe
 	keyExprStr, ok := keyExpr.Interface().(string)
 	if !ok {
 		return exec.AsValue(fmt.Errorf("group_by: key expression must be string, got %T", keyExpr.Interface()))
+	}
+
+	// Record filter operation in trace if tracing is enabled
+	if e.Environment != nil && e.Environment.Context != nil {
+		if cfg, ok := e.Environment.Context.Get("_tracing_config"); ok {
+			if tc, ok := cfg.(*tracingConfig); ok {
+				tc.recordFilter(e.Environment.Context, "group_by", fmt.Sprintf("%T", items), len(itemsSlice), []string{keyExprStr})
+			}
+		}
 	}
 
 	// Group items
@@ -644,6 +716,19 @@ func transformFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *e
 	transforms, ok := convertToMap(transformsArg.Interface())
 	if !ok {
 		return exec.AsValue(fmt.Errorf("transform: transforms must be a map/dict"))
+	}
+
+	// Record filter operation in trace if tracing is enabled
+	transformKeys := make([]string, 0, len(transforms))
+	for key := range transforms {
+		transformKeys = append(transformKeys, key)
+	}
+	if e.Environment != nil && e.Environment.Context != nil {
+		if cfg, ok := e.Environment.Context.Get("_tracing_config"); ok {
+			if tc, ok := cfg.(*tracingConfig); ok {
+				tc.recordFilter(e.Environment.Context, "transform", fmt.Sprintf("%T", items), len(itemsSlice), transformKeys)
+			}
+		}
 	}
 
 	// Transform each item
@@ -689,26 +774,57 @@ func extractFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exe
 	}
 
 	items := in.Interface()
+	recordExtractFilterTrace(e, items, pathStr)
 
 	// Handle single item vs array
 	if itemsSlice, ok := convertToSlice(items); ok {
-		result := []interface{}{}
-		for _, item := range itemsSlice {
-			extracted := evaluateExpression(item, pathStr)
-			if extracted != nil {
-				// If extracted is also a slice, flatten it
-				if extractedSlice, ok := convertToSlice(extracted); ok {
-					result = append(result, extractedSlice...)
-				} else {
-					result = append(result, extracted)
-				}
-			}
-		}
-		return exec.AsValue(result)
+		return exec.AsValue(extractFromSlice(itemsSlice, pathStr))
 	}
 
 	// Single item
 	return exec.AsValue(evaluateExpression(items, pathStr))
+}
+
+// recordExtractFilterTrace records extract filter operation if tracing is enabled.
+func recordExtractFilterTrace(e *exec.Evaluator, items interface{}, pathStr string) {
+	if e.Environment == nil || e.Environment.Context == nil {
+		return
+	}
+
+	cfg, ok := e.Environment.Context.Get("_tracing_config")
+	if !ok {
+		return
+	}
+
+	tc, ok := cfg.(*tracingConfig)
+	if !ok {
+		return
+	}
+
+	itemCount := 1
+	if itemsSlice, ok := convertToSlice(items); ok {
+		itemCount = len(itemsSlice)
+	}
+	tc.recordFilter(e.Environment.Context, "extract", fmt.Sprintf("%T", items), itemCount, []string{pathStr})
+}
+
+// extractFromSlice extracts values from a slice using a JSONPath expression.
+func extractFromSlice(items []interface{}, pathStr string) []interface{} {
+	result := []interface{}{}
+	for _, item := range items {
+		extracted := evaluateExpression(item, pathStr)
+		if extracted == nil {
+			continue
+		}
+
+		// If extracted is also a slice, flatten it
+		if extractedSlice, ok := convertToSlice(extracted); ok {
+			result = append(result, extractedSlice...)
+		} else {
+			result = append(result, extracted)
+		}
+	}
+	return result
 }
 
 // globMatchFilter filters a list of strings by glob pattern.
@@ -746,6 +862,59 @@ func globMatchFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *e
 	}
 
 	return exec.AsValue(result)
+}
+
+// debugFilter outputs the structure of a variable as formatted JSON comments.
+// Useful for debugging template data during development.
+// Usage: {{ routes | debug }} or {{ routes | debug("label") }}.
+func debugFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.Value {
+	// Get optional label
+	label := ""
+	if params != nil && len(params.Args) > 0 {
+		if labelArg := params.First(); labelArg != nil {
+			label = labelArg.String()
+		}
+	}
+
+	// Marshal to JSON with indentation
+	data, err := json.MarshalIndent(in.Interface(), "# ", "  ")
+	if err != nil {
+		// Fallback to simple string representation
+		data = []byte(fmt.Sprintf("%v", in.Interface()))
+	}
+
+	// Format as HAProxy comments
+	var output string
+	if label != "" {
+		output = fmt.Sprintf("# DEBUG %s:\n# %s\n", label, string(data))
+	} else {
+		output = fmt.Sprintf("# DEBUG:\n# %s\n", string(data))
+	}
+
+	return exec.AsValue(output)
+}
+
+// evalFilter evaluates a JSONPath expression and returns the result with type information.
+// Useful for testing sort_by criteria and debugging data extraction.
+// Usage: {{ route | eval("$.match.method:exists:desc") }}.
+func evalFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.Value {
+	// Get expression
+	if params == nil || len(params.Args) == 0 {
+		return exec.AsValue(fmt.Errorf("eval: missing expression argument"))
+	}
+
+	exprArg := params.First()
+	if exprArg == nil {
+		return exec.AsValue(fmt.Errorf("eval: expression cannot be nil"))
+	}
+
+	expr := exprArg.String()
+
+	// Evaluate expression
+	result := evaluateExpression(in.Interface(), expr)
+
+	// Return result with type info for debugging
+	return exec.AsValue(fmt.Sprintf("%v (%T)", result, result))
 }
 
 // conflictsByTest detects conflicts when grouped by key.
@@ -805,6 +974,7 @@ func conflictsByTest(ctx *exec.Context, in *exec.Value, params *exec.VarArgs) (b
 type sortableItems struct {
 	items    []interface{}
 	criteria []string
+	tracing  *tracingConfig // For filter debug logging
 }
 
 func (s *sortableItems) Len() int {
@@ -813,7 +983,7 @@ func (s *sortableItems) Len() int {
 
 func (s *sortableItems) Less(i, j int) bool {
 	for _, criterion := range s.criteria {
-		cmp := compareByExpression(s.items[i], s.items[j], criterion)
+		cmp := compareByExpressionWithDebug(s.items[i], s.items[j], criterion, s.tracing)
 		if cmp != 0 {
 			return cmp < 0
 		}
@@ -1110,6 +1280,70 @@ func processDot(segments []string, current *strings.Builder) []string {
 	return segments
 }
 
+// compareByExpressionWithDebug wraps compareByExpression and adds debug logging when enabled.
+func compareByExpressionWithDebug(a, b interface{}, criterion string, tracing *tracingConfig) int {
+	// Check if debug is enabled
+	var debugEnabled bool
+	if tracing != nil {
+		tracing.mu.Lock()
+		debugEnabled = tracing.debugFilters
+		tracing.mu.Unlock()
+	}
+
+	// If debug not enabled, just call compareByExpression
+	if !debugEnabled {
+		return compareByExpression(a, b, criterion)
+	}
+
+	// Debug enabled - clean expression and evaluate for logging
+	// Parse modifiers to get clean expression (same logic as compareByExpression)
+	checkExists := false
+	checkLength := false
+
+	parts := strings.Split(criterion, ":")
+	expr := parts[0]
+
+	for i := 1; i < len(parts); i++ {
+		modifier := strings.TrimSpace(parts[i])
+		if modifier == "exists" {
+			checkExists = true
+		}
+	}
+
+	// Check for length operator
+	if strings.Contains(expr, " | length") {
+		checkLength = true
+		expr = strings.Split(expr, " | ")[0]
+	}
+
+	// Evaluate cleaned expression
+	valA := evaluateExpression(a, expr)
+	valB := evaluateExpression(b, expr)
+
+	// Apply modifiers for debug display
+	if checkExists {
+		valA = (valA != nil)
+		valB = (valB != nil)
+	} else if checkLength {
+		valA = getLength(valA)
+		valB = getLength(valB)
+	}
+
+	// Call comparison
+	result := compareByExpression(a, b, criterion)
+
+	// Log the comparison
+	slog.Info("SORT comparison",
+		"criterion", criterion,
+		"valA", valA,
+		"valA_type", fmt.Sprintf("%T", valA),
+		"valB", valB,
+		"valB_type", fmt.Sprintf("%T", valB),
+		"result", result)
+
+	return result
+}
+
 // compareByExpression compares two items based on an expression with optional modifiers.
 func compareByExpression(a, b interface{}, criterion string) int {
 	// Parse modifiers
@@ -1146,13 +1380,13 @@ func compareByExpression(a, b interface{}, criterion string) int {
 		existsB := valB != nil
 		result := 0
 		if existsA && !existsB {
-			result = -1
+			result = -1 // A exists, B doesn't → A comes first
 		} else if !existsA && existsB {
-			result = 1
+			result = 1 // B exists, A doesn't → B comes first
 		}
-		if descending {
-			result = -result
-		}
+		// For :exists modifier, the descending flag means "items with field first"
+		// which is already the natural ordering above (exists = -1, not exists = 1).
+		// Don't negate - the semantics of :exists:desc are already captured.
 		return result
 	}
 
@@ -1447,10 +1681,33 @@ func (e *TemplateEngine) EnableTracing() {
 	e.tracing.mu.Unlock()
 }
 
+// IsTracingEnabled returns true if template tracing is currently enabled.
+func (e *TemplateEngine) IsTracingEnabled() bool {
+	e.tracing.mu.Lock()
+	defer e.tracing.mu.Unlock()
+	return e.tracing.enabled
+}
+
 // DisableTracing disables template execution tracing.
 func (e *TemplateEngine) DisableTracing() {
 	e.tracing.mu.Lock()
 	e.tracing.enabled = false
+	e.tracing.mu.Unlock()
+}
+
+// EnableFilterDebug enables detailed filter operation logging.
+// This logs each sort comparison, showing the compared values and results.
+// Useful for debugging sort_by behavior and understanding why items are ordered as they are.
+func (e *TemplateEngine) EnableFilterDebug() {
+	e.tracing.mu.Lock()
+	e.tracing.debugFilters = true
+	e.tracing.mu.Unlock()
+}
+
+// DisableFilterDebug disables detailed filter operation logging.
+func (e *TemplateEngine) DisableFilterDebug() {
+	e.tracing.mu.Lock()
+	e.tracing.debugFilters = false
 	e.tracing.mu.Unlock()
 }
 
@@ -1467,6 +1724,25 @@ func (e *TemplateEngine) GetTraceOutput() string {
 	output := strings.Join(e.tracing.traces, "")
 	e.tracing.traces = make([]string, 0)
 	return output
+}
+
+// AppendTraces appends traces from another engine to this engine's trace buffer.
+// This is useful for aggregating traces from multiple worker engines.
+func (e *TemplateEngine) AppendTraces(other *TemplateEngine) {
+	if other == nil {
+		return
+	}
+
+	// Get traces from the other engine (this clears its buffer)
+	traces := other.GetTraceOutput()
+	if traces == "" {
+		return
+	}
+
+	// Append to this engine's trace buffer
+	e.tracing.mu.Lock()
+	e.tracing.traces = append(e.tracing.traces, traces)
+	e.tracing.mu.Unlock()
 }
 
 // tracef logs a trace message with proper indentation based on nesting depth.

@@ -1,21 +1,43 @@
-package configloader
+// Copyright 2025 Philipp Hossner
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package conversion
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/core/config"
 )
 
-// ConvertCRDToConfig converts a HAProxyTemplateConfig CRD Spec to internal config.Config format.
+// ConvertSpec converts a HAProxyTemplateConfig CRD Spec to internal config.Config format.
 //
-// The CRD Spec structure directly maps to config.Config, so this is primarily a type conversion
-// with field mapping. The CRD includes two additional fields not in config.Config:
-//   - CredentialsSecretRef: Reference to Secret containing credentials (handled separately)
-//   - ValidationTests: Test configurations for validating webhook (handled by webhook component)
+// This is a comprehensive converter that handles ALL fields from the CRD spec including:
+//   - Production fields: PodSelector, Controller, Logging, Dataplane
+//   - Template fields: HAProxyConfig, TemplateSnippets, Maps, Files, SSLCertificates
+//   - Resource fields: WatchedResources, WatchedResourcesIgnoreFields
+//   - Configuration fields: TemplatingSettings
+//   - Test fields: ValidationTests (includes fixtures and assertions)
 //
-// These fields are intentionally excluded from the conversion as they serve different purposes.
-func ConvertCRDToConfig(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Config, error) {
+// The CRD spec field CredentialsSecretRef is intentionally excluded as it's handled
+// separately by the credentials loader component.
+func ConvertSpec(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Config, error) {
 	// Convert pod selector
 	podSelector := config.PodSelector{
 		MatchLabels: spec.PodSelector.MatchLabels,
@@ -122,12 +144,34 @@ func ConvertCRDToConfig(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Confi
 		Template: spec.HAProxyConfig.Template,
 	}
 
+	// Convert templating settings
+	templatingSettings := config.TemplatingSettings{}
+	if len(spec.TemplatingSettings.ExtraContext.Raw) > 0 {
+		// Unmarshal runtime.RawExtension JSON to map[string]interface{}
+		var extraContext map[string]interface{}
+		if err := json.Unmarshal(spec.TemplatingSettings.ExtraContext.Raw, &extraContext); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal templating_settings.extra_context: %w", err)
+		}
+		templatingSettings.ExtraContext = extraContext
+	}
+
+	// Convert validation tests
+	validationTests := make(map[string]config.ValidationTest, len(spec.ValidationTests))
+	for testName, test := range spec.ValidationTests {
+		validationTests[testName] = config.ValidationTest{
+			Description: test.Description,
+			Fixtures:    convertFixtures(test.Fixtures),
+			Assertions:  convertAssertions(test.Assertions),
+		}
+	}
+
 	// Construct final config
 	cfg := &config.Config{
 		PodSelector:                  podSelector,
 		Controller:                   controllerConfig,
 		Logging:                      loggingConfig,
 		Dataplane:                    dataplaneConfig,
+		TemplatingSettings:           templatingSettings,
 		WatchedResourcesIgnoreFields: spec.WatchedResourcesIgnoreFields,
 		WatchedResources:             watchedResources,
 		TemplateSnippets:             templateSnippets,
@@ -135,9 +179,48 @@ func ConvertCRDToConfig(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Confi
 		Files:                        files,
 		SSLCertificates:              sslCertificates,
 		HAProxyConfig:                haproxyConfig,
+		ValidationTests:              validationTests,
 	}
 
 	return cfg, nil
+}
+
+// convertFixtures converts CRD fixtures to internal config format.
+// This converts from map[string][]runtime.RawExtension to map[string][]interface{}.
+func convertFixtures(crdFixtures map[string][]runtime.RawExtension) map[string][]interface{} {
+	fixtures := make(map[string][]interface{})
+	for resourceType, resources := range crdFixtures {
+		interfaceSlice := make([]interface{}, len(resources))
+		for i, rawExt := range resources {
+			// Parse RawExtension.Raw ([]byte) into unstructured object
+			obj := &unstructured.Unstructured{}
+			if err := json.Unmarshal(rawExt.Raw, &obj.Object); err != nil {
+				// If parsing fails, use empty object to avoid breaking fixture processing
+				// The error will be caught during test execution
+				obj.Object = make(map[string]interface{})
+			}
+			interfaceSlice[i] = obj.Object
+		}
+		fixtures[resourceType] = interfaceSlice
+	}
+	return fixtures
+}
+
+// convertAssertions converts CRD assertion types to internal config format.
+func convertAssertions(crdAssertions []v1alpha1.ValidationAssertion) []config.ValidationAssertion {
+	assertions := make([]config.ValidationAssertion, len(crdAssertions))
+	for i, a := range crdAssertions {
+		assertions[i] = config.ValidationAssertion{
+			Type:        a.Type,
+			Description: a.Description,
+			Target:      a.Target,
+			Pattern:     a.Pattern,
+			Expected:    a.Expected,
+			JSONPath:    a.JSONPath,
+			Patterns:    a.Patterns,
+		}
+	}
+	return assertions
 }
 
 // parseLabelSelector parses a label selector string into a map.

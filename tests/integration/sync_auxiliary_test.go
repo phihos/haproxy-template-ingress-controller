@@ -205,9 +205,9 @@ func TestSyncAuxiliary(t *testing.T) {
 			mapFiles: map[string]string{
 				"domains.map": "map-files/domains-updated.map", // Same name, different content
 			},
-			expectedCreates: 0,
-			expectedUpdates: 0,
-			expectedDeletes: 0,
+			expectedCreates:    0,
+			expectedUpdates:    0,
+			expectedDeletes:    0,
 			expectedOperations: []string{
 				// No HAProxy config operations expected - config is identical
 			},

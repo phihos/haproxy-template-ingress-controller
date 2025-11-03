@@ -58,6 +58,8 @@ type Runner struct {
 	config          *config.Config
 	logger          *slog.Logger
 	workers         int
+	debugFilters    bool // Enable detailed filter operation logging
+	traceTemplates  bool // Enable template execution tracing
 }
 
 // testEntry is a tuple of test name and test definition for worker processing.
@@ -78,6 +80,10 @@ type Options struct {
 	// Default: 4
 	// Set to 1 for sequential execution.
 	Workers int
+
+	// DebugFilters enables detailed filter operation logging.
+	// When enabled, each sort comparison is logged with values and results.
+	DebugFilters bool
 }
 
 // TestResults contains the results of running validation tests.
@@ -186,12 +192,17 @@ func New(
 		workers = runtime.NumCPU() // Default to number of CPUs
 	}
 
+	// Capture tracing state from template engine
+	traceTemplates := engine.IsTracingEnabled()
+
 	return &Runner{
 		engineTemplate:  engine,
 		validationPaths: validationPaths,
 		config:          cfg,
 		logger:          logger.With("component", "test-runner"),
 		workers:         workers,
+		debugFilters:    options.DebugFilters,
+		traceTemplates:  traceTemplates,
 	}
 }
 
@@ -259,6 +270,16 @@ func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templ
 	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile templates for worker: %w", err)
+	}
+
+	// Enable filter debug if requested
+	if r.debugFilters {
+		engine.EnableFilterDebug()
+	}
+
+	// Enable template tracing if original engine had it enabled
+	if r.traceTemplates {
+		engine.EnableTracing()
 	}
 
 	return engine, nil
@@ -483,6 +504,11 @@ func (r *Runner) testWorker(ctx context.Context, workerID int, tests <-chan test
 				"passed", result.Passed,
 				"total_duration_ms", testDuration.Milliseconds())
 
+			// Append traces from worker engine to main engine (for --trace-templates output)
+			if r.traceTemplates {
+				r.engineTemplate.AppendTraces(testEngine)
+			}
+
 			results <- result
 
 			testNum++
@@ -648,7 +674,8 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 
 // buildRenderingContext builds the template rendering context using fixture stores.
 //
-// This mirrors DryRunValidator.buildRenderingContext.
+// This mirrors DryRunValidator.buildRenderingContext and Renderer.buildRenderingContext.
+// The context includes resources (fixture stores), template snippets, and controller configuration.
 func (r *Runner) buildRenderingContext(stores map[string]types.Store) map[string]interface{} {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
@@ -665,10 +692,15 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store) map[string
 	snippetNames := r.sortSnippetsByPriority()
 
 	// Build final context
-	return map[string]interface{}{
+	context := map[string]interface{}{
 		"resources":         resources,
 		"template_snippets": snippetNames,
 	}
+
+	// Merge extraContext variables into top-level context
+	renderer.MergeExtraContextInto(context, r.config)
+
+	return context
 }
 
 // sortSnippetsByPriority sorts template snippet names alphabetically.

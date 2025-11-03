@@ -85,7 +85,22 @@ func TestGonjaFilter_SortBy(t *testing.T) {
 					{"name": "also-without"},
 				},
 			},
-			want: "without:none,also-without:none,with:value,", // false comes before true in sort
+			want: "with:value,without:none,also-without:none,", // :exists:desc means items with field come first
+		},
+		{
+			name: "Gateway API route precedence - method and headers",
+			template: `{%- for route in routes | sort_by(["$.match.method:exists:desc", "$.match.headers | length:desc"]) -%}
+{{ route.name }},
+{%- endfor %}`,
+			context: map[string]interface{}{
+				"routes": []map[string]interface{}{
+					{"name": "catchall", "match": map[string]interface{}{}},
+					{"name": "get-with-2-headers", "match": map[string]interface{}{"method": "GET", "headers": []interface{}{"X-Auth", "X-Version"}}},
+					{"name": "get-with-1-header", "match": map[string]interface{}{"method": "GET", "headers": []interface{}{"X-Auth"}}},
+					{"name": "get-only", "match": map[string]interface{}{"method": "GET"}},
+				},
+			},
+			want: "get-with-2-headers,get-with-1-header,get-only,catchall,", // Most specific first, catch-all last
 		},
 		{
 			name:     "empty list",
@@ -258,6 +273,155 @@ func TestGonjaFilter_Extract(t *testing.T) {
 
 // Note: conflicts_by is a test, not a filter, and is not currently used in templates
 // Tests removed due to Gonja argument passing complexities
+
+func TestGonjaFilter_Debug(t *testing.T) {
+	tests := []struct {
+		name         string
+		template     string
+		context      map[string]interface{}
+		wantContains []string
+		wantErr      bool
+	}{
+		{
+			name:     "debug simple object",
+			template: `{{ item | debug }}`,
+			context: map[string]interface{}{
+				"item": map[string]interface{}{
+					"name":  "test",
+					"value": 42,
+				},
+			},
+			wantContains: []string{
+				"# DEBUG:",
+				`#   "name": "test"`,
+				`#   "value": 42`,
+			},
+		},
+		{
+			name:     "debug with label",
+			template: `{{ item | debug("my-label") }}`,
+			context: map[string]interface{}{
+				"item": map[string]interface{}{
+					"key": "value",
+				},
+			},
+			wantContains: []string{
+				"# DEBUG my-label:",
+				`#   "key": "value"`,
+			},
+		},
+		{
+			name:     "debug array",
+			template: `{{ items | debug }}`,
+			context: map[string]interface{}{
+				"items": []interface{}{"a", "b", "c"},
+			},
+			wantContains: []string{
+				"# DEBUG:",
+				"#   \"a\"",
+				"#   \"b\"",
+				"#   \"c\"",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil)
+			require.NoError(t, err)
+
+			got, err := engine.Render("test", tt.context)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			for _, wantStr := range tt.wantContains {
+				assert.Contains(t, got, wantStr)
+			}
+		})
+	}
+}
+
+func TestGonjaFilter_Eval(t *testing.T) {
+	tests := []struct {
+		name         string
+		template     string
+		context      map[string]interface{}
+		wantContains string
+		wantErr      bool
+	}{
+		{
+			name:     "eval simple field",
+			template: `{{ item | eval("$.name") }}`,
+			context: map[string]interface{}{
+				"item": map[string]interface{}{
+					"name": "test-name",
+				},
+			},
+			wantContains: "test-name (string)",
+		},
+		{
+			name:     "eval nested field",
+			template: `{{ item | eval("$.config.port") }}`,
+			context: map[string]interface{}{
+				"item": map[string]interface{}{
+					"config": map[string]interface{}{
+						"port": 8080,
+					},
+				},
+			},
+			wantContains: "8080",
+		},
+		{
+			name:     "eval with length modifier",
+			template: `{{ item | eval("$.items | length") }}`,
+			context: map[string]interface{}{
+				"item": map[string]interface{}{
+					"items": []interface{}{"a", "b", "c"},
+				},
+			},
+			wantContains: "3 (int)",
+		},
+		{
+			name:     "eval with exists check",
+			template: `{{ item | eval("$.optional:exists") }}`,
+			context: map[string]interface{}{
+				"item": map[string]interface{}{
+					"optional": "value",
+				},
+			},
+			wantContains: "true (bool)",
+		},
+		{
+			name:     "eval with exists check (missing field)",
+			template: `{{ item | eval("$.missing:exists") }}`,
+			context: map[string]interface{}{
+				"item": map[string]interface{}{
+					"other": "value",
+				},
+			},
+			wantContains: "false (bool)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil)
+			require.NoError(t, err)
+
+			got, err := engine.Render("test", tt.context)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Contains(t, got, tt.wantContains)
+		})
+	}
+}
 
 // Test edge cases and error conditions.
 func TestGonjaFilter_EdgeCases(t *testing.T) {

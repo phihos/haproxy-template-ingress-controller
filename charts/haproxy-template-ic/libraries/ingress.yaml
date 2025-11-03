@@ -47,7 +47,7 @@ templateSnippets:
       {%- for path in (rule.http.paths | default([]) | selectattr("path", "defined")) %}
       {%- for check_type in path_types %}
       {%- if path.pathType == check_type %}
-      {{ rule.host }}{{ path.path }} BACKEND:{% include "resource_ingress_backend-name" -%}{{ suffix }}
+      {{ "\n" }}{{ rule.host }}{{ path.path }} BACKEND:{% include "resource_ingress_backend-name" -%}{{ suffix }}
       {%- endif %}
       {%- endfor %}
       {% endfor %}
@@ -126,10 +126,10 @@ templateSnippets:
       {%- set suffix = "" %}
       {% include "resource_ingress_path-map-entry" %}
 
-  map-entry-path-prefix-ingress:
+  map-entry-path-prefix-beg-ingress:
     template: |
       {#- Generate prefix path map entries with trailing slash for Ingress resources #}
-      # ingress/map-entry-path-prefix-ingress
+      # ingress/map-entry-path-prefix-beg-ingress
       {% set path_types = ["Prefix", "ImplementationSpecific"] %}
       {%- set suffix = "/" %}
       {% include "resource_ingress_path-map-entry" %}

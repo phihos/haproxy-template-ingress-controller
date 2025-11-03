@@ -93,7 +93,6 @@ func GetNamespaceFromContext(ctx context.Context) (string, error) {
 	return namespace, nil
 }
 
-
 // WaitForPodReady waits for a pod matching the label selector to be ready.
 func WaitForPodReady(ctx context.Context, client klient.Client, namespace, labelSelector string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)

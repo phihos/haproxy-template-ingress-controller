@@ -466,6 +466,35 @@ Tracing overhead is minimal:
 
 **Recommendation**: Safe to leave enabled for debugging, but disable in performance-critical production paths.
 
+### Filter Operations in Traces
+
+Template tracing captures filter operations when enabled, showing the data flow through custom filters:
+
+```go
+engine.EnableTracing()
+output, _ := engine.Render("test", context)
+trace := engine.GetTraceOutput()
+
+// Example trace output:
+// Rendering: test
+//   Filter: sort_by([]interface {}, 3 items) [priority:desc]
+//   Filter: group_by([]interface {}, 3 items) [priority]
+//   Filter: extract([]interface {}, 3 items) [name]
+// Completed: test (0.012ms)
+```
+
+**Captured information:**
+- Filter name (sort_by, group_by, extract, transform)
+- Input type ([]interface {}, map[string]interface {})
+- Item count for slice operations
+- Filter parameters in brackets
+
+**Use cases:**
+- Understanding which filters are called and in what order
+- Verifying filter parameters are evaluated correctly
+- Debugging unexpected sorting or grouping results
+- Performance analysis of filter operations
+
 ### Limitations
 
 **Current limitations:**
@@ -551,6 +580,260 @@ func TestTracing_ConcurrentRenders(t *testing.T) {
     assert.Contains(t, trace, "Rendering: template2")
 
     // Run with race detector: go test -race
+}
+```
+
+## Filter Debug Logging
+
+The template engine provides detailed debug logging for filter operations, particularly useful for debugging sort_by comparisons.
+
+### Enabling Filter Debug
+
+```go
+engine, _ := templating.New(templating.EngineTypeGonja, templates, nil, nil)
+
+// Enable filter debug logging
+engine.EnableFilterDebug()
+
+// Render templates (debug logs appear in slog output)
+output, _ := engine.Render("test", context)
+
+// Disable filter debug logging
+engine.DisableFilterDebug()
+```
+
+### Debug Output
+
+When enabled, sort_by filter logs each comparison with structured logging:
+
+```
+INFO SORT comparison criterion=$.priority:desc valA=10 valA_type=int valB=5 valB_type=int result=1
+INFO SORT comparison criterion=$.priority:desc valA=5 valA_type=int valB=1 valB_type=int result=1
+```
+
+**Logged fields:**
+- `criterion`: The sort expression being evaluated
+- `valA`: Value extracted from first item
+- `valA_type`: Go type of first value
+- `valB`: Value extracted from second item
+- `valB_type`: Go type of second value
+- `result`: Comparison result (-1, 0, 1)
+
+### CLI Integration
+
+The `controller validate` command supports `--debug-filters` flag:
+
+```bash
+# Enable filter debug logging during validation tests
+./bin/controller validate --test test-gateway-route-precedence --debug-filters
+
+# Combine with other debugging flags
+./bin/controller validate --debug-filters --trace-templates --dump-rendered
+```
+
+**How it works:**
+- Flag passed from CLI → testrunner.Options → testrunner.Runner
+- Runner creates worker engines with `EnableFilterDebug()` called
+- Each worker engine independently logs filter operations
+- Useful for understanding why routes are sorted in a particular order
+
+### Use Cases
+
+**1. Debugging sort_by precedence:**
+```go
+// Template
+routes | sort_by(["$.match.method:exists:desc", "$.match.headers | length:desc"])
+
+// Enable debug to see:
+// - Which routes have method field (exists check)
+// - Header count for each route
+// - Comparison order and results
+```
+
+**2. Understanding mixed-type sorting:**
+```go
+// When sorting items with different value types
+items | sort_by(["$.value"])
+
+// Debug shows actual types being compared:
+// valA=string valA_type=string
+// valB=123 valB_type=int
+```
+
+**3. Verifying expression evaluation:**
+```go
+// Complex expressions with multiple criteria
+items | sort_by(["$.type", "$.priority:desc", "$.name"])
+
+// Debug shows evaluation of each criterion
+```
+
+### Implementation Notes
+
+- Debug logging uses Go's `log/slog` package
+- Logging only happens when `EnableFilterDebug()` is active
+- Thread-safe: Multiple concurrent renders each log independently
+- Zero overhead when disabled (simple boolean check)
+- Only sort_by filter currently logs (most common debugging need)
+
+### Performance Impact
+
+Filter debug logging is lightweight:
+- Single boolean check per comparison
+- Structured logging (slog) is efficient
+- No string formatting when disabled
+- Typical overhead: <5% for sort-heavy templates
+
+**Recommendation**: Safe to enable during development and validation testing. Disable in production unless investigating specific issues.
+
+## Debug Filters
+
+The template engine provides filters specifically designed for debugging templates by inspecting variable contents and evaluating expressions.
+
+### debug Filter
+
+Dumps variable structure as JSON-formatted HAProxy comments:
+
+```jinja2
+{%- set routes = [
+    {"name": "api", "priority": 10},
+    {"name": "web", "priority": 5}
+] %}
+
+{{- routes | debug }}
+
+{# Output:
+# DEBUG:
+# [
+#   {
+#     "name": "api",
+#     "priority": 10
+#   },
+#   {
+#     "name": "web",
+#     "priority": 5
+#   }
+# ]
+#}
+```
+
+**With label:**
+```jinja2
+{{ routes | debug("sorted-routes") }}
+
+{# Output:
+# DEBUG sorted-routes:
+# [...]
+#}
+```
+
+**Use cases:**
+- Inspecting variable structure during template development
+- Verifying filter transformations (before/after)
+- Understanding data passed to templates
+- Safe output (formatted as comments, won't break HAProxy config)
+
+**Features:**
+- JSON formatted with indentation
+- Prefixed with `# ` (HAProxy comment)
+- Optional label for identifying debug output
+- Works with any data type (objects, arrays, strings, numbers)
+
+### eval Filter
+
+Evaluates JSONPath expressions and shows the result with type information:
+
+```jinja2
+{%- set item = {
+    "name": "test-route",
+    "match": {
+        "method": "GET",
+        "headers": ["X-Auth", "X-Version"]
+    }
+} %}
+
+{{ item | eval("$.name") }}
+{# Output: test-route (string) #}
+
+{{ item | eval("$.match.headers | length") }}
+{# Output: 2 (int) #}
+
+{{ item | eval("$.match.method:exists") }}
+{# Output: true (bool) #}
+
+{{ item | eval("$.optional:exists") }}
+{# Output: false (bool) #}
+```
+
+**Use cases:**
+- Testing sort_by criteria before using them
+- Understanding why items are sorted in unexpected order
+- Verifying JSONPath expressions extract the right data
+- Debugging :exists checks and modifiers
+
+**Expression syntax:**
+- Uses same JSONPath syntax as sort_by/extract filters
+- Supports all modifiers: `:desc`, `:exists`, `| length`
+- Shows both value and Go type
+- Returns error string if evaluation fails
+
+### Combining Debug Filters
+
+```jinja2
+{%- set items = [...] %}
+
+{# Before sorting #}
+{{ items | debug("unsorted") }}
+
+{# Test sort criteria #}
+{%- for item in items %}
+  {{ item | eval("$.priority:desc") }}
+{%- endfor %}
+
+{# After sorting #}
+{%- set sorted = items | sort_by(["$.priority:desc"]) %}
+{{ sorted | debug("sorted") }}
+```
+
+### Implementation Notes
+
+**debug filter:**
+- Uses `json.MarshalIndent()` for formatting
+- Adds `# ` prefix to every line
+- Falls back to `fmt.Sprintf("%v")` if JSON marshaling fails
+- Returns string (can be used in {{ }} expressions)
+
+**eval filter:**
+- Reuses same `evaluateExpression()` function as sort_by
+- Formats output as `value (type)`
+- Type information helps understand comparison behavior
+- Returns formatted string, not the evaluated value itself
+
+### Performance Impact
+
+Both filters are intended for debugging only:
+- **debug**: JSON marshaling overhead (skip in production templates)
+- **eval**: Minimal overhead (same as one sort comparison)
+- No impact on other filters or rendering when not used
+- Safe to leave in templates during development (just comment out)
+
+**Recommendation**: Use during template development and testing. Remove or comment out before production deployment.
+
+### Testing Debug Filters
+
+```go
+func TestDebugFilter(t *testing.T) {
+    templates := map[string]string{
+        "test": `{{ item | debug("test-item") }}`,
+    }
+
+    engine, _ := templating.New(templating.EngineTypeGonja, templates, nil, nil)
+    output, _ := engine.Render("test", map[string]interface{}{
+        "item": map[string]interface{}{"key": "value"},
+    })
+
+    assert.Contains(t, output, "# DEBUG test-item:")
+    assert.Contains(t, output, `"key": "value"`)
 }
 ```
 

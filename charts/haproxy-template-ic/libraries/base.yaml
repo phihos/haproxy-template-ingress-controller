@@ -49,20 +49,15 @@ templateSnippets:
       # Empty string if no path match - falls through gracefully
       http-request set-var(txn.path_match_qualifier) var(txn.path_match),field(1,:)
 
-      # VAR qualifier: set request-scoped disambiguation variable
-      # Format: VAR:<variable_name>:<variable_value>
-      # Example: VAR:httproute_route_id:ns1_route1_0__ns2_route2_1
-      # The value contains all conflicting rules: {namespace}_{route_name}_{rule_index}
-      # Store variable name and value in fixed variables for advanced matchers to use
-      http-request set-var(req.conflict_var_name) var(txn.path_match),field(2,:) if { var(txn.path_match_qualifier) -m str VAR }
-      http-request set-var(req.conflict_var_value) var(txn.path_match),field(3,:) if { var(txn.path_match_qualifier) -m str VAR }
-
       # Extension point for advanced matchers (method/header/query)
       # Libraries can inject ordered http-request statements here
       {%- from "macros" import include_matching -%}
       {%- filter indent(6, first=True) %}
       {{ include_matching("advanced-matcher-*") }}
       {%- endfilter %}
+
+      # Re-parse path_match_qualifier after advanced matchers may have changed path_match
+      http-request set-var(txn.path_match_qualifier) var(txn.path_match),field(1,:)
 
       # MULTIBACKEND qualifier: weighted routing
       # Format: MULTIBACKEND:<total_weight>:<route_key>
@@ -170,9 +165,9 @@ maps:
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
       # It should be used with the prefix string matcher. Example:
       #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
-      {#- Resource libraries populate this map via map-entry-path-prefix-* snippets #}
+      {#- Resource libraries populate this map via map-entry-path-prefix-beg-* snippets #}
       {%- from "macros" import include_matching -%}
-      {{- include_matching("map-entry-path-prefix-*") -}}
+      {{- include_matching("map-entry-path-prefix-beg-*") -}}
 
   path-regex.map:
     template: |
@@ -277,7 +272,6 @@ haproxyConfig:
   template: |
     global
         log stdout len 4096 local0 info
-        chroot /var/lib/haproxy
         user haproxy
         group haproxy
         daemon
@@ -320,10 +314,20 @@ haproxyConfig:
         {% include "use-backend-selection" -%}
         {%- endfilter %}
 
-        # Debug headers (when enabled via config)
-        {%- if config.debug.headers.enabled | default(false) %}
+        # Debug headers (when enabled via templating settings)
+        {%- if debug | default(false) %}
+        # HAProxy routing decision introspection
+        http-response set-header X-HAProxy-Backend %[var(txn.backend_name)] if { var(txn.backend_name) -m found }
+        http-response set-header X-HAProxy-Host-Match %[var(txn.host_match)] if { var(txn.host_match) -m found }
+        http-response set-header X-HAProxy-Path-Match %[var(txn.path_match)] if { var(txn.path_match) -m found }
+        http-response set-header X-HAProxy-Path-Match-Qualifier %[var(txn.path_match_qualifier)] if { var(txn.path_match_qualifier) -m found }
+        http-response set-header X-HAProxy-Total-Weight %[var(txn.total_weight)] if { var(txn.total_weight) -m found }
+        http-response set-header X-HAProxy-Random-Weight %[var(txn.random_weight)] if { var(txn.random_weight) -m found }
+        http-response set-header X-HAProxy-Route-Key %[var(txn.route_key)] if { var(txn.route_key) -m found }
+        # Gateway-specific headers (set by gateway.yaml advanced matchers)
         http-response set-header X-Gateway-Matched-Route %[var(txn.matched_route)] if { var(txn.matched_route) -m found }
         http-response set-header X-Gateway-Match-Reason %[var(txn.match_reason)] if { var(txn.match_reason) -m found }
+        http-response set-header X-Gateway-Filters-Applied %[var(txn.filters_applied)] if { var(txn.filters_applied) -m found }
         {%- endif %}
 
         # Default backend

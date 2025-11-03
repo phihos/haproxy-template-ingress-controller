@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
+	"haproxy-template-ic/pkg/controller/conversion"
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/core/config"
 	busevents "haproxy-template-ic/pkg/events"
@@ -146,7 +147,7 @@ func (c *ConfigLoaderComponent) processCRD(resource *unstructured.Unstructured) 
 	}
 
 	// Convert CRD Spec to config.Config
-	cfg, err := ConvertCRDToConfig(&crd.Spec)
+	cfg, err := conversion.ConvertSpec(&crd.Spec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert CRD Spec to config: %w", err)
 	}

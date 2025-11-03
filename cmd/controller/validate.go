@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
+	"haproxy-template-ic/pkg/controller/conversion"
 	"haproxy-template-ic/pkg/controller/testrunner"
 	"haproxy-template-ic/pkg/dataplane"
 	"haproxy-template-ic/pkg/templating"
@@ -42,6 +43,7 @@ var (
 	validateVerbose        bool
 	validateDumpRendered   bool
 	validateTraceTemplates bool
+	validateDebugFilters   bool
 	validateWorkers        int
 )
 
@@ -84,6 +86,7 @@ func init() {
 	validateCmd.Flags().BoolVar(&validateVerbose, "verbose", false, "Show rendered content preview for failed assertions")
 	validateCmd.Flags().BoolVar(&validateDumpRendered, "dump-rendered", false, "Dump all rendered content (haproxy.cfg, maps, files)")
 	validateCmd.Flags().BoolVar(&validateTraceTemplates, "trace-templates", false, "Show template execution trace")
+	validateCmd.Flags().BoolVar(&validateDebugFilters, "debug-filters", false, "Show filter operation debugging (sort comparisons, etc.)")
 	validateCmd.Flags().IntVar(&validateWorkers, "workers", 0, "Number of parallel test workers (0=auto-detect CPUs, 1=sequential)")
 
 	_ = validateCmd.MarkFlagRequired("file")
@@ -167,7 +170,7 @@ func runValidationTests(
 	logger *slog.Logger,
 ) (*testrunner.TestResults, error) {
 	// Convert CRD spec to internal config format
-	cfg, err := testrunner.ConvertSpecToInternalConfig(configSpec)
+	cfg, err := conversion.ConvertSpec(configSpec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert config: %w", err)
 	}
@@ -178,8 +181,9 @@ func runValidationTests(
 		engine,
 		validationPaths,
 		testrunner.Options{
-			Logger:  logger,
-			Workers: validateWorkers,
+			Logger:       logger,
+			Workers:      validateWorkers,
+			DebugFilters: validateDebugFilters,
 		},
 	)
 

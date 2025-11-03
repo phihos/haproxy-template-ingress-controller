@@ -134,6 +134,15 @@ controller:
     logging:
       verbose: 1  # 0=WARNING, 1=INFO, 2=DEBUG
 
+    # Template rendering settings
+    # extraContext provides custom variables available to all templates
+    templatingSettings:
+      extraContext:
+        # Enable debug headers in HAProxy responses
+        # When enabled, HAProxy adds headers like X-HAProxy-Backend, X-Gateway-Matched-Route
+        # to show internal routing decisions
+        debug: true
+
     watchedResourcesIgnoreFields:
       - metadata.managedFields
 
