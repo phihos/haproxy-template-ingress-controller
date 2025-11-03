@@ -307,6 +307,151 @@ userlist auth_users
 
 **Returns:** Decoded plaintext string
 
+**Custom filter - regex_escape:**
+
+The `regex_escape` filter escapes special regex characters for safe use in HAProxy ACL patterns. Essential when constructing regex patterns from user-controlled data.
+
+```jinja2
+{# Escape path prefixes for regex matching #}
+{% set path_pattern = route.match.path.value | regex_escape %}
+acl path_match path_reg ^{{ path_pattern }}
+
+{# Example with Gateway API HTTPRoute path matching #}
+{% for route in httproutes %}
+  {% set escaped_path = route.spec.rules[0].matches[0].path.value | regex_escape %}
+  use_backend backend_{{ route.metadata.name }} if { path_reg ^{{ escaped_path }} }
+{% endfor %}
+```
+
+**Custom filter - sort_by:**
+
+The `sort_by` filter sorts arrays of objects by JSONPath expressions. Supports multiple sort criteria with modifiers.
+
+```jinja2
+{# Sort routes by priority (descending) then name #}
+{% set sorted_routes = routes | sort_by(["$.priority:desc", "$.name"]) %}
+
+{# Gateway API route precedence: method > headers > query params > path specificity #}
+{% set sorted = routes | sort_by([
+    "$.match.method:exists:desc",
+    "$.match.headers | length:desc",
+    "$.match.queryParams | length:desc",
+    "$.match.path.value | length:desc"
+]) %}
+{% for route in sorted %}
+  {# Routes now ordered by Gateway API precedence rules #}
+  use_backend {{ route.backend }} if {{ route.acl }}
+{% endfor %}
+```
+
+**Available modifiers:**
+- `:desc` - Sort in descending order
+- `:exists` - Sort by field presence (present items first)
+- `| length` - Sort by string or array length
+
+**Custom filter - extract:**
+
+The `extract` filter extracts values from objects using JSONPath expressions. Automatically flattens nested arrays.
+
+```jinja2
+{# Extract all HTTP methods from Gateway API routes #}
+{% set all_methods = httproutes | extract("$.spec.rules[*].matches[*].method") %}
+{# Returns: ["GET", "POST", "PUT", "DELETE"] #}
+
+{# Extract service names from ingresses #}
+{% set services = ingresses | extract("$.spec.rules[*].http.paths[*].backend.service.name") %}
+
+{# Use extracted values for ACL construction #}
+{% set hostnames = ingresses | extract("$.spec.rules[*].host") | unique %}
+{% for host in hostnames %}
+  acl is_{{ host | replace(".", "_") }} hdr(host) -i {{ host }}
+{% endfor %}
+```
+
+**Custom filter - group_by:**
+
+The `group_by` filter groups array items by the value of a JSONPath expression.
+
+```jinja2
+{# Group ingresses by namespace for multi-tenant configuration #}
+{% set by_namespace = ingresses | group_by("$.metadata.namespace") %}
+{% for namespace, ingresses in by_namespace.items() %}
+  # Namespace: {{ namespace }} ({{ ingresses|length }} ingresses)
+  {% for ingress in ingresses %}
+    backend ing_{{ namespace }}_{{ ingress.metadata.name }}
+  {% endfor %}
+{% endfor %}
+
+{# Group routes by priority level #}
+{% set by_priority = routes | group_by("$.priority") %}
+{% for priority in by_priority.keys() | sort | reverse %}
+  # Priority {{ priority }} routes
+  {% for route in by_priority[priority] %}
+    {# Process high-priority routes first #}
+  {% endfor %}
+{% endfor %}
+```
+
+**Custom filter - transform:**
+
+The `transform` filter applies regex substitution to array elements.
+
+```jinja2
+{# Strip API version prefixes from paths #}
+{% set paths = ["/api/v1/users", "/api/v1/posts", "/api/v2/comments"] %}
+{% set clean_paths = paths | transform("^/api/v\\d+", "") %}
+{# Returns: ["/users", "/posts", "/comments"] #}
+
+{# Normalize hostname formats #}
+{% set hosts = ["www.example.com", "api.example.com"] %}
+{% set domains = hosts | transform("^[^.]+\\.", "") %}
+{# Returns: ["example.com", "example.com"] #}
+```
+
+**Custom filter - debug:**
+
+The `debug` filter outputs variables as JSON-formatted HAProxy comments. Useful for template development and troubleshooting.
+
+```jinja2
+{# Debug route structure during development #}
+{{ routes | debug("available-routes") }}
+
+{# Output:
+# DEBUG available-routes:
+# [
+#   {
+#     "name": "api-route",
+#     "priority": 100,
+#     "match": {"method": "GET", "path": "/api"}
+#   }
+# ]
+#}
+
+{# Compare before/after transformations #}
+{{ routes | debug("before-sorting") }}
+{% set sorted = routes | sort_by(["$.priority:desc"]) %}
+{{ sorted | debug("after-sorting") }}
+```
+
+**Custom filter - eval:**
+
+The `eval` filter evaluates JSONPath expressions and shows results with type information. Useful for testing sort_by criteria.
+
+```jinja2
+{# Test sort criteria before applying #}
+{% for route in routes %}
+  Route: {{ route.name }}
+    Priority: {{ route | eval("$.priority") }}
+    Has method: {{ route | eval("$.match.method:exists") }}
+    Header count: {{ route | eval("$.match.headers | length") }}
+{% endfor %}
+
+{# Understand why items are sorted in a specific order #}
+{% for item in items %}
+  {{ item | eval("$.weight:desc") }}  {# Shows: 100 (int), 50 (int), 10 (int) #}
+{% endfor %}
+```
+
 For the complete list of built-in filters, see [Gonja filters](https://github.com/nikolalohinski/gonja#filters).
 
 ### Functions
@@ -420,6 +565,143 @@ index_by: ["metadata.namespace", "type"]
 
 > [!TIP]
 > Escape dots in JSONPath expressions for labels: `kubernetes\\.io/service-name`
+
+## Custom Template Variables
+
+You can add custom variables to the template context using `templatingSettings.extraContext`. These variables are available in all templates, allowing you to configure template behavior without modifying controller code.
+
+### Configuration
+
+Define custom variables in your HAProxyTemplateConfig CRD or ConfigMap configuration:
+
+**Using CRD:**
+
+```yaml
+apiVersion: haproxy-template-ic.github.io/v1alpha1
+kind: HAProxyTemplateConfig
+spec:
+  templatingSettings:
+    extraContext:
+      debug:
+        enabled: true
+        verboseHeaders: false
+      environment: production
+      featureFlags:
+        rateLimiting: true
+        caching: false
+      customTimeout: 30
+```
+
+**Using ConfigMap:**
+
+```yaml
+# config.yaml in ConfigMap
+templating_settings:
+  extra_context:
+    debug:
+      enabled: true
+      verbose_headers: false
+    environment: production
+    feature_flags:
+      rate_limiting: true
+      caching: false
+    custom_timeout: 30
+```
+
+### Accessing Custom Variables
+
+Custom variables are merged at the top level of the template context. Access them directly without prefixes:
+
+```jinja2
+{% if debug.enabled %}
+  # Debug mode - add diagnostic headers
+  http-response set-header X-HAProxy-Backend %[be_name]
+  http-response set-header X-HAProxy-Server %[srv_name]
+{% endif %}
+
+{% if environment == "production" %}
+  # Production-specific settings
+  timeout client {{ customTimeout }}s
+  timeout server {{ customTimeout }}s
+{% else %}
+  # Development settings
+  timeout client 300s
+  timeout server 300s
+{% endif %}
+
+{% if featureFlags.rateLimiting %}
+  # Rate limiting configuration
+  stick-table type ip size 100k expire 30s store http_req_rate(10s)
+  http-request track-sc0 src
+  http-request deny if { sc_http_req_rate(0) gt 100 }
+{% endif %}
+```
+
+### Use Cases
+
+**Environment-Specific Configuration:**
+
+```yaml
+extraContext:
+  environment: staging
+  limits:
+    maxConn: 1000
+    timeout: 10
+```
+
+```jinja2
+global
+  maxconn {% if environment == "production" %}10000{% else %}{{ limits.maxConn }}{% endif %}
+
+defaults
+  timeout connect {{ limits.timeout }}s
+```
+
+**Feature Flags:**
+
+```yaml
+extraContext:
+  features:
+    compression: true
+    http2: false
+```
+
+```jinja2
+{% if features.compression %}
+  compression algo gzip
+  compression type text/html text/plain text/css
+{% endif %}
+
+{% if features.http2 %}
+  bind *:443 ssl crt /etc/haproxy/ssl/ alpn h2,http/1.1
+{% else %}
+  bind *:443 ssl crt /etc/haproxy/ssl/
+{% endif %}
+```
+
+**Debug Headers:**
+
+```yaml
+extraContext:
+  debug: true
+```
+
+```jinja2
+{% if debug %}
+  # Add diagnostic headers showing routing decisions
+  http-response set-header X-Gateway-Matched-Route %[var(txn.matched_route)]
+  http-response set-header X-Gateway-Backend %[var(txn.backend_name)]
+{% endif %}
+```
+
+### Supported Value Types
+
+The `extraContext` field accepts any valid JSON value:
+- **Strings**: `environment: "production"`
+- **Numbers**: `timeout: 30`, `limit: 1.5`
+- **Booleans**: `enabled: true`
+- **Objects**: `debug: { enabled: true, level: 2 }`
+- **Arrays**: `allowedIPs: ["10.0.0.1", "10.0.0.2"]`
 
 ## Authentication Annotations
 

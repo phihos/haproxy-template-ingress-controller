@@ -240,6 +240,50 @@ haproxyConfig:
 
 See [Templating Guide](./templating.md) for syntax and filters.
 
+### templatingSettings
+
+Template rendering configuration and custom variables.
+
+```yaml
+templatingSettings:
+  extraContext:
+    debug:
+      enabled: true
+      verboseHeaders: false
+    environment: production
+    featureFlags:
+      rateLimiting: true
+      caching: false
+    customTimeout: 30
+```
+
+**Fields:**
+
+| Field          | Type                   | Required | Description                                                              |
+|----------------|------------------------|----------|--------------------------------------------------------------------------|
+| `extraContext` | map[string]interface{} | No       | Custom variables merged into template context (available in all templates) |
+
+**Usage in templates:**
+
+Custom variables are merged at the top level of the template context. Access them directly:
+
+```jinja2
+{% if debug.enabled %}
+  # Debug-specific configuration
+  http-response set-header X-HAProxy-Backend %[be_name]
+{% endif %}
+
+{% if environment == "production" %}
+  timeout client {{ customTimeout }}s
+{% else %}
+  timeout client 300s
+{% endif %}
+```
+
+The `extraContext` field accepts any valid JSON value (strings, numbers, booleans, objects, arrays). This allows you to configure template behavior for different environments, enable feature flags, or inject custom metadata without modifying controller code.
+
+See [Templating Guide - Custom Template Variables](./templating.md#custom-template-variables) for detailed examples and use cases.
+
 ### validationTests
 
 Embedded validation tests (optional, used by webhook and CLI).
