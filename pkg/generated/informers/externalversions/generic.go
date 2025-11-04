@@ -51,6 +51,10 @@ func (f *genericInformer) Lister() cache.GenericLister {
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
 	// Group=haproxy-template-ic.github.io, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithResource("haproxycfgs"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.HaproxyTemplateIC().V1alpha1().HAProxyCfgs().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("haproxymapfiles"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.HaproxyTemplateIC().V1alpha1().HAProxyMapFiles().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("haproxytemplateconfigs"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.HaproxyTemplateIC().V1alpha1().HAProxyTemplateConfigs().Informer()}, nil
 

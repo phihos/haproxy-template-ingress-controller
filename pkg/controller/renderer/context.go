@@ -31,6 +31,9 @@ import (
 //	    "secrets": StoreWrapper,
 //	    // ... other watched resources
 //	  },
+//	  "controller": {
+//	    "haproxy_pods": StoreWrapper,  // HAProxy controller pods for pod-maxconn calculations
+//	  },
 //	  "template_snippets": ["snippet1", "snippet2", ...]  // Sorted by priority
 //	  "config": Config,  // Controller configuration (e.g., config.debug.headers.enabled)
 //	}
@@ -40,6 +43,13 @@ import (
 //	{% for ingress in resources.ingresses.List() %}
 //	  {{ ingress.metadata.name }}
 //	{% endfor %}
+//
+// Templates can access controller metadata:
+//
+//	{%- set pod_count = controller.haproxy_pods.List() | length %}
+//	{%- if pod_count > 0 %}
+//	  {# Distribute load across {{ pod_count }} HAProxy replicas #}
+//	{%- endif %}
 //
 // Iterate over matching template snippets:
 //
@@ -68,16 +78,31 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 		}
 	}
 
+	// Create controller namespace with HAProxy pods store
+	controller := make(map[string]interface{})
+	if c.haproxyPodStore != nil {
+		c.logger.Info("wrapping HAProxy pods store for rendering context")
+		controller["haproxy_pods"] = &StoreWrapper{
+			Store:        c.haproxyPodStore,
+			ResourceType: "haproxy-pods",
+			Logger:       c.logger,
+		}
+	} else {
+		c.logger.Warn("HAProxy pods store is nil, controller.haproxy_pods will not be available")
+	}
+
 	// Sort template snippets by priority for template access
 	snippetNames := sortSnippetsByPriority(c.config.TemplateSnippets)
 
 	c.logger.Info("rendering context built",
 		"resource_count", len(resources),
+		"controller_fields", len(controller),
 		"snippet_count", len(snippetNames))
 
 	// Build final context
 	context := map[string]interface{}{
 		"resources":         resources,
+		"controller":        controller,
 		"template_snippets": snippetNames,
 	}
 

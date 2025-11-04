@@ -22,6 +22,8 @@ package deployer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -125,7 +127,7 @@ func (c *Component) handleDeploymentScheduled(ctx context.Context, event *events
 		"config_bytes", len(event.Config))
 
 	// Execute deployment
-	c.deployToEndpoints(ctx, event.Config, event.AuxiliaryFiles, event.Endpoints, event.Reason)
+	c.deployToEndpoints(ctx, event.Config, event.AuxiliaryFiles, event.Endpoints, event.RuntimeConfigName, event.RuntimeConfigNamespace, event.Reason)
 }
 
 // convertEndpoints converts []interface{} to []dataplane.Endpoint.
@@ -167,12 +169,15 @@ func (c *Component) convertAuxFiles(auxFilesRaw interface{}) *dataplane.Auxiliar
 //  1. Publishes DeploymentStartedEvent
 //  2. Deploys to all endpoints in parallel
 //  3. Publishes InstanceDeployedEvent or InstanceDeploymentFailedEvent for each endpoint
-//  4. Publishes DeploymentCompletedEvent with summary
+//  4. Publishes ConfigAppliedToPodEvent for successful deployments
+//  5. Publishes DeploymentCompletedEvent with summary
 func (c *Component) deployToEndpoints(
 	ctx context.Context,
 	config string,
 	auxFilesRaw interface{},
 	endpointsRaw []interface{},
+	runtimeConfigName string,
+	runtimeConfigNamespace string,
 	reason string,
 ) {
 	// Clear deployment flag after this function completes (after wg.Wait())
@@ -189,6 +194,10 @@ func (c *Component) deployToEndpoints(
 
 	auxFiles := c.convertAuxFiles(auxFilesRaw)
 
+	// Calculate config checksum for ConfigAppliedToPodEvent
+	hash := sha256.Sum256([]byte(config))
+	checksum := hex.EncodeToString(hash[:])
+
 	c.logger.Info("starting deployment",
 		"reason", reason,
 		"endpoint_count", len(endpoints),
@@ -204,9 +213,9 @@ func (c *Component) deployToEndpoints(
 	failureCount := 0
 	var countMutex sync.Mutex
 
-	for _, endpoint := range endpoints {
+	for i := range endpoints {
 		wg.Add(1)
-		go func(ep dataplane.Endpoint) {
+		go func(ep *dataplane.Endpoint) {
 			defer wg.Done()
 
 			instanceStart := time.Now()
@@ -243,11 +252,22 @@ func (c *Component) deployToEndpoints(
 					true, // reloadRequired (we don't track this granularly yet)
 				))
 
+				// Publish ConfigAppliedToPodEvent (for runtime config status updates)
+				if runtimeConfigName != "" && runtimeConfigNamespace != "" {
+					c.eventBus.Publish(events.NewConfigAppliedToPodEvent(
+						runtimeConfigName,
+						runtimeConfigNamespace,
+						ep.PodName,
+						ep.PodNamespace,
+						checksum,
+					))
+				}
+
 				countMutex.Lock()
 				successCount++
 				countMutex.Unlock()
 			}
-		}(endpoint)
+		}(&endpoints[i])
 	}
 
 	// Wait for all deployments to complete
@@ -275,7 +295,7 @@ func (c *Component) deployToSingleEndpoint(
 	ctx context.Context,
 	config string,
 	auxFiles *dataplane.AuxiliaryFiles,
-	endpoint dataplane.Endpoint,
+	endpoint *dataplane.Endpoint,
 ) error {
 	// Create client for this endpoint
 	client, err := dataplane.NewClient(ctx, endpoint)

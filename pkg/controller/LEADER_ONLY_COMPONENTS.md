@@ -22,13 +22,14 @@ When leadership transitions occur, leader-only components start subscribing to e
 
 ## Leader-Only Components
 
-Components that only run on the elected leader (controller.go:571-578):
+Components that only run on the elected leader (controller.go:783-790):
 
 | Component | Purpose | Event Dependencies | State Replay | Cleanup |
 |-----------|---------|-------------------|--------------|---------|
 | **DeploymentScheduler** | Schedules HAProxy deployments with rate limiting | `ValidationCompletedEvent`<br>`HAProxyPodsDiscoveredEvent` | N/A (receives replayed events) | ✅ `LostLeadershipEvent` |
 | **Deployer** | Executes deployments to HAProxy pods | `DeploymentScheduledEvent` | N/A (stateless) | N/A (stateless) |
 | **DriftPreventionMonitor** | Triggers periodic drift prevention deployments | `DeploymentCompletedEvent` | N/A (timer-based) | ✅ `LostLeadershipEvent` |
+| **ConfigPublisher** | Creates and updates HAProxyCfg and auxiliary file resources | `ConfigValidatedEvent`<br>`TemplateRenderedEvent`<br>`ValidationCompletedEvent`<br>`ConfigAppliedToPodEvent`<br>`HAProxyPodTerminatedEvent` | N/A (caches state from events) | ✅ `LostLeadershipEvent` |
 
 ## All-Replica Components with State Replay
 

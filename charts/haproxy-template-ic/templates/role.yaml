@@ -7,10 +7,26 @@ metadata:
   labels:
     {{- include "haproxy-template-ic.labels" . | nindent 4 }}
 rules:
-  # Credentials secret (namespace-scoped)
-  # The controller needs to watch the Secret containing HAProxy Dataplane API credentials
-  # This secret is in the same namespace as the controller deployment
+  # Secrets (namespace-scoped)
+  # - Credentials: HAProxy Dataplane API credentials (read-only)
+  # - SSL Certificates: Published as Secrets for HAProxy runtime config (read-write)
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # HAProxyCfg CRD (runtime configuration publishing)
+  # Published to controller's namespace as read-only view of rendered config
+  - apiGroups: ["haproxy-template-ic.github.io"]
+    resources: ["haproxycfgs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["haproxy-template-ic.github.io"]
+    resources: ["haproxycfgs/status"]
+    verbs: ["get", "update", "patch"]
+  # HAProxyMapFile CRD (auxiliary map files)
+  # Published to controller's namespace as children of HAProxyCfg
+  - apiGroups: ["haproxy-template-ic.github.io"]
+    resources: ["haproxymapfiles"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["haproxy-template-ic.github.io"]
+    resources: ["haproxymapfiles/status"]
+    verbs: ["get", "update", "patch"]
 {{- end }}

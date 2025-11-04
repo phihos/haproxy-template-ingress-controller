@@ -106,8 +106,11 @@ backend servers
 		"ingresses": &mockStore{},
 	}
 
+	// Create mock haproxy-pods store
+	haproxyPodStore := &mockStore{}
+
 	// Create renderer
-	rendererComponent, err := renderer.New(bus, cfg, stores, logger)
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
 	// Create validator
@@ -192,7 +195,10 @@ backend servers
 		"ingresses": &mockStore{},
 	}
 
-	rendererComponent, err := renderer.New(bus, cfg, stores, logger)
+	// Create mock haproxy-pods store
+	haproxyPodStore := &mockStore{}
+
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
 	validatorComponent := NewHAProxyValidator(bus, logger, testValidationPaths(t))
@@ -272,7 +278,10 @@ backend servers
 		"ingresses": &mockStore{},
 	}
 
-	rendererComponent, err := renderer.New(bus, cfg, stores, logger)
+	// Create mock haproxy-pods store
+	haproxyPodStore := &mockStore{}
+
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
 	validatorComponent := NewHAProxyValidator(bus, logger, testValidationPaths(t))
@@ -345,7 +354,10 @@ backend servers
 		"ingresses": &mockStore{},
 	}
 
-	rendererComponent, err := renderer.New(bus, cfg, stores, logger)
+	// Create mock haproxy-pods store
+	haproxyPodStore := &mockStore{}
+
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
 	validatorComponent := NewHAProxyValidator(bus, logger, testValidationPaths(t))

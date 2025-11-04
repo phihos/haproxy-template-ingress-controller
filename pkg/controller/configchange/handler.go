@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"haproxy-template-ic/pkg/controller/events"
@@ -32,6 +33,11 @@ type ConfigChangeHandler struct {
 	configChangeCh chan<- *coreconfig.Config
 	validators     []string
 	stopCh         chan struct{}
+
+	// State caching for leader election replay (prevents "late subscriber problem")
+	mu                       sync.RWMutex
+	lastConfigValidatedEvent *events.ConfigValidatedEvent
+	hasValidatedConfig       bool
 }
 
 // NewConfigChangeHandler creates a new ConfigChangeHandler.
@@ -86,6 +92,8 @@ func (h *ConfigChangeHandler) Start(ctx context.Context) {
 				h.handleConfigParsed(ctx, e)
 			case *events.ConfigValidatedEvent:
 				h.handleConfigValidated(e)
+			case *events.BecameLeaderEvent:
+				h.handleBecameLeader(e)
 			}
 		}
 	}
@@ -101,11 +109,21 @@ func (h *ConfigChangeHandler) handleConfigParsed(ctx context.Context, event *eve
 	// If no validators are configured, skip validation and immediately publish validated event
 	if len(h.validators) == 0 {
 		h.logger.Debug("No validators configured, skipping validation", "version", event.Version)
-		h.bus.Publish(events.NewConfigValidatedEvent(
+
+		validatedEvent := events.NewConfigValidatedEvent(
 			event.Config,
+			event.TemplateConfig,
 			event.Version,
 			event.SecretVersion,
-		))
+		)
+
+		// Cache the event for leadership transition replay
+		h.mu.Lock()
+		h.lastConfigValidatedEvent = validatedEvent
+		h.hasValidatedConfig = true
+		h.mu.Unlock()
+
+		h.bus.Publish(validatedEvent)
 		return
 	}
 
@@ -164,12 +182,22 @@ func (h *ConfigChangeHandler) handleConfigParsed(ctx context.Context, event *eve
 
 	if allValid {
 		h.logger.Info("Config validation succeeded", "version", event.Version)
-		// Publish validated event
-		h.bus.Publish(events.NewConfigValidatedEvent(
+
+		validatedEvent := events.NewConfigValidatedEvent(
 			event.Config,
+			event.TemplateConfig,
 			event.Version,
 			event.SecretVersion,
-		))
+		)
+
+		// Cache the event for leadership transition replay
+		h.mu.Lock()
+		h.lastConfigValidatedEvent = validatedEvent
+		h.hasValidatedConfig = true
+		h.mu.Unlock()
+
+		// Publish validated event
+		h.bus.Publish(validatedEvent)
 	} else {
 		h.logger.Warn("Config validation failed",
 			"version", event.Version,
@@ -181,6 +209,13 @@ func (h *ConfigChangeHandler) handleConfigParsed(ctx context.Context, event *eve
 
 // handleConfigValidated signals controller reinitialization when config is validated.
 func (h *ConfigChangeHandler) handleConfigValidated(event *events.ConfigValidatedEvent) {
+	// Cache the event for leadership transition replay
+	// This must happen BEFORE the early return for version="initial"
+	h.mu.Lock()
+	h.lastConfigValidatedEvent = event
+	h.hasValidatedConfig = true
+	h.mu.Unlock()
+
 	// Ignore initial bootstrap events (version "initial")
 	// These are published to bootstrap reconciliation components and should not trigger reinitialization
 	if event.Version == "initial" {
@@ -208,4 +243,31 @@ func (h *ConfigChangeHandler) handleConfigValidated(event *events.ConfigValidate
 	default:
 		h.logger.Warn("Failed to send reinitialization signal: channel full")
 	}
+}
+
+// handleBecameLeader handles BecameLeaderEvent by re-publishing the last validated config.
+//
+// This ensures ConfigPublisher (which starts subscribing only after becoming leader)
+// receives the current validated config state, even if validation occurred before leadership
+// was acquired.
+//
+// This prevents the "late subscriber problem" where leader-only components miss events
+// that were published before they started subscribing.
+func (h *ConfigChangeHandler) handleBecameLeader(_ *events.BecameLeaderEvent) {
+	h.mu.RLock()
+	hasState := h.hasValidatedConfig
+	validatedEvent := h.lastConfigValidatedEvent
+	h.mu.RUnlock()
+
+	if !hasState {
+		h.logger.Debug("became leader but no validated config available yet, skipping state replay")
+		return
+	}
+
+	h.logger.Info("became leader, re-publishing last validated config for leader-only components",
+		"config_version", validatedEvent.Version,
+		"secret_version", validatedEvent.SecretVersion)
+
+	// Re-publish the last validated event to ensure new leader-only components receive it
+	h.bus.Publish(validatedEvent)
 }

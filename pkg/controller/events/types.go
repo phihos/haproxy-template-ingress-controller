@@ -105,6 +105,12 @@ const (
 	EventTypeHAProxyPodsDiscovered = "haproxy.pods.discovered"
 	EventTypeHAProxyPodAdded       = "haproxy.pod.added"
 	EventTypeHAProxyPodRemoved     = "haproxy.pod.removed"
+	EventTypeHAProxyPodTerminated  = "haproxy.pod.terminated"
+
+	// Config publishing event types.
+	EventTypeConfigPublished     = "config.published"
+	EventTypeConfigPublishFailed = "config.publish.failed"
+	EventTypeConfigAppliedToPod  = "config.applied.to.pod"
 
 	// Credentials event types.
 	EventTypeSecretResourceChanged = "secret.resource.changed"
@@ -185,6 +191,11 @@ type ConfigParsedEvent struct {
 	// Consumers should type-assert to their expected config type.
 	Config interface{}
 
+	// TemplateConfig is the original HAProxyTemplateConfig CRD.
+	// Type: interface{} to avoid circular dependencies.
+	// Needed by ConfigPublisher to extract Kubernetes metadata (name, namespace, UID).
+	TemplateConfig interface{}
+
 	// Version is the resourceVersion of the ConfigMap.
 	Version string
 
@@ -195,12 +206,13 @@ type ConfigParsedEvent struct {
 }
 
 // NewConfigParsedEvent creates a new ConfigParsedEvent.
-func NewConfigParsedEvent(config interface{}, version, secretVersion string) *ConfigParsedEvent {
+func NewConfigParsedEvent(config, templateConfig interface{}, version, secretVersion string) *ConfigParsedEvent {
 	return &ConfigParsedEvent{
-		Config:        config,
-		Version:       version,
-		SecretVersion: secretVersion,
-		timestamp:     time.Now(),
+		Config:         config,
+		TemplateConfig: templateConfig,
+		Version:        version,
+		SecretVersion:  secretVersion,
+		timestamp:      time.Now(),
 	}
 }
 
@@ -287,19 +299,26 @@ func (e *ConfigValidationResponse) Responder() string    { return e.responder }
 // After receiving this event, the controller proceeds to start resource watchers.
 // with the validated configuration.
 type ConfigValidatedEvent struct {
-	Config        interface{}
+	Config interface{}
+
+	// TemplateConfig is the original HAProxyTemplateConfig CRD.
+	// Type: interface{} to avoid circular dependencies.
+	// Needed by ConfigPublisher to extract Kubernetes metadata (name, namespace, UID).
+	TemplateConfig interface{}
+
 	Version       string
 	SecretVersion string
 	timestamp     time.Time
 }
 
 // NewConfigValidatedEvent creates a new ConfigValidatedEvent.
-func NewConfigValidatedEvent(config interface{}, version, secretVersion string) *ConfigValidatedEvent {
+func NewConfigValidatedEvent(config, templateConfig interface{}, version, secretVersion string) *ConfigValidatedEvent {
 	return &ConfigValidatedEvent{
-		Config:        config,
-		Version:       version,
-		SecretVersion: secretVersion,
-		timestamp:     time.Now(),
+		Config:         config,
+		TemplateConfig: templateConfig,
+		Version:        version,
+		SecretVersion:  secretVersion,
+		timestamp:      time.Now(),
 	}
 }
 
@@ -841,6 +860,14 @@ type DeploymentScheduledEvent struct {
 	// Endpoints is the list of HAProxy endpoints to deploy to.
 	Endpoints []interface{}
 
+	// RuntimeConfigName is the name of the HAProxyCfg resource.
+	// Used for publishing ConfigAppliedToPodEvent after successful deployment.
+	RuntimeConfigName string
+
+	// RuntimeConfigNamespace is the namespace of the HAProxyCfg resource.
+	// Used for publishing ConfigAppliedToPodEvent after successful deployment.
+	RuntimeConfigNamespace string
+
 	// Reason describes why this deployment was scheduled.
 	// Examples: "config_validation", "pod_discovery", "drift_prevention"
 	Reason string
@@ -850,7 +877,7 @@ type DeploymentScheduledEvent struct {
 
 // NewDeploymentScheduledEvent creates a new DeploymentScheduledEvent.
 // Performs defensive copy of endpoints slice.
-func NewDeploymentScheduledEvent(config string, auxFiles interface{}, endpoints []interface{}, reason string) *DeploymentScheduledEvent {
+func NewDeploymentScheduledEvent(config string, auxFiles interface{}, endpoints []interface{}, runtimeConfigName, runtimeConfigNamespace, reason string) *DeploymentScheduledEvent {
 	// Defensive copy of endpoints slice
 	var endpointsCopy []interface{}
 	if len(endpoints) > 0 {
@@ -859,11 +886,13 @@ func NewDeploymentScheduledEvent(config string, auxFiles interface{}, endpoints 
 	}
 
 	return &DeploymentScheduledEvent{
-		Config:         config,
-		AuxiliaryFiles: auxFiles,
-		Endpoints:      endpointsCopy,
-		Reason:         reason,
-		timestamp:      time.Now(),
+		Config:                 config,
+		AuxiliaryFiles:         auxFiles,
+		Endpoints:              endpointsCopy,
+		RuntimeConfigName:      runtimeConfigName,
+		RuntimeConfigNamespace: runtimeConfigNamespace,
+		Reason:                 reason,
+		timestamp:              time.Now(),
 	}
 }
 
@@ -1035,6 +1064,107 @@ func NewHAProxyPodRemovedEvent(endpoint interface{}) *HAProxyPodRemovedEvent {
 
 func (e *HAProxyPodRemovedEvent) EventType() string    { return EventTypeHAProxyPodRemoved }
 func (e *HAProxyPodRemovedEvent) Timestamp() time.Time { return e.timestamp }
+
+// HAProxyPodTerminatedEvent is published when an HAProxy pod terminates.
+//
+// This triggers cleanup of the pod from all runtime config status fields.
+type HAProxyPodTerminatedEvent struct {
+	PodName      string
+	PodNamespace string
+	timestamp    time.Time
+}
+
+// NewHAProxyPodTerminatedEvent creates a new HAProxyPodTerminatedEvent.
+func NewHAProxyPodTerminatedEvent(podName, podNamespace string) *HAProxyPodTerminatedEvent {
+	return &HAProxyPodTerminatedEvent{
+		PodName:      podName,
+		PodNamespace: podNamespace,
+		timestamp:    time.Now(),
+	}
+}
+
+func (e *HAProxyPodTerminatedEvent) EventType() string    { return EventTypeHAProxyPodTerminated }
+func (e *HAProxyPodTerminatedEvent) Timestamp() time.Time { return e.timestamp }
+
+// -----------------------------------------------------------------------------
+// Config Publishing Events.
+// -----------------------------------------------------------------------------
+
+// ConfigPublishedEvent is published after runtime configuration resources are created/updated.
+//
+// This is a non-critical event - publishing failures do not affect controller operation.
+type ConfigPublishedEvent struct {
+	RuntimeConfigName      string
+	RuntimeConfigNamespace string
+	MapFileCount           int
+	SecretCount            int
+	timestamp              time.Time
+}
+
+// NewConfigPublishedEvent creates a new ConfigPublishedEvent.
+func NewConfigPublishedEvent(runtimeConfigName, runtimeConfigNamespace string, mapFileCount, secretCount int) *ConfigPublishedEvent {
+	return &ConfigPublishedEvent{
+		RuntimeConfigName:      runtimeConfigName,
+		RuntimeConfigNamespace: runtimeConfigNamespace,
+		MapFileCount:           mapFileCount,
+		SecretCount:            secretCount,
+		timestamp:              time.Now(),
+	}
+}
+
+func (e *ConfigPublishedEvent) EventType() string    { return EventTypeConfigPublished }
+func (e *ConfigPublishedEvent) Timestamp() time.Time { return e.timestamp }
+
+// ConfigPublishFailedEvent is published when runtime configuration publishing fails.
+//
+// This is logged but does not affect controller operation.
+type ConfigPublishFailedEvent struct {
+	Error     string
+	timestamp time.Time
+}
+
+// NewConfigPublishFailedEvent creates a new ConfigPublishFailedEvent.
+func NewConfigPublishFailedEvent(err error) *ConfigPublishFailedEvent {
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+
+	return &ConfigPublishFailedEvent{
+		Error:     errStr,
+		timestamp: time.Now(),
+	}
+}
+
+func (e *ConfigPublishFailedEvent) EventType() string    { return EventTypeConfigPublishFailed }
+func (e *ConfigPublishFailedEvent) Timestamp() time.Time { return e.timestamp }
+
+// ConfigAppliedToPodEvent is published after configuration is successfully applied to an HAProxy pod.
+//
+// This triggers updating the deployment status in runtime config resources.
+type ConfigAppliedToPodEvent struct {
+	RuntimeConfigName      string
+	RuntimeConfigNamespace string
+	PodName                string
+	PodNamespace           string
+	Checksum               string
+	timestamp              time.Time
+}
+
+// NewConfigAppliedToPodEvent creates a new ConfigAppliedToPodEvent.
+func NewConfigAppliedToPodEvent(runtimeConfigName, runtimeConfigNamespace, podName, podNamespace, checksum string) *ConfigAppliedToPodEvent {
+	return &ConfigAppliedToPodEvent{
+		RuntimeConfigName:      runtimeConfigName,
+		RuntimeConfigNamespace: runtimeConfigNamespace,
+		PodName:                podName,
+		PodNamespace:           podNamespace,
+		Checksum:               checksum,
+		timestamp:              time.Now(),
+	}
+}
+
+func (e *ConfigAppliedToPodEvent) EventType() string    { return EventTypeConfigAppliedToPod }
+func (e *ConfigAppliedToPodEvent) Timestamp() time.Time { return e.timestamp }
 
 // -----------------------------------------------------------------------------
 // Configuration Resource Events.

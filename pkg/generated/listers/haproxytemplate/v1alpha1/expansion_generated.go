@@ -16,6 +16,22 @@
 
 package v1alpha1
 
+// HAProxyCfgListerExpansion allows custom methods to be added to
+// HAProxyCfgLister.
+type HAProxyCfgListerExpansion interface{}
+
+// HAProxyCfgNamespaceListerExpansion allows custom methods to be added to
+// HAProxyCfgNamespaceLister.
+type HAProxyCfgNamespaceListerExpansion interface{}
+
+// HAProxyMapFileListerExpansion allows custom methods to be added to
+// HAProxyMapFileLister.
+type HAProxyMapFileListerExpansion interface{}
+
+// HAProxyMapFileNamespaceListerExpansion allows custom methods to be added to
+// HAProxyMapFileNamespaceLister.
+type HAProxyMapFileNamespaceListerExpansion interface{}
+
 // HAProxyTemplateConfigListerExpansion allows custom methods to be added to
 // HAProxyTemplateConfigLister.
 type HAProxyTemplateConfigListerExpansion interface{}

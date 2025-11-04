@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/controller/conversion"
@@ -115,7 +114,7 @@ func (c *ConfigLoaderComponent) processConfigChange(event *events.ConfigResource
 	}
 
 	// Process CRD
-	cfg, err := c.processCRD(resource)
+	cfg, templateConfig, err := c.processCRD(resource)
 
 	if err != nil {
 		c.logger.Error("Failed to process config resource",
@@ -131,26 +130,19 @@ func (c *ConfigLoaderComponent) processConfigChange(event *events.ConfigResource
 		"kind", kind,
 		"version", version)
 
-	// Publish ConfigParsedEvent
+	// Publish ConfigParsedEvent with both parsed config and original CRD
 	// Note: SecretVersion will be empty here - it gets populated later when
 	// the ValidationCoordinator correlates with credentials
-	parsedEvent := events.NewConfigParsedEvent(cfg, version, "")
+	parsedEvent := events.NewConfigParsedEvent(cfg, templateConfig, version, "")
 	c.bus.Publish(parsedEvent)
 }
 
-// processCRD converts a HAProxyTemplateConfig CRD to config.Config.
-func (c *ConfigLoaderComponent) processCRD(resource *unstructured.Unstructured) (*config.Config, error) {
-	// Convert unstructured to typed CRD
-	crd := &v1alpha1.HAProxyTemplateConfig{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(resource.Object, crd); err != nil {
-		return nil, fmt.Errorf("failed to convert unstructured to HAProxyTemplateConfig: %w", err)
-	}
-
-	// Convert CRD Spec to config.Config
-	cfg, err := conversion.ConvertSpec(&crd.Spec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert CRD Spec to config: %w", err)
-	}
-
-	return cfg, nil
+// processCRD converts a HAProxyTemplateConfig CRD to config.Config and returns both.
+//
+// Returns:
+//   - *config.Config: Parsed configuration for validation and rendering
+//   - *v1alpha1.HAProxyTemplateConfig: Original CRD for metadata (name, namespace, UID)
+//   - error: Conversion failure
+func (c *ConfigLoaderComponent) processCRD(resource *unstructured.Unstructured) (*config.Config, *v1alpha1.HAProxyTemplateConfig, error) {
+	return conversion.ParseCRD(resource)
 }

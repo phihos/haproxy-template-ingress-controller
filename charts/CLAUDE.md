@@ -89,6 +89,38 @@ templateSnippets:
 
 **Critical Rule**: Libraries should ONLY provide `templateSnippets`, not override `haproxyConfig`. The base template calls your snippets via `{% include %}`.
 
+**CRITICAL ARCHITECTURE RULE - base.yaml MUST Be Resource-Agnostic**:
+
+**base.yaml MUST be completely resource-agnostic**. It must NOT access:
+- `ingress.metadata.*`, `ingress.spec.*`
+- `httproute.metadata.*`, `httproute.spec.*`
+- `grpcroute.metadata.*`, `grpcroute.spec.*`
+- Any other resource-specific fields or annotations
+
+Resource-specific libraries (ingress.yaml, gateway.yaml, haproxytech.yaml) are responsible for:
+1. Extracting annotations and resource-specific data
+2. Performing resource-specific calculations
+3. Setting generic context variables for base.yaml to consume
+
+**Pattern**: Resource libraries extract data and set variables → base.yaml reads generic variables
+
+**Example**:
+```jinja2
+{#- ingress.yaml or haproxytech.yaml (resource-specific) -#}
+{%- set pod_maxconn = ingress.metadata.annotations["haproxy.org/pod-maxconn"] | default("") %}
+{%- if pod_maxconn != "" %}
+  {%- set pod_maxconn_value = calculate_per_pod_value(pod_maxconn) %}
+{%- endif %}
+{% include "util-backend-servers" %}
+
+{#- base.yaml (resource-agnostic) -#}
+{%- if pod_maxconn_value is defined %}
+  server SRV_1 {{ endpoint.address }}:{{ endpoint.port }} maxconn {{ pod_maxconn_value }}
+{%- endif %}
+```
+
+**Why This Matters**: This separation allows Gateway API and Ingress resources to coexist without base.yaml needing to know which resource type it's processing. Resource-specific logic stays in resource-specific libraries.
+
 ## Development Workflow
 
 ### Testing Library Changes

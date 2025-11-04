@@ -36,7 +36,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/restmapper"
@@ -45,6 +44,7 @@ import (
 	"haproxy-template-ic/pkg/controller/commentator"
 	"haproxy-template-ic/pkg/controller/configchange"
 	"haproxy-template-ic/pkg/controller/configloader"
+	ctrlconfigpublisher "haproxy-template-ic/pkg/controller/configpublisher"
 	"haproxy-template-ic/pkg/controller/conversion"
 	"haproxy-template-ic/pkg/controller/credentialsloader"
 	"haproxy-template-ic/pkg/controller/debug"
@@ -65,8 +65,10 @@ import (
 	coreconfig "haproxy-template-ic/pkg/core/config"
 	"haproxy-template-ic/pkg/dataplane"
 	busevents "haproxy-template-ic/pkg/events"
+	"haproxy-template-ic/pkg/generated/clientset/versioned"
 	"haproxy-template-ic/pkg/introspection"
 	"haproxy-template-ic/pkg/k8s/client"
+	"haproxy-template-ic/pkg/k8s/configpublisher"
 	k8sleaderelection "haproxy-template-ic/pkg/k8s/leaderelection"
 	"haproxy-template-ic/pkg/k8s/types"
 	"haproxy-template-ic/pkg/k8s/watcher"
@@ -156,7 +158,7 @@ func fetchAndValidateInitialConfig(
 	crdGVR schema.GroupVersionResource,
 	secretGVR schema.GroupVersionResource,
 	logger *slog.Logger,
-) (*coreconfig.Config, *coreconfig.Credentials, *WebhookCertificates, error) {
+) (*coreconfig.Config, *v1alpha1.HAProxyTemplateConfig, *coreconfig.Credentials, *WebhookCertificates, error) {
 	logger.Info("Fetching initial CRD, credentials, and webhook certificates",
 		"crd_name", crdName)
 
@@ -198,36 +200,36 @@ func fetchAndValidateInitialConfig(
 
 	// Wait for all fetches to complete
 	if err := g.Wait(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// Parse initial configuration
 	logger.Info("Parsing initial configuration, credentials, and webhook certificates")
 
-	cfg, err := parseCRD(crdResource)
+	cfg, crd, err := parseCRD(crdResource)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse initial HAProxyTemplateConfig: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to parse initial HAProxyTemplateConfig: %w", err)
 	}
 
 	creds, err := parseSecret(secretResource)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse initial Secret: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to parse initial Secret: %w", err)
 	}
 
 	webhookCerts, err := parseWebhookCertSecret(webhookCertSecretResource)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse webhook certificate Secret: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to parse webhook certificate Secret: %w", err)
 	}
 
 	// Validate initial configuration
 	logger.Info("Validating initial configuration and credentials")
 
 	if err := coreconfig.ValidateStructure(cfg); err != nil {
-		return nil, nil, nil, fmt.Errorf("initial configuration validation failed: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initial configuration validation failed: %w", err)
 	}
 
 	if err := coreconfig.ValidateCredentials(creds); err != nil {
-		return nil, nil, nil, fmt.Errorf("initial credentials validation failed: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initial credentials validation failed: %w", err)
 	}
 
 	logger.Info("Initial configuration validated successfully",
@@ -235,7 +237,7 @@ func fetchAndValidateInitialConfig(
 		"secret_version", secretResource.GetResourceVersion(),
 		"webhook_cert_version", webhookCertSecretResource.GetResourceVersion())
 
-	return cfg, creds, webhookCerts, nil
+	return cfg, crd, creds, webhookCerts, nil
 }
 
 // componentSetup contains all resources created during component initialization.
@@ -584,6 +586,8 @@ func setupConfigWatchers(
 
 	logger.Info("Watchers synced successfully")
 
+	// Initial config already passed via bootstrap event. Watchers handle subsequent changes only.
+
 	return nil
 }
 
@@ -597,6 +601,7 @@ type reconciliationComponents struct {
 	deployer            *deployer.Component
 	deploymentScheduler *deployer.DeploymentScheduler
 	driftMonitor        *deployer.DriftPreventionMonitor
+	configPublisher     *ctrlconfigpublisher.Component
 }
 
 // leaderOnlyComponents holds components that only the leader should run.
@@ -604,6 +609,7 @@ type leaderOnlyComponents struct {
 	deployer            *deployer.Component
 	deploymentScheduler *deployer.DeploymentScheduler
 	driftMonitor        *deployer.DriftPreventionMonitor
+	configPublisher     *ctrlconfigpublisher.Component
 	ctx                 context.Context
 	cancel              context.CancelFunc
 }
@@ -611,6 +617,7 @@ type leaderOnlyComponents struct {
 // createReconciliationComponents creates all reconciliation components.
 func createReconciliationComponents(
 	cfg *coreconfig.Config,
+	k8sClient *client.Client,
 	resourceWatcher *resourcewatcher.ResourceWatcherComponent,
 	bus *busevents.EventBus,
 	logger *slog.Logger,
@@ -620,7 +627,14 @@ func createReconciliationComponents(
 
 	// Create Renderer with stores from ResourceWatcher
 	stores := resourceWatcher.GetAllStores()
-	rendererComponent, err := renderer.New(bus, cfg, stores, logger)
+
+	// Get haproxy-pods store for pod-maxconn calculations in templates
+	haproxyPodStore := resourceWatcher.GetStore("haproxy-pods")
+	if haproxyPodStore == nil {
+		return nil, fmt.Errorf("haproxy-pods store not found (should be auto-injected)")
+	}
+
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create renderer: %w", err)
 	}
@@ -656,6 +670,15 @@ func createReconciliationComponents(
 	}
 	discoveryComponent.SetPodStore(podStore)
 
+	// Create Config Publisher (pure publisher + event adapter)
+	// Publishes runtime config resources after successful validation
+	crdClientset, err := versioned.NewForConfig(k8sClient.RestConfig())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CRD clientset: %w", err)
+	}
+	purePublisher := configpublisher.New(k8sClient.Clientset(), crdClientset, logger)
+	configPublisherComponent := ctrlconfigpublisher.New(purePublisher, bus, logger)
+
 	return &reconciliationComponents{
 		reconciler:          reconcilerComponent,
 		renderer:            rendererComponent,
@@ -665,12 +688,13 @@ func createReconciliationComponents(
 		deployer:            deployerComponent,
 		deploymentScheduler: deploymentSchedulerComponent,
 		driftMonitor:        driftMonitorComponent,
+		configPublisher:     configPublisherComponent,
 	}, nil
 }
 
 // startReconciliationComponents starts reconciliation components.
 // All replicas start: Reconciler, Renderer, HAProxyValidator, Executor, Discovery
-// Leader-only components (Deployer, DeploymentScheduler, DriftMonitor) are NOT started here.
+// Leader-only components (Deployer, DeploymentScheduler, DriftMonitor, ConfigPublisher) are NOT started here.
 func startReconciliationComponents(
 	iterCtx context.Context,
 	components *reconciliationComponents,
@@ -756,13 +780,23 @@ func startLeaderOnlyComponents(
 		}
 	}()
 
+	// Start config publisher in background (leader only)
+	// Publishes runtime config resources after successful validation (non-blocking)
+	go func() {
+		if err := components.configPublisher.Start(leaderCtx); err != nil && leaderCtx.Err() == nil {
+			logger.Error("config publisher failed", "error", err)
+			parentCancel()
+		}
+	}()
+
 	logger.Info("Leader-only components started",
-		"components", "Deployer, DeploymentScheduler, DriftMonitor")
+		"components", "Deployer, DeploymentScheduler, DriftMonitor, ConfigPublisher")
 
 	return &leaderOnlyComponents{
 		deployer:            components.deployer,
 		deploymentScheduler: components.deploymentScheduler,
 		driftMonitor:        components.driftMonitor,
+		configPublisher:     components.configPublisher,
 		ctx:                 leaderCtx,
 		cancel:              leaderCancel,
 	}
@@ -926,14 +960,16 @@ func setupWebhook(
 func setupReconciliation(
 	iterCtx context.Context,
 	cfg *coreconfig.Config,
+	crd *v1alpha1.HAProxyTemplateConfig,
 	creds *coreconfig.Credentials,
+	k8sClient *client.Client,
 	resourceWatcher *resourcewatcher.ResourceWatcherComponent,
 	bus *busevents.EventBus,
 	logger *slog.Logger,
 	cancel context.CancelFunc,
 ) (*reconciliationComponents, error) {
 	// Create all components
-	components, err := createReconciliationComponents(cfg, resourceWatcher, bus, logger)
+	components, err := createReconciliationComponents(cfg, k8sClient, resourceWatcher, bus, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -949,7 +985,8 @@ func setupReconciliation(
 	// Publish initial config and credentials events
 	// This ensures reconciliation components (especially Discovery) receive the initial state
 	// even though they started after the initial ConfigMap/Secret watcher events
-	bus.Publish(events.NewConfigValidatedEvent(cfg, "initial", "initial"))
+	// Note: We pass the actual CRD (not nil) so ConfigPublisher can cache it for creating HAProxyCfg resources
+	bus.Publish(events.NewConfigValidatedEvent(cfg, crd, "initial", "initial"))
 	logger.Debug("Published initial ConfigValidatedEvent for reconciliation components")
 
 	bus.Publish(events.NewCredentialsUpdatedEvent(creds, "initial"))
@@ -1102,7 +1139,7 @@ func runIteration(
 	startEarlyInfrastructureServers(setup.IterCtx, debugPort, setup, logger)
 
 	// 1. Fetch and validate initial configuration
-	cfg, creds, webhookCerts, err := fetchAndValidateInitialConfig(
+	cfg, crd, creds, webhookCerts, err := fetchAndValidateInitialConfig(
 		ctx, k8sClient, crdName, secretName, webhookCertSecretName,
 		crdGVR, secretGVR, logger,
 	)
@@ -1161,7 +1198,7 @@ func runIteration(
 
 	// 6. Start reconciliation components (Stage 5)
 	logger.Info("Stage 5: Starting reconciliation components")
-	reconComponents, err := setupReconciliation(setup.IterCtx, cfg, creds, resourceWatcher, setup.Bus, logger, setup.Cancel)
+	reconComponents, err := setupReconciliation(setup.IterCtx, cfg, crd, creds, k8sClient, resourceWatcher, setup.Bus, logger, setup.Cancel)
 	if err != nil {
 		return err
 	}
@@ -1263,35 +1300,8 @@ func waitForGoroutinesToFinish(errGroup *errgroup.Group, logger *slog.Logger, pr
 }
 
 // parseCRD extracts and converts configuration from a HAProxyTemplateConfig CRD resource.
-func parseCRD(resource *unstructured.Unstructured) (*coreconfig.Config, error) {
-	// This function uses the same logic as configloader.processCRD for consistency
-
-	// Validate resource type
-	apiVersion := resource.GetAPIVersion()
-	kind := resource.GetKind()
-
-	if kind != "HAProxyTemplateConfig" {
-		return nil, fmt.Errorf("expected HAProxyTemplateConfig, got %s", kind)
-	}
-
-	if apiVersion != "haproxy-template-ic.github.io/v1alpha1" {
-		return nil, fmt.Errorf("expected apiVersion haproxy-template-ic.github.io/v1alpha1, got %s", apiVersion)
-	}
-
-	// Convert unstructured to typed CRD using runtime converter
-	// This is the same approach used in configloader.processCRD
-	crd := &v1alpha1.HAProxyTemplateConfig{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(resource.Object, crd); err != nil {
-		return nil, fmt.Errorf("failed to convert unstructured to HAProxyTemplateConfig: %w", err)
-	}
-
-	// Convert CRD Spec to config.Config using the conversion package
-	cfg, err := conversion.ConvertSpec(&crd.Spec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert CRD spec to config: %w", err)
-	}
-
-	return cfg, nil
+func parseCRD(resource *unstructured.Unstructured) (*coreconfig.Config, *v1alpha1.HAProxyTemplateConfig, error) {
+	return conversion.ParseCRD(resource)
 }
 
 // parseSecret extracts and parses credentials from a Secret resource.

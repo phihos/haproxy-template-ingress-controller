@@ -50,11 +50,12 @@ const (
 // The component caches the last rendered output to support state replay during
 // leadership transitions (when new leader-only components start subscribing).
 type Component struct {
-	eventBus *busevents.EventBus
-	engine   *templating.TemplateEngine
-	config   *config.Config
-	stores   map[string]types.Store
-	logger   *slog.Logger
+	eventBus        *busevents.EventBus
+	engine          *templating.TemplateEngine
+	config          *config.Config
+	stores          map[string]types.Store
+	haproxyPodStore types.Store // HAProxy controller pods store for pod-maxconn calculations
+	logger          *slog.Logger
 
 	// State protected by mutex (for leadership transition replay)
 	mu                   sync.RWMutex
@@ -74,6 +75,7 @@ type Component struct {
 //   - eventBus: The EventBus for subscribing to events and publishing results
 //   - config: Controller configuration containing templates
 //   - stores: Map of resource type names to their stores (e.g., "ingresses" -> Store)
+//   - haproxyPodStore: Store containing HAProxy controller pods for pod-maxconn calculations
 //   - logger: Structured logger for component logging
 //
 // Returns:
@@ -83,6 +85,7 @@ func New(
 	eventBus *busevents.EventBus,
 	config *config.Config,
 	stores map[string]types.Store,
+	haproxyPodStore types.Store,
 	logger *slog.Logger,
 ) (*Component, error) {
 	// Log stores received during initialization
@@ -122,11 +125,12 @@ func New(
 	}
 
 	return &Component{
-		eventBus: eventBus,
-		engine:   engine,
-		config:   config,
-		stores:   stores,
-		logger:   logger,
+		eventBus:        eventBus,
+		engine:          engine,
+		config:          config,
+		stores:          stores,
+		haproxyPodStore: haproxyPodStore,
+		logger:          logger,
 	}, nil
 }
 

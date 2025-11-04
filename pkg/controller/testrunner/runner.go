@@ -677,13 +677,29 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 // This mirrors DryRunValidator.buildRenderingContext and Renderer.buildRenderingContext.
 // The context includes resources (fixture stores), template snippets, and controller configuration.
 func (r *Runner) buildRenderingContext(stores map[string]types.Store) map[string]interface{} {
-	// Create resources map with wrapped stores
+	// Create resources map with wrapped stores (excluding haproxy-pods)
 	resources := make(map[string]interface{})
 
 	for resourceTypeName, store := range stores {
+		// Skip haproxy-pods - it goes in controller namespace, not resources
+		if resourceTypeName == "haproxy-pods" {
+			continue
+		}
+
 		resources[resourceTypeName] = &renderer.StoreWrapper{
 			Store:        store,
 			ResourceType: resourceTypeName,
+			Logger:       r.logger,
+		}
+	}
+
+	// Create controller namespace with haproxy_pods store
+	controller := make(map[string]interface{})
+	if haproxyPodStore, exists := stores["haproxy-pods"]; exists {
+		r.logger.Debug("wrapping haproxy-pods store for rendering context")
+		controller["haproxy_pods"] = &renderer.StoreWrapper{
+			Store:        haproxyPodStore,
+			ResourceType: "haproxy-pods",
 			Logger:       r.logger,
 		}
 	}
@@ -694,6 +710,7 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store) map[string
 	// Build final context
 	context := map[string]interface{}{
 		"resources":         resources,
+		"controller":        controller,
 		"template_snippets": snippetNames,
 	}
 

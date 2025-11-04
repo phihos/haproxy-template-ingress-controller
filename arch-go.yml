@@ -69,13 +69,12 @@ dependenciesRules:
         - "**.pkg.templating.**"
         - "**.pkg.webhook.**"
 
-  # Rule 6: k8s packages should NOT depend on other top-level packages
+  # Rule 6: k8s packages should NOT depend on other top-level packages (except configpublisher)
   - package: "**.pkg.k8s.**"
     shouldNotDependsOn:
       internal:
         - "**.pkg.controller.**"
         - "**.pkg.core.**"
-        - "**.pkg.dataplane.**"
         - "**.pkg.events.**"
         - "**.pkg.introspection.**"
         - "**.pkg.templating.**"

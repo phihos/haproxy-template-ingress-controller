@@ -270,6 +270,7 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 		"glob_match": globMatchFilter,
 		"debug":      debugFilter,
 		"eval":       evalFilter,
+		"strip":      stripFilter,
 	}
 	genericFilterSet := exec.NewFilterSet(genericFilterMap)
 	filters = filters.Update(genericFilterSet)
@@ -915,6 +916,18 @@ func evalFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.V
 
 	// Return result with type info for debugging
 	return exec.AsValue(fmt.Sprintf("%v (%T)", result, result))
+}
+
+// stripFilter removes leading and trailing whitespace from a string.
+// Usage: {{ value | strip }}.
+func stripFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.Value {
+	// Convert input to string
+	str := in.String()
+
+	// Strip whitespace
+	stripped := strings.TrimSpace(str)
+
+	return exec.AsValue(stripped)
 }
 
 // conflictsByTest detects conflicts when grouped by key.

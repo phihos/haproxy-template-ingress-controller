@@ -434,6 +434,10 @@ func (ec *EventCommentator) generateInsight(event busevents.Event) (insight stri
 		return "HAProxy pod removed from cluster",
 			attrs
 
+	case *events.HAProxyPodTerminatedEvent:
+		return fmt.Sprintf("HAProxy pod terminated: %s/%s", e.PodNamespace, e.PodName),
+			append(attrs, "pod_name", e.PodName, "pod_namespace", e.PodNamespace)
+
 	// Webhook Validation Events
 	case *events.WebhookValidationRequestEvent:
 		resourceRef := fmt.Sprintf("%s/%s", e.Namespace, e.Name)

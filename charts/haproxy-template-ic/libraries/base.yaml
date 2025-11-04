@@ -78,16 +78,25 @@ templateSnippets:
   util-backend-servers:
     template: |
       {#- Pre-allocated server pool with auto-expansion #}
-      {%- set initial_slots = 10 %}  {#- Single place to adjust initial slots #}
+      {%- if max_server_slots is defined %}
+        {%- set initial_slots = max_server_slots %}
+      {%- else %}
+        {%- set initial_slots = 10 %}  {#- Default when not specified #}
+      {%- endif %}
 
+      {#- === Endpoint Collection === #}
       {#- Collect active endpoints using O(1) indexed lookup #}
       {#- Use namespace() to maintain list across loop scopes #}
       {%- set ns = namespace(active_endpoints=[]) %}
       {%- for endpoint_slice in resources.endpoints.Fetch(service_name) %}
         {%- for endpoint in (endpoint_slice.endpoints | default([])) %}
           {%- for address in (endpoint.addresses | default([])) %}
-            {%- set endpoint_name = endpoint.targetRef.name if endpoint.targetRef else address %}
-            {%- set ns.active_endpoints = ns.active_endpoints + [{'name': endpoint_name, 'address': address, 'port': port}] %}
+            {%- if endpoint.targetRef is defined and endpoint.targetRef.name is defined %}
+              {%- set endpoint_name = endpoint.targetRef.name %}
+            {%- else %}
+              {%- set endpoint_name = address %}
+            {%- endif %}
+            {%- set ns.active_endpoints = ns.active_endpoints.append({'name': endpoint_name, 'address': address, 'port': port}) %}
           {%- endfor %}
         {%- endfor %}
       {%- endfor %}
@@ -98,15 +107,27 @@ templateSnippets:
       {%- set max_servers = initial_slots %}
       # base/util-backend-servers
 
+      {#- === Maxconn Value (Generic, Resource-Agnostic) === #}
+      {#- Resource-specific libraries (haproxytech.yaml) set ns_server_opts.pod_maxconn_value #}
+      {#- base.yaml is resource-agnostic and reads from namespace (persists across includes) #}
+
+      {#- === Server Options Building === #}
+      {#- Build server options string from namespace variable array #}
+      {%- set server_opts = "" %}
+      {%- if ns_server_opts is defined and (ns_server_opts.flags | length) > 0 %}
+        {%- set server_opts = " " ~ (ns_server_opts.flags | join(" ")) %}
+      {%- endif %}
+
+      {#- === Server Line Generation === #}
       {#- Generate all server slots with fixed names #}
       {%- for i in range(1, max_servers + 1) %}
         {%- if loop.index0 < ns.active_endpoints|length %}
           {#- Active server with real endpoint #}
           {%- set endpoint = ns.active_endpoints[loop.index0] %}
-      server SRV_{{ i }} {{ endpoint.address }}:{{ endpoint.port }} check
+      server SRV_{{ i }} {{ endpoint.address }}:{{ endpoint.port }}{{ server_opts }}{%- if ns_server_opts is defined and ns_server_opts.pod_maxconn_value is defined %} maxconn {{ ns_server_opts.pod_maxconn_value }}{%- endif %} check  # Pod: {{ endpoint.name }}
         {%- else %}
           {#- Disabled placeholder server #}
-      server SRV_{{ i }} 127.0.0.1:1 disabled
+      server SRV_{{ i }} 127.0.0.1:1 disabled  # Placeholder
         {%- endif %}
       {%- endfor %}
 

@@ -294,6 +294,7 @@ templateSnippets:
       {%- if ("|" ~ backend_key ~ "|") not in ns.seen %}
       {%- set ns.seen = ns.seen ~ "|" ~ backend_key ~ "|" %}
 
+      # Backend for: {{ "HTTPRoute" if proto_flag == "" else "GRPCRoute" }} {{ route.metadata.namespace }}/{{ route.metadata.name }} → Service {{ backend.name }}:{{ backend.port }}
       backend {%+ include "util-backend-name-gateway" +%}
         balance roundrobin
         default-server check{{ " proto " ~ proto_flag if proto_flag else "" }}
@@ -578,6 +579,22 @@ templateSnippets:
 
         {#- Set req.gw_rule_id to mark this rule as winner #}
         {%- if conditions %}
+          {#- Build matcher type description for provenance comment #}
+          {%- set ns_types = namespace(desc=[]) %}
+          {%- if route_info.match.method and route_info.resource_type == "httproute" %}
+            {%- set ns_types.desc = ns_types.desc.append("method " ~ route_info.match.method) %}
+          {%- endif %}
+          {%- if route_info.match.headers %}
+            {%- set ns_types.desc = ns_types.desc.append(route_info.match.headers | length ~ " headers") %}
+          {%- endif %}
+          {%- if route_info.match.queryParams %}
+            {%- set ns_types.desc = ns_types.desc.append(route_info.match.queryParams | length ~ " query params") %}
+          {%- endif %}
+          {%- if route_info.is_grpc and route_info.match.method %}
+            {%- set ns_types.desc = ns_types.desc.append("gRPC method") %}
+          {%- endif %}
+          {%- set matcher_desc = (ns_types.desc | join(", ")) | default("path-only") %}
+      # Rule: {{ route_info.resource_type | title }} {{ route_info.route.metadata.namespace }}/{{ route_info.route.metadata.name }} rule[{{ route_info.rule_idx }}] - {{ matcher_desc }}
       http-request set-var(req.gw_rule_id) str({{ route_info.route_id }}) if {{ conditions | join(" ") }}
           {#- Debug headers if enabled #}
           {%- if debug | default(false) %}
@@ -595,7 +612,7 @@ templateSnippets:
             {%- if route_info.is_grpc and route_info.match.method %}
               {%- set ns_match.types = ns_match.types.append("grpc-method") %}
             {%- endif %}
-            {%- set match_types_str = ns_match.types | join(",") if ns_match.types else "advanced" %}
+            {%- set match_types_str = (ns_match.types | join("+")) | default("advanced") %}
       http-request set-var(txn.matched_route) str({{ route_info.route.metadata.namespace }}/{{ route_info.route.metadata.name }}/rule{{ route_info.rule_idx }}) if {{ conditions | join(" ") }}
       http-request set-var(txn.match_reason) str({{ match_types_str }}) if {{ conditions | join(" ") }}
           {%- endif %}

@@ -312,7 +312,7 @@ func TestExecutor_IgnoresUnrelatedEvents(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Publish various unrelated events
-	bus.Publish(events.NewConfigParsedEvent(nil, "v1", "s1"))
+	bus.Publish(events.NewConfigParsedEvent(nil, nil, "v1", "s1"))
 	bus.Publish(events.NewIndexSynchronizedEvent(map[string]int{"ingresses": 10}))
 
 	// Wait a bit

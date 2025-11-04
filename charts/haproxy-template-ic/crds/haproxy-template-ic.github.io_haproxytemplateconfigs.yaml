@@ -356,7 +356,7 @@ spec:
                           environment: production
                           customValue: 42
 
-                      Templates can then reference these as: {{ debug }}, {{ environment }}, etc.
+                      Templates can then reference these as: {{ debug.enabled }}, {{ environment }}, etc.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                 type: object

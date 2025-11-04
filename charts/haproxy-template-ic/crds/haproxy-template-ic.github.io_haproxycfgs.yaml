@@ -1,0 +1,210 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: haproxycfgs.haproxy-template-ic.github.io
+spec:
+  group: haproxy-template-ic.github.io
+  names:
+    kind: HAProxyCfg
+    listKind: HAProxyCfgList
+    plural: haproxycfgs
+    shortNames:
+    - hpcfg
+    singular: haproxycfg
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.checksum
+      name: Checksum
+      type: string
+    - jsonPath: .status.metadata.totalSize
+      name: Size
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          HAProxyCfg contains the rendered HAProxy configuration for a specific
+          HAProxyTemplateConfig.
+
+          This is a read-only resource automatically created and updated by the controller
+          to expose the actual runtime configuration applied to HAProxy pods.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: HAProxyCfgSpec contains the rendered configuration content.
+            properties:
+              checksum:
+                description: |-
+                  Checksum is the SHA-256 hash of the configuration content.
+
+                  Used to detect configuration changes and verify consistency across pods.
+                  Format: sha256:<hex-digest>
+                minLength: 1
+                type: string
+              content:
+                description: |-
+                  Content is the rendered HAProxy configuration file content.
+
+                  This is the actual haproxy.cfg content that was validated and deployed
+                  to HAProxy pods.
+                minLength: 1
+                type: string
+              path:
+                description: |-
+                  Path is the file system path where this configuration is stored.
+
+                  Default: /etc/haproxy/haproxy.cfg
+                minLength: 1
+                type: string
+            required:
+            - checksum
+            - content
+            - path
+            type: object
+          status:
+            description: HAProxyCfgStatus tracks deployment state and auxiliary files.
+            properties:
+              auxiliaryFiles:
+                description: AuxiliaryFiles references the associated map files and
+                  certificates.
+                properties:
+                  mapFiles:
+                    description: MapFiles lists the HAProxyMapFile resources associated
+                      with this config.
+                    items:
+                      description: ResourceReference identifies a related Kubernetes
+                        resource.
+                      properties:
+                        kind:
+                          description: Kind is the resource type (e.g., HAProxyMapFile,
+                            Secret).
+                          minLength: 1
+                          type: string
+                        name:
+                          description: Name is the resource name.
+                          minLength: 1
+                          type: string
+                        namespace:
+                          description: Namespace is the resource namespace.
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                    type: array
+                  sslCertificates:
+                    description: SSLCertificates lists the Secret resources containing
+                      SSL certificates.
+                    items:
+                      description: ResourceReference identifies a related Kubernetes
+                        resource.
+                      properties:
+                        kind:
+                          description: Kind is the resource type (e.g., HAProxyMapFile,
+                            Secret).
+                          minLength: 1
+                          type: string
+                        name:
+                          description: Name is the resource name.
+                          minLength: 1
+                          type: string
+                        namespace:
+                          description: Namespace is the resource namespace.
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                    type: array
+                type: object
+              deployedToPods:
+                description: |-
+                  DeployedToPods tracks which HAProxy pods currently have this configuration.
+
+                  Pods are automatically added when configuration is applied and removed when
+                  the pod terminates.
+                items:
+                  description: PodDeploymentStatus tracks deployment to a specific
+                    pod.
+                  properties:
+                    checksum:
+                      description: Checksum of the configuration deployed to this
+                        pod.
+                      type: string
+                    deployedAt:
+                      description: DeployedAt is the timestamp when configuration
+                        was applied to this pod.
+                      format: date-time
+                      type: string
+                    namespace:
+                      description: Namespace of the pod.
+                      minLength: 1
+                      type: string
+                    podName:
+                      description: PodName is the name of the HAProxy pod.
+                      minLength: 1
+                      type: string
+                  required:
+                  - deployedAt
+                  - namespace
+                  - podName
+                  type: object
+                type: array
+              metadata:
+                description: Metadata contains information about the configuration
+                  rendering and validation.
+                properties:
+                  contentSize:
+                    description: ContentSize is the size of the main configuration
+                      content in bytes.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  renderedAt:
+                    description: RenderedAt is the timestamp when the configuration
+                      was rendered.
+                    format: date-time
+                    type: string
+                  totalSize:
+                    description: |-
+                      TotalSize is the total size of all configuration data in bytes.
+
+                      Includes main config, map files, and certificates.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  validatedAt:
+                    description: ValidatedAt is the timestamp when the configuration
+                      was successfully validated.
+                    format: date-time
+                    type: string
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,138 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: haproxymapfiles.haproxy-template-ic.github.io
+spec:
+  group: haproxy-template-ic.github.io
+  names:
+    kind: HAProxyMapFile
+    listKind: HAProxyMapFileList
+    plural: haproxymapfiles
+    shortNames:
+    - hpmap
+    singular: haproxymapfile
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.mapName
+      name: Map Name
+      type: string
+    - jsonPath: .spec.path
+      name: Path
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          HAProxyMapFile contains a rendered HAProxy map file.
+
+          This is a read-only resource automatically created and updated by the controller
+          to expose map files generated from templates. Each HAProxyMapFile is owned by
+          a HAProxyConfig resource.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: HAProxyMapFileSpec contains the map file content.
+            properties:
+              checksum:
+                description: |-
+                  Checksum is the SHA-256 hash of the map file entries.
+
+                  Used to detect changes and verify consistency across pods.
+                  Format: sha256:<hex-digest>
+                minLength: 1
+                type: string
+              entries:
+                description: |-
+                  Entries is the map file content in HAProxy map format.
+
+                  Each line typically contains a key-value pair separated by whitespace.
+                  Example:
+                    /api backend-api
+                    /web backend-web
+                minLength: 1
+                type: string
+              mapName:
+                description: |-
+                  MapName is the logical name of the map file.
+
+                  This corresponds to the key in HAProxyTemplateConfig.spec.maps.
+                minLength: 1
+                type: string
+              path:
+                description: |-
+                  Path is the file system path where this map file is stored.
+
+                  Example: /etc/haproxy/maps/path-prefix.map
+                minLength: 1
+                type: string
+            required:
+            - checksum
+            - entries
+            - mapName
+            - path
+            type: object
+          status:
+            description: HAProxyMapFileStatus tracks deployment state to HAProxy pods.
+            properties:
+              deployedToPods:
+                description: |-
+                  DeployedToPods tracks which HAProxy pods currently have this map file.
+
+                  Pods are automatically added when the map file is applied and removed when
+                  the pod terminates.
+                items:
+                  description: PodDeploymentStatus tracks deployment to a specific
+                    pod.
+                  properties:
+                    checksum:
+                      description: Checksum of the configuration deployed to this
+                        pod.
+                      type: string
+                    deployedAt:
+                      description: DeployedAt is the timestamp when configuration
+                        was applied to this pod.
+                      format: date-time
+                      type: string
+                    namespace:
+                      description: Namespace of the pod.
+                      minLength: 1
+                      type: string
+                    podName:
+                      description: PodName is the name of the HAProxy pod.
+                      minLength: 1
+                      type: string
+                  required:
+                  - deployedAt
+                  - namespace
+                  - podName
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

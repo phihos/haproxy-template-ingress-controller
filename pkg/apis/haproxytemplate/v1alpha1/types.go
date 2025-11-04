@@ -561,3 +561,228 @@ type HAProxyTemplateConfigList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []HAProxyTemplateConfig `json:"items"`
 }
+
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=hpcfg,scope=Namespaced
+// +kubebuilder:printcolumn:name="Checksum",type=string,JSONPath=`.spec.checksum`
+// +kubebuilder:printcolumn:name="Size",type=integer,JSONPath=`.status.metadata.totalSize`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// HAProxyCfg contains the rendered HAProxy configuration for a specific
+// HAProxyTemplateConfig.
+//
+// This is a read-only resource automatically created and updated by the controller
+// to expose the actual runtime configuration applied to HAProxy pods.
+type HAProxyCfg struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   HAProxyCfgSpec   `json:"spec,omitempty"`
+	Status HAProxyCfgStatus `json:"status,omitempty"`
+}
+
+// HAProxyCfgSpec contains the rendered configuration content.
+type HAProxyCfgSpec struct {
+	// Path is the file system path where this configuration is stored.
+	//
+	// Default: /etc/haproxy/haproxy.cfg
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Path string `json:"path"`
+
+	// Content is the rendered HAProxy configuration file content.
+	//
+	// This is the actual haproxy.cfg content that was validated and deployed
+	// to HAProxy pods.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Content string `json:"content"`
+
+	// Checksum is the SHA-256 hash of the configuration content.
+	//
+	// Used to detect configuration changes and verify consistency across pods.
+	// Format: sha256:<hex-digest>
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Checksum string `json:"checksum"`
+}
+
+// HAProxyCfgStatus tracks deployment state and auxiliary files.
+type HAProxyCfgStatus struct {
+	// DeployedToPods tracks which HAProxy pods currently have this configuration.
+	//
+	// Pods are automatically added when configuration is applied and removed when
+	// the pod terminates.
+	// +optional
+	DeployedToPods []PodDeploymentStatus `json:"deployedToPods,omitempty"`
+
+	// AuxiliaryFiles references the associated map files and certificates.
+	// +optional
+	AuxiliaryFiles *AuxiliaryFileReferences `json:"auxiliaryFiles,omitempty"`
+
+	// Metadata contains information about the configuration rendering and validation.
+	// +optional
+	Metadata *ConfigMetadata `json:"metadata,omitempty"`
+}
+
+// PodDeploymentStatus tracks deployment to a specific pod.
+type PodDeploymentStatus struct {
+	// PodName is the name of the HAProxy pod.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	PodName string `json:"podName"`
+
+	// Namespace of the pod.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Namespace string `json:"namespace"`
+
+	// DeployedAt is the timestamp when configuration was applied to this pod.
+	// +kubebuilder:validation:Required
+	DeployedAt metav1.Time `json:"deployedAt"`
+
+	// Checksum of the configuration deployed to this pod.
+	// +optional
+	Checksum string `json:"checksum,omitempty"`
+}
+
+// AuxiliaryFileReferences references the associated map files and certificates.
+type AuxiliaryFileReferences struct {
+	// MapFiles lists the HAProxyMapFile resources associated with this config.
+	// +optional
+	MapFiles []ResourceReference `json:"mapFiles,omitempty"`
+
+	// SSLCertificates lists the Secret resources containing SSL certificates.
+	// +optional
+	SSLCertificates []ResourceReference `json:"sslCertificates,omitempty"`
+}
+
+// ResourceReference identifies a related Kubernetes resource.
+type ResourceReference struct {
+	// Kind is the resource type (e.g., HAProxyMapFile, Secret).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Kind string `json:"kind"`
+
+	// Name is the resource name.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Namespace is the resource namespace.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ConfigMetadata contains information about the configuration rendering and validation.
+type ConfigMetadata struct {
+	// TotalSize is the total size of all configuration data in bytes.
+	//
+	// Includes main config, map files, and certificates.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	TotalSize int64 `json:"totalSize,omitempty"`
+
+	// ContentSize is the size of the main configuration content in bytes.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ContentSize int64 `json:"contentSize,omitempty"`
+
+	// RenderedAt is the timestamp when the configuration was rendered.
+	// +optional
+	RenderedAt *metav1.Time `json:"renderedAt,omitempty"`
+
+	// ValidatedAt is the timestamp when the configuration was successfully validated.
+	// +optional
+	ValidatedAt *metav1.Time `json:"validatedAt,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+
+// HAProxyCfgList contains a list of HAProxyCfg.
+type HAProxyCfgList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []HAProxyCfg `json:"items"`
+}
+
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=hpmap,scope=Namespaced
+// +kubebuilder:printcolumn:name="Map Name",type=string,JSONPath=`.spec.mapName`
+// +kubebuilder:printcolumn:name="Path",type=string,JSONPath=`.spec.path`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// HAProxyMapFile contains a rendered HAProxy map file.
+//
+// This is a read-only resource automatically created and updated by the controller
+// to expose map files generated from templates. Each HAProxyMapFile is owned by
+// a HAProxyConfig resource.
+type HAProxyMapFile struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   HAProxyMapFileSpec   `json:"spec,omitempty"`
+	Status HAProxyMapFileStatus `json:"status,omitempty"`
+}
+
+// HAProxyMapFileSpec contains the map file content.
+type HAProxyMapFileSpec struct {
+	// MapName is the logical name of the map file.
+	//
+	// This corresponds to the key in HAProxyTemplateConfig.spec.maps.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	MapName string `json:"mapName"`
+
+	// Path is the file system path where this map file is stored.
+	//
+	// Example: /etc/haproxy/maps/path-prefix.map
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Path string `json:"path"`
+
+	// Entries is the map file content in HAProxy map format.
+	//
+	// Each line typically contains a key-value pair separated by whitespace.
+	// Example:
+	//   /api backend-api
+	//   /web backend-web
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Entries string `json:"entries"`
+
+	// Checksum is the SHA-256 hash of the map file entries.
+	//
+	// Used to detect changes and verify consistency across pods.
+	// Format: sha256:<hex-digest>
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Checksum string `json:"checksum"`
+}
+
+// HAProxyMapFileStatus tracks deployment state to HAProxy pods.
+type HAProxyMapFileStatus struct {
+	// DeployedToPods tracks which HAProxy pods currently have this map file.
+	//
+	// Pods are automatically added when the map file is applied and removed when
+	// the pod terminates.
+	// +optional
+	DeployedToPods []PodDeploymentStatus `json:"deployedToPods,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+
+// HAProxyMapFileList contains a list of HAProxyMapFile.
+type HAProxyMapFileList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []HAProxyMapFile `json:"items"`
+}

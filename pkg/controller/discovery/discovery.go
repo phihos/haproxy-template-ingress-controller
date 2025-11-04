@@ -336,10 +336,11 @@ func (d *Discovery) DiscoverEndpointsWithLogger(
 
 		// Create endpoint with credentials
 		endpoint := dataplane.Endpoint{
-			URL:      url,
-			Username: credentials.DataplaneUsername,
-			Password: credentials.DataplanePassword,
-			PodName:  pod.GetName(),
+			URL:          url,
+			Username:     credentials.DataplaneUsername,
+			Password:     credentials.DataplanePassword,
+			PodName:      pod.GetName(),
+			PodNamespace: pod.GetNamespace(),
 		}
 
 		endpoints = append(endpoints, endpoint)
