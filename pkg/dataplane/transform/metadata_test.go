@@ -24,7 +24,7 @@ func TestConvertClientMetadataToAPI(t *testing.T) {
 	tests := []struct {
 		name  string
 		input map[string]interface{}
-		want  *map[string]map[string]interface{}
+		want  map[string]map[string]interface{}
 	}{
 		{
 			name:  "nil input",
@@ -41,7 +41,7 @@ func TestConvertClientMetadataToAPI(t *testing.T) {
 			input: map[string]interface{}{
 				"comment": "Pod: echo-server-v2",
 			},
-			want: &map[string]map[string]interface{}{
+			want: map[string]map[string]interface{}{
 				"comment": {
 					"value": "Pod: echo-server-v2",
 				},
@@ -55,7 +55,7 @@ func TestConvertClientMetadataToAPI(t *testing.T) {
 				"region":    "us-west-2",
 				"buildinfo": "v1.2.3-abc123",
 			},
-			want: &map[string]map[string]interface{}{
+			want: map[string]map[string]interface{}{
 				"comment": {
 					"value": "Pod: echo-server-v2",
 				},
@@ -76,7 +76,7 @@ func TestConvertClientMetadataToAPI(t *testing.T) {
 				"port":   8080,
 				"weight": 100,
 			},
-			want: &map[string]map[string]interface{}{
+			want: map[string]map[string]interface{}{
 				"port": {
 					"value": 8080,
 				},
@@ -91,7 +91,7 @@ func TestConvertClientMetadataToAPI(t *testing.T) {
 				"enabled": true,
 				"debug":   false,
 			},
-			want: &map[string]map[string]interface{}{
+			want: map[string]map[string]interface{}{
 				"enabled": {
 					"value": true,
 				},
@@ -131,7 +131,7 @@ func TestConvertAPIMetadataToClient(t *testing.T) {
 		{
 			name:  "empty map",
 			input: map[string]map[string]interface{}{},
-			want:  map[string]interface{}{},
+			want:  nil,
 		},
 		{
 			name: "single string value",

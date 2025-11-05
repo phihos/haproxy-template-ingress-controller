@@ -2650,7 +2650,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "stick store-response res.cook(JSESSIONID)"
+        pattern: "stick store-response res\\.cook\\(JSESSIONID\\)"
         description: Must include multiline snippet content
 
   test-send-proxy-protocol:

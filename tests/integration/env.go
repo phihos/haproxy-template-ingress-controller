@@ -207,7 +207,7 @@ func TestDataplaneHighLevelClient(env fixenv.Env) *dataplane.Client {
 			Password: endpoint.Password,
 		}
 
-		client, err := dataplane.NewClient(context.Background(), dpEndpoint)
+		client, err := dataplane.NewClient(context.Background(), &dpEndpoint)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create dataplane client: %w", err)
 		}
