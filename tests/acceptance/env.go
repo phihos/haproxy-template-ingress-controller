@@ -323,3 +323,48 @@ func GetPodLogs(ctx context.Context, client klient.Client, pod *corev1.Pod, tail
 
 	return buf.String(), nil
 }
+
+// WaitForCondition polls a condition function until it returns true or timeout occurs.
+// The condition function should return (satisfied bool, err error).
+// If err is non-nil, polling continues (transient errors are expected).
+// If satisfied is true, polling stops immediately and returns nil.
+// If timeout occurs, returns an error with the provided description.
+//
+// This is a generic polling helper that replaces sleep-based synchronization
+// with proper condition checking, making tests faster and more reliable.
+//
+// Example:
+//
+//	err := WaitForCondition(ctx, "HAProxy config deployed", 30*time.Second, 100*time.Millisecond, func() (bool, error) {
+//	    config, err := getHAProxyConfig()
+//	    if err != nil {
+//	        return false, err // Transient error, keep trying
+//	    }
+//	    return strings.Contains(config, "expected-content"), nil
+//	})
+func WaitForCondition(ctx context.Context, description string, timeout, pollInterval time.Duration, condition func() (bool, error)) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	// Check immediately before first tick
+	if satisfied, err := condition(); err == nil && satisfied {
+		return nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for %s (waited %v)", description, timeout)
+
+		case <-ticker.C:
+			satisfied, err := condition()
+			if err == nil && satisfied {
+				return nil
+			}
+			// Keep polling on error or unsatisfied condition
+		}
+	}
+}

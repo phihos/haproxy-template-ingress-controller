@@ -47,6 +47,9 @@ type Component struct {
 	eventBus  *busevents.EventBus
 	logger    *slog.Logger
 
+	// Subscribed in constructor for proper startup synchronization
+	eventChan <-chan busevents.Event
+
 	// Cached state from events (protected by mutex)
 	mu                sync.RWMutex
 	templateConfig    *v1alpha1.HAProxyTemplateConfig
@@ -71,19 +74,27 @@ func New(
 		publisher: publisher,
 		eventBus:  eventBus,
 		logger:    logger.With("component", "config_publisher"),
+		eventChan: eventBus.Subscribe(EventBufferSize),
 	}
 }
 
-// Start starts the config publisher component.
+// Start begins the config publisher's event loop.
+//
+// This method blocks until the context is cancelled or an error occurs.
+// It processes events from the subscription channel established in the constructor.
+//
+// Parameters:
+//   - ctx: Context for cancellation and lifecycle management
+//
+// Returns:
+//   - nil when context is cancelled (graceful shutdown)
+//   - Error only in exceptional circumstances
 func (c *Component) Start(ctx context.Context) error {
 	c.logger.Info("starting config publisher component")
 
-	// Subscribe to events before starting the event bus
-	eventChan := c.eventBus.Subscribe(EventBufferSize)
-
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-c.eventChan:
 			c.handleEvent(event)
 
 		case <-ctx.Done():

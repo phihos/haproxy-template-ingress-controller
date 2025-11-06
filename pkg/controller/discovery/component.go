@@ -56,6 +56,9 @@ type Component struct {
 	eventBus  *busevents.EventBus
 	logger    *slog.Logger
 
+	// Subscribed in constructor for proper startup synchronization
+	eventChan <-chan busevents.Event
+
 	// State protected by mutex
 	mu               sync.RWMutex
 	dataplanePort    int
@@ -77,6 +80,7 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 	return &Component{
 		eventBus:      eventBus,
 		logger:        logger.With("component", "discovery"),
+		eventChan:     eventBus.Subscribe(EventBufferSize),
 		lastEndpoints: make(map[string]string),
 	}
 }
@@ -84,7 +88,6 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 // Start begins the Discovery component's event processing loop.
 //
 // This method:
-//   - Subscribes to relevant events
 //   - Checks for existing pods and triggers initial discovery if needed
 //   - Maintains state from config and credential updates
 //   - Triggers discovery when HAProxy pods change
@@ -92,19 +95,19 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 //   - Runs until context is cancelled
 //
 // Returns an error if the event loop fails.
+//
+// Note: Event subscription occurs in the constructor (New()) to ensure proper
+// startup synchronization and avoid missing events during initialization.
 func (c *Component) Start(ctx context.Context) error {
 	c.logger.Info("starting discovery component")
 
-	// Subscribe to events
-	eventChan := c.eventBus.Subscribe(EventBufferSize)
-
-	// Perform initial discovery check after subscribing
+	// Perform initial discovery check
 	// This ensures we discover pods even if ResourceSyncCompleteEvent was already published
 	c.performInitialDiscovery()
 
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-c.eventChan:
 			c.handleEvent(event)
 
 		case <-ctx.Done():

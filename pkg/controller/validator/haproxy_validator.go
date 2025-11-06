@@ -49,6 +49,7 @@ const (
 // leadership transitions (when new leader-only components start subscribing).
 type HAProxyValidatorComponent struct {
 	eventBus        *busevents.EventBus
+	eventChan       <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
 	logger          *slog.Logger
 	validationPaths dataplane.ValidationPaths
 
@@ -74,8 +75,13 @@ func NewHAProxyValidator(
 	logger *slog.Logger,
 	validationPaths dataplane.ValidationPaths,
 ) *HAProxyValidatorComponent {
+	// Subscribe to EventBus during construction (before EventBus.Start())
+	// This ensures proper startup synchronization without timing-based sleeps
+	eventChan := eventBus.Subscribe(EventBufferSize)
+
 	return &HAProxyValidatorComponent{
 		eventBus:        eventBus,
+		eventChan:       eventChan,
 		logger:          logger,
 		validationPaths: validationPaths,
 	}
@@ -84,8 +90,10 @@ func NewHAProxyValidator(
 // Start begins the validator's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to the EventBus and processes events:
+// The component is already subscribed to the EventBus (subscription happens in NewHAProxyValidator()),
+// so this method only processes events:
 //   - TemplateRenderedEvent: Starts HAProxy configuration validation
+//   - BecameLeaderEvent: Replays last validation state for new leader-only components
 //
 // The component runs until the context is cancelled, at which point it
 // performs cleanup and returns.
@@ -99,11 +107,9 @@ func NewHAProxyValidator(
 func (v *HAProxyValidatorComponent) Start(ctx context.Context) error {
 	v.logger.Info("HAProxy Validator starting")
 
-	eventChan := v.eventBus.Subscribe(EventBufferSize)
-
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-v.eventChan:
 			v.handleEvent(event)
 
 		case <-ctx.Done():

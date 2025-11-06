@@ -976,26 +976,24 @@ func setupReconciliation(
 
 	// Start all-replica components in background
 	// Leader-only components (Deployer, DeploymentScheduler, DriftMonitor) are NOT started here
+	// Note: Components already subscribed during construction, so they're ready to receive events
 	startReconciliationComponents(iterCtx, components, logger, cancel)
 
-	// Give components a brief moment to subscribe to the EventBus
-	// before publishing initial state events
-	time.Sleep(100 * time.Millisecond)
-
 	// Publish initial config and credentials events
+	// These events are buffered by EventBus until Start() is called in the main controller loop
 	// This ensures reconciliation components (especially Discovery) receive the initial state
-	// even though they started after the initial ConfigMap/Secret watcher events
+	// even though they were created after the initial ConfigMap/Secret watcher events
 	// Note: We pass the actual CRD (not nil) so ConfigPublisher can cache it for creating HAProxyCfg resources
 	bus.Publish(events.NewConfigValidatedEvent(cfg, crd, "initial", "initial"))
-	logger.Debug("Published initial ConfigValidatedEvent for reconciliation components")
+	logger.Debug("Published initial ConfigValidatedEvent (buffered until EventBus.Start())")
 
 	bus.Publish(events.NewCredentialsUpdatedEvent(creds, "initial"))
-	logger.Debug("Published initial CredentialsUpdatedEvent for reconciliation components")
+	logger.Debug("Published initial CredentialsUpdatedEvent (buffered until EventBus.Start())")
 
 	// Trigger initial reconciliation to bootstrap the pipeline
 	// This ensures at least one reconciliation cycle runs even with 0 resources
 	bus.Publish(events.NewReconciliationTriggeredEvent("initial_sync_complete"))
-	logger.Debug("Published initial reconciliation trigger")
+	logger.Debug("Published initial reconciliation trigger (buffered until EventBus.Start())")
 
 	return components, nil
 }
@@ -1189,38 +1187,38 @@ func runIteration(
 		}
 	}()
 
-	// 5.5. Brief pause to ensure subscriptions are registered before releasing buffered events
-	// This prevents race condition where bus.Start() releases events before subscriptions are ready
-	time.Sleep(10 * time.Millisecond)
-
-	// 5.6. Start the EventBus (releases buffered events and begins normal operation)
-	setup.Bus.Start()
-
-	// 6. Start reconciliation components (Stage 5)
-	logger.Info("Stage 5: Starting reconciliation components")
+	// 6. Create reconciliation components (Stage 5)
+	// Components subscribe during construction, before EventBus.Start()
+	logger.Info("Stage 5: Creating reconciliation components")
 	reconComponents, err := setupReconciliation(setup.IterCtx, cfg, crd, creds, k8sClient, resourceWatcher, setup.Bus, logger, setup.Cancel)
 	if err != nil {
 		return err
 	}
 
-	// 6.5. Setup leader election (Stage 0 - before everything else ideally, but we need cfg)
-	logger.Info("Stage 0: Initializing leader election")
+	// 6.5. Start the EventBus (releases buffered events and begins normal operation)
+	// All components have now subscribed during their construction, so we can safely start
+	// the bus without race conditions or timing-based sleeps
+	logger.Info("Starting EventBus (all components subscribed)")
+	setup.Bus.Start()
+
+	// 7. Setup leader election
+	logger.Info("Stage 6: Initializing leader election")
 	leaderComponents, leaderComponentsMutex := setupLeaderElection(
 		setup.IterCtx, cfg, k8sClient, reconComponents, setup.Bus, logger, setup.Cancel, setup.ErrGroup,
 	)
 
-	// 7. Setup webhook validation if enabled
+	// 8. Setup webhook validation if enabled
 	if webhook.HasWebhookEnabled(cfg) {
-		logger.Info("Stage 6: Setting up webhook validation")
+		logger.Info("Stage 7: Setting up webhook validation")
 		setupWebhook(setup.IterCtx, cfg, webhookCerts, k8sClient, setup.Bus, setup.StoreManager, logger, setup.MetricsComponent.Metrics(), setup.Cancel)
 	}
 
-	// 8. Setup debug and metrics infrastructure
+	// 9. Setup debug and metrics infrastructure
 	setupInfrastructureServers(setup.IterCtx, cfg, debugPort, setup, stateCache, logger)
 
 	logger.Info("Controller iteration initialized successfully - entering event loop")
 
-	// 9. Wait for config change signal or context cancellation
+	// 10. Wait for config change signal or context cancellation
 	select {
 	case <-setup.IterCtx.Done():
 		handleIterationCancellation(leaderComponents, leaderComponentsMutex, setup, logger)

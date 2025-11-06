@@ -40,12 +40,13 @@ const (
 //
 // Event subscriptions:
 //   - DeploymentCompletedEvent: Reset drift prevention timer
+//   - LostLeadershipEvent: Stop drift prevention timer and clear state
 //
 // The component publishes DriftPreventionTriggeredEvent when drift prevention
 // is needed.
 type DriftPreventionMonitor struct {
 	eventBus                *busevents.EventBus
-	eventChan               <-chan busevents.Event // Event subscription channel (subscribed in constructor)
+	eventChan               <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
 	logger                  *slog.Logger
 	driftPreventionInterval time.Duration
 
@@ -59,6 +60,9 @@ type DriftPreventionMonitor struct {
 
 // NewDriftPreventionMonitor creates a new DriftPreventionMonitor component.
 //
+// The component is subscribed to the EventBus during construction to ensure proper
+// startup synchronization without timing-based sleeps.
+//
 // Parameters:
 //   - eventBus: The EventBus for subscribing to events and publishing triggers
 //   - logger: Structured logger for component logging
@@ -67,9 +71,13 @@ type DriftPreventionMonitor struct {
 // Returns:
 //   - A new DriftPreventionMonitor instance ready to be started
 func NewDriftPreventionMonitor(eventBus *busevents.EventBus, logger *slog.Logger, driftPreventionInterval time.Duration) *DriftPreventionMonitor {
+	// Subscribe to EventBus during construction (before EventBus.Start())
+	// This ensures proper startup synchronization without timing-based sleeps
+	eventChan := eventBus.Subscribe(DriftMonitorEventBufferSize)
+
 	return &DriftPreventionMonitor{
 		eventBus:                eventBus,
-		eventChan:               eventBus.Subscribe(DriftMonitorEventBufferSize),
+		eventChan:               eventChan,
 		logger:                  logger.With("component", "drift-prevention-monitor"),
 		driftPreventionInterval: driftPreventionInterval,
 	}
@@ -78,7 +86,14 @@ func NewDriftPreventionMonitor(eventBus *busevents.EventBus, logger *slog.Logger
 // Start begins the drift prevention monitor's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It processes events from the subscription channel established in the constructor.
+// The component is already subscribed to the EventBus (subscription happens in NewDriftPreventionMonitor()),
+// so this method only processes events and manages the drift prevention timer:
+//   - DeploymentCompletedEvent: Resets the drift prevention timer
+//   - LostLeadershipEvent: Stops the drift prevention timer and clears state
+//   - Drift timer expiration: Publishes DriftPreventionTriggeredEvent
+//
+// The component runs until the context is cancelled, at which point it
+// performs cleanup and returns.
 //
 // Parameters:
 //   - ctx: Context for cancellation and lifecycle management

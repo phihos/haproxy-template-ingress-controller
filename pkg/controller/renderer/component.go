@@ -51,6 +51,7 @@ const (
 // leadership transitions (when new leader-only components start subscribing).
 type Component struct {
 	eventBus        *busevents.EventBus
+	eventChan       <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
 	engine          *templating.TemplateEngine
 	config          *config.Config
 	stores          map[string]types.Store
@@ -124,8 +125,13 @@ func New(
 		return nil, fmt.Errorf("failed to create template engine: %w", err)
 	}
 
+	// Subscribe to EventBus during construction (before EventBus.Start())
+	// This ensures proper startup synchronization without timing-based sleeps
+	eventChan := eventBus.Subscribe(EventBufferSize)
+
 	return &Component{
 		eventBus:        eventBus,
+		eventChan:       eventChan,
 		engine:          engine,
 		config:          config,
 		stores:          stores,
@@ -137,8 +143,10 @@ func New(
 // Start begins the renderer's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to the EventBus and processes events:
+// The component is already subscribed to the EventBus (subscription happens in New()),
+// so this method only processes events:
 //   - ReconciliationTriggeredEvent: Starts template rendering
+//   - BecameLeaderEvent: Replays last rendered state for new leader-only components
 //
 // The component runs until the context is cancelled, at which point it
 // performs cleanup and returns.
@@ -152,11 +160,9 @@ func New(
 func (c *Component) Start(ctx context.Context) error {
 	c.logger.Info("Renderer starting")
 
-	eventChan := c.eventBus.Subscribe(EventBufferSize)
-
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-c.eventChan:
 			c.handleEvent(event)
 
 		case <-ctx.Done():

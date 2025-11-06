@@ -10,8 +10,8 @@ keywords:
   - controller
   - loadbalancer
   - template
-home: https://github.com/phihos/haproxy-template-ic
+home: https://github.com/phihos/haproxy-template-ingress-controller
 sources:
-  - https://github.com/phihos/haproxy-template-ic
+  - https://github.com/phihos/haproxy-template-ingress-controller
 maintainers:
   - name: phihos
