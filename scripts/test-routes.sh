@@ -433,56 +433,138 @@ verify_cluster() {
 wait_for_services_ready() {
     log INFO "Waiting for services to be ready..."
 
-    local max_attempts=30  # 60 seconds total for CI environments
+    # Step 1: Wait for HAProxy pods to be ready
+    log INFO "Checking HAProxy pod readiness..."
+    if ! kubectl -n haproxy-template-ic wait --for=condition=ready pod \
+        -l app=haproxy --timeout=120s >/dev/null 2>&1; then
+        echo
+        err "HAProxy pods are not ready after 120s"
+        echo
+        echo "HAProxy pod status:"
+        kubectl -n haproxy-template-ic get pods -l app=haproxy
+        echo
+        echo "Recent pod events:"
+        kubectl -n haproxy-template-ic get events --sort-by='.lastTimestamp' | tail -10
+        echo
+        exit 1
+    fi
+    ok "HAProxy pods are ready"
+
+    # Step 2: Wait for echo service pods to be ready
+    log INFO "Checking echo service pod readiness..."
+    if ! kubectl -n echo wait --for=condition=ready pod \
+        -l app=echo-server --timeout=120s >/dev/null 2>&1; then
+        echo
+        err "Echo service pods are not ready after 120s"
+        echo
+        echo "Echo pod status:"
+        kubectl -n echo get pods -l app=echo-server
+        echo
+        echo "Recent pod events:"
+        kubectl -n echo get events --sort-by='.lastTimestamp' | tail -10
+        echo
+        exit 1
+    fi
+    ok "Echo service pods are ready"
+
+    # Step 3: Check for echo-server-v2 pods (Gateway API demos - optional)
+    debug "Checking echo-server-v2 pod readiness (optional)..."
+    if kubectl -n echo get pods -l app=echo-server-v2 >/dev/null 2>&1; then
+        if ! kubectl -n echo wait --for=condition=ready pod \
+            -l app=echo-server-v2 --timeout=120s >/dev/null 2>&1; then
+            warn "Echo-server-v2 pods exist but are not ready (continuing anyway)"
+        else
+            ok "Echo-server-v2 pods are ready"
+        fi
+    else
+        debug "Echo-server-v2 pods not found (skipping)"
+    fi
+
+    # Step 4: Verify service endpoints are populated
+    log INFO "Checking service endpoints..."
+    local endpoint_attempts=30
+    local attempt=1
+    local endpoints_ready=false
+
+    while [[ $attempt -le $endpoint_attempts ]]; do
+        if kubectl -n echo get endpoints echo-server -o json 2>/dev/null | \
+            jq -e '.subsets[0].addresses | length > 0' >/dev/null 2>&1; then
+            endpoints_ready=true
+            break
+        fi
+
+        if [[ $attempt -lt $endpoint_attempts ]]; then
+            debug "Endpoints not ready yet (attempt $attempt/$endpoint_attempts), waiting 2s..."
+            sleep 2
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    if [[ "$endpoints_ready" != "true" ]]; then
+        warn "Echo service endpoints may not be fully populated, but continuing..."
+        kubectl -n echo get endpoints echo-server 2>/dev/null || echo "  (no endpoints found)"
+    else
+        ok "Service endpoints are populated"
+    fi
+
+    # Step 5: Test HTTP connectivity (pods are ready, so this should be fast)
+    log INFO "Testing HTTP connectivity..."
+    local max_attempts=20  # 40 seconds - reduced since pods are already ready
     local delay=2
     local attempt=1
-    local ready=false
+    local http_ready=false
 
-    # Test basic ingress connectivity (echo.localdev.me)
     while [[ $attempt -le $max_attempts ]]; do
-        debug "Readiness check attempt $attempt/$max_attempts..."
+        debug "HTTP connectivity check $attempt/$max_attempts..."
 
         local response
         if response=$(curl -s --max-time 5 -H "Host: echo.localdev.me" "${BASE_URL}/" 2>&1); then
             # Check that response contains valid JSON with expected structure
             if echo "$response" | grep -q "\"http\":"; then
                 debug "Services responding with valid JSON"
-                ready=true
+                http_ready=true
                 break
             else
                 debug "Connection succeeded but response invalid or empty"
             fi
         else
-            debug "Connection failed"
+            debug "Connection failed: $response"
         fi
 
         if [[ $attempt -lt $max_attempts ]]; then
-            debug "Services not ready yet, waiting ${delay}s before retry..."
             sleep "$delay"
         fi
 
         attempt=$((attempt + 1))
     done
 
-    if [[ "$ready" == "true" ]]; then
+    if [[ "$http_ready" == "true" ]]; then
         ok "Services are ready and accepting connections"
     else
         echo
-        err "Services did not become ready after $max_attempts attempts (${max_attempts}x${delay}s)"
+        err "HTTP connectivity check failed after $max_attempts attempts (${max_attempts}x${delay}s)"
         echo
-        echo "This typically means:"
-        echo "  - HAProxy pods are not running or not ready"
-        echo "  - Echo service pods are not ready"
+        echo "Pods are ready but HTTP requests are not working. This typically means:"
         echo "  - HAProxy configuration has not synced yet"
-        echo "  - Endpoints have not been populated"
+        echo "  - Ingress resources may not be configured correctly"
+        echo "  - Controller may not have reconciled the configuration"
         echo
-        echo "Troubleshooting steps:"
-        echo "  1. Check HAProxy pods: kubectl -n haproxy-template-ic get pods -l app=haproxy"
-        echo "  2. Check echo pods: kubectl -n echo get pods"
-        echo "  3. Check HAProxy logs: kubectl -n haproxy-template-ic logs deploy/haproxy-production -c haproxy"
-        echo "  4. Check controller logs: ./scripts/start-dev-env.sh logs"
-        echo "  5. Check endpoints: kubectl -n echo get endpoints"
-        echo "  6. Wait longer and try again, or restart: ./scripts/start-dev-env.sh restart"
+        echo "Diagnostics:"
+        echo "  HAProxy pods:"
+        kubectl -n haproxy-template-ic get pods -l app=haproxy
+        echo
+        echo "  Echo pods:"
+        kubectl -n echo get pods
+        echo
+        echo "  Endpoints:"
+        kubectl -n echo get endpoints
+        echo
+        echo "  HAProxy logs (last 20 lines):"
+        kubectl -n haproxy-template-ic logs -l app=haproxy --tail=20 -c haproxy 2>/dev/null || echo "  (no logs available)"
+        echo
+        echo "  Controller logs (last 20 lines):"
+        kubectl -n haproxy-template-ic logs -l app=haproxy-template-ic --tail=20 2>/dev/null || echo "  (no logs available)"
         echo
         exit 1
     fi
