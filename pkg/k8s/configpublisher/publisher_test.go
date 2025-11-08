@@ -74,7 +74,7 @@ func TestPublishConfig_CreateNew(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, "test-config-runtime", result.RuntimeConfigName)
+	assert.Equal(t, "test-config-haproxycfg", result.RuntimeConfigName)
 	assert.Equal(t, "default", result.RuntimeConfigNamespace)
 	assert.Len(t, result.MapFileNames, 1)
 	assert.Len(t, result.SecretNames, 1)
@@ -82,7 +82,7 @@ func TestPublishConfig_CreateNew(t *testing.T) {
 	// Verify HAProxyCfg was created
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	assert.Equal(t, "/etc/haproxy/haproxy.cfg", runtimeConfig.Spec.Path)
@@ -163,7 +163,7 @@ func TestPublishConfig_Update(t *testing.T) {
 	// Verify config was updated
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	assert.Equal(t, "global\n  daemon\n  maxconn 1000\n", runtimeConfig.Spec.Content)
@@ -196,10 +196,9 @@ func TestUpdateDeploymentStatus_AddPod(t *testing.T) {
 	// Update deployment status
 	deployedAt := time.Now()
 	update := DeploymentStatusUpdate{
-		RuntimeConfigName:      "test-config-runtime",
+		RuntimeConfigName:      "test-config-haproxycfg",
 		RuntimeConfigNamespace: "default",
 		PodName:                "haproxy-0",
-		PodNamespace:           "default",
 		DeployedAt:             deployedAt,
 		Checksum:               "abc123",
 	}
@@ -211,12 +210,11 @@ func TestUpdateDeploymentStatus_AddPod(t *testing.T) {
 	// Verify deployment status was updated
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	require.Len(t, runtimeConfig.Status.DeployedToPods, 1)
 	assert.Equal(t, "haproxy-0", runtimeConfig.Status.DeployedToPods[0].PodName)
-	assert.Equal(t, "default", runtimeConfig.Status.DeployedToPods[0].Namespace)
 	assert.Equal(t, "abc123", runtimeConfig.Status.DeployedToPods[0].Checksum)
 }
 
@@ -245,10 +243,9 @@ func TestUpdateDeploymentStatus_UpdateExistingPod(t *testing.T) {
 
 	// Add pod first time
 	firstUpdate := DeploymentStatusUpdate{
-		RuntimeConfigName:      "test-config-runtime",
+		RuntimeConfigName:      "test-config-haproxycfg",
 		RuntimeConfigNamespace: "default",
 		PodName:                "haproxy-0",
-		PodNamespace:           "default",
 		DeployedAt:             time.Now(),
 		Checksum:               "abc123",
 	}
@@ -259,10 +256,9 @@ func TestUpdateDeploymentStatus_UpdateExistingPod(t *testing.T) {
 	// Update same pod with new checksum
 	time.Sleep(10 * time.Millisecond) // Ensure different timestamp
 	secondUpdate := DeploymentStatusUpdate{
-		RuntimeConfigName:      "test-config-runtime",
+		RuntimeConfigName:      "test-config-haproxycfg",
 		RuntimeConfigNamespace: "default",
 		PodName:                "haproxy-0",
-		PodNamespace:           "default",
 		DeployedAt:             time.Now(),
 		Checksum:               "def456",
 	}
@@ -273,7 +269,7 @@ func TestUpdateDeploymentStatus_UpdateExistingPod(t *testing.T) {
 	// Verify only one pod entry exists with updated checksum
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	require.Len(t, runtimeConfig.Status.DeployedToPods, 1)
@@ -308,10 +304,9 @@ func TestUpdateDeploymentStatus_MultiplePods(t *testing.T) {
 	pods := []string{"haproxy-0", "haproxy-1", "haproxy-2"}
 	for _, podName := range pods {
 		update := DeploymentStatusUpdate{
-			RuntimeConfigName:      "test-config-runtime",
+			RuntimeConfigName:      "test-config-haproxycfg",
 			RuntimeConfigNamespace: "default",
 			PodName:                podName,
-			PodNamespace:           "default",
 			DeployedAt:             time.Now(),
 			Checksum:               "abc123",
 		}
@@ -323,7 +318,7 @@ func TestUpdateDeploymentStatus_MultiplePods(t *testing.T) {
 	// Verify all pods were added
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	require.Len(t, runtimeConfig.Status.DeployedToPods, 3)
@@ -364,10 +359,9 @@ func TestCleanupPodReferences_RemovePod(t *testing.T) {
 	// Add two pods
 	for _, podName := range []string{"haproxy-0", "haproxy-1"} {
 		update := DeploymentStatusUpdate{
-			RuntimeConfigName:      "test-config-runtime",
+			RuntimeConfigName:      "test-config-haproxycfg",
 			RuntimeConfigNamespace: "default",
 			PodName:                podName,
-			PodNamespace:           "default",
 			DeployedAt:             time.Now(),
 			Checksum:               "abc123",
 		}
@@ -378,8 +372,7 @@ func TestCleanupPodReferences_RemovePod(t *testing.T) {
 
 	// Remove one pod
 	cleanup := PodCleanupRequest{
-		PodName:      "haproxy-0",
-		PodNamespace: "default",
+		PodName: "haproxy-0",
 	}
 
 	err = publisher.CleanupPodReferences(ctx, &cleanup)
@@ -388,7 +381,7 @@ func TestCleanupPodReferences_RemovePod(t *testing.T) {
 	// Verify only one pod remains
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	require.Len(t, runtimeConfig.Status.DeployedToPods, 1)
@@ -420,8 +413,7 @@ func TestCleanupPodReferences_NonexistentPod(t *testing.T) {
 
 	// Try to cleanup pod that was never added
 	cleanup := PodCleanupRequest{
-		PodName:      "nonexistent-pod",
-		PodNamespace: "default",
+		PodName: "nonexistent-pod",
 	}
 
 	err = publisher.CleanupPodReferences(ctx, &cleanup)
@@ -432,7 +424,7 @@ func TestCleanupPodReferences_NonexistentPod(t *testing.T) {
 	// Verify runtime config status unchanged
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	assert.Len(t, runtimeConfig.Status.DeployedToPods, 0)
@@ -451,7 +443,6 @@ func TestUpdateDeploymentStatus_RuntimeConfigNotFound(t *testing.T) {
 		RuntimeConfigName:      "nonexistent-runtime",
 		RuntimeConfigNamespace: "default",
 		PodName:                "haproxy-0",
-		PodNamespace:           "default",
 		DeployedAt:             time.Now(),
 		Checksum:               "abc123",
 	}

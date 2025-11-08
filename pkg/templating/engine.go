@@ -78,6 +78,10 @@ type TemplateEngine struct {
 	// compiledTemplates stores pre-compiled templates by name
 	compiledTemplates map[string]*exec.Template
 
+	// postProcessors stores post-processors by template name
+	// Each template can have a chain of post-processors applied after rendering
+	postProcessors map[string][]PostProcessor
+
 	// tracing controls template execution tracing
 	tracing *tracingConfig
 }
@@ -200,11 +204,26 @@ func testInFixed(ctx *exec.Context, in *exec.Value, params *exec.VarArgs) (bool,
 //
 // Example without custom filters/functions:
 //
-//	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil)
+//	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil, nil)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func New(engineType EngineType, templates map[string]string, customFilters map[string]FilterFunc, customFunctions map[string]GlobalFunc) (*TemplateEngine, error) {
+//
+// Example with post-processors for indentation normalization:
+//
+//	postProcessors := map[string][]templating.PostProcessorConfig{
+//	    "haproxycfg": {
+//	        {
+//	            Type: templating.PostProcessorTypeRegexReplace,
+//	            Params: map[string]string{
+//	                "pattern": "^[ ]+",
+//	                "replace": "  ",
+//	            },
+//	        },
+//	    },
+//	}
+//	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil, postProcessors)
+func New(engineType EngineType, templates map[string]string, customFilters map[string]FilterFunc, customFunctions map[string]GlobalFunc, postProcessorConfigs map[string][]PostProcessorConfig) (*TemplateEngine, error) {
 	// Validate engine type
 	if engineType != EngineTypeGonja {
 		return nil, NewUnsupportedEngineError(engineType)
@@ -214,6 +233,7 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 		engineType:        engineType,
 		rawTemplates:      make(map[string]string, len(templates)),
 		compiledTemplates: make(map[string]*exec.Template, len(templates)),
+		postProcessors:    make(map[string][]PostProcessor),
 		tracing: &tracingConfig{
 			enabled: false,
 			traces:  make([]string, 0),
@@ -331,6 +351,19 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 		}
 
 		engine.compiledTemplates[name] = compiled
+	}
+
+	// Build post-processors from configuration
+	for templateName, configs := range postProcessorConfigs {
+		processors := make([]PostProcessor, 0, len(configs))
+		for _, config := range configs {
+			processor, err := NewPostProcessor(config)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create post-processor for template %q: %w", templateName, err)
+			}
+			processors = append(processors, processor)
+		}
+		engine.postProcessors[templateName] = processors
 	}
 
 	return engine, nil
@@ -471,21 +504,48 @@ func (e *TemplateEngine) Render(templateName string, context map[string]interfac
 	// Look up the compiled template
 	template, exists := e.compiledTemplates[templateName]
 	if !exists {
-		// Collect available template names for the error message
-		availableNames := make([]string, 0, len(e.compiledTemplates))
-		for name := range e.compiledTemplates {
-			availableNames = append(availableNames, name)
-		}
-		return "", NewTemplateNotFoundError(templateName, availableNames)
+		return "", e.templateNotFoundError(templateName)
 	}
 
 	// Create execution context
-	// Ensure context is not nil to avoid panic in Set()
 	if context == nil {
 		context = make(map[string]interface{})
 	}
 	ctx := exec.NewContext(context)
 
+	// Setup tracing if enabled
+	cleanup := e.setupTracing(ctx, templateName)
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	// Execute the template with the provided context
+	output, err := template.ExecuteToString(ctx)
+	if err != nil {
+		return "", NewRenderError(templateName, err)
+	}
+
+	// Apply post-processors if configured for this template
+	output, err = e.applyPostProcessors(templateName, output)
+	if err != nil {
+		return "", err
+	}
+
+	return output, nil
+}
+
+// templateNotFoundError creates a TemplateNotFoundError with available template names.
+func (e *TemplateEngine) templateNotFoundError(templateName string) error {
+	availableNames := make([]string, 0, len(e.compiledTemplates))
+	for name := range e.compiledTemplates {
+		availableNames = append(availableNames, name)
+	}
+	return NewTemplateNotFoundError(templateName, availableNames)
+}
+
+// setupTracing initializes tracing for a template render if tracing is enabled.
+// Returns a cleanup function that must be called via defer, or nil if tracing is disabled.
+func (e *TemplateEngine) setupTracing(ctx *exec.Context, templateName string) func() {
 	// Check if tracing is enabled (thread-safe snapshot)
 	e.tracing.mu.Lock()
 	tracingEnabled := e.tracing.enabled
@@ -494,43 +554,55 @@ func (e *TemplateEngine) Render(templateName string, context map[string]interfac
 	// Store tracing config reference in context for filters to access
 	ctx.Set("_tracing_config", e.tracing)
 
-	// If tracing is enabled, attach per-render trace state to context
-	var traceBuilder *strings.Builder
-	if tracingEnabled {
-		traceBuilder = &strings.Builder{}
-		ctx.Set("_trace_depth", 0)
-		ctx.Set("_trace_builder", traceBuilder)
-		ctx.Set("_trace_enabled", true) // Store enabled flag in context
-
-		// Log render start
-		e.tracef(ctx, "Rendering: %s", templateName)
-		// Increment depth
-		if depth, ok := ctx.Get("_trace_depth"); ok {
-			ctx.Set("_trace_depth", depth.(int)+1)
-		}
-
-		startTime := time.Now()
-		defer func() {
-			duration := time.Since(startTime)
-			// Decrement depth
-			if depth, ok := ctx.Get("_trace_depth"); ok {
-				ctx.Set("_trace_depth", depth.(int)-1)
-			}
-			e.tracef(ctx, "Completed: %s (%.3fms)", templateName, float64(duration.Microseconds())/1000.0)
-
-			// After render completes, collect trace output and store it thread-safely
-			if traceBuilder != nil && traceBuilder.Len() > 0 {
-				e.tracing.mu.Lock()
-				e.tracing.traces = append(e.tracing.traces, traceBuilder.String())
-				e.tracing.mu.Unlock()
-			}
-		}()
+	if !tracingEnabled {
+		return nil
 	}
 
-	// Execute the template with the provided context
-	output, err := template.ExecuteToString(ctx)
-	if err != nil {
-		return "", NewRenderError(templateName, err)
+	// Initialize per-render trace state
+	traceBuilder := &strings.Builder{}
+	ctx.Set("_trace_depth", 0)
+	ctx.Set("_trace_builder", traceBuilder)
+	ctx.Set("_trace_enabled", true)
+
+	// Log render start
+	e.tracef(ctx, "Rendering: %s", templateName)
+	if depth, ok := ctx.Get("_trace_depth"); ok {
+		ctx.Set("_trace_depth", depth.(int)+1)
+	}
+
+	startTime := time.Now()
+
+	// Return cleanup function
+	return func() {
+		duration := time.Since(startTime)
+		// Decrement depth
+		if depth, ok := ctx.Get("_trace_depth"); ok {
+			ctx.Set("_trace_depth", depth.(int)-1)
+		}
+		e.tracef(ctx, "Completed: %s (%.3fms)", templateName, float64(duration.Microseconds())/1000.0)
+
+		// Store completed trace
+		if traceBuilder.Len() > 0 {
+			e.tracing.mu.Lock()
+			e.tracing.traces = append(e.tracing.traces, traceBuilder.String())
+			e.tracing.mu.Unlock()
+		}
+	}
+}
+
+// applyPostProcessors applies configured post-processors to the template output.
+func (e *TemplateEngine) applyPostProcessors(templateName, output string) (string, error) {
+	processors, exists := e.postProcessors[templateName]
+	if !exists {
+		return output, nil
+	}
+
+	var err error
+	for _, processor := range processors {
+		output, err = processor.Process(output)
+		if err != nil {
+			return "", fmt.Errorf("post-processor failed for template %q: %w", templateName, err)
+		}
 	}
 
 	return output, nil

@@ -883,7 +883,7 @@ func setupWebhook(
 	}
 
 	// Create template engine
-	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, nil)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, nil, nil)
 	if err != nil {
 		logger.Error("Failed to create template engine for dry-run validation", "error", err)
 		return

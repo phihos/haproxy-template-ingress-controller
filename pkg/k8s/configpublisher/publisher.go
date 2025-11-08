@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	haproxyv1alpha1 "haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
@@ -152,26 +153,15 @@ func (p *Publisher) UpdateDeploymentStatus(ctx context.Context, update *Deployme
 		return fmt.Errorf("failed to get runtime config: %w", err)
 	}
 
-	// Add pod to deployedToPods list (avoid duplicates)
-	podStatus := haproxyv1alpha1.PodDeploymentStatus{
-		PodName:    update.PodName,
-		Namespace:  update.PodNamespace,
-		DeployedAt: metav1.NewTime(update.DeployedAt),
-		Checksum:   update.Checksum,
-	}
+	// Build pod status from update
+	podStatus := buildPodStatus(update)
 
-	updated := false
-	for i, existing := range runtimeConfig.Status.DeployedToPods {
-		if existing.PodName == update.PodName && existing.Namespace == update.PodNamespace {
-			runtimeConfig.Status.DeployedToPods[i] = podStatus
-			updated = true
-			break
-		}
-	}
-
-	if !updated {
-		runtimeConfig.Status.DeployedToPods = append(runtimeConfig.Status.DeployedToPods, podStatus)
-	}
+	// Update or append pod status
+	runtimeConfig.Status.DeployedToPods = updateOrAppendPodStatus(
+		runtimeConfig.Status.DeployedToPods,
+		&podStatus,
+		update,
+	)
 
 	_, err = p.crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs(update.RuntimeConfigNamespace).
@@ -183,7 +173,7 @@ func (p *Publisher) UpdateDeploymentStatus(ctx context.Context, update *Deployme
 	// Update all child map files
 	if runtimeConfig.Status.AuxiliaryFiles != nil {
 		for _, mapFileRef := range runtimeConfig.Status.AuxiliaryFiles.MapFiles {
-			if err := p.updateMapFileDeploymentStatus(ctx, mapFileRef.Namespace, mapFileRef.Name, podStatus); err != nil {
+			if err := p.updateMapFileDeploymentStatus(ctx, mapFileRef.Namespace, mapFileRef.Name, &podStatus); err != nil {
 				p.logger.Warn("failed to update map file deployment status",
 					"mapFile", mapFileRef.Name,
 					"error", err,
@@ -204,7 +194,6 @@ func (p *Publisher) UpdateDeploymentStatus(ctx context.Context, update *Deployme
 func (p *Publisher) CleanupPodReferences(ctx context.Context, cleanup *PodCleanupRequest) error {
 	p.logger.Debug("cleaning up pod references",
 		"pod", cleanup.PodName,
-		"namespace", cleanup.PodNamespace,
 	)
 
 	// List all HAProxyCfgs across all namespaces
@@ -218,6 +207,28 @@ func (p *Publisher) CleanupPodReferences(ctx context.Context, cleanup *PodCleanu
 
 	for i := range runtimeConfigs.Items {
 		p.cleanupRuntimeConfigPodReference(ctx, &runtimeConfigs.Items[i], cleanup)
+	}
+
+	return nil
+}
+
+// DeleteRuntimeConfig deletes a HAProxyCfg resource.
+//
+// Used to clean up invalid configuration resources when validation succeeds again.
+func (p *Publisher) DeleteRuntimeConfig(ctx context.Context, namespace, name string) error {
+	err := p.crdClient.HaproxyTemplateICV1alpha1().
+		HAProxyCfgs(namespace).
+		Delete(ctx, name, metav1.DeleteOptions{})
+
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete runtime config %s/%s: %w", namespace, name, err)
+	}
+
+	if err == nil {
+		p.logger.Debug("deleted runtime config",
+			"name", name,
+			"namespace", namespace,
+		)
 	}
 
 	return nil
@@ -254,12 +265,12 @@ func (p *Publisher) removePodFromList(pods []haproxyv1alpha1.PodDeploymentStatus
 	newPods := []haproxyv1alpha1.PodDeploymentStatus{}
 	removed := false
 
-	for _, pod := range pods {
-		if pod.PodName == cleanup.PodName && pod.Namespace == cleanup.PodNamespace {
+	for i := range pods {
+		if pods[i].PodName == cleanup.PodName {
 			removed = true
 			continue // Skip this pod
 		}
-		newPods = append(newPods, pod)
+		newPods = append(newPods, pods[i])
 	}
 
 	return newPods, removed
@@ -284,8 +295,26 @@ func (p *Publisher) cleanupMapFiles(ctx context.Context, auxFiles *haproxyv1alph
 
 // createOrUpdateRuntimeConfig creates or updates the HAProxyCfg resource.
 func (p *Publisher) createOrUpdateRuntimeConfig(ctx context.Context, req *PublishRequest) (*haproxyv1alpha1.HAProxyCfg, error) {
-	name := p.generateRuntimeConfigName(req.TemplateConfigName)
+	name := p.generateRuntimeConfigName(req.TemplateConfigName) + req.NameSuffix
+	runtimeConfig := p.buildRuntimeConfig(name, req)
 
+	// Try to get existing resource
+	existing, err := p.crdClient.HaproxyTemplateICV1alpha1().
+		HAProxyCfgs(req.TemplateConfigNamespace).
+		Get(ctx, name, metav1.GetOptions{})
+
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("failed to get existing runtime config: %w", err)
+		}
+		return p.createRuntimeConfig(ctx, req, runtimeConfig)
+	}
+
+	return p.updateRuntimeConfig(ctx, req, existing, runtimeConfig)
+}
+
+// buildRuntimeConfig constructs a HAProxyCfg resource from the request.
+func (p *Publisher) buildRuntimeConfig(name string, req *PublishRequest) *haproxyv1alpha1.HAProxyCfg {
 	runtimeConfig := &haproxyv1alpha1.HAProxyCfg{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -306,39 +335,84 @@ func (p *Publisher) createOrUpdateRuntimeConfig(ctx context.Context, req *Publis
 		},
 		Spec: haproxyv1alpha1.HAProxyCfgSpec{
 			Path:     req.ConfigPath,
-			Content:  req.Config,
+			Content:  "\n" + req.Config,
 			Checksum: req.Checksum,
 		},
 	}
 
-	// Try to get existing resource
-	existing, err := p.crdClient.HaproxyTemplateICV1alpha1().
+	// Set validation error in status if provided
+	if req.ValidationError != "" {
+		if runtimeConfig.Status.Metadata == nil {
+			runtimeConfig.Status.Metadata = &haproxyv1alpha1.ConfigMetadata{}
+		}
+		runtimeConfig.Status.ValidationError = req.ValidationError
+		runtimeConfig.Status.Metadata.ValidatedAt = &metav1.Time{Time: time.Now()}
+	}
+
+	return runtimeConfig
+}
+
+// createRuntimeConfig creates a new HAProxyCfg resource.
+func (p *Publisher) createRuntimeConfig(ctx context.Context, req *PublishRequest, runtimeConfig *haproxyv1alpha1.HAProxyCfg) (*haproxyv1alpha1.HAProxyCfg, error) {
+	created, err := p.crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs(req.TemplateConfigNamespace).
-		Get(ctx, name, metav1.GetOptions{})
-
+		Create(ctx, runtimeConfig, metav1.CreateOptions{})
 	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("failed to get existing runtime config: %w", err)
-		}
+		return nil, fmt.Errorf("failed to create runtime config: %w", err)
+	}
 
-		// Create new resource
-		created, err := p.crdClient.HaproxyTemplateICV1alpha1().
-			HAProxyCfgs(req.TemplateConfigNamespace).
-			Create(ctx, runtimeConfig, metav1.CreateOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create runtime config: %w", err)
-		}
-
-		// Don't update status immediately after creation to avoid race conditions
-		// Status will be updated when first deployment completes via UpdateDeploymentStatus()
+	// Update status after creation if needed
+	if req.ValidationError != "" || !req.ValidatedAt.IsZero() {
+		p.updateCreatedStatus(ctx, req, created)
+	} else {
 		p.logger.Debug("created new runtime config, status will be updated on first deployment",
 			"name", created.Name,
 			"namespace", created.Namespace,
 		)
-
-		return created, nil
 	}
 
+	return created, nil
+}
+
+// updateCreatedStatus updates the status of a newly created HAProxyCfg.
+func (p *Publisher) updateCreatedStatus(ctx context.Context, req *PublishRequest, created *haproxyv1alpha1.HAProxyCfg) {
+	// Initialize status metadata if needed
+	if created.Status.Metadata == nil {
+		created.Status.Metadata = &haproxyv1alpha1.ConfigMetadata{}
+	}
+
+	// Set metadata fields
+	created.Status.Metadata.ContentSize = int64(len(req.Config))
+	created.Status.Metadata.RenderedAt = &metav1.Time{Time: req.RenderedAt}
+	if !req.ValidatedAt.IsZero() {
+		created.Status.Metadata.ValidatedAt = &metav1.Time{Time: req.ValidatedAt}
+	}
+
+	// Set validation error if provided
+	if req.ValidationError != "" {
+		created.Status.ValidationError = req.ValidationError
+	}
+
+	// Update status
+	_, err := p.crdClient.HaproxyTemplateICV1alpha1().
+		HAProxyCfgs(req.TemplateConfigNamespace).
+		UpdateStatus(ctx, created, metav1.UpdateOptions{})
+	if err != nil {
+		p.logger.Warn("failed to update runtime config status after creation",
+			"name", created.Name,
+			"error", err,
+		)
+	} else {
+		p.logger.Debug("created and updated runtime config status",
+			"name", created.Name,
+			"namespace", created.Namespace,
+			"has_validation_error", req.ValidationError != "",
+		)
+	}
+}
+
+// updateRuntimeConfig updates an existing HAProxyCfg resource.
+func (p *Publisher) updateRuntimeConfig(ctx context.Context, req *PublishRequest, existing, runtimeConfig *haproxyv1alpha1.HAProxyCfg) (*haproxyv1alpha1.HAProxyCfg, error) {
 	// Update existing resource
 	existing.Spec = runtimeConfig.Spec
 	existing.Labels = runtimeConfig.Labels
@@ -350,15 +424,31 @@ func (p *Publisher) createOrUpdateRuntimeConfig(ctx context.Context, req *Publis
 		return nil, fmt.Errorf("failed to update runtime config: %w", err)
 	}
 
+	p.updateExistingStatus(ctx, req, updated)
+	return updated, nil
+}
+
+// updateExistingStatus updates the status of an existing HAProxyCfg.
+func (p *Publisher) updateExistingStatus(ctx context.Context, req *PublishRequest, updated *haproxyv1alpha1.HAProxyCfg) {
 	// Update status metadata
 	if updated.Status.Metadata == nil {
 		updated.Status.Metadata = &haproxyv1alpha1.ConfigMetadata{}
 	}
 	updated.Status.Metadata.ContentSize = int64(len(req.Config))
 	updated.Status.Metadata.RenderedAt = &metav1.Time{Time: req.RenderedAt}
-	updated.Status.Metadata.ValidatedAt = &metav1.Time{Time: req.ValidatedAt}
+	if !req.ValidatedAt.IsZero() {
+		updated.Status.Metadata.ValidatedAt = &metav1.Time{Time: req.ValidatedAt}
+	}
 
-	_, err = p.crdClient.HaproxyTemplateICV1alpha1().
+	// Update validation error (set or clear)
+	if req.ValidationError != "" {
+		updated.Status.ValidationError = req.ValidationError
+	} else {
+		// Clear validation error if not provided (transitioning from invalid to valid)
+		updated.Status.ValidationError = ""
+	}
+
+	_, err := p.crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs(req.TemplateConfigNamespace).
 		UpdateStatus(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
@@ -367,8 +457,6 @@ func (p *Publisher) createOrUpdateRuntimeConfig(ctx context.Context, req *Publis
 			"error", err,
 		)
 	}
-
-	return updated, nil
 }
 
 // createOrUpdateMapFile creates or updates a HAProxyMapFile resource.
@@ -554,7 +642,7 @@ func (p *Publisher) updateRuntimeConfigStatus(ctx context.Context, runtimeConfig
 }
 
 // updateMapFileDeploymentStatus updates a map file's deployment status.
-func (p *Publisher) updateMapFileDeploymentStatus(ctx context.Context, namespace, name string, podStatus haproxyv1alpha1.PodDeploymentStatus) error {
+func (p *Publisher) updateMapFileDeploymentStatus(ctx context.Context, namespace, name string, podStatus *haproxyv1alpha1.PodDeploymentStatus) error {
 	mapFile, err := p.crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyMapFiles(namespace).
 		Get(ctx, name, metav1.GetOptions{})
@@ -567,16 +655,16 @@ func (p *Publisher) updateMapFileDeploymentStatus(ctx context.Context, namespace
 
 	// Add or update pod in deployedToPods list
 	updated := false
-	for i, existing := range mapFile.Status.DeployedToPods {
-		if existing.PodName == podStatus.PodName && existing.Namespace == podStatus.Namespace {
-			mapFile.Status.DeployedToPods[i] = podStatus
+	for i := range mapFile.Status.DeployedToPods {
+		if mapFile.Status.DeployedToPods[i].PodName == podStatus.PodName {
+			mapFile.Status.DeployedToPods[i] = *podStatus
 			updated = true
 			break
 		}
 	}
 
 	if !updated {
-		mapFile.Status.DeployedToPods = append(mapFile.Status.DeployedToPods, podStatus)
+		mapFile.Status.DeployedToPods = append(mapFile.Status.DeployedToPods, *podStatus)
 	}
 
 	_, err = p.crdClient.HaproxyTemplateICV1alpha1().
@@ -605,12 +693,12 @@ func (p *Publisher) cleanupMapFilePodReference(ctx context.Context, namespace, n
 	newDeployedToPods := []haproxyv1alpha1.PodDeploymentStatus{}
 	removed := false
 
-	for _, pod := range mapFile.Status.DeployedToPods {
-		if pod.PodName == cleanup.PodName && pod.Namespace == cleanup.PodNamespace {
+	for i := range mapFile.Status.DeployedToPods {
+		if mapFile.Status.DeployedToPods[i].PodName == cleanup.PodName {
 			removed = true
 			continue
 		}
-		newDeployedToPods = append(newDeployedToPods, pod)
+		newDeployedToPods = append(newDeployedToPods, mapFile.Status.DeployedToPods[i])
 	}
 
 	if !removed {
@@ -631,8 +719,108 @@ func (p *Publisher) cleanupMapFilePodReference(ctx context.Context, namespace, n
 
 // Helper functions
 
+// updateOrAppendPodStatus updates an existing pod status or appends a new one.
+// Returns the updated slice.
+func updateOrAppendPodStatus(
+	pods []haproxyv1alpha1.PodDeploymentStatus,
+	podStatus *haproxyv1alpha1.PodDeploymentStatus,
+	update *DeploymentStatusUpdate,
+) []haproxyv1alpha1.PodDeploymentStatus {
+	// Try to find and update existing pod
+	for i := range pods {
+		if pods[i].PodName != update.PodName {
+			continue
+		}
+
+		// Preserve deployedAt if no operations were performed
+		if podStatus.DeployedAt.IsZero() {
+			podStatus.DeployedAt = pods[i].DeployedAt
+		}
+
+		// Preserve and update consecutive error count
+		if update.Error != "" {
+			podStatus.ConsecutiveErrors = pods[i].ConsecutiveErrors + 1
+		} else {
+			podStatus.ConsecutiveErrors = 0
+		}
+
+		pods[i] = *podStatus
+		return pods
+	}
+
+	// Pod not found - append new entry
+	// Ensure deployedAt is set for first-time pod
+	if podStatus.DeployedAt.IsZero() && podStatus.LastCheckedAt != nil {
+		// Safeguard: use LastCheckedAt if deployedAt not set
+		// (shouldn't happen in practice - first sync always has operations)
+		podStatus.DeployedAt = *podStatus.LastCheckedAt
+	}
+
+	return append(pods, *podStatus)
+}
+
+// buildPodStatus constructs a PodDeploymentStatus from a DeploymentStatusUpdate.
+func buildPodStatus(update *DeploymentStatusUpdate) haproxyv1alpha1.PodDeploymentStatus {
+	podStatus := haproxyv1alpha1.PodDeploymentStatus{
+		PodName:  update.PodName,
+		Checksum: update.Checksum,
+	}
+
+	// Set LastCheckedAt - always set on every successful sync
+	if update.LastCheckedAt != nil {
+		checkedTime := metav1.NewTime(*update.LastCheckedAt)
+		podStatus.LastCheckedAt = &checkedTime
+	}
+
+	// Set DeployedAt only when operations > 0 (actual changes made)
+	// If no operations, we'll preserve the existing DeployedAt in the caller
+	if !update.DeployedAt.IsZero() {
+		podStatus.DeployedAt = metav1.NewTime(update.DeployedAt)
+	}
+
+	// Set reload information if provided
+	if update.LastReloadAt != nil {
+		reloadTime := metav1.NewTime(*update.LastReloadAt)
+		podStatus.LastReloadAt = &reloadTime
+		podStatus.LastReloadID = update.LastReloadID
+	}
+
+	// Set performance metrics
+	if update.SyncDuration != nil {
+		duration := metav1.Duration{Duration: *update.SyncDuration}
+		podStatus.SyncDuration = &duration
+	}
+	podStatus.VersionConflictRetries = update.VersionConflictRetries
+	podStatus.FallbackUsed = update.FallbackUsed
+
+	// Set operation summary
+	if update.OperationSummary != nil {
+		podStatus.LastOperationSummary = &haproxyv1alpha1.OperationSummary{
+			TotalAPIOperations: update.OperationSummary.TotalAPIOperations,
+			BackendsAdded:      update.OperationSummary.BackendsAdded,
+			BackendsRemoved:    update.OperationSummary.BackendsRemoved,
+			BackendsModified:   update.OperationSummary.BackendsModified,
+			ServersAdded:       update.OperationSummary.ServersAdded,
+			ServersRemoved:     update.OperationSummary.ServersRemoved,
+			ServersModified:    update.OperationSummary.ServersModified,
+			FrontendsAdded:     update.OperationSummary.FrontendsAdded,
+			FrontendsRemoved:   update.OperationSummary.FrontendsRemoved,
+			FrontendsModified:  update.OperationSummary.FrontendsModified,
+		}
+	}
+
+	// Set error tracking
+	if update.Error != "" {
+		podStatus.LastError = update.Error
+		now := metav1.NewTime(update.DeployedAt)
+		podStatus.LastErrorAt = &now
+	}
+
+	return podStatus
+}
+
 func (p *Publisher) generateRuntimeConfigName(templateConfigName string) string {
-	return templateConfigName + "-runtime"
+	return templateConfigName + "-haproxycfg"
 }
 
 func (p *Publisher) generateMapFileName(mapName string) string {

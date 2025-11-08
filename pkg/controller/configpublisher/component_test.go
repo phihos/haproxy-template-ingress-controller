@@ -89,11 +89,13 @@ func TestComponent_ConfigAppliedToPodEvent(t *testing.T) {
 
 	// Now publish ConfigAppliedToPodEvent
 	eventBus.Publish(events.NewConfigAppliedToPodEvent(
-		"test-config-runtime",
+		"test-config-haproxycfg",
 		"default",
 		"haproxy-pod-1",
 		"haproxy-ns",
 		"checksum123",
+		false, // isDriftCheck
+		nil,   // syncMetadata - not testing metadata in this test
 	))
 
 	time.Sleep(500 * time.Millisecond)
@@ -101,14 +103,13 @@ func TestComponent_ConfigAppliedToPodEvent(t *testing.T) {
 	// Verify deployment status was updated
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	require.Len(t, runtimeConfig.Status.DeployedToPods, 1)
 
 	pod := runtimeConfig.Status.DeployedToPods[0]
 	assert.Equal(t, "haproxy-pod-1", pod.PodName)
-	assert.Equal(t, "haproxy-ns", pod.Namespace)
 	assert.Equal(t, "checksum123", pod.Checksum)
 	assert.NotNil(t, pod.DeployedAt)
 }
@@ -149,11 +150,13 @@ func TestComponent_HAProxyPodTerminatedEvent(t *testing.T) {
 
 	// Add a pod to deployment status
 	eventBus.Publish(events.NewConfigAppliedToPodEvent(
-		"test-config-runtime",
+		"test-config-haproxycfg",
 		"default",
 		"haproxy-pod-1",
 		"haproxy-ns",
 		"checksum123",
+		false, // isDriftCheck
+		nil,   // syncMetadata
 	))
 
 	time.Sleep(500 * time.Millisecond)
@@ -161,7 +164,7 @@ func TestComponent_HAProxyPodTerminatedEvent(t *testing.T) {
 	// Verify pod was added
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	require.Len(t, runtimeConfig.Status.DeployedToPods, 1)
@@ -174,7 +177,7 @@ func TestComponent_HAProxyPodTerminatedEvent(t *testing.T) {
 	// Verify pod was removed from deployment status
 	runtimeConfig, err = crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	assert.Len(t, runtimeConfig.Status.DeployedToPods, 0, "pod should be removed from deployment status")
@@ -217,11 +220,13 @@ func TestComponent_MultiplePods(t *testing.T) {
 	// Add multiple pods
 	for i := 1; i <= 3; i++ {
 		eventBus.Publish(events.NewConfigAppliedToPodEvent(
-			"test-config-runtime",
+			"test-config-haproxycfg",
 			"default",
 			fmt.Sprintf("haproxy-pod-%d", i),
 			"haproxy-ns",
 			"checksum123",
+			false, // isDriftCheck
+			nil,   // syncMetadata
 		))
 	}
 
@@ -230,7 +235,7 @@ func TestComponent_MultiplePods(t *testing.T) {
 	// Verify all pods were added
 	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	assert.Len(t, runtimeConfig.Status.DeployedToPods, 3)
@@ -243,7 +248,7 @@ func TestComponent_MultiplePods(t *testing.T) {
 	// Verify only one pod was removed
 	runtimeConfig, err = crdClient.HaproxyTemplateICV1alpha1().
 		HAProxyCfgs("default").
-		Get(ctx, "test-config-runtime", metav1.GetOptions{})
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
 
 	require.NoError(t, err)
 	assert.Len(t, runtimeConfig.Status.DeployedToPods, 2)

@@ -63,6 +63,16 @@ type PublishRequest struct {
 
 	// Checksum is the SHA-256 hash of the configuration content.
 	Checksum string
+
+	// NameSuffix appends to the generated resource name (e.g., "-invalid").
+	// Used to publish separate resources for invalid configurations.
+	// +optional
+	NameSuffix string
+
+	// ValidationError contains the error message if this configuration failed validation.
+	// When set, this indicates the configuration is invalid and should not be deployed.
+	// +optional
+	ValidationError string
 }
 
 // PublishResult contains the result of publishing configuration resources.
@@ -91,21 +101,62 @@ type DeploymentStatusUpdate struct {
 	// PodName is the name of the HAProxy pod that received the configuration.
 	PodName string
 
-	// PodNamespace is the namespace of the pod.
-	PodNamespace string
-
-	// DeployedAt is the timestamp when the configuration was applied to the pod.
+	// DeployedAt is the timestamp when configuration was last changed on the pod.
+	// Only set when operations > 0.
 	DeployedAt time.Time
 
 	// Checksum is the checksum of the configuration deployed to the pod.
 	Checksum string
+
+	// IsDriftCheck indicates whether this was a drift prevention check (GET-only)
+	// or an actual sync operation (POST/PUT/DELETE).
+	IsDriftCheck bool
+
+	// LastCheckedAt is the timestamp of the last successful sync operation.
+	// Set on every successful sync regardless of whether operations were performed.
+	LastCheckedAt *time.Time
+
+	// LastReloadAt is the timestamp when HAProxy was last reloaded.
+	// Only set when a reload was triggered.
+	LastReloadAt *time.Time
+
+	// LastReloadID is the reload identifier from HAProxy.
+	// Only set when a reload was triggered.
+	LastReloadID string
+
+	// SyncDuration is how long the sync operation took.
+	SyncDuration *time.Duration
+
+	// VersionConflictRetries is the number of retries due to version conflicts.
+	VersionConflictRetries int
+
+	// FallbackUsed indicates whether raw config push was used.
+	FallbackUsed bool
+
+	// OperationSummary provides a breakdown of operations performed.
+	OperationSummary *OperationSummary
+
+	// Error contains the error message if sync failed.
+	// Empty string indicates success.
+	Error string
+}
+
+// OperationSummary provides statistics about sync operations.
+type OperationSummary struct {
+	TotalAPIOperations int
+	BackendsAdded      int
+	BackendsRemoved    int
+	BackendsModified   int
+	ServersAdded       int
+	ServersRemoved     int
+	ServersModified    int
+	FrontendsAdded     int
+	FrontendsRemoved   int
+	FrontendsModified  int
 }
 
 // PodCleanupRequest contains information about a terminated pod to clean up.
 type PodCleanupRequest struct {
 	// PodName is the name of the terminated pod.
 	PodName string
-
-	// PodNamespace is the namespace of the terminated pod.
-	PodNamespace string
 }

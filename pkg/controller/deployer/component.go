@@ -219,8 +219,11 @@ func (c *Component) deployToEndpoints(
 			defer wg.Done()
 
 			instanceStart := time.Now()
-			err := c.deployToSingleEndpoint(ctx, config, auxFiles, ep)
+			syncResult, err := c.deployToSingleEndpoint(ctx, config, auxFiles, ep)
 			durationMs := time.Since(instanceStart).Milliseconds()
+
+			// Determine if this is a drift check based on deployment reason
+			isDriftCheck := reason == "drift_prevention"
 
 			if err != nil {
 				c.logger.Error("deployment failed for endpoint",
@@ -236,6 +239,22 @@ func (c *Component) deployToEndpoints(
 					true, // retryable
 				))
 
+				// Publish ConfigAppliedToPodEvent with error info (for status tracking)
+				if runtimeConfigName != "" && runtimeConfigNamespace != "" {
+					syncMetadata := &events.SyncMetadata{
+						Error: err.Error(),
+					}
+					c.eventBus.Publish(events.NewConfigAppliedToPodEvent(
+						runtimeConfigName,
+						runtimeConfigNamespace,
+						ep.PodName,
+						ep.PodNamespace,
+						checksum,
+						isDriftCheck,
+						syncMetadata,
+					))
+				}
+
 				countMutex.Lock()
 				failureCount++
 				countMutex.Unlock()
@@ -243,23 +262,29 @@ func (c *Component) deployToEndpoints(
 				c.logger.Info("deployment succeeded for endpoint",
 					"endpoint", ep.URL,
 					"pod", ep.PodName,
-					"duration_ms", durationMs)
+					"duration_ms", durationMs,
+					"reload_triggered", syncResult.ReloadTriggered)
 
 				// Publish InstanceDeployedEvent
 				c.eventBus.Publish(events.NewInstanceDeployedEvent(
 					ep,
 					durationMs,
-					true, // reloadRequired (we don't track this granularly yet)
+					syncResult.ReloadTriggered, // Now tracking this accurately
 				))
 
 				// Publish ConfigAppliedToPodEvent (for runtime config status updates)
 				if runtimeConfigName != "" && runtimeConfigNamespace != "" {
+					// Convert dataplane.SyncResult to events.SyncMetadata
+					syncMetadata := c.convertSyncResultToMetadata(syncResult)
+
 					c.eventBus.Publish(events.NewConfigAppliedToPodEvent(
 						runtimeConfigName,
 						runtimeConfigNamespace,
 						ep.PodName,
 						ep.PodNamespace,
 						checksum,
+						isDriftCheck,
+						syncMetadata,
 					))
 				}
 
@@ -291,23 +316,25 @@ func (c *Component) deployToEndpoints(
 }
 
 // deployToSingleEndpoint deploys configuration to a single HAProxy endpoint.
+//
+// Returns the sync result containing detailed operation metadata, or an error if the sync failed.
 func (c *Component) deployToSingleEndpoint(
 	ctx context.Context,
 	config string,
 	auxFiles *dataplane.AuxiliaryFiles,
 	endpoint *dataplane.Endpoint,
-) error {
+) (*dataplane.SyncResult, error) {
 	// Create client for this endpoint
 	client, err := dataplane.NewClient(ctx, endpoint)
 	if err != nil {
-		return fmt.Errorf("failed to create client: %w", err)
+		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
 	defer client.Close()
 
 	// Sync configuration with default options
 	result, err := client.Sync(ctx, config, auxFiles, nil)
 	if err != nil {
-		return fmt.Errorf("sync failed: %w", err)
+		return nil, fmt.Errorf("sync failed: %w", err)
 	}
 
 	c.logger.Debug("sync completed for endpoint",
@@ -317,5 +344,47 @@ func (c *Component) deployToSingleEndpoint(
 		"reload_triggered", result.ReloadTriggered,
 		"duration", result.Duration)
 
-	return nil
+	return result, nil
+}
+
+// convertSyncResultToMetadata converts dataplane.SyncResult to events.SyncMetadata.
+func (c *Component) convertSyncResultToMetadata(result *dataplane.SyncResult) *events.SyncMetadata {
+	if result == nil {
+		return nil
+	}
+
+	// Count total servers added/removed/modified across all backends
+	totalServersAdded := 0
+	for _, servers := range result.Details.ServersAdded {
+		totalServersAdded += len(servers)
+	}
+	totalServersRemoved := 0
+	for _, servers := range result.Details.ServersDeleted {
+		totalServersRemoved += len(servers)
+	}
+	totalServersModified := 0
+	for _, servers := range result.Details.ServersModified {
+		totalServersModified += len(servers)
+	}
+
+	return &events.SyncMetadata{
+		ReloadTriggered:        result.ReloadTriggered,
+		ReloadID:               result.ReloadID,
+		SyncDuration:           result.Duration,
+		VersionConflictRetries: result.Retries,
+		FallbackUsed:           result.FallbackToRaw,
+		OperationCounts: events.OperationCounts{
+			TotalAPIOperations: result.Details.TotalOperations,
+			BackendsAdded:      len(result.Details.BackendsAdded),
+			BackendsRemoved:    len(result.Details.BackendsDeleted),
+			BackendsModified:   len(result.Details.BackendsModified),
+			ServersAdded:       totalServersAdded,
+			ServersRemoved:     totalServersRemoved,
+			ServersModified:    totalServersModified,
+			FrontendsAdded:     len(result.Details.FrontendsAdded),
+			FrontendsRemoved:   len(result.Details.FrontendsDeleted),
+			FrontendsModified:  len(result.Details.FrontendsModified),
+		},
+		Error: "", // Empty on success
+	}
 }

@@ -267,7 +267,7 @@ func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templ
 	}
 
 	// Compile all templates with worker-specific filters
-	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile templates for worker: %w", err)
 	}

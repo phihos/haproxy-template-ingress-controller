@@ -37,6 +37,13 @@ import (
 //
 // The CRD spec field CredentialsSecretRef is intentionally excluded as it's handled
 // separately by the credentials loader component.
+//
+// IMPORTANT: When adding or modifying fields in the CRD types (pkg/apis/haproxytemplate/v1alpha1/types.go),
+// you MUST update this function to copy those fields. The CRD types have documentation comments
+// pointing to this file as a reminder.
+//
+// Common mistake: Adding a field to the CRD but forgetting to copy it here, resulting in the field
+// being silently ignored by the controller.
 func ConvertSpec(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Config, error) {
 	// Convert pod selector
 	podSelector := config.PodSelector{
@@ -119,7 +126,8 @@ func ConvertSpec(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Config, erro
 	maps := make(map[string]config.MapFile)
 	for name, crdMap := range spec.Maps {
 		maps[name] = config.MapFile{
-			Template: crdMap.Template,
+			Template:       crdMap.Template,
+			PostProcessing: convertPostProcessors(crdMap.PostProcessing),
 		}
 	}
 
@@ -127,7 +135,8 @@ func ConvertSpec(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Config, erro
 	files := make(map[string]config.GeneralFile)
 	for name, crdFile := range spec.Files {
 		files[name] = config.GeneralFile{
-			Template: crdFile.Template,
+			Template:       crdFile.Template,
+			PostProcessing: convertPostProcessors(crdFile.PostProcessing),
 		}
 	}
 
@@ -135,13 +144,15 @@ func ConvertSpec(spec *v1alpha1.HAProxyTemplateConfigSpec) (*config.Config, erro
 	sslCertificates := make(map[string]config.SSLCertificate)
 	for name, crdCert := range spec.SSLCertificates {
 		sslCertificates[name] = config.SSLCertificate{
-			Template: crdCert.Template,
+			Template:       crdCert.Template,
+			PostProcessing: convertPostProcessors(crdCert.PostProcessing),
 		}
 	}
 
 	// Convert HAProxy config
 	haproxyConfig := config.HAProxyConfig{
-		Template: spec.HAProxyConfig.Template,
+		Template:       spec.HAProxyConfig.Template,
+		PostProcessing: convertPostProcessors(spec.HAProxyConfig.PostProcessing),
 	}
 
 	// Convert templating settings
@@ -204,6 +215,22 @@ func convertFixtures(crdFixtures map[string][]runtime.RawExtension) map[string][
 		fixtures[resourceType] = interfaceSlice
 	}
 	return fixtures
+}
+
+// convertPostProcessors converts CRD PostProcessorConfig to internal config format.
+func convertPostProcessors(crdPostProcessors []v1alpha1.PostProcessorConfig) []config.PostProcessorConfig {
+	if len(crdPostProcessors) == 0 {
+		return nil
+	}
+
+	postProcessors := make([]config.PostProcessorConfig, len(crdPostProcessors))
+	for i, pp := range crdPostProcessors {
+		postProcessors[i] = config.PostProcessorConfig{
+			Type:   pp.Type,
+			Params: pp.Params,
+		}
+	}
+	return postProcessors
 }
 
 // convertAssertions converts CRD assertion types to internal config format.

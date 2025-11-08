@@ -73,19 +73,19 @@ templateSnippets:
       {%- for ingress in resources.ingresses.List() -%}
       {%- if loop.first %}
       # ingress/backends-ingress
-      {%- endif %}
-      {%- if ingress.spec and ingress.spec.rules %}
-      {%- for rule in ingress.spec.rules %}
-      {%- if rule.http and rule.http.paths %}
-      {%- for path in rule.http.paths %}
-      {%- if path.backend and path.backend.service %}
-      {%- set service_name = path.backend.service.name %}
-      {%- set port = path.backend.service.port.number | default(80) %}
-      {#- Compute backend key for deduplication (matches util-backend-name-ingress) #}
-      {%- set backend_key = ingress.metadata.namespace ~ "_" ~ ingress.metadata.name ~ "_" ~ path.backend.service.name ~ "_" ~ (path.backend.service.port.name | default(path.backend.service.port.number)) %}
-      {%- if backend_key not in ns.seen %}
-      {%- set ns.seen = ns.seen.append(backend_key) %}
 
+      {% endif -%}
+      {%- if ingress.spec and ingress.spec.rules %}
+      {%- for rule in ingress.spec.rules -%}
+      {%- if rule.http and rule.http.paths %}
+      {%- for path in rule.http.paths -%}
+      {%- if path.backend and path.backend.service %}
+      {%- set service_name = path.backend.service.name -%}
+      {%- set port = path.backend.service.port.number | default(80) -%}
+      {#- Compute backend key for deduplication (matches util-backend-name-ingress) #}
+      {%- set backend_key = ingress.metadata.namespace ~ "_" ~ ingress.metadata.name ~ "_" ~ path.backend.service.name ~ "_" ~ (path.backend.service.port.name | default(path.backend.service.port.number)) -%}
+      {%- if backend_key not in ns.seen -%}
+      {%- set ns.seen = ns.seen.append(backend_key) %}
       # Backend for: Ingress {{ ingress.metadata.namespace }}/{{ ingress.metadata.name }} → Service {{ service_name }}:{{ port }}
       backend {%+ include "util-backend-name-ingress" +%}
         balance roundrobin
@@ -94,25 +94,22 @@ templateSnippets:
         {%- filter indent(2, first=True) %}
         {#- Initialize server options namespace before backend-directives can append to it #}
         {%- set ns_server_opts = namespace(flags=[]) %}
-        {% include "backend-directives" %}
-
+        {% include "backend-directives" -%}
         {#- Backend config snippet injection (Ingress-only) #}
         {%- set backend_snippet = ingress.metadata.annotations["haproxy.org/backend-config-snippet"] | default("") %}
         {%- if backend_snippet %}
         # haproxytech/backend-config-snippet
         {{ backend_snippet | indent(2, first=False) }}
-        {%- endif %}
-
+        {%- endif -%}
         {% include "util-backend-servers" %}
-        {%- endfilter %}
-      {%- endif %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
-
+        {%- endfilter -%}
+      {%- endif -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endif -%}
+      {%- endfor -%}
   map-host-ingress:
     template: |
       {#- Generate host map entries for Ingress resources #}

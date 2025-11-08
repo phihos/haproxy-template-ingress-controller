@@ -411,7 +411,32 @@ type TemplateSnippet struct {
 	Priority *int `json:"priority,omitempty"`
 }
 
+// PostProcessorConfig defines a post-processor to apply to rendered template output.
+//
+// IMPORTANT: This is a Kubernetes CRD type. When modifying this struct, you must also update:
+//   - The internal config type: pkg/core/config/types.go (PostProcessorConfig)
+//   - The conversion logic: pkg/controller/conversion/converter.go (ConvertSpec function)
+//
+// The converter.go file transforms CRD types to internal config types used by the controller.
+type PostProcessorConfig struct {
+	// Type specifies the post-processor type (e.g., "regex_replace").
+	// +kubebuilder:validation:Required
+	Type string `json:"type"`
+
+	// Params contains post-processor-specific parameters.
+	//
+	// For "regex_replace":
+	//   - pattern: Regular expression pattern to match
+	//   - replace: Replacement string
+	// +kubebuilder:validation:Required
+	Params map[string]string `json:"params"`
+}
+
 // MapFile defines a HAProxy map file generated from a template.
+//
+// IMPORTANT: This is a Kubernetes CRD type. When modifying this struct, you must also update:
+//   - The internal config type: pkg/core/config/types.go (MapFile)
+//   - The conversion logic: pkg/controller/conversion/converter.go (ConvertSpec function - maps section)
 type MapFile struct {
 	// Template is the Gonja template for generating the map file content.
 	//
@@ -419,6 +444,12 @@ type MapFile struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	//
+	// Post-processors run in the order specified and can transform the rendered output.
+	// +optional
+	PostProcessing []PostProcessorConfig `json:"postProcessing,omitempty"`
 }
 
 // GeneralFile defines a general file generated from a template.
@@ -426,15 +457,29 @@ type MapFile struct {
 // The filename is derived from the map key in the configuration.
 // The full path is constructed using the get_path filter in templates:
 //
-//	{{ "503.http" | get_path("file") }} → /etc/haproxy/general/503.http
+//	Example: "503.http" | get_path("file") returns /etc/haproxy/general/503.http
+//
+// IMPORTANT: This is a Kubernetes CRD type. When modifying this struct, you must also update:
+//   - The internal config type: pkg/core/config/types.go (GeneralFile)
+//   - The conversion logic: pkg/controller/conversion/converter.go (ConvertSpec function - files section)
 type GeneralFile struct {
 	// Template is the Gonja template for generating the file content.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	//
+	// Post-processors run in the order specified and can transform the rendered output.
+	// +optional
+	PostProcessing []PostProcessorConfig `json:"postProcessing,omitempty"`
 }
 
 // SSLCertificate defines an SSL certificate generated from a template.
+//
+// IMPORTANT: This is a Kubernetes CRD type. When modifying this struct, you must also update:
+//   - The internal config type: pkg/core/config/types.go (SSLCertificate)
+//   - The conversion logic: pkg/controller/conversion/converter.go (ConvertSpec function - sslCertificates section)
 type SSLCertificate struct {
 	// Template is the Gonja template for generating the certificate content.
 	//
@@ -442,14 +487,31 @@ type SSLCertificate struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	//
+	// Post-processors run in the order specified and can transform the rendered output.
+	// +optional
+	PostProcessing []PostProcessorConfig `json:"postProcessing,omitempty"`
 }
 
 // HAProxyConfig defines the main HAProxy configuration.
+//
+// IMPORTANT: This is a Kubernetes CRD type. When modifying this struct, you must also update:
+//   - The internal config type: pkg/core/config/types.go (HAProxyConfig)
+//   - The conversion logic: pkg/controller/conversion/converter.go (ConvertSpec function - haproxyConfig section)
 type HAProxyConfig struct {
 	// Template is the Gonja template for generating haproxy.cfg.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	//
+	// Post-processors run in the order specified and can transform the rendered output.
+	// Common use case: Normalize indentation with regex_replace.
+	// +optional
+	PostProcessing []PostProcessorConfig `json:"postProcessing,omitempty"`
 }
 
 // ValidationTest defines a validation test with fixtures and assertions.
@@ -626,6 +688,31 @@ type HAProxyCfgStatus struct {
 	// Metadata contains information about the configuration rendering and validation.
 	// +optional
 	Metadata *ConfigMetadata `json:"metadata,omitempty"`
+
+	// ValidationError contains the error message if this configuration failed validation.
+	//
+	// Only populated for HAProxyCfg resources published with the -invalid suffix.
+	// When present, this configuration was not deployed to HAProxy instances.
+	// +optional
+	ValidationError string `json:"validationError,omitempty"`
+
+	// ObservedGeneration reflects the generation of the spec that was most recently processed.
+	//
+	// This is used to track whether status is up-to-date with latest spec changes.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions represent the latest available observations of the resource's state.
+	//
+	// Standard conditions include:
+	// - "Synced": Configuration has been successfully applied to all target pods
+	// - "Ready": Resource is ready for use
+	// +optional
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 // PodDeploymentStatus tracks deployment to a specific pod.
@@ -635,18 +722,145 @@ type PodDeploymentStatus struct {
 	// +kubebuilder:validation:MinLength=1
 	PodName string `json:"podName"`
 
-	// Namespace of the pod.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Namespace string `json:"namespace"`
-
-	// DeployedAt is the timestamp when configuration was applied to this pod.
+	// DeployedAt is the timestamp when configuration was last changed on this pod.
+	//
+	// This is only updated when actual operations are performed (TotalOperations > 0).
+	// To see when config was last verified (including no-op checks), use LastCheckedAt.
 	// +kubebuilder:validation:Required
 	DeployedAt metav1.Time `json:"deployedAt"`
 
 	// Checksum of the configuration deployed to this pod.
 	// +optional
 	Checksum string `json:"checksum,omitempty"`
+
+	// LastCheckedAt is the timestamp of the last successful sync operation.
+	//
+	// Updated on every successful sync (reconciliation or drift-prevention),
+	// regardless of whether operations were performed. Use this to verify
+	// when the config was last checked against HAProxy's current state.
+	// +optional
+	LastCheckedAt *metav1.Time `json:"lastCheckedAt,omitempty"`
+
+	// LastReloadAt is the timestamp when HAProxy was last reloaded for this pod.
+	//
+	// HAProxy reloads occur when structural configuration changes are made via
+	// the transaction API (status 202). Runtime-only changes do not trigger reloads.
+	// +optional
+	LastReloadAt *metav1.Time `json:"lastReloadAt,omitempty"`
+
+	// LastReloadID is the reload identifier from the most recent HAProxy reload.
+	//
+	// This corresponds to the Reload-ID header returned by the HAProxy dataplane
+	// API when a reload is triggered.
+	// +optional
+	LastReloadID string `json:"lastReloadID,omitempty"`
+
+	// SyncDuration is the duration of the most recent sync operation.
+	//
+	// This tracks how long it took to apply configuration changes to this pod,
+	// useful for performance monitoring and troubleshooting.
+	// +optional
+	SyncDuration *metav1.Duration `json:"syncDuration,omitempty"`
+
+	// VersionConflictRetries is the number of version conflict retries during the last sync.
+	//
+	// HAProxy's dataplane API uses optimistic concurrency control. This counter
+	// tracks retries due to version conflicts, indicating contention or race conditions.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	VersionConflictRetries int `json:"versionConflictRetries,omitempty"`
+
+	// FallbackUsed indicates whether the last sync used fallback mode.
+	//
+	// When true, indicates that incremental sync failed and a full raw configuration
+	// push was used instead. Frequent fallbacks may indicate sync logic issues.
+	// +optional
+	FallbackUsed bool `json:"fallbackUsed,omitempty"`
+
+	// LastOperationSummary provides a breakdown of operations performed in the last sync.
+	//
+	// This shows the number of backends, servers, and other resources that were
+	// added, removed, or modified during synchronization.
+	// +optional
+	LastOperationSummary *OperationSummary `json:"lastOperationSummary,omitempty"`
+
+	// LastError contains the error message from the most recent failed sync attempt.
+	//
+	// This field is cleared when a sync succeeds. Combined with ConsecutiveErrors,
+	// this helps identify persistent vs transient issues.
+	// +optional
+	LastError string `json:"lastError,omitempty"`
+
+	// ConsecutiveErrors is the count of consecutive sync failures.
+	//
+	// This counter increments on each failure and resets to 0 on success.
+	// High values indicate persistent problems requiring investigation.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ConsecutiveErrors int `json:"consecutiveErrors,omitempty"`
+
+	// LastErrorAt is the timestamp of the most recent sync error.
+	//
+	// Used to determine how long a pod has been in an error state.
+	// +optional
+	LastErrorAt *metav1.Time `json:"lastErrorAt,omitempty"`
+}
+
+// OperationSummary provides statistics about sync operations.
+type OperationSummary struct {
+	// TotalAPIOperations is the total count of HAProxy Dataplane API operations
+	// across ALL configuration sections (includes globals, defaults, acls, binds, etc.).
+	//
+	// This may be higher than the sum of specific operations shown below, as it includes
+	// operations on sections not individually tracked in this summary.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TotalAPIOperations int `json:"totalAPIOperations,omitempty"`
+
+	// BackendsAdded is the number of backends added.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	BackendsAdded int `json:"backendsAdded,omitempty"`
+
+	// BackendsRemoved is the number of backends removed.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	BackendsRemoved int `json:"backendsRemoved,omitempty"`
+
+	// BackendsModified is the number of backends modified.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	BackendsModified int `json:"backendsModified,omitempty"`
+
+	// ServersAdded is the number of servers added across all backends.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ServersAdded int `json:"serversAdded,omitempty"`
+
+	// ServersRemoved is the number of servers removed across all backends.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ServersRemoved int `json:"serversRemoved,omitempty"`
+
+	// ServersModified is the number of servers modified across all backends.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ServersModified int `json:"serversModified,omitempty"`
+
+	// FrontendsAdded is the number of frontends added.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	FrontendsAdded int `json:"frontendsAdded,omitempty"`
+
+	// FrontendsRemoved is the number of frontends removed.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	FrontendsRemoved int `json:"frontendsRemoved,omitempty"`
+
+	// FrontendsModified is the number of frontends modified.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	FrontendsModified int `json:"frontendsModified,omitempty"`
 }
 
 // AuxiliaryFileReferences references the associated map files and certificates.
@@ -775,6 +989,24 @@ type HAProxyMapFileStatus struct {
 	// the pod terminates.
 	// +optional
 	DeployedToPods []PodDeploymentStatus `json:"deployedToPods,omitempty"`
+
+	// ObservedGeneration reflects the generation of the spec that was most recently processed.
+	//
+	// This is used to track whether status is up-to-date with latest spec changes.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions represent the latest available observations of the resource's state.
+	//
+	// Standard conditions include:
+	// - "Synced": Map file has been successfully applied to all target pods
+	// - "Ready": Resource is ready for use
+	// +optional
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

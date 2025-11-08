@@ -100,6 +100,9 @@ func New(
 	// Extract all templates from config
 	templates := extractTemplates(config)
 
+	// Extract post-processor configurations from config
+	postProcessorConfigs := extractPostProcessorConfigs(config)
+
 	// Create path resolver for get_path filter
 	pathResolver := &templating.PathResolver{
 		MapsDir:    config.Dataplane.MapsDir,
@@ -119,8 +122,8 @@ func New(
 		"fail": failFunction,
 	}
 
-	// Pre-compile all templates with custom filters and functions
-	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
+	// Pre-compile all templates with custom filters, functions, and post-processors
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions, postProcessorConfigs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create template engine: %w", err)
 	}
@@ -369,6 +372,52 @@ func extractTemplates(cfg *config.Config) map[string]string {
 	}
 
 	return templates
+}
+
+// extractPostProcessorConfigs extracts post-processor configurations from all templates in the config.
+// Returns a map of template names to their post-processor configurations.
+func extractPostProcessorConfigs(cfg *config.Config) map[string][]templating.PostProcessorConfig {
+	configs := make(map[string][]templating.PostProcessorConfig)
+
+	// Main HAProxy config
+	if len(cfg.HAProxyConfig.PostProcessing) > 0 {
+		configs["haproxy.cfg"] = convertPostProcessorConfigs(cfg.HAProxyConfig.PostProcessing)
+	}
+
+	// Map files
+	for name, mapDef := range cfg.Maps {
+		if len(mapDef.PostProcessing) > 0 {
+			configs[name] = convertPostProcessorConfigs(mapDef.PostProcessing)
+		}
+	}
+
+	// General files
+	for name, fileDef := range cfg.Files {
+		if len(fileDef.PostProcessing) > 0 {
+			configs[name] = convertPostProcessorConfigs(fileDef.PostProcessing)
+		}
+	}
+
+	// SSL certificates
+	for name, certDef := range cfg.SSLCertificates {
+		if len(certDef.PostProcessing) > 0 {
+			configs[name] = convertPostProcessorConfigs(certDef.PostProcessing)
+		}
+	}
+
+	return configs
+}
+
+// convertPostProcessorConfigs converts config.PostProcessorConfig to templating.PostProcessorConfig.
+func convertPostProcessorConfigs(postProcessors []config.PostProcessorConfig) []templating.PostProcessorConfig {
+	ppConfigs := make([]templating.PostProcessorConfig, len(postProcessors))
+	for i, pp := range postProcessors {
+		ppConfigs[i] = templating.PostProcessorConfig{
+			Type:   templating.PostProcessorType(pp.Type),
+			Params: pp.Params,
+		}
+	}
+	return ppConfigs
 }
 
 // failFunction is a global function that causes template rendering to fail with a custom error message.

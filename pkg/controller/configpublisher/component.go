@@ -116,6 +116,9 @@ func (c *Component) handleEvent(event busevents.Event) {
 	case *events.ValidationCompletedEvent:
 		c.handleValidationCompleted(e)
 
+	case *events.ValidationFailedEvent:
+		c.handleValidationFailed(e)
+
 	case *events.ConfigAppliedToPodEvent:
 		c.handleConfigAppliedToPod(e)
 
@@ -257,6 +260,19 @@ func (c *Component) handleValidationCompleted(_ *events.ValidationCompletedEvent
 		"secret_count", len(result.SecretNames),
 	)
 
+	// Cleanup invalid config resource if it exists
+	invalidConfigName := result.RuntimeConfigName + "-invalid"
+	if err := c.publisher.DeleteRuntimeConfig(ctx, result.RuntimeConfigNamespace, invalidConfigName); err != nil {
+		c.logger.Debug("failed to cleanup invalid config resource (may not exist)",
+			"invalid_config_name", invalidConfigName,
+			"error", err,
+		)
+	} else {
+		c.logger.Debug("cleaned up invalid config resource",
+			"invalid_config_name", invalidConfigName,
+		)
+	}
+
 	// Publish success event
 	c.eventBus.Publish(events.NewConfigPublishedEvent(
 		result.RuntimeConfigName,
@@ -264,6 +280,81 @@ func (c *Component) handleValidationCompleted(_ *events.ValidationCompletedEvent
 		len(result.MapFileNames),
 		len(result.SecretNames),
 	))
+}
+
+// handleValidationFailed publishes the invalid configuration for observability.
+func (c *Component) handleValidationFailed(event *events.ValidationFailedEvent) {
+	// Get cached state
+	c.mu.RLock()
+	hasTemplateConfig := c.hasTemplateConfig
+	hasRenderedConfig := c.hasRenderedConfig
+	templateConfig := c.templateConfig
+	renderedConfig := c.renderedConfig
+	renderedAuxFiles := c.renderedAuxFiles
+	renderedAt := c.renderedAt
+	c.mu.RUnlock()
+
+	// Check if we have all required data
+	if !hasTemplateConfig || !hasRenderedConfig {
+		c.logger.Warn("cannot publish invalid configuration, missing cached state",
+			"has_template_config", hasTemplateConfig,
+			"has_rendered_config", hasRenderedConfig,
+		)
+		return
+	}
+
+	// Join validation errors into a single string
+	validationError := ""
+	if len(event.Errors) > 0 {
+		validationError = event.Errors[0]
+		if len(event.Errors) > 1 {
+			validationError = fmt.Sprintf("%s (and %d more errors)", event.Errors[0], len(event.Errors)-1)
+		}
+	}
+
+	c.logger.Info("publishing invalid configuration for observability",
+		"config_name", templateConfig.Name,
+		"config_namespace", templateConfig.Namespace,
+		"error_count", len(event.Errors),
+		"first_error", validationError,
+	)
+
+	// Calculate checksum of rendered config
+	hash := sha256.Sum256([]byte(renderedConfig))
+	checksum := hex.EncodeToString(hash[:])
+
+	// Create publish request with -invalid suffix
+	req := configpublisher.PublishRequest{
+		TemplateConfigName:      templateConfig.Name,
+		TemplateConfigNamespace: templateConfig.Namespace,
+		TemplateConfigUID:       templateConfig.UID,
+		Config:                  renderedConfig,
+		ConfigPath:              "/etc/haproxy/haproxy.cfg",
+		AuxiliaryFiles:          c.convertAuxiliaryFiles(renderedAuxFiles),
+		RenderedAt:              renderedAt,
+		Checksum:                checksum,
+		NameSuffix:              "-invalid",
+		ValidationError:         validationError,
+	}
+
+	// Call pure publisher (non-blocking - log errors but don't fail)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.publisher.PublishConfig(ctx, &req)
+	if err != nil {
+		c.logger.Warn("failed to publish invalid configuration",
+			"error", err,
+			"config_name", templateConfig.Name,
+			"config_namespace", templateConfig.Namespace,
+		)
+		return
+	}
+
+	c.logger.Info("invalid configuration published successfully for debugging",
+		"config_name", templateConfig.Name,
+		"config_namespace", templateConfig.Namespace,
+	)
 }
 
 // handleConfigAppliedToPod updates the deployment status when a config is applied to a pod.
@@ -274,16 +365,56 @@ func (c *Component) handleConfigAppliedToPod(event *events.ConfigAppliedToPodEve
 		"pod_name", event.PodName,
 		"pod_namespace", event.PodNamespace,
 		"checksum", event.Checksum,
+		"is_drift_check", event.IsDriftCheck,
 	)
 
 	// Convert event to status update
+	timestamp := event.Timestamp()
 	update := configpublisher.DeploymentStatusUpdate{
 		RuntimeConfigName:      event.RuntimeConfigName,
 		RuntimeConfigNamespace: event.RuntimeConfigNamespace,
 		PodName:                event.PodName,
-		PodNamespace:           event.PodNamespace,
-		DeployedAt:             event.Timestamp(),
+		LastCheckedAt:          &timestamp, // Always set - every sync updates this
 		Checksum:               event.Checksum,
+		IsDriftCheck:           event.IsDriftCheck,
+	}
+
+	// Extract sync metadata if available
+	if event.SyncMetadata != nil {
+		// Only set deployedAt when actual operations were performed
+		if event.SyncMetadata.Error == "" && event.SyncMetadata.OperationCounts.TotalAPIOperations > 0 {
+			update.DeployedAt = timestamp
+		}
+
+		// Set reload information if reload was triggered
+		if event.SyncMetadata.ReloadTriggered {
+			update.LastReloadAt = &timestamp
+			update.LastReloadID = event.SyncMetadata.ReloadID
+		}
+
+		// Copy performance metrics
+		update.SyncDuration = &event.SyncMetadata.SyncDuration
+		update.VersionConflictRetries = event.SyncMetadata.VersionConflictRetries
+		update.FallbackUsed = event.SyncMetadata.FallbackUsed
+
+		// Copy operation summary
+		if event.SyncMetadata.OperationCounts.TotalAPIOperations > 0 {
+			update.OperationSummary = &configpublisher.OperationSummary{
+				TotalAPIOperations: event.SyncMetadata.OperationCounts.TotalAPIOperations,
+				BackendsAdded:      event.SyncMetadata.OperationCounts.BackendsAdded,
+				BackendsRemoved:    event.SyncMetadata.OperationCounts.BackendsRemoved,
+				BackendsModified:   event.SyncMetadata.OperationCounts.BackendsModified,
+				ServersAdded:       event.SyncMetadata.OperationCounts.ServersAdded,
+				ServersRemoved:     event.SyncMetadata.OperationCounts.ServersRemoved,
+				ServersModified:    event.SyncMetadata.OperationCounts.ServersModified,
+				FrontendsAdded:     event.SyncMetadata.OperationCounts.FrontendsAdded,
+				FrontendsRemoved:   event.SyncMetadata.OperationCounts.FrontendsRemoved,
+				FrontendsModified:  event.SyncMetadata.OperationCounts.FrontendsModified,
+			}
+		}
+
+		// Copy error information
+		update.Error = event.SyncMetadata.Error
 	}
 
 	// Call pure publisher (non-blocking - log errors but don't fail)
@@ -315,8 +446,7 @@ func (c *Component) handlePodTerminated(event *events.HAProxyPodTerminatedEvent)
 
 	// Convert event to cleanup request
 	cleanupReq := configpublisher.PodCleanupRequest{
-		PodName:      event.PodName,
-		PodNamespace: event.PodNamespace,
+		PodName: event.PodName,
 	}
 
 	// Call pure publisher (non-blocking - log errors but don't fail)

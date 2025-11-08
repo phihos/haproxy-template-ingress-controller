@@ -1148,17 +1148,75 @@ type ConfigAppliedToPodEvent struct {
 	PodName                string
 	PodNamespace           string
 	Checksum               string
-	timestamp              time.Time
+
+	// IsDriftCheck indicates whether this was a drift prevention check (GET-only)
+	// or an actual sync operation (POST/PUT/DELETE).
+	//
+	// True:  Drift check - no actual changes were made, just verified config is current
+	// False: Actual sync - configuration was written to HAProxy
+	IsDriftCheck bool
+
+	// SyncMetadata contains detailed information about the sync operation.
+	// Only populated for actual syncs (IsDriftCheck=false).
+	SyncMetadata *SyncMetadata
+
+	timestamp time.Time
+}
+
+// SyncMetadata contains detailed information about a sync operation.
+type SyncMetadata struct {
+	// ReloadTriggered indicates whether HAProxy was reloaded during this sync.
+	// Reloads occur for structural changes via transaction API (status 202).
+	// Runtime-only changes don't trigger reloads (status 200).
+	ReloadTriggered bool
+
+	// ReloadID is the reload identifier from HAProxy dataplane API.
+	// Only populated when ReloadTriggered is true.
+	ReloadID string
+
+	// SyncDuration is how long the sync operation took.
+	SyncDuration time.Duration
+
+	// VersionConflictRetries is the number of retries due to version conflicts.
+	// HAProxy's dataplane API uses optimistic concurrency control.
+	VersionConflictRetries int
+
+	// FallbackUsed indicates whether incremental sync failed and a full
+	// raw configuration push was used instead.
+	FallbackUsed bool
+
+	// OperationCounts provides a breakdown of operations performed.
+	OperationCounts OperationCounts
+
+	// Error contains the error message if sync failed.
+	// Empty string indicates success.
+	Error string
+}
+
+// OperationCounts provides statistics about sync operations.
+type OperationCounts struct {
+	TotalAPIOperations int
+	BackendsAdded      int
+	BackendsRemoved    int
+	BackendsModified   int
+	ServersAdded       int
+	ServersRemoved     int
+	ServersModified    int
+	FrontendsAdded     int
+	FrontendsRemoved   int
+	FrontendsModified  int
 }
 
 // NewConfigAppliedToPodEvent creates a new ConfigAppliedToPodEvent.
-func NewConfigAppliedToPodEvent(runtimeConfigName, runtimeConfigNamespace, podName, podNamespace, checksum string) *ConfigAppliedToPodEvent {
+func NewConfigAppliedToPodEvent(runtimeConfigName, runtimeConfigNamespace, podName, podNamespace, checksum string, isDriftCheck bool, syncMetadata *SyncMetadata) *ConfigAppliedToPodEvent {
 	return &ConfigAppliedToPodEvent{
 		RuntimeConfigName:      runtimeConfigName,
 		RuntimeConfigNamespace: runtimeConfigNamespace,
 		PodName:                podName,
 		PodNamespace:           podNamespace,
 		Checksum:               checksum,
+		IsDriftCheck:           isDriftCheck,
+		SyncMetadata:           syncMetadata,
 		timestamp:              time.Now(),
 	}
 }

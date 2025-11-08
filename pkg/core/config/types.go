@@ -280,24 +280,61 @@ type TemplateSnippet struct {
 type MapFile struct {
 	// Template is the template content that generates the map file.
 	Template string `yaml:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	// Post-processors are applied in order to transform the rendered output.
+	PostProcessing []PostProcessorConfig `yaml:"post_processing,omitempty"`
 }
 
 // GeneralFile is a general-purpose auxiliary file template.
 type GeneralFile struct {
 	// Template is the template content that generates the file.
 	Template string `yaml:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	// Post-processors are applied in order to transform the rendered output.
+	PostProcessing []PostProcessorConfig `yaml:"post_processing,omitempty"`
 }
 
 // SSLCertificate is an SSL certificate file template.
 type SSLCertificate struct {
 	// Template is the template content that generates the certificate file.
 	Template string `yaml:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	// Post-processors are applied in order to transform the rendered output.
+	PostProcessing []PostProcessorConfig `yaml:"post_processing,omitempty"`
 }
 
 // HAProxyConfig is the main HAProxy configuration template.
 type HAProxyConfig struct {
 	// Template is the template content that generates haproxy.cfg.
 	Template string `yaml:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	// Post-processors are applied in order to transform the rendered output.
+	// Common use case: indentation normalization with regex_replace.
+	//
+	// Example:
+	//   post_processing:
+	//     - type: regex_replace
+	//       params:
+	//         pattern: "^[ ]+"
+	//         replace: "  "
+	PostProcessing []PostProcessorConfig `yaml:"post_processing,omitempty"`
+}
+
+// PostProcessorConfig defines a post-processor to apply to rendered template output.
+type PostProcessorConfig struct {
+	// Type specifies the post-processor type.
+	// Supported values: "regex_replace"
+	Type string `yaml:"type"`
+
+	// Params contains type-specific configuration parameters.
+	// For regex_replace:
+	//   - pattern: Regular expression pattern to match (required)
+	//   - replace: Replacement string (required)
+	Params map[string]string `yaml:"params"`
 }
 
 // TemplatingSettings configures template rendering behavior and custom variables.

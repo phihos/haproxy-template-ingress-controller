@@ -21,7 +21,6 @@ templateSnippets:
     template: |
       {#-
         HAProxy SSL Redirect (Ingress Only)
-
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#ssl-redirect
 
         Annotations:
@@ -52,14 +51,12 @@ templateSnippets:
       http-request redirect scheme https code {{ ssl_redirect_code }} if !{ ssl_fc }
           {%- endif %}
         {%- endif %}
-      {%- endfor %}
-
+      {%- endfor -%}
   frontend-filters-haproxytech-redirects:
     priority: 450
     template: |
       {#-
         HAProxy Request Redirect (Ingress Only)
-
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#request-redirect
 
         Annotations:
@@ -91,14 +88,12 @@ templateSnippets:
       http-request redirect location {{ redirect_target }} code {{ redirect_code }}
           {%- endif %}
         {%- endif %}
-      {%- endfor %}
-
+      {%- endfor -%}
   frontend-filters-haproxytech-cors:
     priority: 300
     template: |
       {#-
         HAProxy CORS Configuration (Ingress Only)
-
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#cors-enable
 
         Annotations:
@@ -149,14 +144,12 @@ templateSnippets:
             {%- endif %}
           {%- endif %}
         {%- endif %}
-      {%- endfor %}
-
+      {%- endfor -%}
   frontend-filters-haproxytech-access-control:
     priority: 200
     template: |
       {#-
         HAProxy Access Control - IP Allowlist/Denylist (Ingress Only)
-
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#allowlist
 
         Annotations:
@@ -205,14 +198,12 @@ templateSnippets:
       http-request deny if{% for ip in denylist.split(",") %}{% set ip = ip | strip %}{% if ip %}{% if not loop.first %} or{% endif %} denylist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
           {%- endif %}
         {%- endif %}
-      {%- endfor %}
-
+      {%- endfor -%}
   frontend-filters-haproxytech-logging:
     priority: 500
     template: |
       {#-
         HAProxy Request Capture & Source IP Detection (Ingress Only)
-
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#request-capture
 
         Annotations:
@@ -252,14 +243,12 @@ templateSnippets:
             {%- endfor %}
           {%- endif %}
         {%- endif %}
-      {%- endfor %}
-
+      {%- endfor -%}
   frontend-filters-haproxytech-basic-headers:
     priority: 100
     template: |
       {#-
         HAProxy Basic Header Manipulation (Ingress Only)
-
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#forwarded-for
 
         Annotations:
@@ -289,14 +278,12 @@ templateSnippets:
             {%- endif %}
           {%- endif %}
         {%- endif %}
-      {%- endfor %}
-
+      {%- endfor -%}
   global-top-haproxytech-ingress-auth:
     priority: 500
     template: |
       {#-
         HAProxy Basic Authentication Support (Ingress Only)
-
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#auth-secret
 
         Annotations:
@@ -364,18 +351,17 @@ templateSnippets:
               {%- set secret = resources.secrets.GetSingle(secret_namespace, secret_name) %}
               {%- if secret %}
       # haproxytech/global-top-haproxytech-ingress-auth
-
       userlist {{ userlist_name }}
                 {%- for username in secret.data | default({}) %}
         user {{ username }} password {{ secret.data[username] | b64decode }}
-                {%- endfor %}
+                {%- endfor -%}
               {%- else %}
                 {{- fail("Secret '" ~ secret_namespace ~ "/" ~ secret_name ~ "' referenced by annotation 'haproxy.org/auth-secret' does not exist. Please create the secret or update the annotation.") -}}
               {%- endif %}
             {%- endif %}
           {%- endif %}
         {%- endif %}
-      {%- endfor %}
+      {%- endfor -%}
 
   backend-directives-haproxytech-load-balance:
     priority: 150
@@ -412,7 +398,7 @@ templateSnippets:
       # haproxytech/backend-directives-haproxytech-load-balance
       balance {{ load_balance }}
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-rate-limiting:
     priority: 250
@@ -453,7 +439,7 @@ templateSnippets:
       http-request track-sc0 src
       http-request deny deny_status {{ rate_status }} if { sc_http_req_rate(0) gt {{ rate_requests }} }
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-session-persistence:
     priority: 400
@@ -484,7 +470,7 @@ templateSnippets:
       cookie {{ cookie_name }} insert indirect nocache dynamic
       # Note: dynamic-cookie-key would be set by base template for multi-instance support
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-advanced:
     priority: 900
@@ -571,7 +557,7 @@ templateSnippets:
       {%- if server_slots %}
       {%- set max_server_slots = server_slots | int %}
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-path-rewrite:
     priority: 350
@@ -612,7 +598,7 @@ templateSnippets:
       http-request replace-path (.*) {{path_rewrite}}
         {%- endif %}
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-header-manipulation:
     priority: 300
@@ -668,7 +654,7 @@ templateSnippets:
           {%- endif %}
         {%- endfor %}
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-set-host:
     priority: 250
@@ -693,7 +679,7 @@ templateSnippets:
       # haproxytech/backend-directives-haproxytech-set-host
       http-request set-header Host "{{ set_host }}"
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-advanced-health-checks:
     priority: 210
@@ -733,7 +719,7 @@ templateSnippets:
       {%- if check_interval %}
       # Note: check-interval annotation value: {{ check_interval }}
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-health-checks:
     priority: 200
@@ -762,7 +748,7 @@ templateSnippets:
       # haproxytech/backend-directives-haproxytech-health-checks
       # Note: check annotation value: {{ check_enabled }}
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-pod-maxconn:
     priority: 100
@@ -819,7 +805,7 @@ templateSnippets:
           {%- set ns_server_opts.pod_maxconn_value = pod_maxconn | int %}
         {%- endif %}
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-timeouts:
     priority: 100
@@ -892,7 +878,7 @@ templateSnippets:
       {%- if timeout_check %}
       timeout check {{ timeout_check }}
       {%- endif %}
-      {%- endif %}
+      {%- endif -%}
 
   backend-directives-haproxytech-ingress-auth:
     priority: 500
@@ -928,9 +914,9 @@ templateSnippets:
           {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
       # haproxytech/backend-directives-haproxytech-ingress-auth
       http-request auth realm "{{ auth_realm }}" unless { http_auth({{ userlist_name }}) }
-        {%- endif %}
-      {%- endif %}
-      {%- endif %}
+        {%- endif -%}
+      {%- endif -%}
+      {%- endif -%}
 
 validationTests:
   test-auth-basic-cross-namespace:

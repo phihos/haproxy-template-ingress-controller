@@ -856,6 +856,7 @@ dev_restart() {
         "--set" "image.tag=${IMAGE_TAG}"
         "--wait"
         "--timeout" "${TIMEOUT}s"
+        "--reset-values"
     )
 
     # Add webhook CA bundle if set

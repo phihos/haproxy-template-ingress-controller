@@ -285,15 +285,14 @@ templateSnippets:
       {#-   proto_flag: protocol flag for default-server ("" for HTTP, "h2" for gRPC) #}
       {#-   ns: namespace object with seen="" for deduplication tracking (shared across calls) #}
       {%- macro generate_gateway_backends(routes, proto_flag, ns) -%}
-      {%- for route in routes %}
-      {%- for rule in (route.spec.rules | default([])) %}
+      {%- for route in routes -%}
+      {%- for rule in (route.spec.rules | default([])) -%}
       {%- if rule.backendRefs %}
-      {%- for backendRef in rule.backendRefs %}
-      {%- set backend = {"name": backendRef.name, "port": backendRef.port} %}
-      {%- set backend_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ backend.name ~ "_" ~ backend.port %}
-      {%- if ("|" ~ backend_key ~ "|") not in ns.seen %}
+      {%- for backendRef in rule.backendRefs -%}
+      {%- set backend = {"name": backendRef.name, "port": backendRef.port} -%}
+      {%- set backend_key = route.metadata.namespace ~ "_" ~ route.metadata.name ~ "_" ~ backend.name ~ "_" ~ backend.port -%}
+      {%- if ("|" ~ backend_key ~ "|") not in ns.seen -%}
       {%- set ns.seen = ns.seen ~ "|" ~ backend_key ~ "|" %}
-
       # Backend for: {{ "HTTPRoute" if proto_flag == "" else "GRPCRoute" }} {{ route.metadata.namespace }}/{{ route.metadata.name }} → Service {{ backend.name }}:{{ backend.port }}
       backend {%+ include "util-backend-name-gateway" +%}
         balance roundrobin
@@ -303,12 +302,12 @@ templateSnippets:
         {% set service_name = backend.name %}
         {% set port = backend.port %}
         {% include "util-backend-servers" %}
-        {%- endfilter %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endif %}
-      {%- endfor %}
-      {%- endfor %}
+        {%- endfilter -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endfor -%}
       {%- endmacro -%}
 
   backends-gateway:
@@ -316,20 +315,16 @@ templateSnippets:
       {#- Generate backend definitions from HTTPRoute and GRPCRoute resources #}
       {#- Implements backends-* extension point from base library #}
       {#- Deduplicates backends: one backend per unique (namespace, route, service, port) combination #}
-
       {#- Import backend generation macro #}
       {%- from "util-generate-backends-gateway" import generate_gateway_backends %}
-
       {#- Use namespace with string tracking for seen backends (shared across both route types) #}
       {%- set ns = namespace(seen="") %}
       # gateway/backends-gateway
 
       {#- HTTPRoute backends (HTTP protocol) #}
-      {{- generate_gateway_backends(resources.httproutes.List(), "", ns) -}}
-
+      {{ generate_gateway_backends(resources.httproutes.List(), "", ns) -}}
       {#- GRPCRoute backends (HTTP/2 protocol) #}
       {{- generate_gateway_backends(resources.grpcroutes.List(), "h2", ns) -}}
-
   util-path-map-entry-gateway:
     template: |
       {#- Generate HTTPRoute path matching map entries with qualifiers #}
@@ -653,45 +648,41 @@ templateSnippets:
             {%- set qualifier = "MULTIBACKEND:" ~ ns.total_weight ~ ":" ~ route_key %}
           {%- endif %}
       http-request set-var(txn.path_match) str({{ qualifier }}) if { var(req.gw_rule_id) -m str "{{ route_info.route_id }}" }
-        {%- endif %}
-      {%- endfor %}
-      {%- endif %}
-
+        {%- endif -%}
+      {%- endfor -%}
+      {%- endif -%}
   # Filter: RequestHeaderModifier - modifies request headers before backend selection
   frontend-filters-gateway-request-header:
     template: |
       {#- Generate http-request header modification statements #}
       {#- This is injected into base template via the frontend-filters-* extension point #}
       {#- Runs AFTER routing decisions, BEFORE backend selection #}
-      # gateway/frontend-filters-gateway-request-header
-
-      {%- from "util-regex-sanitize" import sanitize_regex %}
-
+      {%- from "util-regex-sanitize" import sanitize_regex -%}
       {#- Compute route analysis once per render (cached across all includes) #}
-      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
-      {%- compute_once analysis %}
-        {%- from "util-analyze-routes" import analyze_routes %}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) -%}
+      {%- compute_once analysis -%}
+        {%- from "util-analyze-routes" import analyze_routes -%}
         {{- analyze_routes(analysis, resources) -}}
-      {%- endcompute_once %}
+      {%- endcompute_once -%}
 
       {#- Process all routes that have RequestHeaderModifier filters #}
-      {%- set ns_has_filters = namespace(found=false) %}
-      {%- for route_info in analysis.all_routes %}
-        {%- for filter in route_info.filters %}
-          {%- if filter.type == "RequestHeaderModifier" %}
-            {%- set ns_has_filters.found = true %}
-          {%- endif %}
-        {%- endfor %}
-      {%- endfor %}
+      {%- set ns_has_filters = namespace(found=false) -%}
+      {%- for route_info in analysis.all_routes -%}
+        {%- for filter in route_info.filters -%}
+          {%- if filter.type == "RequestHeaderModifier" -%}
+            {%- set ns_has_filters.found = true -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
 
       {%- if ns_has_filters.found %}
+      # gateway/frontend-filters-gateway-request-header
       # RequestHeaderModifier filters
       {%- for route_info in analysis.all_routes %}
         {%- for filter in route_info.filters %}
           {%- if filter.type == "RequestHeaderModifier" %}
             {#- Simple route ID check - all condition evaluation done by advanced matchers #}
             {%- set conditions = ['{ var(req.gw_rule_id) -m str "' ~ route_info.route_id ~ '" }'] %}
-
             {#- Generate header modification statements #}
             {%- if filter.requestHeaderModifier %}
               {#- Set headers (replace if exists) #}
@@ -716,35 +707,31 @@ templateSnippets:
             {%- endif %}
           {%- endif %}
         {%- endfor %}
-      {%- endfor %}
-      {%- endif %}
-
+      {%- endfor -%}
+      {%- endif -%}
   # Filter: ResponseHeaderModifier - modifies response headers before sending to client
   frontend-filters-gateway-response-header:
     template: |
       {#- Generate http-response header modification statements #}
       {#- This is injected into base template via the frontend-filters-* extension point #}
       {#- Runs AFTER routing decisions, BEFORE backend selection #}
-      # gateway/frontend-filters-gateway-response-header
-
-      {%- from "util-regex-sanitize" import sanitize_regex %}
-
+      {%- from "util-regex-sanitize" import sanitize_regex -%}
       {#- Compute route analysis once per render (cached across all includes) #}
-      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
-      {%- compute_once analysis %}
-        {%- from "util-analyze-routes" import analyze_routes %}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) -%}
+      {%- compute_once analysis -%}
+        {%- from "util-analyze-routes" import analyze_routes -%}
         {{- analyze_routes(analysis, resources) -}}
-      {%- endcompute_once %}
+      {%- endcompute_once -%}
 
       {#- Process all routes that have ResponseHeaderModifier filters #}
-      {%- set ns_has_filters = namespace(found=false) %}
-      {%- for route_info in analysis.all_routes %}
-        {%- for filter in route_info.filters %}
-          {%- if filter.type == "ResponseHeaderModifier" %}
-            {%- set ns_has_filters.found = true %}
-          {%- endif %}
-        {%- endfor %}
-      {%- endfor %}
+      {%- set ns_has_filters = namespace(found=false) -%}
+      {%- for route_info in analysis.all_routes -%}
+        {%- for filter in route_info.filters -%}
+          {%- if filter.type == "ResponseHeaderModifier" -%}
+            {%- set ns_has_filters.found = true -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
 
       {%- if ns_has_filters.found %}
       # ResponseHeaderModifier filters
@@ -778,52 +765,46 @@ templateSnippets:
             {%- endif %}
           {%- endif %}
         {%- endfor %}
-      {%- endfor %}
-      {%- endif %}
-
+      {%- endfor -%}
+      {%- endif -%}
   # Filter: RequestRedirect - redirects requests to different locations
   frontend-filters-gateway-redirect:
     template: |
       {#- Generate http-request redirect statements #}
       {#- This is injected into base template via the frontend-filters-* extension point #}
       {#- Runs AFTER routing decisions, BEFORE backend selection #}
-      # gateway/frontend-filters-gateway-redirect
-
-      {%- from "util-regex-sanitize" import sanitize_regex %}
-
+      {%- from "util-regex-sanitize" import sanitize_regex -%}
       {#- Compute route analysis once per render (cached across all includes) #}
-      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
-      {%- compute_once analysis %}
-        {%- from "util-analyze-routes" import analyze_routes %}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) -%}
+      {%- compute_once analysis -%}
+        {%- from "util-analyze-routes" import analyze_routes -%}
         {{- analyze_routes(analysis, resources) -}}
-      {%- endcompute_once %}
+      {%- endcompute_once -%}
 
       {#- Process all routes that have RequestRedirect filters #}
-      {%- set ns_has_filters = namespace(found=false) %}
-      {%- for route_info in analysis.all_routes %}
-        {%- for filter in route_info.filters %}
-          {%- if filter.type == "RequestRedirect" and route_info.resource_type == "httproute" %}
-            {%- set ns_has_filters.found = true %}
-          {%- endif %}
-        {%- endfor %}
-      {%- endfor %}
+      {%- set ns_has_filters = namespace(found=false) -%}
+      {%- for route_info in analysis.all_routes -%}
+        {%- for filter in route_info.filters -%}
+          {%- if filter.type == "RequestRedirect" and route_info.resource_type == "httproute" -%}
+            {%- set ns_has_filters.found = true -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
 
       {%- if ns_has_filters.found %}
+      # gateway/frontend-filters-gateway-redirect
       # RequestRedirect filters
       {%- for route_info in analysis.all_routes %}
         {%- for filter in route_info.filters %}
           {%- if filter.type == "RequestRedirect" and route_info.resource_type == "httproute" %}
             {#- Simple route ID check - all condition evaluation done by advanced matchers #}
             {%- set conditions = ['{ var(req.gw_rule_id) -m str "' ~ route_info.route_id ~ '" }'] %}
-
             {#- Build redirect directive #}
             {%- if filter.requestRedirect %}
               {%- set redirect = filter.requestRedirect %}
               {%- set status_code = redirect.statusCode | default(302) %}
-
               {#- Build redirect location components #}
               {%- set ns_redir = namespace(parts=[]) %}
-
               {#- Scheme #}
               {%- if redirect.scheme %}
                 {%- set ns_redir.parts = ns_redir.parts.append("scheme " ~ redirect.scheme) %}
@@ -872,37 +853,34 @@ templateSnippets:
             {%- endif %}
           {%- endif %}
         {%- endfor %}
-      {%- endfor %}
-      {%- endif %}
-
+      {%- endfor -%}
+      {%- endif -%}
   # Filter: URLRewrite - rewrites request URLs before sending to backend
   frontend-filters-gateway-urlrewrite:
     template: |
       {#- Generate http-request URL rewrite statements #}
       {#- This is injected into base template via the frontend-filters-* extension point #}
       {#- Runs AFTER routing decisions, BEFORE backend selection #}
-      # gateway/frontend-filters-gateway-urlrewrite
-
-      {%- from "util-regex-sanitize" import sanitize_regex %}
-
+      {%- from "util-regex-sanitize" import sanitize_regex -%}
       {#- Compute route analysis once per render (cached across all includes) #}
-      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) %}
-      {%- compute_once analysis %}
-        {%- from "util-analyze-routes" import analyze_routes %}
+      {%- set analysis = namespace(path_groups={}, sorted_routes=[], all_routes=[]) -%}
+      {%- compute_once analysis -%}
+        {%- from "util-analyze-routes" import analyze_routes -%}
         {{- analyze_routes(analysis, resources) -}}
-      {%- endcompute_once %}
+      {%- endcompute_once -%}
 
       {#- Process all routes that have URLRewrite filters #}
-      {%- set ns_has_filters = namespace(found=false) %}
-      {%- for route_info in analysis.all_routes %}
-        {%- for filter in route_info.filters %}
-          {%- if filter.type == "URLRewrite" and route_info.resource_type == "httproute" %}
-            {%- set ns_has_filters.found = true %}
-          {%- endif %}
-        {%- endfor %}
-      {%- endfor %}
+      {%- set ns_has_filters = namespace(found=false) -%}
+      {%- for route_info in analysis.all_routes -%}
+        {%- for filter in route_info.filters -%}
+          {%- if filter.type == "URLRewrite" and route_info.resource_type == "httproute" -%}
+            {%- set ns_has_filters.found = true -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
 
       {%- if ns_has_filters.found %}
+      # gateway/frontend-filters-gateway-urlrewrite
       # URLRewrite filters
       {%- for route_info in analysis.all_routes %}
         {%- for filter in route_info.filters %}
@@ -913,17 +891,14 @@ templateSnippets:
             {#- Apply URL rewrite directives #}
             {%- if filter.urlRewrite %}
               {%- set rewrite = filter.urlRewrite %}
-
               {#- Debug: track filter application #}
               {%- if debug | default(false) %}
       http-request set-var(txn.filters_applied) str(URLRewrite) if {{ conditions | join(" ") }} !{ var(txn.filters_applied) -m found }
               {%- endif %}
-
               {#- Hostname rewrite #}
               {%- if rewrite.hostname %}
       http-request set-header Host "{{ rewrite.hostname }}" if {{ conditions | join(" ") }}
               {%- endif %}
-
               {#- Path rewrite #}
               {%- if rewrite.path %}
                 {%- if rewrite.path.type == "ReplaceFullPath" %}
@@ -941,9 +916,8 @@ templateSnippets:
             {%- endif %}
           {%- endif %}
         {%- endfor %}
-      {%- endfor %}
-      {%- endif %}
-
+      {%- endfor -%}
+      {%- endif -%}
 validationTests:
   test-httproute-duplicate-backend-different-ports:
     description: HTTPRoute with multiple rules to same service but different ports (tests deduplication)
