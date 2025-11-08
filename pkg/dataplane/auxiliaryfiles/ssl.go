@@ -2,6 +2,8 @@ package auxiliaryfiles
 
 import (
 	"context"
+	"log/slog"
+	"strings"
 
 	"haproxy-template-ic/pkg/dataplane/client"
 )
@@ -20,7 +22,14 @@ func (o *sslCertificateOps) GetContent(ctx context.Context, id string) (string, 
 }
 
 func (o *sslCertificateOps) Create(ctx context.Context, id, content string) error {
-	return o.client.CreateSSLCertificate(ctx, id, content)
+	err := o.client.CreateSSLCertificate(ctx, id, content)
+	if err != nil && strings.Contains(err.Error(), "already exists") {
+		// Certificate already exists, fall back to update instead of failing.
+		// This handles the case where a previous deployment partially succeeded
+		// or where path normalization causes comparison mismatches.
+		return o.Update(ctx, id, content)
+	}
+	return err
 }
 
 func (o *sslCertificateOps) Update(ctx context.Context, id, content string) error {
@@ -61,9 +70,18 @@ func CompareSSLCertificates(ctx context.Context, c *client.DataplaneClient, desi
 	}
 
 	desiredMap := make(map[string]SSLCertificate, len(desired))
+	desiredPaths := make([]string, 0, len(desired))
 	for _, cert := range desired {
 		desiredMap[cert.Path] = cert
+		desiredPaths = append(desiredPaths, cert.Path)
 	}
+
+	// Debug logging to diagnose path mismatches
+	slog.Info("SSL certificate comparison",
+		"current_count", len(currentNames),
+		"current_names", currentNames,
+		"desired_count", len(desired),
+		"desired_paths", desiredPaths)
 
 	// Determine operations
 	var toCreate, toUpdate []SSLCertificate
@@ -87,6 +105,22 @@ func CompareSSLCertificates(ctx context.Context, c *client.DataplaneClient, desi
 			toDelete = append(toDelete, name)
 		}
 	}
+
+	// Extract paths for logging
+	createPaths := make([]string, len(toCreate))
+	for i, cert := range toCreate {
+		createPaths[i] = cert.Path
+	}
+	updatePaths := make([]string, len(toUpdate))
+	for i, cert := range toUpdate {
+		updatePaths[i] = cert.Path
+	}
+
+	// Debug logging to diagnose comparison results
+	slog.Info("SSL certificate comparison results",
+		"to_create", createPaths,
+		"to_update", updatePaths,
+		"to_delete", toDelete)
 
 	return &SSLCertificateDiff{
 		ToCreate: toCreate,
