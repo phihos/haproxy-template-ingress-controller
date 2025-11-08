@@ -480,37 +480,67 @@ wait_for_services_ready() {
         debug "Echo-server-v2 pods not found (skipping)"
     fi
 
-    # Step 3.5: Wait for controller to reconcile and publish configuration
-    log INFO "Waiting for HAProxy configuration to be deployed..."
-    local config_attempts=30  # 60 seconds
+    # Step 3.5: Wait for Ingress resources to exist
+    log INFO "Waiting for Ingress resources to be created..."
+    local ingress_attempts=30  # 60 seconds
     local attempt=1
+    local ingress_created_epoch=0
+
+    while [[ $attempt -le $ingress_attempts ]]; do
+        # Check if echo-basic Ingress exists (used by first test)
+        if kubectl -n echo get ingress echo-basic >/dev/null 2>&1; then
+            # Get Ingress creation timestamp
+            local ingress_created=$(kubectl -n echo get ingress echo-basic -o jsonpath='{.metadata.creationTimestamp}')
+            ingress_created_epoch=$(date -d "$ingress_created" +%s 2>/dev/null || echo 0)
+            debug "Ingress echo-basic created at $(date -d "@$ingress_created_epoch" 2>/dev/null)"
+            break
+        fi
+
+        if [[ $attempt -lt $ingress_attempts ]]; then
+            debug "Ingress resources not found yet (attempt $attempt/$ingress_attempts)..."
+            sleep 2
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    if [[ $ingress_created_epoch -eq 0 ]]; then
+        echo
+        err "Ingress resources were not created after ${ingress_attempts} attempts (60s)"
+        echo
+        echo "This means start-dev-env.sh did not deploy Ingress demo resources."
+        echo
+        exit 1
+    fi
+    ok "Ingress resources created"
+
+    # Step 3.6: Wait for controller to reconcile the Ingress resources
+    log INFO "Waiting for HAProxy configuration to be reconciled..."
+    local config_attempts=30  # 60 seconds
+    attempt=1
     local config_deployed=false
 
     while [[ $attempt -le $config_attempts ]]; do
-        # Check if HAProxyCfg exists and has recent deployment
-        # We check lastCheckedAt to ensure this is a RECENT reconciliation,
-        # not a stale deployment from before Ingress/HTTPRoute resources were created
-        local now_epoch=$(date +%s)
+        # Check if HAProxyCfg was reconciled AFTER the Ingress was created
         local last_checked=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
             jq -r '.items[0].status.deployedToPods[0].lastCheckedAt // empty')
 
         if [[ -n "$last_checked" ]]; then
             # Convert Kubernetes timestamp to epoch (handles format: 2025-11-08T21:35:20Z)
             local checked_epoch=$(date -d "$last_checked" +%s 2>/dev/null || echo 0)
-            local age=$((now_epoch - checked_epoch))
 
-            debug "Configuration last checked $age seconds ago"
+            debug "Configuration last checked at epoch $checked_epoch, Ingress created at epoch $ingress_created_epoch"
 
-            # Configuration is considered deployed if it was checked within last 15 seconds
-            if [[ $age -le 15 ]]; then
-                debug "HAProxy configuration was recently reconciled"
+            # Configuration is reconciled if lastCheckedAt is AFTER Ingress creation
+            if [[ $checked_epoch -gt $ingress_created_epoch ]]; then
+                debug "HAProxy configuration was reconciled after Ingress creation"
                 config_deployed=true
                 break
             fi
         fi
 
         if [[ $attempt -lt $config_attempts ]]; then
-            debug "Waiting for recent configuration reconciliation (attempt $attempt/$config_attempts)..."
+            debug "Waiting for configuration reconciliation after Ingress creation (attempt $attempt/$config_attempts)..."
             sleep 2
         fi
 
