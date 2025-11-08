@@ -584,7 +584,7 @@ templateSnippets:
           {%- if ca_content %}
             {#- Register CA file with file registry and get path #}
             {%- set ca_filename = ca_namespace ~ "-" ~ ca_name ~ "-ca.pem" %}
-            {%- set ca_path = file_registry.Register("cert", ca_filename, ca_content) %}
+            {%- set ca_path = file_registry.Register("file", ca_filename, ca_content) %}
             {#- Add server option with CA file #}
             {%- set ns_server_opts.flags = ns_server_opts.flags.append("ssl verify required ca-file " ~ ca_path) %}
           {%- else %}
