@@ -558,16 +558,19 @@ wait_for_services_ready() {
     local config_deployed=false
 
     while [[ $attempt -le $config_attempts ]]; do
-        # Check if HAProxyCfg was reconciled AFTER the Ingress was created
-        local last_checked=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
-            jq -r '.items[0].status.deployedToPods[0].lastCheckedAt // empty')
+        # Check if HAProxyCfg was DEPLOYED (not just checked) AFTER the Ingress was created
+        # deployedAt updates only on actual config changes, lastCheckedAt updates on drift checks too
+        local deployed_at=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
+            jq -r '.items[0].status.deployedToPods[0].deployedAt // empty')
 
-        if [[ -n "$last_checked" ]]; then
+        if [[ -n "$deployed_at" ]]; then
             # Convert Kubernetes timestamp to epoch
-            local checked_epoch=$(date -d "$last_checked" +%s 2>/dev/null || echo 0)
+            local deployed_epoch=$(date -d "$deployed_at" +%s 2>/dev/null || echo 0)
 
-            # Configuration must be reconciled after Ingress creation
-            if [[ $checked_epoch -gt $ingress_created_epoch ]]; then
+            debug "Configuration deployed at epoch $deployed_epoch, Ingress created at epoch $ingress_created_epoch"
+
+            # Configuration must be deployed after Ingress creation
+            if [[ $deployed_epoch -gt $ingress_created_epoch ]]; then
                 # Also verify the configuration actually contains backends
                 local backend_count=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
                     jq -r '.items[0].spec.content' | grep -c "^backend.*echo" || echo 0)
@@ -575,12 +578,14 @@ wait_for_services_ready() {
                 debug "Configuration has $backend_count echo backends"
 
                 if [[ $backend_count -gt 0 ]]; then
-                    debug "HAProxy configuration includes echo service backends"
+                    debug "HAProxy configuration with backends was deployed"
                     config_deployed=true
                     break
                 else
-                    debug "Configuration reconciled but has no backends yet"
+                    debug "Configuration deployed but has no backends yet (reconciling...)"
                 fi
+            else
+                debug "Configuration exists but was deployed before Ingress creation"
             fi
         fi
 
