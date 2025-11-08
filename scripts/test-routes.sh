@@ -487,16 +487,30 @@ wait_for_services_ready() {
     local config_deployed=false
 
     while [[ $attempt -le $config_attempts ]]; do
-        # Check if HAProxyCfg exists and has deployedToPods entries
-        if kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
-            jq -e '.items[0].status.deployedToPods | length > 0' >/dev/null 2>&1; then
-            debug "HAProxy configuration has been deployed to pods"
-            config_deployed=true
-            break
+        # Check if HAProxyCfg exists and has recent deployment
+        # We check lastCheckedAt to ensure this is a RECENT reconciliation,
+        # not a stale deployment from before Ingress/HTTPRoute resources were created
+        local now_epoch=$(date +%s)
+        local last_checked=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
+            jq -r '.items[0].status.deployedToPods[0].lastCheckedAt // empty')
+
+        if [[ -n "$last_checked" ]]; then
+            # Convert Kubernetes timestamp to epoch (handles format: 2025-11-08T21:35:20Z)
+            local checked_epoch=$(date -d "$last_checked" +%s 2>/dev/null || echo 0)
+            local age=$((now_epoch - checked_epoch))
+
+            debug "Configuration last checked $age seconds ago"
+
+            # Configuration is considered deployed if it was checked within last 15 seconds
+            if [[ $age -le 15 ]]; then
+                debug "HAProxy configuration was recently reconciled"
+                config_deployed=true
+                break
+            fi
         fi
 
         if [[ $attempt -lt $config_attempts ]]; then
-            debug "Configuration not deployed yet (attempt $attempt/$config_attempts), waiting 2s..."
+            debug "Waiting for recent configuration reconciliation (attempt $attempt/$config_attempts)..."
             sleep 2
         fi
 
