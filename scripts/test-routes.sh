@@ -514,65 +514,21 @@ wait_for_services_ready() {
     fi
     ok "Ingress resources created"
 
-    # Step 3.6: Wait for controller to reconcile the Ingress resources
-    log INFO "Waiting for HAProxy configuration to be reconciled..."
-    local config_attempts=30  # 60 seconds
-    attempt=1
-    local config_deployed=false
-
-    while [[ $attempt -le $config_attempts ]]; do
-        # Check if HAProxyCfg was reconciled AFTER the Ingress was created
-        local last_checked=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
-            jq -r '.items[0].status.deployedToPods[0].lastCheckedAt // empty')
-
-        if [[ -n "$last_checked" ]]; then
-            # Convert Kubernetes timestamp to epoch (handles format: 2025-11-08T21:35:20Z)
-            local checked_epoch=$(date -d "$last_checked" +%s 2>/dev/null || echo 0)
-
-            debug "Configuration last checked at epoch $checked_epoch, Ingress created at epoch $ingress_created_epoch"
-
-            # Configuration is reconciled if lastCheckedAt is AFTER Ingress creation
-            if [[ $checked_epoch -gt $ingress_created_epoch ]]; then
-                debug "HAProxy configuration was reconciled after Ingress creation"
-                config_deployed=true
-                break
-            fi
-        fi
-
-        if [[ $attempt -lt $config_attempts ]]; then
-            debug "Waiting for configuration reconciliation after Ingress creation (attempt $attempt/$config_attempts)..."
-            sleep 2
-        fi
-
-        attempt=$((attempt + 1))
-    done
-
-    if [[ "$config_deployed" != "true" ]]; then
-        echo
-        err "HAProxy configuration was not deployed after ${config_attempts} attempts (60s)"
-        echo
-        echo "This means the controller has not reconciled Ingress/HTTPRoute resources yet."
-        echo
-        echo "HAProxyCfg resources:"
-        kubectl -n haproxy-template-ic get haproxycfg -o wide 2>/dev/null || echo "  (no HAProxyCfg resources found)"
-        echo
-        echo "Controller logs (last 30 lines):"
-        kubectl -n haproxy-template-ic logs -l app.kubernetes.io/name=haproxy-template-ic --tail=30 2>/dev/null || echo "  (no logs available)"
-        echo
-        exit 1
-    fi
-    ok "HAProxy configuration deployed to pods"
-
-    # Step 4: Verify service endpoints are populated
-    log INFO "Checking service endpoints..."
+    # Step 3.6: Wait for service endpoints to be populated
+    # We check this BEFORE configuration reconciliation because backends need endpoints
+    log INFO "Waiting for service endpoints to be populated..."
     local endpoint_attempts=30
-    local attempt=1
+    attempt=1
     local endpoints_ready=false
+    local endpoints_created_epoch=0
 
     while [[ $attempt -le $endpoint_attempts ]]; do
         if kubectl -n echo get endpoints echo-server -o json 2>/dev/null | \
             jq -e '.subsets[0].addresses | length > 0' >/dev/null 2>&1; then
+            # Get endpoints last update timestamp
+            local endpoints_updated=$(kubectl -n echo get endpoints echo-server -o jsonpath='{.metadata.resourceVersion}')
             endpoints_ready=true
+            debug "Service endpoints are populated (resourceVersion: $endpoints_updated)"
             break
         fi
 
@@ -585,13 +541,79 @@ wait_for_services_ready() {
     done
 
     if [[ "$endpoints_ready" != "true" ]]; then
-        warn "Echo service endpoints may not be fully populated, but continuing..."
+        echo
+        err "Service endpoints were not populated after ${endpoint_attempts} attempts (60s)"
+        echo
         kubectl -n echo get endpoints echo-server 2>/dev/null || echo "  (no endpoints found)"
-    else
-        ok "Service endpoints are populated"
+        echo
+        exit 1
     fi
+    ok "Service endpoints populated"
 
-    # Step 5: Test HTTP connectivity (pods and config are ready, so this should be fast)
+    # Step 3.7: Wait for controller to reconcile with backends
+    # Now that endpoints exist, wait for HAProxyCfg that includes backends
+    log INFO "Waiting for HAProxy configuration with backends..."
+    local config_attempts=30  # 60 seconds
+    attempt=1
+    local config_deployed=false
+
+    while [[ $attempt -le $config_attempts ]]; do
+        # Check if HAProxyCfg was reconciled AFTER the Ingress was created
+        local last_checked=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
+            jq -r '.items[0].status.deployedToPods[0].lastCheckedAt // empty')
+
+        if [[ -n "$last_checked" ]]; then
+            # Convert Kubernetes timestamp to epoch
+            local checked_epoch=$(date -d "$last_checked" +%s 2>/dev/null || echo 0)
+
+            # Configuration must be reconciled after Ingress creation
+            if [[ $checked_epoch -gt $ingress_created_epoch ]]; then
+                # Also verify the configuration actually contains backends
+                local backend_count=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
+                    jq -r '.items[0].spec.content' | grep -c "^backend.*echo" || echo 0)
+
+                debug "Configuration has $backend_count echo backends"
+
+                if [[ $backend_count -gt 0 ]]; then
+                    debug "HAProxy configuration includes echo service backends"
+                    config_deployed=true
+                    break
+                else
+                    debug "Configuration reconciled but has no backends yet"
+                fi
+            fi
+        fi
+
+        if [[ $attempt -lt $config_attempts ]]; then
+            debug "Waiting for configuration with backends (attempt $attempt/$config_attempts)..."
+            sleep 2
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    if [[ "$config_deployed" != "true" ]]; then
+        echo
+        err "HAProxy configuration with backends was not deployed after ${config_attempts} attempts (60s)"
+        echo
+        echo "Configuration may be empty or missing Service/Endpoint data."
+        echo
+        echo "HAProxyCfg checksum:"
+        kubectl -n haproxy-template-ic get haproxycfg -o jsonpath='{.items[0].spec.checksum}' 2>/dev/null || echo "  (not found)"
+        echo
+        echo
+        echo "Backend count in HAProxyCfg:"
+        kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
+            jq -r '.items[0].spec.content' | grep "^backend" | wc -l || echo "  0"
+        echo
+        echo "Controller logs (last 30 lines):"
+        kubectl -n haproxy-template-ic logs -l app.kubernetes.io/name=haproxy-template-ic --tail=30 2>/dev/null || echo "  (no logs available)"
+        echo
+        exit 1
+    fi
+    ok "HAProxy configuration with backends deployed"
+
+    # Step 4: Test HTTP connectivity (pods, endpoints, and config with backends are ready)
     log INFO "Testing HTTP connectivity..."
     local max_attempts=20  # 40 seconds - reduced since pods and config are ready
     local delay=2
