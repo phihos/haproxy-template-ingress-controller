@@ -480,6 +480,45 @@ wait_for_services_ready() {
         debug "Echo-server-v2 pods not found (skipping)"
     fi
 
+    # Step 3.5: Wait for controller to reconcile and publish configuration
+    log INFO "Waiting for HAProxy configuration to be deployed..."
+    local config_attempts=30  # 60 seconds
+    local attempt=1
+    local config_deployed=false
+
+    while [[ $attempt -le $config_attempts ]]; do
+        # Check if HAProxyCfg exists and has deployedToPods entries
+        if kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
+            jq -e '.items[0].status.deployedToPods | length > 0' >/dev/null 2>&1; then
+            debug "HAProxy configuration has been deployed to pods"
+            config_deployed=true
+            break
+        fi
+
+        if [[ $attempt -lt $config_attempts ]]; then
+            debug "Configuration not deployed yet (attempt $attempt/$config_attempts), waiting 2s..."
+            sleep 2
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    if [[ "$config_deployed" != "true" ]]; then
+        echo
+        err "HAProxy configuration was not deployed after ${config_attempts} attempts (60s)"
+        echo
+        echo "This means the controller has not reconciled Ingress/HTTPRoute resources yet."
+        echo
+        echo "HAProxyCfg resources:"
+        kubectl -n haproxy-template-ic get haproxycfg -o wide 2>/dev/null || echo "  (no HAProxyCfg resources found)"
+        echo
+        echo "Controller logs (last 30 lines):"
+        kubectl -n haproxy-template-ic logs -l app.kubernetes.io/name=haproxy-template-ic --tail=30 2>/dev/null || echo "  (no logs available)"
+        echo
+        exit 1
+    fi
+    ok "HAProxy configuration deployed to pods"
+
     # Step 4: Verify service endpoints are populated
     log INFO "Checking service endpoints..."
     local endpoint_attempts=30
@@ -508,9 +547,9 @@ wait_for_services_ready() {
         ok "Service endpoints are populated"
     fi
 
-    # Step 5: Test HTTP connectivity (pods are ready, so this should be fast)
+    # Step 5: Test HTTP connectivity (pods and config are ready, so this should be fast)
     log INFO "Testing HTTP connectivity..."
-    local max_attempts=20  # 40 seconds - reduced since pods are already ready
+    local max_attempts=20  # 40 seconds - reduced since pods and config are ready
     local delay=2
     local attempt=1
     local http_ready=false
@@ -545,10 +584,11 @@ wait_for_services_ready() {
         echo
         err "HTTP connectivity check failed after $max_attempts attempts (${max_attempts}x${delay}s)"
         echo
-        echo "Pods are ready but HTTP requests are not working. This typically means:"
-        echo "  - HAProxy configuration has not synced yet"
-        echo "  - Ingress resources may not be configured correctly"
-        echo "  - Controller may not have reconciled the configuration"
+        echo "Pods are ready and configuration was deployed, but HTTP requests are still failing."
+        echo "This typically means:"
+        echo "  - HAProxy configuration may have errors"
+        echo "  - Ingress/HTTPRoute resources may not match the test expectations"
+        echo "  - Network connectivity issues between test runner and HAProxy"
         echo
         echo "Diagnostics:"
         echo "  HAProxy pods:"
