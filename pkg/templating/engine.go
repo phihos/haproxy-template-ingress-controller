@@ -29,9 +29,11 @@ import (
 	"github.com/nikolalohinski/gonja/v2/builtins"
 	"github.com/nikolalohinski/gonja/v2/config"
 	"github.com/nikolalohinski/gonja/v2/exec"
+	"github.com/nikolalohinski/gonja/v2/loaders"
 	"github.com/nikolalohinski/gonja/v2/nodes"
 	"github.com/nikolalohinski/gonja/v2/parser"
 	"github.com/nikolalohinski/gonja/v2/tokens"
+	"github.com/pkg/errors"
 )
 
 // FilterFunc is a custom filter function that can be registered with the template engine.
@@ -240,16 +242,33 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 		},
 	}
 
-	// Create simple in-memory loader with all templates so they can reference each other
-	// via {% include "template-name" %} directives (no '/' prefix required)
+	// Create template loader and config
 	loader := NewSimpleLoader(templates)
+	cfg := createGonjaConfig()
 
-	// Create custom config with whitespace control enabled
+	// Build Gonja environment with custom extensions
+	environment := buildEnvironment(customFilters, customFunctions)
+
+	// Compile all templates
+	if err := compileTemplates(engine, templates, cfg, loader, environment); err != nil {
+		return nil, err
+	}
+
+	// Build post-processors
+	if err := buildPostProcessors(engine, postProcessorConfigs); err != nil {
+		return nil, err
+	}
+
+	return engine, nil
+}
+
+// createGonjaConfig creates the Gonja configuration with whitespace control enabled.
+func createGonjaConfig() *config.Config {
 	// TrimBlocks removes the first newline after a block (e.g., {% if %})
 	// LeftStripBlocks strips leading spaces/tabs before a block
 	// Note: LeftStripBlocks also sets RemoveTrailingWhiteSpaceFromLastLine on Data nodes,
 	// but this can be overridden using {%+ instead of {% on specific blocks
-	cfg := &config.Config{
+	return &config.Config{
 		BlockStartString:    "{%",
 		BlockEndString:      "%}",
 		VariableStartString: "{{",
@@ -261,8 +280,10 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 		TrimBlocks:          true, // Remove newlines after blocks for cleaner output
 		LeftStripBlocks:     true, // Strip leading spaces before blocks for proper indentation
 	}
+}
 
-	// Create environment with default builtins (filters, tests, control structures, methods, functions)
+// buildFilters creates a filter set with builtin, custom, and generic filters.
+func buildFilters(customFilters map[string]FilterFunc) *exec.FilterSet {
 	// Clone builtin filters to avoid modifying global state when adding custom filters.
 	// The builtins.Filters.Update() method modifies the FilterSet in-place, which causes
 	// race conditions when multiple engines are created concurrently with different custom filters.
@@ -270,14 +291,11 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 
 	// Register custom filters if provided
 	if len(customFilters) > 0 {
-		// Create a new filter set with custom filters
 		filterMap := make(map[string]exec.FilterFunction)
 		for name, customFilter := range customFilters {
-			// Wrap FilterFunc in Gonja's FilterFunction signature
 			filterMap[name] = wrapCustomFilter(customFilter)
 		}
 		customFilterSet := exec.NewFilterSet(filterMap)
-		// Update cloned filters with custom ones (safe since filters is now a copy)
 		filters = filters.Update(customFilterSet)
 	}
 
@@ -291,31 +309,50 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 		"debug":      debugFilter,
 		"eval":       evalFilter,
 		"strip":      stripFilter,
+		"trim":       trimFilter, // Override builtin trim to pass through errors
 	}
 	genericFilterSet := exec.NewFilterSet(genericFilterMap)
-	filters = filters.Update(genericFilterSet)
+	return filters.Update(genericFilterSet)
+}
 
-	// Start with builtin global functions and register custom functions
+// buildGlobalFunctions creates a context with builtin, fail, and custom global functions.
+func buildGlobalFunctions(customFunctions map[string]GlobalFunc) *exec.Context {
 	globalFunctions := builtins.GlobalFunctions
+
+	// Always register the fail() function (used for template validation)
+	failFunctionMap := make(map[string]interface{})
+	failFunctionMap["fail"] = func(args ...interface{}) (interface{}, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("fail() requires exactly one argument (error message)")
+		}
+		message, ok := args[0].(string)
+		if !ok {
+			message = fmt.Sprint(args[0])
+		}
+		return nil, fmt.Errorf("%s", message)
+	}
+	failFunctionContext := exec.NewContext(failFunctionMap)
+	globalFunctions = globalFunctions.Update(failFunctionContext)
 
 	// Register custom global functions if provided
 	if len(customFunctions) > 0 {
-		// Create a new context with builtins plus custom functions
 		functionMap := make(map[string]interface{})
-
-		// Add custom functions (wrapped in Gonja's signature)
 		for name, customFunc := range customFunctions {
 			functionMap[name] = wrapGlobalFunction(customFunc)
 		}
-
 		customFunctionContext := exec.NewContext(functionMap)
-		// Update builtin functions with custom ones
 		globalFunctions = globalFunctions.Update(customFunctionContext)
 	}
 
+	return globalFunctions
+}
+
+// buildEnvironment creates a Gonja environment with all custom extensions.
+func buildEnvironment(customFilters map[string]FilterFunc, customFunctions map[string]GlobalFunc) *exec.Environment {
+	filters := buildFilters(customFilters)
+	globalFunctions := buildGlobalFunctions(customFunctions)
+
 	// Always override the "in" test with our fixed version and add generic tests
-	// This fixes a Gonja limitation where list membership checks use object identity
-	// instead of value comparison for computed template expressions
 	testMap := map[string]exec.TestFunction{
 		"in":           testInFixed,
 		"conflicts_by": conflictsByTest,
@@ -332,41 +369,44 @@ func New(engineType EngineType, templates map[string]string, customFilters map[s
 	customControlStructureSet := exec.NewControlStructureSet(customControlStructures)
 	controlStructures := builtins.ControlStructures.Update(customControlStructureSet)
 
-	environment := &exec.Environment{
+	return &exec.Environment{
 		Filters:           filters,
-		Tests:             tests,             // Use tests with fixed "in" operator
-		ControlStructures: controlStructures, // Use builtins + custom tags
-		Methods:           customMethods,     // Use custom methods with fixed append()
+		Tests:             tests,
+		ControlStructures: controlStructures,
+		Methods:           customMethods,
 		Context:           globalFunctions,
 	}
+}
 
-	// Store raw templates and compile each one through the loader
+// compileTemplates compiles all templates and stores them in the engine.
+func compileTemplates(engine *TemplateEngine, templates map[string]string, cfg *config.Config, loader loaders.Loader, environment *exec.Environment) error {
 	for name, content := range templates {
 		engine.rawTemplates[name] = content
 
-		// Compile the template with custom config for proper whitespace handling
 		compiled, err := exec.NewTemplate(name, cfg, loader, environment)
 		if err != nil {
-			return nil, NewCompilationError(name, content, err)
+			return NewCompilationError(name, content, err)
 		}
 
 		engine.compiledTemplates[name] = compiled
 	}
+	return nil
+}
 
-	// Build post-processors from configuration
+// buildPostProcessors creates post-processors from configuration and stores them in the engine.
+func buildPostProcessors(engine *TemplateEngine, postProcessorConfigs map[string][]PostProcessorConfig) error {
 	for templateName, configs := range postProcessorConfigs {
 		processors := make([]PostProcessor, 0, len(configs))
 		for _, config := range configs {
 			processor, err := NewPostProcessor(config)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create post-processor for template %q: %w", templateName, err)
+				return fmt.Errorf("failed to create post-processor for template %q: %w", templateName, err)
 			}
 			processors = append(processors, processor)
 		}
 		engine.postProcessors[templateName] = processors
 	}
-
-	return engine, nil
+	return nil
 }
 
 // createCustomMethods creates custom method sets for list and dict types with fixed behavior.
@@ -511,6 +551,7 @@ func (e *TemplateEngine) Render(templateName string, context map[string]interfac
 	if context == nil {
 		context = make(map[string]interface{})
 	}
+
 	ctx := exec.NewContext(context)
 
 	// Setup tracing if enabled
@@ -1000,6 +1041,46 @@ func stripFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.
 	stripped := strings.TrimSpace(str)
 
 	return exec.AsValue(stripped)
+}
+
+// trimFilter is a custom trim filter that passes through errors instead of masking them.
+// This is critical for proper error reporting when templates fail inside include_matching().
+//
+// The builtin Gonja trim filter wraps errors with "Wrong signature for 'trim'", which
+// hides the actual error (e.g., from fail() function). Our version checks if the input
+// is an error and returns it unchanged, allowing the real error to propagate.
+//
+// Usage: {{ include_matching("pattern-*") | trim }}.
+//
+// Supports optional 'chars' parameter like Gonja's trim:
+// {{ "  hello  " | trim }}  → "hello".
+// {{ "xxhelloxx" | trim(chars="x") }}  → "hello".
+func trimFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.Value {
+	// Pass through errors unchanged (don't mask them)
+	if in.IsError() {
+		return in
+	}
+
+	// Extract 'chars' parameter (defaults to whitespace)
+	charsParam := exec.KwArg{
+		Name:    "chars",
+		Default: " \t\n\r",
+	}
+	p := params.ExpectKwArgs([]*exec.KwArg{&charsParam})
+	if p.IsError() {
+		return exec.AsValue(errors.Wrap(p, "Wrong signature for 'trim'"))
+	}
+
+	// Convert input to string
+	str := in.String()
+
+	// Get chars to trim
+	chars := p.GetKeywordArgument(charsParam.Name, charsParam.Default).String()
+
+	// Perform trim operation
+	trimmed := strings.Trim(str, chars)
+
+	return exec.AsValue(trimmed)
 }
 
 // conflictsByTest detects conflicts when grouped by key.
@@ -1704,8 +1785,17 @@ func cloneFilterSet(original *exec.FilterSet) *exec.FilterSet {
 // wrapCustomFilter wraps a FilterFunc into Gonja's FilterFunction signature.
 // This adapter converts between our simple FilterFunc interface and Gonja's
 // more complex signature that includes the evaluator and typed values.
+//
+// IMPORTANT: This wrapper passes through errors unchanged to preserve proper
+// error messages when templates fail inside include_matching() or other macros.
 func wrapCustomFilter(customFilter FilterFunc) exec.FilterFunction {
 	return func(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.Value {
+		// Pass through errors unchanged (don't call the filter on errors)
+		// This is critical for proper error propagation from fail() and missing secrets
+		if in.IsError() {
+			return in
+		}
+
 		// Extract the input value as Go interface{}
 		inputValue := in.Interface()
 

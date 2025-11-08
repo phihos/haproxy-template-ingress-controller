@@ -335,7 +335,7 @@ func (p *Publisher) buildRuntimeConfig(name string, req *PublishRequest) *haprox
 		},
 		Spec: haproxyv1alpha1.HAProxyCfgSpec{
 			Path:     req.ConfigPath,
-			Content:  "\n" + req.Config,
+			Content:  req.Config,
 			Checksum: req.Checksum,
 		},
 	}

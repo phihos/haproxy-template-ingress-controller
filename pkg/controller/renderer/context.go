@@ -36,6 +36,7 @@ import (
 //	  },
 //	  "template_snippets": ["snippet1", "snippet2", ...]  // Sorted by priority
 //	  "config": Config,  // Controller configuration (e.g., config.debug.headers.enabled)
+//	  "file_registry": FileRegistry,  // For dynamic auxiliary file registration
 //	}
 //
 // Templates can access resources:
@@ -63,7 +64,13 @@ import (
 //	{%- if config.debug.headers.enabled | default(false) %}
 //	  http-response set-header X-Debug-Info %[var(txn.backend_name)]
 //	{%- endif %}
-func (c *Component) buildRenderingContext() map[string]interface{} {
+//
+// And dynamically register auxiliary files:
+//
+//	{%- set ca_content = secret.data["ca.crt"] | b64decode %}
+//	{%- set ca_path = file_registry.Register("cert", "ca.pem", ca_content) %}
+//	server backend:443 ssl ca-file {{ ca_path }} verify required
+func (c *Component) buildRenderingContext() (map[string]interface{}, *FileRegistry) {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
 
@@ -94,6 +101,9 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 	// Sort template snippets by priority for template access
 	snippetNames := sortSnippetsByPriority(c.config.TemplateSnippets)
 
+	// Create file registry for dynamic auxiliary file registration
+	fileRegistry := NewFileRegistry(c.pathResolver)
+
 	c.logger.Info("rendering context built",
 		"resource_count", len(resources),
 		"controller_fields", len(controller),
@@ -104,6 +114,7 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 		"resources":         resources,
 		"controller":        controller,
 		"template_snippets": snippetNames,
+		"file_registry":     fileRegistry,
 	}
 
 	// Merge extraContext variables into top-level context
@@ -114,7 +125,7 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 			"variable_count", len(c.config.TemplatingSettings.ExtraContext))
 	}
 
-	return context
+	return context, fileRegistry
 }
 
 // sortSnippetsByPriority sorts template snippet names by priority, then alphabetically.

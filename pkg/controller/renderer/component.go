@@ -55,7 +55,8 @@ type Component struct {
 	engine          *templating.TemplateEngine
 	config          *config.Config
 	stores          map[string]types.Store
-	haproxyPodStore types.Store // HAProxy controller pods store for pod-maxconn calculations
+	haproxyPodStore types.Store              // HAProxy controller pods store for pod-maxconn calculations
+	pathResolver    *templating.PathResolver // For FileRegistry to compute auxiliary file paths
 	logger          *slog.Logger
 
 	// State protected by mutex (for leadership transition replay)
@@ -139,6 +140,7 @@ func New(
 		config:          config,
 		stores:          stores,
 		haproxyPodStore: haproxyPodStore,
+		pathResolver:    pathResolver,
 		logger:          logger,
 	}, nil
 }
@@ -192,9 +194,9 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 
 	c.logger.Info("Template rendering triggered", "reason", event.Reason)
 
-	// Build rendering context from all resource stores
+	// Build rendering context from all resource stores (includes FileRegistry)
 	c.logger.Info("building rendering context")
-	context := c.buildRenderingContext()
+	context, fileRegistry := c.buildRenderingContext()
 
 	// Render main HAProxy configuration
 	c.logger.Info("rendering main template")
@@ -204,11 +206,26 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 		return
 	}
 
-	// Render all auxiliary files
-	auxiliaryFiles, err := c.renderAuxiliaryFiles(context)
+	// Render all pre-declared auxiliary files
+	staticFiles, err := c.renderAuxiliaryFiles(context)
 	if err != nil {
 		// Error already published by renderAuxiliaryFiles
 		return
+	}
+
+	// Extract dynamic files registered during template rendering
+	dynamicFiles := fileRegistry.GetFiles()
+
+	// Merge static (pre-declared) and dynamic (registered) files
+	auxiliaryFiles := MergeAuxiliaryFiles(staticFiles, dynamicFiles)
+
+	// Log counts
+	staticCount := len(staticFiles.MapFiles) + len(staticFiles.GeneralFiles) + len(staticFiles.SSLCertificates)
+	dynamicCount := len(dynamicFiles.MapFiles) + len(dynamicFiles.GeneralFiles) + len(dynamicFiles.SSLCertificates)
+	if dynamicCount > 0 {
+		c.logger.Info("merged auxiliary files",
+			"static_count", staticCount,
+			"dynamic_count", dynamicCount)
 	}
 
 	// Calculate metrics
@@ -418,6 +435,38 @@ func convertPostProcessorConfigs(postProcessors []config.PostProcessorConfig) []
 		}
 	}
 	return ppConfigs
+}
+
+// mergeAuxiliaryFiles merges static (pre-declared) and dynamic (registered during rendering) auxiliary files.
+//
+// The function combines both sets of files into a single AuxiliaryFiles structure.
+// Both static and dynamic files are included in the merged result.
+//
+// Parameters:
+//   - static: Pre-declared auxiliary files from config (templates in config.Maps, config.Files, config.SSLCertificates)
+//   - dynamic: Dynamically registered files from FileRegistry during template rendering
+//
+// Returns:
+//   - Merged AuxiliaryFiles containing all files from both sources
+//
+// MergeAuxiliaryFiles merges static (pre-declared) and dynamic (FileRegistry-registered) auxiliary files.
+// Exported for use by test runner.
+func MergeAuxiliaryFiles(static, dynamic *dataplane.AuxiliaryFiles) *dataplane.AuxiliaryFiles {
+	merged := &dataplane.AuxiliaryFiles{}
+
+	// Merge map files
+	merged.MapFiles = append(merged.MapFiles, static.MapFiles...)
+	merged.MapFiles = append(merged.MapFiles, dynamic.MapFiles...)
+
+	// Merge general files
+	merged.GeneralFiles = append(merged.GeneralFiles, static.GeneralFiles...)
+	merged.GeneralFiles = append(merged.GeneralFiles, dynamic.GeneralFiles...)
+
+	// Merge SSL certificates
+	merged.SSLCertificates = append(merged.SSLCertificates, static.SSLCertificates...)
+	merged.SSLCertificates = append(merged.SSLCertificates, dynamic.SSLCertificates...)
+
+	return merged
 }
 
 // failFunction is a global function that causes template rendering to fail with a custom error message.

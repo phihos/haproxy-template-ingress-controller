@@ -612,10 +612,14 @@ func TestBuildRenderingContext(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build context
-	ctx := renderer.buildRenderingContext()
+	ctx, fileRegistry := renderer.buildRenderingContext()
+
+	// Verify file registry was created
+	require.NotNil(t, fileRegistry)
 
 	// Verify structure
 	require.Contains(t, ctx, "resources")
+	require.Contains(t, ctx, "file_registry")
 
 	resources, ok := ctx["resources"].(map[string]interface{})
 	require.True(t, ok, "resources should be a map")

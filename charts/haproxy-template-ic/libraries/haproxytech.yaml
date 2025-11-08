@@ -5,6 +5,12 @@
 # Gateway API resources (HTTPRoute, GRPCRoute) use filters instead of annotations.
 # See charts/haproxy-template-ic/docs/gateway-api-support.md for Gateway API filter documentation.
 
+watchedResources:
+  secrets:
+    apiVersion: v1
+    resources: secrets
+    indexBy: ["metadata.namespace", "metadata.name"]
+
 templateSnippets:
   util-auth-userlist-name:
     template: >-
@@ -485,8 +491,8 @@ templateSnippets:
           - haproxy.org/send-proxy-protocol: PROXY protocol for backends (optional)
           - haproxy.org/server-ssl: Enable SSL/TLS to backend servers (optional)
           - haproxy.org/server-proto: Backend protocol, e.g., "h2" for HTTP/2 (optional)
-          - haproxy.org/server-crt: Client cert for mTLS (not yet implemented - requires secrets watching)
-          - haproxy.org/server-ca: CA cert for backend verification (not yet implemented - requires secrets watching)
+          - haproxy.org/server-crt: Client cert for mTLS to backend (optional, requires secrets watching)
+          - haproxy.org/server-ca: CA cert for backend verification (optional, requires secrets watching)
 
         ## Scaling Configuration
         Annotations:
@@ -500,6 +506,8 @@ templateSnippets:
           send-proxy-protocol: "proxy", "proxy-v1", "proxy-v2", "proxy-v2-ssl", "proxy-v2-ssl-cn"
           server-ssl: "true" or "false"
           server-proto: Protocol string (e.g., "h2", "h2c")
+          server-crt: Secret name with client cert (e.g., "namespace/secret-name" or "secret-name")
+          server-ca: Secret name with CA cert (e.g., "namespace/secret-name" or "secret-name")
           scale-server-slots: Integer (e.g., "100")
           backend-config-snippet: Multiline YAML string with raw HAProxy config
 
@@ -542,14 +550,73 @@ templateSnippets:
         {%- set ns_server_opts.flags = ns_server_opts.flags.append("proto " ~ server_proto) %}
       {%- endif %}
 
-      {#- server-crt and server-ca remain partially implemented (require secrets watching) #}
-      {%- set server_crt = ingress.metadata.annotations["haproxy.org/server-crt"] | default("") %}
+      {#- server-ca: CA certificate for backend verification #}
       {%- set server_ca = ingress.metadata.annotations["haproxy.org/server-ca"] | default("") %}
-      {%- if server_crt %}
-      # Note: server-crt annotation recognized but not yet implemented (requires secrets watching)
-      {%- endif %}
       {%- if server_ca %}
-      # Note: server-ca annotation recognized but not yet implemented (requires secrets watching)
+        {#- Parse secret namespace/name (format: "namespace/secret-name") #}
+        {%- if "/" in server_ca %}
+          {%- set ca_parts = server_ca.split("/") %}
+          {%- set ca_namespace = ca_parts[0] %}
+          {%- set ca_name = ca_parts[1] %}
+        {%- else %}
+          {#- Same namespace as ingress if not specified #}
+          {%- set ca_namespace = ingress.metadata.namespace %}
+          {%- set ca_name = server_ca %}
+        {%- endif %}
+
+        {#- Fetch secret from resource store #}
+        {%- set ca_secret = resources.secrets.GetSingle(ca_namespace, ca_name) %}
+        {%- if ca_secret %}
+          {#- Extract CA certificate content (base64 decode) #}
+          {%- set ca_content = ca_secret.data["ca.crt"] | b64decode %}
+          {%- if ca_content %}
+            {#- Register CA file with file registry and get path #}
+            {%- set ca_filename = ca_namespace ~ "-" ~ ca_name ~ "-ca.pem" %}
+            {%- set ca_path = file_registry.Register("cert", ca_filename, ca_content) %}
+            {#- Add server option with CA file #}
+            {%- set ns_server_opts.flags = ns_server_opts.flags.append("ssl verify required ca-file " ~ ca_path) %}
+          {%- else %}
+            # Warning: Secret {{ ca_namespace }}/{{ ca_name }} missing 'ca.crt' key
+          {%- endif %}
+        {%- else %}
+          # Warning: Secret {{ ca_namespace }}/{{ ca_name }} referenced by haproxy.org/server-ca not found
+        {%- endif %}
+      {%- endif %}
+
+      {#- server-crt: Client certificate for mTLS #}
+      {%- set server_crt = ingress.metadata.annotations["haproxy.org/server-crt"] | default("") %}
+      {%- if server_crt %}
+        {#- Parse secret namespace/name (format: "namespace/secret-name") #}
+        {%- if "/" in server_crt %}
+          {%- set crt_parts = server_crt.split("/") %}
+          {%- set crt_namespace = crt_parts[0] %}
+          {%- set crt_name = crt_parts[1] %}
+        {%- else %}
+          {#- Same namespace as ingress if not specified #}
+          {%- set crt_namespace = ingress.metadata.namespace %}
+          {%- set crt_name = server_crt %}
+        {%- endif %}
+
+        {#- Fetch secret from resource store #}
+        {%- set crt_secret = resources.secrets.GetSingle(crt_namespace, crt_name) %}
+        {%- if crt_secret %}
+          {#- Extract client certificate and key, combine them (HAProxy needs combined PEM) #}
+          {%- set tls_crt = crt_secret.data["tls.crt"] | b64decode %}
+          {%- set tls_key = crt_secret.data["tls.key"] | b64decode %}
+          {%- if tls_crt and tls_key %}
+            {#- Combine certificate and key into single PEM file #}
+            {%- set combined_pem = tls_crt ~ "\n" ~ tls_key %}
+            {#- Register client cert file with file registry and get path #}
+            {%- set crt_filename = crt_namespace ~ "-" ~ crt_name ~ "-client.pem" %}
+            {%- set crt_path = file_registry.Register("cert", crt_filename, combined_pem) %}
+            {#- Add server option with client cert #}
+            {%- set ns_server_opts.flags = ns_server_opts.flags.append("crt " ~ crt_path) %}
+          {%- else %}
+            # Warning: Secret {{ crt_namespace }}/{{ crt_name }} missing 'tls.crt' or 'tls.key' keys
+          {%- endif %}
+        {%- else %}
+          # Warning: Secret {{ crt_namespace }}/{{ crt_name }} referenced by haproxy.org/server-crt not found
+        {%- endif %}
       {%- endif %}
 
       {#- scale-server-slots #}
@@ -2567,6 +2634,100 @@ validationTests:
         target: haproxy.cfg
         pattern: "server SRV_1 10.0.25.100:8443 ssl verify none proto h2 check"
         description: Server must include SSL and proto directives
+
+  test-backend-mtls:
+    description: Backend mTLS with client certificate and CA verification
+    fixtures:
+      secrets:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            namespace: default
+            name: backend-mtls-ca
+          type: Opaque
+          data:
+            ca.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUREekNDQWZlZ0F3SUJBZ0lVTGJRKzlYeUFDbk9CS0xRZlhrMGFWeVlrWllzd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01SR1Z0YnlCdFZFeFRJRU5CTUI0WERUSTFNVEV3T0RFM016SXlOVm9YRFRJMgpNVEV3T0RFM016SXlOVm93RnpFVk1CTUdBMVVFQXd3TVJHVnRieUJ0VkV4VElFTkJNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFwdmdhNkl5cmRuN1pXUkI4UjJFZm9hSmF6Q1B5RjdObS9ZeVMKNk5RSVJhZzdCTVR1Z0RUTml5bmh2Mmx3TG14c2xyNmtncXdieEo0TkZETWRxK3pnVGNmbFFpRjE5N1lsbnlPVAovRzZPMVVNNitOLzQyMmpKYlFOeHI4bTh2TThVN0FkUXU0ek5MREtwZU9YbVo3c2ZWWDI3ZVNqUENmR2drWTl3CjI3c3JubXY4UzVGanVhRlBVbkxHSzBVUWhWRTlIcE5scC91cHhyUmQzOUNDOUFWZlN6WWUvNGNjay9yYVBoZDAKSkhCa1NEWDdmWkY5aE1UQXNsdHdUSGp4KzFQNHF4T3BFeGd6MHNTQ0dPVjNHRHRocmhKZndMaU5RZU1nQXdWawpzRWxUN095M2d1WGxVS3UxRVhvN1dnMTBOOXkzRjRyWURPa1p0c2loWVlOM3VvaEM3UUlEQVFBQm8xTXdVVEFkCkJnTlZIUTRFRmdRVWo4NWRiaXBQR2ZWMzVOeWJIdGlpd2NwNG9kRXdId1lEVlIwakJCZ3dGb0FVajg1ZGJpcFAKR2ZWMzVOeWJIdGlpd2NwNG9kRXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QU5CZ2txaGtpRzl3MEJBUXNGQUFPQwpBUUVBbCtXOUtLQ3hCOXpXQ1kxZ0t0TVJGU0FtRUNVODNwaDlrRVVMMnZJdklMLzBOMEJQZjFtWjV4S1BUL0hQClZYZE9YTFg5aTJGYi9xMndKSEtQNVNVYzBqaFVYK2NlVHA3TDhJNjdmWXpxYUd2cVIxY3dCQWh2eW9RV0U1NysKTkszRFo3L3NFT3BCNFdmR2hycEJiZ1FZUTVSb3h0c3A0aTV4UFJJaktha2tuZzJDdXg4bEpYT29sZ3ZIRm5FMgpBRys3Vit0d0JJbVhtUDNyRzB1QmliSVE4M1NmOUNmWG5IbEJqOVlJSUJ3MHE5Rk5Md2duai9CUkpwRXM0OERnCm9VUkZMd1VFWmxLTkZLWld2dGhMVTJrOGdteFQxc3dmd01BMW1zcmF4SUpCZEZMZkdDS1pWanpxWllRRFdPcHcKdjF4eC9sQmVVMDV5UVhxc3B6dU04THpyVFE9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            namespace: default
+            name: backend-mtls-client-cert
+          type: kubernetes.io/tls
+          data:
+            tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURBRENDQWVpZ0F3SUJBZ0lVVVFFNHBtcy9lQnJKamM4WmVyclpyd3hNSW1Jd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01SR1Z0YnlCdFZFeFRJRU5CTUI0WERUSTFNVEV3T0RFM016SXpPRm9YRFRJMgpNVEV3T0RFM016SXpPRm93R1RFWE1CVUdBMVVFQXd3T1ltRmphMlZ1WkMxamJHbGxiblF3Z2dFaU1BMEdDU3FHClNJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUN3Nk5LemtqR1BJb0N4N1ZSUTQyNW5kNU1nZmZMZ1BGZDIKbGZLRTdQRCtwUUdiWTNwTW4zUk1Ha2FhSHh6NTlueGhyYjAzZVdUdmZ6YzJEV1hoc2tXRjJxMEFLRGxmbzRyUwptVTREUjVWYktwUS8xdkp5T01TMU1ZQW9yVU9CdzRQTHdGZ2E0c0ZvRXFTV25BWHJwWDcwUHVLOElDV0FWbFN5CmorNUVTTlFYQ0pnRkgzQzF4REFsVWM2ZkhCZTZyWFdlUTMvN2plbnpSK3VneGFQUUl6bERUNE4zUWFuekpxNmQKQUtCZXhWWjJKcGgzb3ZiUVBKbE1RSlpsOWpicThEb3JnOEE5NzBJNHNmWEQzeUFReFhRR3JIdm9FRTJvOHl1RAoyMThZeEJpMzdReXZiT1drcElUY3lybG5sdFJoaGNYZld3UERtMlN1OFpMMHQ3SjRtNTZkQWdNQkFBR2pRakJBCk1CMEdBMVVkRGdRV0JCUWtpZXJidGNidVJzRXJjdjRrZGtnTGY3Y2VOakFmQmdOVkhTTUVHREFXZ0JTUHpsMXUKS2s4WjlYZmszSnNlMktMQnluaWgwVEFOQmdrcWhraUc5dzBCQVFzRkFBT0NBUUVBYmJNOUhwdFhwRndsQU5qdgowZXNZODJqRjhaUWVsK1ZVY1ZhR00wcDlwaTJoZGZoU3A3Ry8xV0RSVEFiVDFKSXYzak1kdEVFdW1MeDlUTnRHCnFEMVUzdkhSdXliSHltUkZURThYUDNDUjJTbEFJcEMvN045N25GRmpGT2EwcEZwRS8weWhkRmpNWkZKUVR0dVAKOXFSNVJSbk9JaXZFSGEwOExXcXlTVml4WUQrY3B1TGFXTm9QVHVIdEM0WVgyenEvMG1yelV1a2RBQWx3anppMwpqd2V2NHNWT3RNWGJXZGhya1lxejBjQ1QrZ1NXbGNsY3FUZEFESFpyZTd5QVFKY1RNV08wMVlycmQ2M2dINUQzCmQ1cWdoOTRTTXdMcExyTkhvaEx2cGRKT01XT0VoV0RiNitaSGZwcnBhUWppMTlaa0JjT0ZTSjQ0aitPZk1IaS8KOGlYNUxRPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+            tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2UUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktjd2dnU2pBZ0VBQW9JQkFRQ3c2Tkt6a2pHUElvQ3gKN1ZSUTQyNW5kNU1nZmZMZ1BGZDJsZktFN1BEK3BRR2JZM3BNbjNSTUdrYWFIeHo1OW54aHJiMDNlV1R2ZnpjMgpEV1hoc2tXRjJxMEFLRGxmbzRyU21VNERSNVZiS3BRLzF2SnlPTVMxTVlBb3JVT0J3NFBMd0ZnYTRzRm9FcVNXCm5BWHJwWDcwUHVLOElDV0FWbFN5ais1RVNOUVhDSmdGSDNDMXhEQWxVYzZmSEJlNnJYV2VRMy83amVuelIrdWcKeGFQUUl6bERUNE4zUWFuekpxNmRBS0JleFZaMkpwaDNvdmJRUEpsTVFKWmw5amJxOERvcmc4QTk3MEk0c2ZYRAozeUFReFhRR3JIdm9FRTJvOHl1RDIxOFl4QmkzN1F5dmJPV2twSVRjeXJsbmx0UmhoY1hmV3dQRG0yU3U4WkwwCnQ3SjRtNTZkQWdNQkFBRUNnZ0VBSUdDME0yWlZ5SzhWWTdzZWUrRnNFdWE1R0RERTgxSkg1YTNDNFo0bDYwMFMKMHJndHFYbGpoUXdvRU13Ujl4T3NKd3B2djRmcHQ4V09Pc2ZQOWpNMDh5OFhDNWpSQzFaNHNWdWFnaEluWFRTWgpSbWZXSHA2U0xlRmQ1ZFAwTDNzemsyWmtHYU9YcHk4R1RZUkh0eDJtY3hoUlVnSUdLd3RoMi81b3FybXppM1ZhCm1EbXhJQ1hwSm1LK25ITzNUM0R3SXZhUWFGa0JydmkrQWxXNDRFVjkxdzBUcUdGK29VVmVTVzhCUHJmVUJvQkQKZ1JDVGdpQ09FVDFHV0UveVRyZ01RUEdUajlnQ2FJQzVRNFhkejFOS00yT2hIUzlER0dWTElHcDMrT0pQWjdaNwprbmNuZWJFbG5VU0RYenAvRHNxcENqaGQwSEliLzhNbnFLOWhQNkVFUVFLQmdRRGttNTZjQkZxa2hWYlBNYldhCnNOSG10UmUxMG9uYjg5dG8zdDArVUlWa3lpZzQ0YU9jcDFkMDF2WlhSTmxtbjRNdUNWbmVVR1dJVkRzdTBtNGQKUUgvUDhQSXZjY2FPTnpsT2c4cjZFOGIra3RkVWw0ZUQwMEJXeXpiRTJxSGRSN3h0azlqZTFSMW5xMFZrM1RlMgpFRjY4NThRbUlOcTZRMWpONEp6WkFLeU1ZUUtCZ1FER0cyUmFCQ1hwMDcxaFdHbS9rb01uUlZEUDVJbk05enJOCmxiT0dhNTd2Kzg2Z3FZR0VGaFFHSTE0TnNCeVAzTEdRN1VFR3hRTUVyZmw3ai9DVk9teEE3aGJVK0JlZmp3eE0KbjBiaWNhSEpVN3g0WG5sWjgyWmVacmNrTW5QNFd6a0RraVVqeEJCZGRacEdpTVlNMTIyVDN1VzNtSHo2S1RIdQpBZU5BaU1IYnZRS0JnRk9PbGRDTXZ0eTNaOTFmVy9Ob2diQURyT0RtVFVFNXhvNTBOd1daeE1mc0kvdDJiYWpLCmVXclpUenppaTF1NUhlZHJ2NDlFYjNmKzRZcmhteUhSKzJWenVmR2hjbU4weDl0c3pIblBWTUtqeFZURDllSTMKQ3FNdXI1d1FGVzJkMUw5d2RLb3Qxd3VYVEV2cmwzdFNURzViZ0JRM21mck90dHk1SmxzaXBlN0JBb0dBQmhzcQpDS3hBRHVqNzJWaEVTaWRWNjR2elpiVUJtbE8wZUVtNDh0ZTJXbWRFZ3ljMldyL2pkaHo0OVNzTWRsS3pGbWg1CnJKKzk3Qk1Bc1pKS05BOU03dU5ueU1DczJib3JBdUdWNmJ6ZTQ3bTFBWERJQk1HLzBnRVFmQWtpRWZHZDNFSlEKNnIxTVU5VWdJRFJ2Qms1TmpsVThkMkEzMmU0VEgrYm0va0k0MTNFQ2dZRUE1R0xWRU81K1JSVlJaZFhURzgwcwo1aHhDR1lkQ1IydUI4SWlmRTI0UTRlWDNoaHJwQk43em53UlQvK1JJM2RYclZ0OThKNCtXMnNETHVaemhBSlNwCnYydXUyVzdGdFh1SUV3TG9YSmR6VzBZSG0vSldJTlAvR0Nkd08vSzc1SGFWYVVpT3pId0F0akVBMXQzS2xzWCsKRThjMjJYVW1ZTG1vL0d0ZXJCZy9BMkE9Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
+
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: backend-mtls-ingress
+            annotations:
+              haproxy.org/server-ssl: "true"
+              haproxy.org/server-ca: "backend-mtls-ca"
+              haproxy.org/server-crt: "backend-mtls-client-cert"
+          spec:
+            rules:
+              - host: mtls.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: mtls-service
+                          port:
+                            number: 8443
+
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: mtls-service
+          spec:
+            ports:
+              - port: 8443
+
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: mtls-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: mtls-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.30.100"
+              targetRef:
+                kind: Pod
+                name: mtls-pod-1
+          ports:
+            - port: 8443
+              protocol: TCP
+
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_backend-mtls-ingress_mtls-service_8443"
+        description: Backend must be generated
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "ssl verify required ca-file.*default-backend-mtls-ca-ca\\.pem"
+        description: Server must include CA file for verification
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "crt.*default-backend-mtls-client-cert-client\\.pem"
+        description: Server must include client certificate
 
   test-backend-config-snippet:
     description: Backend config snippet injection

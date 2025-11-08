@@ -1,0 +1,772 @@
+# HAProxy Template Ingress Controller - Comprehensive Annotation Examples
+# This file demonstrates all supported haproxy.org/* annotations
+# Deploy with: kubectl apply -f ingress-demo.yaml
+# Test with: ./scripts/test-routes.sh
+
+---
+# Supporting Resources - Basic Auth Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: echo-auth-secret
+  namespace: echo
+type: Opaque
+data:
+  # Username: admin, Password: admin (bcrypt hash)
+  # Generated with: htpasswd -nbB admin admin | cut -d: -f2 | base64 -w0
+  admin: JDJ5JDA1JG1OMVdWazVRbmJnNFF3ZEFkWGJmei44YjNjZUg2UTVLT1ZDS3hSMklrTkFmSmdMaTVwSUtX
+
+---
+##############################################################################
+# 1. BASIC INGRESS - No annotations (baseline)
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-basic
+  namespace: echo
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 2. BASIC AUTHENTICATION
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-auth
+  namespace: echo
+  annotations:
+    haproxy.org/auth-type: "basic-auth"
+    haproxy.org/auth-secret: "echo-auth-secret"
+    haproxy.org/auth-realm: "Echo-Server-Protected"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-auth.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 3. CORS CONFIGURATION
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-cors
+  namespace: echo
+  annotations:
+    haproxy.org/cors-enable: "true"
+    haproxy.org/cors-allow-origin: "https://example.com"
+    haproxy.org/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    haproxy.org/cors-allow-headers: "Content-Type, Authorization, X-Custom-Header"
+    haproxy.org/cors-allow-credentials: "true"
+    haproxy.org/cors-max-age: "3600"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-cors.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 4. RATE LIMITING
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-ratelimit
+  namespace: echo
+  annotations:
+    haproxy.org/rate-limit-requests: "5"
+    haproxy.org/rate-limit-period: "10s"
+    haproxy.org/rate-limit-size: "100k"
+    haproxy.org/rate-limit-status-code: "429"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-ratelimit.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 5. IP ACCESS CONTROL - Allowlist
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-allowlist
+  namespace: echo
+  annotations:
+    # Allow only specific IPs/CIDRs (localhost and cluster internal)
+    haproxy.org/allowlist: "127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-allowlist.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 6. IP ACCESS CONTROL - Denylist
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-denylist
+  namespace: echo
+  annotations:
+    # Deny specific IPs (example - would deny 1.1.1.1)
+    haproxy.org/denylist: "1.1.1.1, 8.8.8.8"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-denylist.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 7. REQUEST REDIRECT
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-redirect
+  namespace: echo
+  annotations:
+    haproxy.org/request-redirect: "https://echo.localdev.me"
+    haproxy.org/request-redirect-code: "302"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-redirect.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 8. HEADER MANIPULATION - Request Headers
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-headers-request
+  namespace: echo
+  annotations:
+    haproxy.org/request-set-header: |
+      X-Forwarded-Proto https
+      X-Custom-Request custom-req-value
+      X-Request-ID req-12345
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-headers-request.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 9. HEADER MANIPULATION - Response Headers
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-headers-response
+  namespace: echo
+  annotations:
+    haproxy.org/response-set-header: |
+      Strict-Transport-Security max-age=31536000
+      X-Custom-Response custom-resp-value
+      X-Frame-Options DENY
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-headers-response.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 10. SET HOST HEADER
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-sethost
+  namespace: echo
+  annotations:
+    haproxy.org/set-host: "internal-api.example.svc.cluster.local"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-sethost.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 11. PATH REWRITE
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-rewrite
+  namespace: echo
+  annotations:
+    # Rewrite /api/v1/* to /*
+    haproxy.org/path-rewrite: "^/api/v1/(.*) /\\1"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-rewrite.localdev.me
+      http:
+        paths:
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 12. LOAD BALANCING ALGORITHM
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-loadbalance
+  namespace: echo
+  annotations:
+    haproxy.org/load-balance: "leastconn"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-loadbalance.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 13. COOKIE PERSISTENCE (Sticky Sessions)
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-sticky
+  namespace: echo
+  annotations:
+    haproxy.org/cookie-persistence: "SERVERID"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-sticky.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 14. TIMEOUTS CONFIGURATION
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-timeouts
+  namespace: echo
+  annotations:
+    haproxy.org/timeout-server: "30s"
+    haproxy.org/timeout-client: "60s"
+    haproxy.org/timeout-connect: "10s"
+    haproxy.org/timeout-http-request: "5s"
+    haproxy.org/timeout-http-keep-alive: "2m"
+    haproxy.org/timeout-queue: "15s"
+    haproxy.org/timeout-tunnel: "1h"
+    haproxy.org/timeout-check: "3s"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-timeouts.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 15. FORWARDED-FOR HEADER
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-forwardedfor
+  namespace: echo
+  annotations:
+    haproxy.org/forwarded-for: "true"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-forwardedfor.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 16. REQUEST CAPTURE (Logging)
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-capture
+  namespace: echo
+  annotations:
+    haproxy.org/request-capture: |
+      User-Agent
+      Referer
+      Cookie
+    haproxy.org/request-capture-len: "256"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-capture.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 17. CUSTOM HEALTH CHECKS
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-healthcheck
+  namespace: echo
+  annotations:
+    haproxy.org/check: "true"
+    haproxy.org/check-http: "GET /health"
+    haproxy.org/check-interval: "10s"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-healthcheck.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 18. POD MAXCONN (Connection Limits)
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-maxconn
+  namespace: echo
+  annotations:
+    haproxy.org/pod-maxconn: "100"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-maxconn.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 19. SOURCE IP HEADER (Behind CDN/Proxy)
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-srcip
+  namespace: echo
+  annotations:
+    haproxy.org/src-ip-header: "CF-Connecting-IP"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-srcip.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 20. COMBINED ANNOTATIONS - Real-world example
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-combined
+  namespace: echo
+  annotations:
+    # Security
+    haproxy.org/auth-type: "basic-auth"
+    haproxy.org/auth-secret: "echo-auth-secret"
+    haproxy.org/allowlist: "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16"
+    # Rate limiting
+    haproxy.org/rate-limit-requests: "100"
+    haproxy.org/rate-limit-period: "1m"
+    # Headers
+    haproxy.org/response-set-header: |
+      X-Frame-Options DENY
+      X-Content-Type-Options nosniff
+    # Performance
+    haproxy.org/load-balance: "leastconn"
+    haproxy.org/cookie-persistence: "SERVERID"
+    haproxy.org/timeout-server: "30s"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-combined.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 21. BACKEND CONFIG SNIPPET - Raw HAProxy Configuration
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-backend-snippet
+  namespace: echo
+  annotations:
+    haproxy.org/backend-config-snippet: |
+      # Custom HAProxy backend configuration
+      option httplog
+      option http-keep-alive
+      http-reuse safe
+      # Custom ACL and routing
+      acl is_api path_beg /api
+      http-request set-header X-Backend-Type "api" if is_api
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-backend-snippet.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 22. SSL REDIRECT - Force HTTPS
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-ssl-redirect
+  namespace: echo
+  annotations:
+    haproxy.org/ssl-redirect: "true"
+    haproxy.org/ssl-redirect-code: "301"
+    haproxy.org/ssl-redirect-port: "443"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-ssl-redirect.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 23. PROXY PROTOCOL - Preserve client connection info
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-proxy-protocol
+  namespace: echo
+  annotations:
+    # Enable PROXY protocol v2 when connecting to backends
+    haproxy.org/send-proxy-protocol: "proxy-v2"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-proxy-protocol.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 24. BACKEND SSL/TLS - Use HTTPS to backend + HTTP/2
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-backend-ssl
+  namespace: echo
+  annotations:
+    # Enable SSL/TLS when connecting to backend (for backends that require HTTPS)
+    haproxy.org/server-ssl: "true"
+    # Use HTTP/2 protocol to backend
+    haproxy.org/server-proto: "h2"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-backend-ssl.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 25. SCALE SERVER SLOTS - Pre-allocate slots for dynamic scaling
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-scale-slots
+  namespace: echo
+  annotations:
+    # Pre-allocate 20 server slots (allows scaling without HAProxy reload)
+    haproxy.org/scale-server-slots: "20"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-scale-slots.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+##############################################################################
+# 26. Backend mTLS (Mutual TLS to backend servers)
+#
+# Demonstrates using client certificates and CA verification for backend
+# connections, enabling mutual TLS authentication between HAProxy and
+# backend servers.
+#
+# Features:
+# - server-ssl: Enable SSL/TLS to backend
+# - server-ca: CA certificate for backend verification
+# - server-crt: Client certificate for mTLS authentication
+#
+# Note: Secrets contain self-signed demo certificates. The echo-server
+# backend does not support mTLS, so this demo only validates that the
+# annotations are accepted and the HAProxy config is properly generated.
+# In production, use real certificates and mTLS-capable backend servers.
+#
+# Access: http://echo-backend-mtls.localdev.me/
+##############################################################################
+
+# CA certificate for backend verification
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-mtls-ca
+  namespace: echo
+type: Opaque
+data:
+  ca.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUREekNDQWZlZ0F3SUJBZ0lVTGJRKzlYeUFDbk9CS0xRZlhrMGFWeVlrWllzd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01SR1Z0YnlCdFZFeFRJRU5CTUI0WERUSTFNVEV3T0RFM016SXlOVm9YRFRJMgpNVEV3T0RFM016SXlOVm93RnpFVk1CTUdBMVVFQXd3TVJHVnRieUJ0VkV4VElFTkJNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFwdmdhNkl5cmRuN1pXUkI4UjJFZm9hSmF6Q1B5RjdObS9ZeVMKNk5RSVJhZzdCTVR1Z0RUTml5bmh2Mmx3TG14c2xyNmtncXdieEo0TkZETWRxK3pnVGNmbFFpRjE5N1lsbnlPVAovRzZPMVVNNitOLzQyMmpKYlFOeHI4bTh2TThVN0FkUXU0ek5MREtwZU9YbVo3c2ZWWDI3ZVNqUENmR2drWTl3CjI3c3JubXY4UzVGanVhRlBVbkxHSzBVUWhWRTlIcE5scC91cHhyUmQzOUNDOUFWZlN6WWUvNGNjay9yYVBoZDAKSkhCa1NEWDdmWkY5aE1UQXNsdHdUSGp4KzFQNHF4T3BFeGd6MHNTQ0dPVjNHRHRocmhKZndMaU5RZU1nQXdWawpzRWxUT095M2d1WGxVS3UxRVhvN1dnMTBOOXkzRjRyWURPa1p0c2loWVlOM3VvaEM3UUlEQVFBQm8xTXdVVEFkCkJnTlZIUTRFRmdRVWo4NWRiaXBQR2ZWMzVOeWJIdGlpd2NwNG9kRXdId1lEVlIwakJCZ3dGb0FVajg1ZGJpcFAKR2ZWMzVOeWJIdGlpd2NwNG9kRXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QU5CZ2txaGtpRzl3MEJBUXNGQUFPQwpBUUVBbCtXOUtLQ3hCOXpXQ1kxZ0t0TVJGU0FtRUNVODNwaDlrRVVMMnZJdklMLzBOMEJQZjFtWjV4S1BUL0hQClZYZE9YTFg5aTJGYi9xMndKSEtQNVNVYzBqaFVYK2NlVHA3TDhJNjdmWXpxYUd2cVIxY3dCQWh2eW9RV0U1NysKTkszRFo3L3NFT3BCNFdmR2hycEJiZ1FZUTVSb3h0c3A0aTV4UFJJaktha2tuZzJDdXg4bEpYT29sZ3ZIRm5FMgpBRys3Vit0d0JJbVhtUDNyRzB1QmliSVE4M1NmOUNmWG5IbEJqOVlJSUJ3MHE5Rk5Md2duai9CUkpwRXM0OERnCm9VUkZMd1VFWmxLTkZLWld2dGhMVTJrOGdteFQxc3dmd01BMW1zcmF4SUpCZEZMZkdDS1pWanpxWllRRFdPcHcKdjF4eC9sQmVVMDV5UVhxc3B6dU04THpyVFE9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+
+# Client certificate for mTLS authentication
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-mtls-client-cert
+  namespace: echo
+type: kubernetes.io/tls
+data:
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURBRENDQWVpZ0F3SUJBZ0lVVVFFNHBtcy9lQnJKamM4WmVyclpyd3hNSW1Jd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01SR1Z0YnlCdFZFeFRJRU5CTUI0WERUSTFNVEV3T0RFM016SXpPRm9YRFRJMgpNVEV3T0RFM016SXpPRm93R1RFWE1CVUdBMVVFQXd3T1ltRmphMlZ1WkMxamJHbGxiblF3Z2dFaU1BMEdDU3FHClNJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUN3Nk5LemtqR1BJb0N4N1ZSUTQyNW5kNU1nZmZMZ1BGZDIKbGZLRTdQRCtwUUdiWTNwTW4zUk1Ha2FhSHh6NTlueGhyYjAzZVdUdmZ6YzJEV1hoc2tXRjJxMEFLRGxmbzRyUwptVTREUjVWYktwUS8xdkp5T01TMU1ZQW9yVU9CdzRQTHdGZ2E0c0ZvRXFTV25BWHJwWDcwUHVLOElDV0FWbFN5CmorNUVTTlFYQ0pnRkgzQzF4REFsVWM2ZkhCZTZyWFdlUTMvN2plbnpSK3VneGFQUUl6bERUNE4zUWFuekpxNmQKQUtCZXhWWjJKcGgzb3ZiUVBKbE1RSlpsOWpicThEb3JnOEE5NzBJNHNmWEQzeUFReFhRR3JIdm9FRTJvOHl1RAoyMThZeEJpMzdReXZiT1drcElUY3lybG5sdFJoaGNYZld3UERtMlN1OFpMMHQ3SjRtNTZkQWdNQkFBR2pRakJBCk1CMEdBMVVkRGdRV0JCUWtpZXJidGNidVJzRXJjdjRrZGtnTGY3Y2VOakFmQmdOVkhTTUVHREFXZ0JTUHpsMXUKS2s4WjlYZmszSnNlMktMQnluaWgwVEFOQmdrcWhraUc5dzBCQVFzRkFBT0NBUUVBYmJNOUhwdFhwRndsQU5qdgowZXNZODJqRjhaUWVsK1ZVY1ZhR00wcDlwaTJoZGZoU3A3Ry8xV0RSVEFiVDFKSXYzak1kdEVFdW1MeDlUTnRHCnFEMVUzdkhSdXliSHltUkZURThYUDNDUjJTbEFJcEMvN045N25GRmpGT2EwcEZwRS8weWhkRmpNWkZKUVR0dVAKOXFSNVJSbk9JaXZFSGEwOExXcXlTVml4WUQrY3B1TGFXTm9QVHVIdEM0WVgyenEvMG1yelV1a2RBQWx3anppMwpqd2V2NHNWT3RNWGJXZGhya1lxejBjQ1QrZ1NXbGNsY3FUZEFESFpyZTd5QVFKY1RNV08wMVlycmQ2M2dINUQzCmQ1cWdoOTRTTXdMcExyTkhvaEx2cGRKT01XT0VoV0RiNitaSGZwcnBhUWppMTlaa0JjT0ZTSjQ0aitPZk1IaS8KOGlYNUxRPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2UUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktjd2dnU2pBZ0VBQW9JQkFRQ3c2Tkt6a2pHUElvQ3gKN1ZSUTQyNW5kNU1nZmZMZ1BGZDJsZktFN1BEK3BRR2JZM3BNbjNSTUdrYWFIeHo1OW54aHJiMDNlV1R2ZnpjMgpEV1hoc2tXRjJxMEFLRGxmbzRyU21VNERSNVZiS3BRLzF2SnlPTVMxTVlBb3JVT0J3NFBMd0ZnYTRzRm9FcVNXCm5BWHJwWDcwUHVLOElDV0FWbFN5ais1RVNOUVhDSmdGSDNDMXhEQWxVYzZmSEJlNnJYV2VRMy83amVuelIrdWcKeGFQUUl6bERUNE4zUWFuekpxNmRBS0JleFZaMkpwaDNvdmJRUEpsTVFKWmw5amJxOERvcmc4QTk3MEk0c2ZYRAozeUFReFhRR3JIdm9FRTJvOHl1RDIxOFl4QmkzN1F5dmJPV2twSVRjeXJsbmx0UmhoY1hmV3dQRG0yU3U4WkwwCnQ3SjRtNTZkQWdNQkFBRUNnZ0VBSUdDME0yWlZ5SzhWWTdzZWUrRnNFdWE1R0RERTgxSkg1YTNDNFo0bDYwMFMKMHJndHFYbGpoUXdvRU13Ujl4T3NKd3B2djRmcHQ4V09Pc2ZQOWpNMDh5OFhDNWpSQzFaNHNWdWFnaEluWFRTWgpSbWZXSHA2U0xlRmQ1ZFAwTDNzemsyWmtHYU9YcHk4R1RZUkh0eDJtY3hoUlVnSUdLd3RoMi81b3FybXppM1ZhCm1EbXhJQ1hwSm1LK25ITzNUM0R3SXZhUWFGa0JydmkrQWxXNDRFVjkxdzBUcUdGK29VVmVTVzhCUHJmVUJvQkQKZ1JDVGdpQ09FVDFHV0UveVRyZ01RUEdUajlnQ2FJQzVRNFhkejFOS00yT2hIUzlER0dWTElHcDMrT0pQWjdaNwprbmNuZWJFbG5VU0RYenAvRHNxcENqaGQwSEliLzhNbnFLOWhQNkVFUVFLQmdRRGttNTZjQkZxa2hWYlBNYldhCnNOSG10UmUxMG9uYjg5dG8zdDArVUlWa3lpZzQ0YU9jcDFkMDF2WlhSTmxtbjRNdUNWbmVVR1dJVkRzdTBtNGQKUUgvUDhQSXZjY2FPTnpsT2c4cjZFOGIra3RkVWw0ZUQwMEJXeXpiRTJxSGRSN3h0azlqZTFSMW5xMFZrM1RlMgpFRjY4NThRbUlOcTZRMWpONEp6WkFLeU1ZUUtCZ1FER0cyUmFCQ1hwMDcxaFdHbS9rb01uUlZEUDVJbk05enJOCmxiT0dhNTd2Kzg2Z3FZR0VGaFFHSTE0TnNCeVAzTEdRN1VFR3hRTUVyZmw3ai9DVk9teEE3aGJVK0JlZmp3eE0KbjBiaWNhSEpVN3g0WG5sWjgyWmVacmNrTW5QNFd6a0RraVVqeEJCZGRacEdpTVlNMTIyVDN1VzNtSHo2S1RIdQpBZU5BaU1IYnZRS0JnRk9PbGRDTXZ0eTNaOTFmVy9Ob2diQURyT0RtVFVFNXhvNTBOd1daeE1mc0kvdDJiYWpLCmVXclpUenppaTF1NUhlZHJ2NDlFYjNmKzRZcmhteUhSKzJWenVmR2hjbU4weDl0c3pIblBWTUtqeFZURDllSTMKQ3FNdXI1d1FGVzJkMUw5d2RLb3Qxd3VYVEV2cmwzdFNURzViZ0JRM21mck90dHk1SmxzaXBlN0JBb0dBQmhzcQpDS3hBRHVqNzJWaEVTaWRWNjR2elpiVUJtbE8wZUVtNDh0ZTJXbWRFZ3ljMldyL2pkaHo0OVNzTWRsS3pGbWg1CnJKKzk3Qk1Bc1pKS05BOU03dU5ueU1DczJib3JBdUdWNmJ6ZTQ3bTFBWERJQk1HLzBnRVFmQWtpRWZHZDNFSlEKNnIxTVU5VWdJRFJ2Qms1TmpsVThkMkEzMmU0VEgrYm0va0k0MTNFQ2dZRUE1R0xWRU81K1JSVlJaZFhURzgwcwo1aHhDR1lkQ1IydUI4SWlmRTI0UTRlWDNoaHJwQk43em53UlQvK1JJM2RYclZ0OThKNCtXMnNETHVaemhBSlNwCnYydXUyVzdGdFh1SUV3TG9YSmR6VzBZSG0vSldJTlAvR0Nkd08vSzc1SGFWYVVpT3pId0F0akVBMXQzS2xzWCsKRThjMjJYVW1ZTG1vL0d0ZXJCZy9BMkE9Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
+
+# Ingress using mTLS to backend
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-backend-mtls
+  namespace: echo
+  annotations:
+    # Enable SSL/TLS to backend
+    haproxy.org/server-ssl: "true"
+    # CA certificate for verifying backend server certificate
+    haproxy.org/server-ca: "backend-mtls-ca"
+    # Client certificate for mTLS authentication
+    haproxy.org/server-crt: "backend-mtls-client-cert"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-backend-mtls.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
