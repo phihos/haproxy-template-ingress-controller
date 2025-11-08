@@ -40,9 +40,9 @@ templateSnippets:
           ssl-redirect-port: Port number (e.g., "443", "8443")
 
         Generated HAProxy Config:
-          http-request redirect scheme https code <code> if !{ ssl_fc }
+          http-request redirect scheme https code <code> if !{ ssl_fc } { var(txn.host) -m str <host1> } or { var(txn.host) -m str <host2> } ...
 
-        Note: Auto-enabled when TLS secrets present in ingress spec
+        Note: Redirect only applies to hosts defined in the ingress with this annotation
       -#}
       {%- set ns = namespace(processed_ingresses="") %}
       {%- for ingress in resources.ingresses.List() %}
@@ -53,8 +53,20 @@ templateSnippets:
           {%- if ssl_redirect == "true" %}
             {%- set ssl_redirect_code = ingress.metadata.annotations["haproxy.org/ssl-redirect-code"] | default("302") %}
             {%- set ssl_redirect_port = ingress.metadata.annotations["haproxy.org/ssl-redirect-port"] | default("443") %}
+            {#- Extract all hosts from ingress rules -#}
+            {%- set ns_hosts = namespace(hosts=[]) %}
+            {%- if ingress.spec.rules %}
+              {%- for rule in ingress.spec.rules %}
+                {%- if rule.host %}
+                  {%- set ns_hosts.hosts = ns_hosts.hosts.append(rule.host) %}
+                {%- endif %}
+              {%- endfor %}
+            {%- endif %}
+            {#- Generate host-scoped redirect rule -#}
+            {%- if ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-ssl-redirect (for {{ ingress_key }})
-      http-request redirect scheme https code {{ ssl_redirect_code }} if !{ ssl_fc }
+      http-request redirect scheme https code {{ ssl_redirect_code }} if !{ ssl_fc } {% for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+            {%- endif %}
           {%- endif %}
         {%- endif %}
       {%- endfor -%}
