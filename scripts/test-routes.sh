@@ -433,7 +433,7 @@ verify_cluster() {
 wait_for_services_ready() {
     log INFO "Waiting for services to be ready..."
 
-    local max_attempts=10
+    local max_attempts=30  # 60 seconds total for CI environments
     local delay=2
     local attempt=1
     local ready=false
