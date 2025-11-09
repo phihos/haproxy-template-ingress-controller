@@ -55,6 +55,32 @@ type FileDiffGeneric[T FileItem] struct {
 	ToDelete []string
 }
 
+// categorizeFile determines whether a file should be created, updated, or left unchanged.
+func categorizeFile[T FileItem](currentMap map[string]T, id string, desiredFile T, diff *FileDiffGeneric[T]) {
+	currentFile, exists := currentMap[id]
+	if !exists {
+		// File doesn't exist in current state → create
+		diff.ToCreate = append(diff.ToCreate, desiredFile)
+		return
+	}
+
+	// File exists - check if content differs
+	currentContent := currentFile.GetContent()
+	desiredContent := desiredFile.GetContent()
+
+	// Special case: If current content is __NO_FINGERPRINT__, treat as non-existent
+	// This happens when the API doesn't provide metadata (older versions).
+	// We need to CREATE, not UPDATE, because the file doesn't actually exist
+	// in a way that allows updates.
+	if currentContent == "__NO_FINGERPRINT__" {
+		diff.ToCreate = append(diff.ToCreate, desiredFile)
+	} else if currentContent != desiredContent {
+		// File exists and content differs → update
+		diff.ToUpdate = append(diff.ToUpdate, desiredFile)
+	}
+	// If content is identical, no action needed
+}
+
 // Compare compares the current state of files with the desired state using generic operations.
 //
 // This function:
@@ -130,15 +156,7 @@ func Compare[T FileItem](
 
 	// Find files to create or update
 	for id, desiredFile := range desiredMap {
-		currentFile, exists := currentMap[id]
-		if !exists {
-			// File doesn't exist in current state → create
-			diff.ToCreate = append(diff.ToCreate, desiredFile)
-		} else if currentFile.GetContent() != desiredFile.GetContent() {
-			// File exists but content differs → update
-			diff.ToUpdate = append(diff.ToUpdate, desiredFile)
-		}
-		// If content is identical, no action needed
+		categorizeFile(currentMap, id, desiredFile, diff)
 	}
 
 	// Find files to delete (exist in current but not in desired)

@@ -65,7 +65,7 @@ templateSnippets:
             {#- Generate host-scoped redirect rule -#}
             {%- if ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-ssl-redirect (for {{ ingress_key }})
-      http-request redirect scheme https code {{ ssl_redirect_code }} if !{ ssl_fc } {% for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+      http-request redirect scheme https code {{ ssl_redirect_code }} if !{ ssl_fc } {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
             {%- endif %}
           {%- endif %}
         {%- endif %}
@@ -86,9 +86,11 @@ templateSnippets:
           request-redirect-code: HTTP status code (e.g., "301", "302", "303", "307", "308")
 
         Generated HAProxy Config:
-          http-request redirect location <url> code <code>
+          http-request redirect location <url> code <code> if { var(txn.host) -m str <host1> } or { var(txn.host) -m str <host2> } ...
 
-        Note: Protocol prefix in redirect URL sets SSL flag
+        Note:
+          - Redirect only applies to hosts defined in the ingress with this annotation
+          - Protocol prefix in redirect URL sets SSL flag
       -#}
       {%- set ns = namespace(processed_ingresses="") %}
       {%- for ingress in resources.ingresses.List() %}
@@ -102,8 +104,20 @@ templateSnippets:
             {%- if redirect_code not in valid_codes %}
               {{- fail("Invalid value '" ~ redirect_code ~ "' for annotation 'haproxy.org/request-redirect-code' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: " ~ valid_codes | join(", ")) -}}
             {%- endif %}
+            {#- Extract all hosts from ingress rules -#}
+            {%- set ns_hosts = namespace(hosts=[]) %}
+            {%- if ingress.spec.rules %}
+              {%- for rule in ingress.spec.rules %}
+                {%- if rule.host %}
+                  {%- set ns_hosts.hosts = ns_hosts.hosts.append(rule.host) %}
+                {%- endif %}
+              {%- endfor %}
+            {%- endif %}
+            {#- Generate host-scoped redirect rule -#}
+            {%- if ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-redirects (for {{ ingress_key }})
-      http-request redirect location {{ redirect_target }} code {{ redirect_code }}
+      http-request redirect location {{ redirect_target }} code {{ redirect_code }} if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+            {%- endif %}
           {%- endif %}
         {%- endif %}
       {%- endfor -%}
