@@ -340,21 +340,46 @@ assert_rate_limited() {
     local successful_requests=0
     local rate_limited_requests=0
 
-    # Make requests exceeding the limit
-    for i in $(seq 1 $((rate_limit + 3))); do
-        local response_code
-        response_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Host: $host" "${BASE_URL}${path}" 2>&1)
+    # Send requests rapidly (in parallel using background jobs)
+    # This ensures they all come from the same source IP and hit the limit
+    local request_count=$((rate_limit + 3))
+    local pids=()
 
-        if [[ "$response_code" == "200" ]]; then
-            successful_requests=$((successful_requests + 1))
-        elif [[ "$response_code" == "429" ]] || [[ "$response_code" == "403" ]]; then
-            rate_limited_requests=$((rate_limited_requests + 1))
-        fi
-
-        # Small delay between requests
-        sleep 0.1
+    for i in $(seq 1 $request_count); do
+        (
+            local response_code
+            response_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Host: $host" "${BASE_URL}${path}" 2>&1)
+            echo "$response_code" > "/tmp/rate_limit_test_${i}.txt"
+        ) &
+        pids+=($!)
+        # Very small delay to ensure sequential submission but rapid execution
+        sleep 0.05
     done
 
+    # Wait for all requests to complete
+    for pid in "${pids[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+
+    # Collect results
+    local all_codes=""
+    for i in $(seq 1 $request_count); do
+        if [[ -f "/tmp/rate_limit_test_${i}.txt" ]]; then
+            local response_code
+            response_code=$(cat "/tmp/rate_limit_test_${i}.txt")
+            all_codes="${all_codes} ${response_code}"
+
+            if [[ "$response_code" == "200" ]]; then
+                successful_requests=$((successful_requests + 1))
+            elif [[ "$response_code" == "429" ]] || [[ "$response_code" == "403" ]]; then
+                rate_limited_requests=$((rate_limited_requests + 1))
+            fi
+
+            rm -f "/tmp/rate_limit_test_${i}.txt"
+        fi
+    done
+
+    debug "  Response codes:$all_codes"
     debug "  Successful: $successful_requests, Rate limited: $rate_limited_requests"
 
     # Expect some requests to be rate limited
