@@ -763,6 +763,8 @@ metadata:
     haproxy.org/server-ca: "backend-mtls-ca"
     # Client certificate for mTLS authentication
     haproxy.org/server-crt: "backend-mtls-client-cert"
+    # Disable health checks since echo-server doesn't support SSL/mTLS
+    haproxy.org/check: "false"
 spec:
   ingressClassName: haproxy-template-ic
   rules:
