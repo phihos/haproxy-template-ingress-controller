@@ -346,18 +346,20 @@ assert_rate_limited() {
         haproxy_ip="localhost:${NODEPORT}"
     fi
 
-    # Send more requests to ensure rate limiting triggers reliably
-    local request_count=$((rate_limit * 2))
+    # Send significantly more requests to ensure rate limiting triggers reliably
+    # With parallel execution, we need more requests to guarantee some hit the limit
+    local request_count=$((rate_limit * 4))
 
     # Run curl from within cluster to ensure consistent source IP
     # This prevents SNAT issues that occur when testing from host via NodePort
     local pod_name="rate-limit-test-$$"
 
-    # Create pod
+    # Create pod with parallel requests to trigger rate limiting quickly
+    # Use xargs with -P to run multiple curl commands in parallel
     kubectl --context "kind-${CLUSTER_NAME}" run "$pod_name" \
         --image=alpine/curl \
         --restart=Never \
-        --command -- sh -c 'i=1; while [ $i -le $4 ]; do CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $2" "http://$1$3"); echo "$CODE"; i=$((i + 1)); done' -- "$haproxy_ip" "$host" "$path" "$request_count" >/dev/null 2>&1
+        --command -- sh -c 'seq 1 $4 | xargs -I{} -P10 sh -c "curl -s -o /dev/null -w \"%{http_code}\n\" -H \"Host: $2\" \"http://$1$3\""' -- "$haproxy_ip" "$host" "$path" "$request_count" >/dev/null 2>&1
 
     # Wait for pod to complete (skip Ready check as pod may complete before becoming Ready)
     kubectl --context "kind-${CLUSTER_NAME}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$pod_name" --timeout=15s >/dev/null 2>&1
