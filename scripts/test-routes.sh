@@ -337,47 +337,51 @@ assert_rate_limited() {
     debug "Testing rate limiting: $description"
     debug "  Host: $host, Rate limit: $rate_limit requests"
 
+    # Get HAProxy service ClusterIP to test from within cluster
+    local haproxy_ip
+    haproxy_ip=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic get svc haproxy-production -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+
+    if [[ -z "$haproxy_ip" ]]; then
+        warn "Could not get HAProxy ClusterIP, falling back to NodePort test"
+        haproxy_ip="localhost:${NODEPORT}"
+    fi
+
+    # Send more requests to ensure rate limiting triggers reliably
+    local request_count=$((rate_limit * 2))
+
+    # Run curl from within cluster to ensure consistent source IP
+    # This prevents SNAT issues that occur when testing from host via NodePort
+    local pod_name="rate-limit-test-$$"
+
+    # Create pod
+    kubectl --context "kind-${CLUSTER_NAME}" run "$pod_name" \
+        --image=alpine/curl \
+        --restart=Never \
+        --command -- sh -c 'i=1; while [ $i -le $4 ]; do CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $2" "http://$1$3"); echo "$CODE"; i=$((i + 1)); done' -- "$haproxy_ip" "$host" "$path" "$request_count" >/dev/null 2>&1
+
+    # Wait for pod to complete (skip Ready check as pod may complete before becoming Ready)
+    kubectl --context "kind-${CLUSTER_NAME}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$pod_name" --timeout=15s >/dev/null 2>&1
+
+    # Get logs
+    local output
+    output=$(kubectl --context "kind-${CLUSTER_NAME}" logs "$pod_name" 2>/dev/null)
+
+    # Clean up pod
+    kubectl --context "kind-${CLUSTER_NAME}" delete pod "$pod_name" >/dev/null 2>&1
+
     local successful_requests=0
     local rate_limited_requests=0
-
-    # Send requests rapidly (in parallel using background jobs)
-    # This ensures they all come from the same source IP and hit the limit
-    local request_count=$((rate_limit + 3))
-    local pids=()
-
-    for i in $(seq 1 $request_count); do
-        (
-            local response_code
-            response_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Host: $host" "${BASE_URL}${path}" 2>&1)
-            echo "$response_code" > "/tmp/rate_limit_test_${i}.txt"
-        ) &
-        pids+=($!)
-        # Very small delay to ensure sequential submission but rapid execution
-        sleep 0.05
-    done
-
-    # Wait for all requests to complete
-    for pid in "${pids[@]}"; do
-        wait "$pid" 2>/dev/null || true
-    done
-
-    # Collect results
     local all_codes=""
-    for i in $(seq 1 $request_count); do
-        if [[ -f "/tmp/rate_limit_test_${i}.txt" ]]; then
-            local response_code
-            response_code=$(cat "/tmp/rate_limit_test_${i}.txt")
-            all_codes="${all_codes} ${response_code}"
 
-            if [[ "$response_code" == "200" ]]; then
-                successful_requests=$((successful_requests + 1))
-            elif [[ "$response_code" == "429" ]] || [[ "$response_code" == "403" ]]; then
-                rate_limited_requests=$((rate_limited_requests + 1))
-            fi
-
-            rm -f "/tmp/rate_limit_test_${i}.txt"
+    # Parse response codes from output
+    while IFS= read -r response_code; do
+        all_codes="${all_codes} ${response_code}"
+        if [[ "$response_code" == "200" ]]; then
+            successful_requests=$((successful_requests + 1))
+        elif [[ "$response_code" == "429" ]] || [[ "$response_code" == "403" ]]; then
+            rate_limited_requests=$((rate_limited_requests + 1))
         fi
-    done
+    done <<< "$output"
 
     debug "  Response codes:$all_codes"
     debug "  Successful: $successful_requests, Rate limited: $rate_limited_requests"
