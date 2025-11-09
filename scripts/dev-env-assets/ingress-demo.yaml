@@ -634,6 +634,8 @@ metadata:
   namespace: echo
   annotations:
     # Enable PROXY protocol v2 when connecting to backends
+    # Points to haproxy-proxy-protocol which accepts PROXY protocol
+    # and forwards plain HTTP to echo-server
     haproxy.org/send-proxy-protocol: "proxy-v2"
 spec:
   ingressClassName: haproxy-template-ic
@@ -645,9 +647,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: echo-server
+                name: haproxy-proxy-protocol
                 port:
-                  number: 80
+                  number: 8080
 
 ---
 ##############################################################################

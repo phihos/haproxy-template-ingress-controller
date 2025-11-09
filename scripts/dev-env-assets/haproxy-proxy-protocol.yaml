@@ -1,0 +1,95 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-proxy-protocol-config
+  namespace: echo
+data:
+  haproxy.cfg: |
+    global
+        log stdout format raw local0 info
+
+    defaults
+        mode http
+        log global
+        timeout connect 5000ms
+        timeout client 50000ms
+        timeout server 50000ms
+
+    # Frontend accepting PROXY protocol
+    frontend proxy_frontend
+        bind *:8080 accept-proxy
+        mode http
+        default_backend echo_backend
+
+    # Backend forwarding plain HTTP to echo-server
+    backend echo_backend
+        mode http
+        server echo1 echo-server.echo.svc.cluster.local:80 check
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-proxy-protocol
+  namespace: echo
+  labels:
+    app: haproxy-proxy-protocol
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: haproxy-proxy-protocol
+  template:
+    metadata:
+      labels:
+        app: haproxy-proxy-protocol
+    spec:
+      containers:
+        - name: haproxy
+          image: haproxytech/haproxy-debian:3.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp /config/haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
+              exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: haproxy-proxy-protocol-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-proxy-protocol
+  namespace: echo
+  labels:
+    app: haproxy-proxy-protocol
+spec:
+  type: ClusterIP
+  selector:
+    app: haproxy-proxy-protocol
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
