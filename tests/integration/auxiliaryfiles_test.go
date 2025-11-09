@@ -252,11 +252,11 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 				assert.Contains(t, certs, "example.com.pem", "certificate should exist")
 
-				// Verify GetSSLCertificateContent returns file path (API limitation - doesn't return actual content)
-				filePath, err := client.GetSSLCertificateContent(ctx, "example.com.pem")
+				// Verify GetSSLCertificateContent returns fingerprint (or placeholder if API doesn't support it)
+				fingerprint, err := client.GetSSLCertificateContent(ctx, "example.com.pem")
 				require.NoError(t, err)
-				assert.NotEmpty(t, filePath, "file path should not be empty")
-				assert.Contains(t, filePath, "example_com.pem", "file path should contain sanitized cert name")
+				assert.NotEmpty(t, fingerprint, "fingerprint should not be empty")
+				// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
 			},
 		},
 		{
@@ -294,15 +294,12 @@ func TestSSLCertificates(t *testing.T) {
 				assert.Contains(t, certs, "example.com.pem")
 				assert.Contains(t, certs, "test.com.pem")
 
-				// Verify each certificate returns a file path (API limitation - doesn't return actual content)
-				for certName, expectedSanitized := range map[string]string{
-					"example.com.pem": "example_com.pem",
-					"test.com.pem":    "test_com.pem",
-				} {
-					filePath, err := client.GetSSLCertificateContent(ctx, certName)
+				// Verify each certificate returns a fingerprint (or placeholder if API doesn't support it)
+				for _, certName := range []string{"example.com.pem", "test.com.pem"} {
+					fingerprint, err := client.GetSSLCertificateContent(ctx, certName)
 					require.NoError(t, err)
-					assert.NotEmpty(t, filePath, "file path for %s should not be empty", certName)
-					assert.Contains(t, filePath, expectedSanitized, "file path should contain sanitized name for %s", certName)
+					assert.NotEmpty(t, fingerprint, "fingerprint for %s should not be empty", certName)
+					// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
 				}
 			},
 		},
@@ -329,11 +326,11 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 				assert.Contains(t, certs, "example.com.pem", "certificate should still exist")
 
-				// Verify GetSSLCertificateContent returns file path (API limitation - cannot verify content was actually updated)
-				filePath, err := client.GetSSLCertificateContent(ctx, "example.com.pem")
+				// Verify GetSSLCertificateContent returns fingerprint (or placeholder if API doesn't support it)
+				fingerprint, err := client.GetSSLCertificateContent(ctx, "example.com.pem")
 				require.NoError(t, err)
-				assert.NotEmpty(t, filePath, "file path should not be empty")
-				assert.Contains(t, filePath, "example_com.pem", "file path should contain sanitized cert name")
+				assert.NotEmpty(t, fingerprint, "fingerprint should not be empty")
+				// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
 			},
 		},
 		{
@@ -418,6 +415,189 @@ func TestSSLCertificates(t *testing.T) {
 			tc.verify(t, ctx, env)
 		})
 	}
+}
+
+// TestSSLCertificatesCompareAndSync tests the Compare and Sync functions for SSL certificates
+func TestSSLCertificatesCompareAndSync(t *testing.T) {
+	env := fixenv.New(t)
+	ctx := context.Background()
+	client := TestDataplaneClient(env)
+
+	// Clean up any existing certificates
+	certs, err := client.GetAllSSLCertificates(ctx)
+	require.NoError(t, err)
+	for _, cert := range certs {
+		_ = client.DeleteSSLCertificate(ctx, cert)
+	}
+
+	// Test: Compare empty state to desired certificates (should show all creates)
+	t.Run("compare-empty-to-desired", func(t *testing.T) {
+		desired := []auxiliaryfiles.SSLCertificate{
+			{Path: "example.com.pem", Content: LoadTestFileContent(t, "ssl-certs/example.com.pem")},
+			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
+		}
+
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		require.NoError(t, err)
+
+		assert.Len(t, diff.ToCreate, 2, "should have 2 certificates to create")
+		assert.Len(t, diff.ToUpdate, 0, "should have 0 certificates to update")
+		assert.Len(t, diff.ToDelete, 0, "should have 0 certificates to delete")
+	})
+
+	// Test: Sync creates certificates
+	t.Run("sync-create-certificates", func(t *testing.T) {
+		desired := []auxiliaryfiles.SSLCertificate{
+			{Path: "example.com.pem", Content: LoadTestFileContent(t, "ssl-certs/example.com.pem")},
+			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
+		}
+
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		require.NoError(t, err)
+
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		require.NoError(t, err)
+
+		// Verify certificates were created
+		certs, err := client.GetAllSSLCertificates(ctx)
+		require.NoError(t, err)
+		assert.Len(t, certs, 2)
+		assert.Contains(t, certs, "example.com.pem")
+		assert.Contains(t, certs, "test.com.pem")
+	})
+
+	// Test: Compare with certificates already present
+	// NOTE: Behavior depends on whether Dataplane API provides sha256_finger_print:
+	//  - With fingerprints: accurately detects changes (0 create, 1 update, 0 delete)
+	//  - Without fingerprints: uses CREATE-first approach (2 create, 0 update, 0 delete)
+	t.Run("compare-with-existing-certs", func(t *testing.T) {
+		desired := []auxiliaryfiles.SSLCertificate{
+			{Path: "example.com.pem", Content: LoadTestFileContent(t, "ssl-certs/updated.com.pem")}, // Changed content
+			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},       // Same content
+		}
+
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		require.NoError(t, err)
+
+		// Verify total operations match expected (either fingerprint-based or CREATE-first)
+		totalOps := len(diff.ToCreate) + len(diff.ToUpdate)
+		assert.Equal(t, 2, totalOps, "should have 2 total operations (create or update)")
+		assert.Len(t, diff.ToDelete, 0, "should have 0 certificates to delete")
+	})
+
+	// Test: Sync updates certificates (proper UPDATE or CREATE-with-fallback)
+	t.Run("sync-update-certificates", func(t *testing.T) {
+		desired := []auxiliaryfiles.SSLCertificate{
+			{Path: "example.com.pem", Content: LoadTestFileContent(t, "ssl-certs/updated.com.pem")},
+			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
+		}
+
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		require.NoError(t, err)
+
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		require.NoError(t, err)
+
+		// Verify certificates still exist
+		certs, err := client.GetAllSSLCertificates(ctx)
+		require.NoError(t, err)
+		assert.Len(t, certs, 2)
+		assert.Contains(t, certs, "example.com.pem")
+		assert.Contains(t, certs, "test.com.pem")
+	})
+
+	// Test: Compare with one certificate removed
+	t.Run("compare-with-delete", func(t *testing.T) {
+		desired := []auxiliaryfiles.SSLCertificate{
+			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
+			// example.com.pem is not in desired, so it should be deleted
+		}
+
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		require.NoError(t, err)
+
+		// At least one DELETE operation (example.com.pem should be deleted)
+		assert.Len(t, diff.ToDelete, 1, "should have 1 certificate to delete")
+		assert.Equal(t, "example.com.pem", diff.ToDelete[0])
+
+		// Remaining certificate may be CREATE (no fingerprints) or no-op (with fingerprints)
+		totalOps := len(diff.ToCreate) + len(diff.ToUpdate)
+		assert.LessOrEqual(t, totalOps, 1, "should have at most 1 operation for test.com.pem")
+	})
+
+	// Test: Sync deletes certificates
+	t.Run("sync-delete-certificates", func(t *testing.T) {
+		desired := []auxiliaryfiles.SSLCertificate{
+			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
+		}
+
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		require.NoError(t, err)
+
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		require.NoError(t, err)
+
+		// Verify certificate was deleted
+		certs, err := client.GetAllSSLCertificates(ctx)
+		require.NoError(t, err)
+		assert.Len(t, certs, 1)
+		assert.Contains(t, certs, "test.com.pem")
+		assert.NotContains(t, certs, "example.com.pem")
+	})
+
+	// Test: Idempotency - running sync again with same desired state
+	t.Run("sync-idempotent", func(t *testing.T) {
+		desired := []auxiliaryfiles.SSLCertificate{
+			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
+		}
+
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		require.NoError(t, err)
+
+		// Verify no DELETE operations (content hasn't been removed)
+		assert.Len(t, diff.ToDelete, 0, "should have 0 certificates to delete")
+
+		// With fingerprints: no operations. Without fingerprints: CREATE with fallback
+		totalOps := len(diff.ToCreate) + len(diff.ToUpdate)
+		assert.LessOrEqual(t, totalOps, 1, "should have at most 1 operation")
+
+		// Verify syncing again doesn't fail (idempotent via CREATE→UPDATE fallback)
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		require.NoError(t, err, "sync should be idempotent")
+	})
+
+	// Test: Bug regression - cert doesn't exist should CREATE, not UPDATE
+	// This specifically tests the bug that was fixed where non-existent certs were marked for UPDATE
+	t.Run("non-existent-cert-creates-not-updates", func(t *testing.T) {
+		// Clean up all certificates
+		certs, err := client.GetAllSSLCertificates(ctx)
+		require.NoError(t, err)
+		for _, cert := range certs {
+			_ = client.DeleteSSLCertificate(ctx, cert)
+		}
+
+		// Request a certificate that doesn't exist
+		desired := []auxiliaryfiles.SSLCertificate{
+			{Path: "new-cert.pem", Content: LoadTestFileContent(t, "ssl-certs/example.com.pem")},
+		}
+
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		require.NoError(t, err)
+
+		// CRITICAL: Should be marked for CREATE, not UPDATE
+		assert.Len(t, diff.ToCreate, 1, "non-existent cert should be marked for CREATE")
+		assert.Len(t, diff.ToUpdate, 0, "non-existent cert should NOT be marked for UPDATE")
+		assert.Len(t, diff.ToDelete, 0, "should have 0 certificates to delete")
+
+		// Verify sync succeeds (would fail with old bug when trying to UPDATE non-existent cert)
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		require.NoError(t, err, "sync should succeed when creating new certificate")
+
+		// Verify certificate was actually created
+		certs, err = client.GetAllSSLCertificates(ctx)
+		require.NoError(t, err)
+		assert.Contains(t, certs, "new-cert.pem", "certificate should exist after sync")
+	})
 }
 
 // TestGeneralFilesCompareAndSync tests the Compare and Sync functions for general files

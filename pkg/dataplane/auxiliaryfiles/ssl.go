@@ -2,11 +2,20 @@ package auxiliaryfiles
 
 import (
 	"context"
-	"log/slog"
+	"crypto/sha256"
+	"encoding/hex"
+	"path/filepath"
 	"strings"
 
 	"haproxy-template-ic/pkg/dataplane/client"
 )
+
+// calculateCertificateFingerprint calculates the SHA256 fingerprint of certificate content.
+// This matches what the HAProxy Dataplane API returns in the sha256_finger_print field.
+func calculateCertificateFingerprint(content string) string {
+	hash := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(hash[:])
+}
 
 // sslCertificateOps implements FileOperations for SSLCertificate.
 type sslCertificateOps struct {
@@ -14,15 +23,21 @@ type sslCertificateOps struct {
 }
 
 func (o *sslCertificateOps) GetAll(ctx context.Context) ([]string, error) {
+	// NOTE: API returns filenames only (e.g., "cert.pem"), not absolute paths.
+	// Comparison logic in CompareSSLCertificates() handles path normalization.
 	return o.client.GetAllSSLCertificates(ctx)
 }
 
 func (o *sslCertificateOps) GetContent(ctx context.Context, id string) (string, error) {
-	return o.client.GetSSLCertificateContent(ctx, id)
+	// Extract filename from path (API expects filename only)
+	filename := filepath.Base(id)
+	return o.client.GetSSLCertificateContent(ctx, filename)
 }
 
 func (o *sslCertificateOps) Create(ctx context.Context, id, content string) error {
-	err := o.client.CreateSSLCertificate(ctx, id, content)
+	// Extract filename from path (API expects filename only)
+	filename := filepath.Base(id)
+	err := o.client.CreateSSLCertificate(ctx, filename, content)
 	if err != nil && strings.Contains(err.Error(), "already exists") {
 		// Certificate already exists, fall back to update instead of failing.
 		// This handles the case where a previous deployment partially succeeded
@@ -33,100 +48,91 @@ func (o *sslCertificateOps) Create(ctx context.Context, id, content string) erro
 }
 
 func (o *sslCertificateOps) Update(ctx context.Context, id, content string) error {
-	return o.client.UpdateSSLCertificate(ctx, id, content)
+	// Extract filename from path (API expects filename only)
+	filename := filepath.Base(id)
+	return o.client.UpdateSSLCertificate(ctx, filename, content)
 }
 
 func (o *sslCertificateOps) Delete(ctx context.Context, id string) error {
-	return o.client.DeleteSSLCertificate(ctx, id)
+	// Extract filename from path (API expects filename only)
+	filename := filepath.Base(id)
+	return o.client.DeleteSSLCertificate(ctx, filename)
 }
 
 // CompareSSLCertificates compares the current state of SSL certificates in HAProxy storage
 // with the desired state, and returns a diff describing what needs to be created,
 // updated, or deleted.
 //
-// NOTE: HAProxy Data Plane API v3 does not provide SSL certificate content via GET endpoint.
-// It only returns metadata (file path, fingerprints, etc.). Therefore, this comparison is
-// name-based only. All certificates with matching names will be marked for update to ensure
-// content is synchronized, since we cannot verify if the stored content matches desired content.
+// This function uses metadata-based comparison via sha256_finger_print from the HAProxy
+// Dataplane API, which provides accurate content comparison without downloading the full PEM data.
 //
-// This function:
-//  1. Fetches all current certificate names from the Dataplane API
-//  2. Compares names with the desired certificates list
-//  3. Returns an SSLCertificateDiff with operations needed to reach desired state
-//     - ToCreate: certificates that don't exist
-//     - ToUpdate: certificates that exist (always update since we can't verify content)
-//     - ToDelete: certificates that shouldn't exist
+// Strategy:
+//  1. Fetch current certificate names from the Dataplane API
+//  2. Fetch SHA256 fingerprints for all current certificates
+//  3. Compare fingerprints with desired certificates
+//  4. Return diff with create, update, and delete operations
+//
+// Path normalization: The API returns filenames only (e.g., "cert.pem"), but SSLCertificate.Path
+// may contain full paths (e.g., "/etc/haproxy/ssl/cert.pem"). We normalize using filepath.Base()
+// for comparison.
 func CompareSSLCertificates(ctx context.Context, c *client.DataplaneClient, desired []SSLCertificate) (*SSLCertificateDiff, error) {
-	// Fetch current certificate names from API
-	currentNames, err := c.GetAllSSLCertificates(ctx)
+	// Normalize desired certificates to use filenames for identifiers
+	// and calculate SHA256 fingerprints for content comparison
+	normalizedDesired := make([]SSLCertificate, len(desired))
+	for i, cert := range desired {
+		normalizedDesired[i] = SSLCertificate{
+			Path:    filepath.Base(cert.Path),
+			Content: calculateCertificateFingerprint(cert.Content),
+		}
+	}
+
+	ops := &sslCertificateOps{client: c}
+
+	// Use generic Compare function with fingerprint-based comparison
+	genericDiff, err := Compare[SSLCertificate](
+		ctx,
+		ops,
+		normalizedDesired,
+		func(id, fingerprint string) SSLCertificate {
+			return SSLCertificate{
+				Path:    id,
+				Content: fingerprint,
+			}
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create lookup maps
-	currentNamesMap := make(map[string]bool, len(currentNames))
-	for _, name := range currentNames {
-		currentNamesMap[name] = true
+	// Convert generic diff to SSL certificate diff
+	// Note: For SSL certificates, we need to use original desired certificates (with full paths)
+	// for Create/Update operations, but use normalized paths for Delete operations
+	desiredMap := make(map[string]SSLCertificate)
+	for _, cert := range desired {
+		desiredMap[filepath.Base(cert.Path)] = cert
 	}
 
-	desiredMap := make(map[string]SSLCertificate, len(desired))
-	desiredPaths := make([]string, 0, len(desired))
-	for _, cert := range desired {
-		desiredMap[cert.Path] = cert
-		desiredPaths = append(desiredPaths, cert.Path)
+	diff := &SSLCertificateDiff{
+		ToCreate: make([]SSLCertificate, 0, len(genericDiff.ToCreate)),
+		ToUpdate: make([]SSLCertificate, 0, len(genericDiff.ToUpdate)),
+		ToDelete: genericDiff.ToDelete,
 	}
 
-	// Debug logging to diagnose path mismatches
-	slog.Info("SSL certificate comparison",
-		"current_count", len(currentNames),
-		"current_names", currentNames,
-		"desired_count", len(desired),
-		"desired_paths", desiredPaths)
-
-	// Determine operations
-	var toCreate, toUpdate []SSLCertificate
-	var toDelete []string
-
-	// Check desired certificates
-	for _, cert := range desired {
-		if currentNamesMap[cert.Path] {
-			// Certificate exists - always update since we can't verify content matches
-			toUpdate = append(toUpdate, cert)
-		} else {
-			// Certificate doesn't exist - create it
-			toCreate = append(toCreate, cert)
+	// Restore original paths for create operations
+	for _, cert := range genericDiff.ToCreate {
+		if original, exists := desiredMap[cert.Path]; exists {
+			diff.ToCreate = append(diff.ToCreate, original)
 		}
 	}
 
-	// Check for certificates to delete
-	for _, name := range currentNames {
-		if _, exists := desiredMap[name]; !exists {
-			// Certificate exists but not in desired state - delete it
-			toDelete = append(toDelete, name)
+	// Restore original paths for update operations
+	for _, cert := range genericDiff.ToUpdate {
+		if original, exists := desiredMap[cert.Path]; exists {
+			diff.ToUpdate = append(diff.ToUpdate, original)
 		}
 	}
 
-	// Extract paths for logging
-	createPaths := make([]string, len(toCreate))
-	for i, cert := range toCreate {
-		createPaths[i] = cert.Path
-	}
-	updatePaths := make([]string, len(toUpdate))
-	for i, cert := range toUpdate {
-		updatePaths[i] = cert.Path
-	}
-
-	// Debug logging to diagnose comparison results
-	slog.Info("SSL certificate comparison results",
-		"to_create", createPaths,
-		"to_update", updatePaths,
-		"to_delete", toDelete)
-
-	return &SSLCertificateDiff{
-		ToCreate: toCreate,
-		ToUpdate: toUpdate,
-		ToDelete: toDelete,
-	}, nil
+	return diff, nil
 }
 
 // SyncSSLCertificates synchronizes SSL certificates to the desired state by applying

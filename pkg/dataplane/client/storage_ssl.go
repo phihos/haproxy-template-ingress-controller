@@ -96,13 +96,18 @@ func (c *DataplaneClient) GetAllSSLCertificates(ctx context.Context) ([]string, 
 	return names, nil
 }
 
-// GetSSLCertificateContent retrieves metadata for a specific SSL certificate by name.
+// GetSSLCertificateContent retrieves the SHA256 fingerprint for a specific SSL certificate by name.
 //
-// IMPORTANT: HAProxy Data Plane API v3 limitation - this function returns the FILE PATH
-// stored in the 'file' field (e.g., "/etc/haproxy/ssl/example_com.pem"), NOT the actual
-// certificate content (PEM data). This is a known API limitation.
+// This function returns the sha256_finger_print field from the HAProxy Data Plane API,
+// which serves as a unique identifier for the certificate content. This allows content-based
+// comparison without needing to download the actual PEM data.
 //
-// To get actual certificate content, you would need to use kubectl exec or direct file access.
+// The API provides rich metadata including:
+//   - sha256_finger_print: SHA-256 hash of certificate content (returned by this function)
+//   - serial: Certificate serial number
+//   - issuers: Certificate issuer information
+//   - subject: Certificate subject information
+//   - not_after, not_before: Certificate validity period
 //
 // The name parameter can use dots (e.g., "example.com.pem"), which will be sanitized
 // automatically before calling the API.
@@ -136,11 +141,14 @@ func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name str
 		return "", nil
 	}
 
-	// Parse response body
+	// Parse response body - include sha256_finger_print field
+	// Try both underscore and dash versions as field name may vary by API version
 	var apiCert struct {
-		StorageName *string `json:"storage_name"`
-		File        *string `json:"file"`
-		Description *string `json:"description"`
+		StorageName        *string `json:"storage_name"`
+		File               *string `json:"file"`
+		Description        *string `json:"description"`
+		SHA256Fingerprint  *string `json:"sha256_finger_print"`
+		SHA256Fingerprint2 *string `json:"sha256-finger-print"` // Try dash version
 	}
 
 	if err := json.Unmarshal(bodyBytes, &apiCert); err != nil {
@@ -152,12 +160,23 @@ func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name str
 		return "", fmt.Errorf("failed to decode SSL certificate response (body: %s): %w", bodySnippet, err)
 	}
 
-	if apiCert.File == nil {
-		return "", fmt.Errorf("certificate file path is nil for '%s'", name)
+	// Use whichever fingerprint field is populated
+	var fingerprint *string
+	if apiCert.SHA256Fingerprint != nil {
+		fingerprint = apiCert.SHA256Fingerprint
+	} else if apiCert.SHA256Fingerprint2 != nil {
+		fingerprint = apiCert.SHA256Fingerprint2
 	}
 
-	// Returns file path, not content (see function documentation for details)
-	return *apiCert.File, nil
+	if fingerprint == nil {
+		// Fingerprint not available - this can happen with older Dataplane API versions.
+		// Return a placeholder that will trigger CREATE operations (which have fallback to UPDATE).
+		// This ensures compatibility with both old and new API versions.
+		return "__NO_FINGERPRINT__", nil
+	}
+
+	// Return SHA256 fingerprint for content-based comparison
+	return *fingerprint, nil
 }
 
 // CreateSSLCertificate creates a new SSL certificate using multipart form-data.
