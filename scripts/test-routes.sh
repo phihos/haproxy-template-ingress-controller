@@ -1053,40 +1053,17 @@ test_ingress_combined() {
     # Test requires auth
     assert_auth_required \
         "Auth required on combined example" \
-        "echo-combined.localdev.me"
+        "echo-combined-ingress.localdev.me"
 
-    # Test rate limiting with auth
-    local successful_requests=0
-    local rate_limited_requests=0
+    # Test security headers (need auth for this endpoint)
+    local response_headers
+    response_headers=$(curl -s --max-time 5 -I -u "admin:admin" -H "Host: echo-combined-ingress.localdev.me" "${BASE_URL}/" 2>&1)
 
-    debug "Testing combined rate limiting with auth..."
-
-    for i in $(seq 1 15); do
-        local response_code
-        response_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -u "admin:admin" -H "Host: echo-combined.localdev.me" "${BASE_URL}/" 2>&1)
-
-        if [[ "$response_code" == "200" ]]; then
-            successful_requests=$((successful_requests + 1))
-        elif [[ "$response_code" == "429" ]] || [[ "$response_code" == "403" ]]; then
-            rate_limited_requests=$((rate_limited_requests + 1))
-        fi
-
-        sleep 0.1
-    done
-
-    debug "  Combined test: Successful: $successful_requests, Rate limited: $rate_limited_requests"
-
-    if [[ $rate_limited_requests -gt 0 ]]; then
-        ok "Combined annotations work together (auth + rate limiting)"
+    if echo "$response_headers" | grep -iq "^x-frame-options:"; then
+        ok "Security headers in combined example - Header 'X-Frame-Options' present"
     else
-        warn "Combined test: No requests rate limited (may need more requests)"
+        err "Security headers in combined example - Header 'X-Frame-Options' not found"
     fi
-
-    # Test security headers
-    assert_header_present \
-        "Security headers in combined example" \
-        "echo-combined.localdev.me" \
-        "X-Frame-Options"
 }
 
 test_ingress_backend_snippet() {

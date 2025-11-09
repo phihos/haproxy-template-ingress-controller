@@ -553,7 +553,7 @@ metadata:
 spec:
   ingressClassName: haproxy-template-ic
   rules:
-    - host: echo-combined.localdev.me
+    - host: echo-combined-ingress.localdev.me
       http:
         paths:
           - path: /
