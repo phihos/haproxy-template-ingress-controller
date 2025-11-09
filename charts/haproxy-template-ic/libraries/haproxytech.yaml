@@ -504,6 +504,40 @@ templateSnippets:
       {%- endif %}
       {%- endif -%}
 
+  backend-directives-haproxytech-session-persistence-no-dynamic:
+    priority: 401
+    template: |
+      {#-
+        HAProxy Session Persistence - Static Cookies (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#cookie-persistence
+
+        Annotations:
+          - haproxy.org/cookie-persistence-no-dynamic: Cookie name for static sticky sessions (optional)
+
+        Format:
+          cookie-persistence-no-dynamic: Cookie name (e.g., "SERVERID", "JSESSIONID")
+
+        Generated HAProxy Config:
+          cookie <name> insert indirect nocache
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+        Note: Use only in single-instance controller deployments
+        Note: Mutually exclusive with cookie-persistence
+        Note: Static cookies will differ across controller instances, breaking session affinity in multi-instance deployments
+      -#}
+      {%- if ingress is defined %}
+      {%- set cookie_dynamic = ingress.metadata.annotations["haproxy.org/cookie-persistence"] | default("") %}
+      {%- set cookie_static = ingress.metadata.annotations["haproxy.org/cookie-persistence-no-dynamic"] | default("") %}
+      {%- if cookie_dynamic and cookie_static %}
+        {{- fail("Cannot use both 'haproxy.org/cookie-persistence' and 'haproxy.org/cookie-persistence-no-dynamic' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Use only one cookie persistence method.") -}}
+      {%- endif %}
+      {%- if cookie_static %}
+      # haproxytech/backend-directives-haproxytech-session-persistence-no-dynamic
+      cookie {{ cookie_static }} insert indirect nocache
+      {%- endif %}
+      {%- endif -%}
+
   backend-directives-haproxytech-advanced:
     priority: 900
     template: |
@@ -1010,6 +1044,214 @@ templateSnippets:
         {%- endif -%}
       {%- endif -%}
       {%- endif -%}
+
+  frontends-ssl-tcp:
+    priority: 300
+    template: |
+      {#-
+        HAProxy SSL TCP Frontend (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#ssl-passthrough
+
+        Purpose:
+          Implements SSL passthrough support by creating a TCP frontend on port 443 that:
+          - Extracts SNI (Server Name Indication) without terminating SSL
+          - Routes to passthrough backends for hosts with haproxy.org/ssl-passthrough="true"
+          - Routes to loopback backend for SSL termination for other hosts
+
+        Architecture:
+          Based on official HAProxy Kubernetes Ingress Controller implementation
+          (see /home/phil/Quellcode/GitHub/kubernetes-ingress/pkg/handler/https.go:206-316)
+
+        Flow:
+          1. TCP frontend receives connection on port 443
+          2. Extracts SNI hostname using req_ssl_sni
+          3. Routes to passthrough backends for hosts with annotation enabled
+          4. Routes to loopback backend for SSL termination for other hosts
+
+        Annotations:
+          - haproxy.org/ssl-passthrough: "true" (enables passthrough for all hosts in this ingress)
+
+        Generated HAProxy Config:
+          frontend ssl-tcp
+            mode tcp
+            bind *:443
+            tcp-request inspect-delay 5s
+            tcp-request content accept if { req_ssl_hello_type 1 }
+            use_backend <passthrough-backend> if { req_ssl_sni -m str <hostname> }
+            default_backend ssl-loopback
+      -#}
+      {#- Only generate TCP frontend if at least one ingress has ssl-passthrough -#}
+      {%- set ns = namespace(has_passthrough=false) %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
+        {%- if ssl_passthrough == "true" %}
+          {%- set ns.has_passthrough = true %}
+        {%- endif %}
+      {%- endfor %}
+
+      {%- if ns.has_passthrough %}
+      # haproxytech/frontends-ssl-tcp
+
+      frontend ssl-tcp
+          mode tcp
+          bind *:443
+
+          # Extract SNI for routing decisions (wait up to 5s for client hello)
+          tcp-request inspect-delay 5s
+          tcp-request content accept if { req_ssl_hello_type 1 }
+
+          # Route to passthrough backends based on SNI
+          {%- set ns_routes = namespace(seen="") %}
+          {%- for ingress in resources.ingresses.List() %}
+            {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
+            {%- if ssl_passthrough == "true" %}
+              {%- for rule in (ingress.spec.rules | default([])) %}
+                {%- if rule.host is defined %}
+                  {%- set host_key = rule.host %}
+                  {%- if ("|" ~ host_key ~ "|") not in ns_routes.seen %}
+                    {%- set ns_routes.seen = ns_routes.seen ~ "|" ~ host_key ~ "|" %}
+                    {%- set backend_name = "ssl-passthrough-" ~ ingress.metadata.namespace ~ "-" ~ ingress.metadata.name %}
+          use_backend {{ backend_name }} if { req_ssl_sni -m str {{ host_key }} }
+                  {%- endif %}
+                {%- endif %}
+              {%- endfor %}
+            {%- endif %}
+          {%- endfor %}
+
+          # Default: route to loopback backend for SSL termination
+          default_backend ssl-loopback
+      {%- endif %}
+
+  frontends-ssl-https:
+    priority: 301
+    template: |
+      {#-
+          HAProxy SSL HTTPS Frontend (Ingress Only)
+
+          Purpose:
+            Unix socket frontend for SSL-terminated traffic from the loopback backend.
+            Uses PROXY protocol v2 to preserve client IP information.
+
+          Architecture:
+            Receives traffic from ssl-loopback backend after SSL termination.
+            Applies same routing logic as http_frontend but on unix socket.
+
+          Flow:
+            1. ssl-tcp frontend routes non-passthrough traffic to ssl-loopback backend
+            2. ssl-loopback backend terminates SSL and sends to this frontend via unix socket
+            3. This frontend uses PROXY protocol v2 to get real client IP
+            4. Standard HTTP routing logic applies (same as port 80)
+      -#}
+      {#- Only generate HTTPS frontend if at least one ingress has ssl-passthrough -#}
+      {%- set ns = namespace(has_passthrough=false) %}
+      {%- for ingress in resources.ingresses.List() %}
+          {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
+          {%- if ssl_passthrough == "true" %}
+            {%- set ns.has_passthrough = true %}
+          {%- endif %}
+      {%- endfor %}
+
+      {%- if ns.has_passthrough %}
+      # haproxytech/frontends-ssl-https
+
+      frontend ssl-https
+          mode http
+          bind unix@/var/run/ssl-frontend.sock accept-proxy
+
+          {#- Reuse frontend routing logic from base.yaml #}
+          {%- filter indent(8, first=False) %}
+          {% include "frontend-routing-logic" -%}
+          {%- endfilter %}
+
+          # Use backend from txn.backend_name (set by qualifier logic)
+          use_backend %[var(txn.backend_name)] if { var(txn.backend_name) -m found }
+
+          # Default backend
+          default_backend default_backend
+      {%- endif %}
+
+  backends-haproxytech-ssl-loopback:
+    priority: 500
+    template: |
+      {#-
+          HAProxy SSL Loopback Backend (Ingress Only)
+
+          Purpose:
+            Routes SSL-terminated traffic to the ssl-https frontend using unix socket.
+            Uses PROXY protocol v2 to preserve client IP information.
+
+          Architecture:
+            Acts as intermediary between ssl-tcp frontend and ssl-https frontend.
+            Terminates SSL and forwards to unix socket with client info via PROXY protocol.
+      -#}
+      {#- Only generate loopback backend if at least one ingress has ssl-passthrough -#}
+      {%- set ns = namespace(has_passthrough=false) %}
+      {%- for ingress in resources.ingresses.List() %}
+          {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
+          {%- if ssl_passthrough == "true" %}
+            {%- set ns.has_passthrough = true %}
+          {%- endif %}
+      {%- endfor %}
+
+      {%- if ns.has_passthrough %}
+      # haproxytech/backends-haproxytech-ssl-loopback
+
+      backend ssl-loopback
+          mode tcp
+          server loopback unix@/var/run/ssl-frontend.sock send-proxy-v2
+      {%- endif %}
+
+  backends-haproxytech-ssl-passthrough:
+    priority: 501
+    template: |
+      {#-
+          HAProxy SSL Passthrough Backends (Ingress Only)
+
+          Purpose:
+            TCP backends for SSL passthrough - forward encrypted traffic directly to pods.
+            No SSL termination occurs in HAProxy.
+
+          Annotations:
+            - haproxy.org/ssl-passthrough: "true" (enables passthrough for this ingress)
+
+          Generated HAProxy Config:
+            backend ssl-passthrough-<namespace>-<name>
+              mode tcp
+              server SRV_1 <pod-ip>:<pod-port> check
+      -#}
+      {%- set ns = namespace(processed="") %}
+      {%- for ingress in resources.ingresses.List() %}
+          {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
+          {%- if ssl_passthrough == "true" %}
+            {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
+            {%- if ("|" ~ ingress_key ~ "|") not in ns.processed %}
+              {%- set ns.processed = ns.processed ~ "|" ~ ingress_key ~ "|" %}
+              {%- set backend_name = "ssl-passthrough-" ~ ingress.metadata.namespace ~ "-" ~ ingress.metadata.name %}
+              {%- set ns_backend = namespace(generated=false) %}
+              {%- for rule in (ingress.spec.rules | default([])) %}
+                {%- if not ns_backend.generated and rule.http is defined %}
+                  {%- for path in (rule.http.paths | default([])) %}
+                    {%- if not ns_backend.generated %}
+                      {%- set service_name = path.backend.service.name %}
+                      {%- set service_port = path.backend.service.port.number | default(path.backend.service.port.name) %}
+                      {%- set port = service_port %}
+      # haproxytech/backends-haproxytech-ssl-passthrough
+
+      backend {{ backend_name }}
+          mode tcp
+          balance roundrobin
+                      {%- filter indent(8, first=False) -%}
+                      {%- include "util-backend-servers" -%}
+                      {%- endfilter %}
+                      {%- set ns_backend.generated = true %}
+                    {%- endif %}
+                  {%- endfor %}
+                {%- endif %}
+              {%- endfor %}
+            {%- endif %}
+          {%- endif %}
+      {%- endfor %}
 
 validationTests:
   test-auth-basic-cross-namespace:
@@ -3490,3 +3732,298 @@ validationTests:
         target: haproxy.cfg
         pattern: "backend ing_default_empty-annotations-ingress_test-service_80"
         description: Backend must be created for ingress with empty annotations
+
+  test-ssl-passthrough-basic:
+    description: SSL passthrough with basic configuration
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: ssl-passthrough-ingress
+            annotations:
+              haproxy.org/ssl-passthrough: "true"
+          spec:
+            rules:
+              - host: secure.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: secure-service
+                          port:
+                            number: 443
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: secure-service
+          spec:
+            ports:
+              - port: 443
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: secure-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: secure-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.1.30"
+          ports:
+            - port: 8443
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "frontend ssl-tcp"
+        description: Must generate TCP frontend for SSL passthrough
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "mode tcp"
+        description: TCP frontend must be in TCP mode
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "bind \\*:443"
+        description: TCP frontend must bind to port 443
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "tcp-request inspect-delay 5s"
+        description: Must wait for SSL client hello
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "tcp-request content accept if \\{ req_ssl_hello_type 1 \\}"
+        description: Must accept SSL client hello
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "use_backend ssl-passthrough-default-ssl-passthrough-ingress if \\{ req_ssl_sni -m str secure\\.example\\.com \\}"
+        description: Must route based on SNI to passthrough backend
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "default_backend ssl-loopback"
+        description: Must default to loopback backend for SSL termination
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ssl-passthrough-default-ssl-passthrough-ingress"
+        description: Must generate passthrough backend
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ssl-loopback"
+        description: Must generate loopback backend
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server loopback unix@/var/run/ssl-frontend\\.sock send-proxy-v2"
+        description: Loopback must use unix socket with PROXY protocol v2
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "frontend ssl-https"
+        description: Must generate HTTPS frontend on unix socket
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "bind unix@/var/run/ssl-frontend\\.sock accept-proxy"
+        description: HTTPS frontend must accept PROXY protocol
+
+  test-ssl-passthrough-no-annotation:
+    description: No SSL passthrough frontends when annotation not present
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: normal-ingress
+          spec:
+            rules:
+              - host: normal.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: normal-service
+                          port:
+                            number: 80
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: normal-service
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: normal-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: normal-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.1.60"
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: not_contains
+        target: haproxy.cfg
+        pattern: "frontend ssl-tcp"
+        description: Must NOT generate TCP frontend when no passthrough annotation
+
+      - type: not_contains
+        target: haproxy.cfg
+        pattern: "frontend ssl-https"
+        description: Must NOT generate HTTPS frontend when no passthrough annotation
+
+      - type: not_contains
+        target: haproxy.cfg
+        pattern: "backend ssl-loopback"
+        description: Must NOT generate loopback backend when no passthrough annotation
+
+  test-cookie-persistence-no-dynamic:
+    description: Static cookie persistence without dynamic cookie-key
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: static-cookie-ingress
+            annotations:
+              haproxy.org/cookie-persistence-no-dynamic: "SERVERID"
+          spec:
+            rules:
+              - host: app.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: app-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: app-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-service-xyz
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.1.20"
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "cookie SERVERID insert indirect nocache"
+        description: Must generate static cookie directive
+
+      - type: not_contains
+        target: haproxy.cfg
+        pattern: "dynamic-cookie-key"
+        description: Must NOT include dynamic-cookie-key
+
+      - type: not_contains
+        target: haproxy.cfg
+        pattern: "cookie SERVERID insert indirect nocache dynamic"
+        description: Must NOT include dynamic keyword in cookie directive
+
+  test-cookie-persistence-mutual-exclusion:
+    description: Cannot use both dynamic and static cookie persistence
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: conflict-ingress
+            annotations:
+              haproxy.org/cookie-persistence: "SESSION1"
+              haproxy.org/cookie-persistence-no-dynamic: "SESSION2"
+          spec:
+            rules:
+              - host: app.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: app-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: app-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-service-xyz
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.1.20"
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: contains
+        target: rendering_error
+        pattern: "Cannot use both 'haproxy.org/cookie-persistence' and 'haproxy.org/cookie-persistence-no-dynamic'"
+        description: Must fail with clear mutual exclusion error

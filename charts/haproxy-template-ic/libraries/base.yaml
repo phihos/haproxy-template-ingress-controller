@@ -356,9 +356,13 @@ haproxyConfig:
         # Default backend
         default_backend default_backend
 
+    {#- Extension point for additional frontends (e.g., HTTPS, TCP) #}
+    {#- Resource libraries can inject frontends-* snippets for SSL, passthrough, etc. #}
+    {%- from "util-macros" import include_matching -%}
+    {{- include_matching("frontends-*") | trim }}
+
     {#- Include all resource-specific backend definitions using plugin pattern #}
     {#- Resource libraries implement backends-* snippets (e.g., backends-ingress, backends-gateway) #}
-    {%- from "util-macros" import include_matching -%}
     {{- include_matching("backends-*") | trim }}
     backend default_backend
         http-request return status 404

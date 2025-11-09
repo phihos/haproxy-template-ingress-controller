@@ -13,7 +13,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLUSTER_NAME="haproxy-template-ic-dev"
 ECHO_NAMESPACE="echo"
 NODEPORT="30080"
+HTTPS_NODEPORT="30443"
 BASE_URL="http://localhost:${NODEPORT}"
+HTTPS_BASE_URL="https://localhost:${HTTPS_NODEPORT}"
 
 # Options
 VERBOSE=false
@@ -1132,14 +1134,15 @@ test_ingress_proxy_protocol() {
     print_section "Testing Ingress: echo-proxy-protocol (PROXY protocol)"
 
     # Note: PROXY protocol is a backend-side feature
-    # We can only verify that the route works (backend would need to support PROXY protocol)
+    # Points to haproxy-demo-backend which accepts PROXY protocol v2
+    # and forwards plain HTTP to echo-server
     assert_response_ok \
         "PROXY protocol route responds" \
         "echo-proxy-protocol.localdev.me" \
         "/" \
         ""
 
-    ok "PROXY protocol annotation applied (backend-side feature, limited test)"
+    ok "PROXY protocol annotation applied (backend accepts PROXY protocol)"
 }
 
 test_ingress_backend_ssl() {
@@ -1209,6 +1212,37 @@ test_ingress_scale_slots() {
     else
         ok "Route works (could not check HAProxy config - no pod found)"
     fi
+}
+
+test_ingress_ssl_passthrough() {
+    if ! should_test "echo-ssl-passthrough"; then
+        return 0
+    fi
+
+    print_section "Testing Ingress: echo-ssl-passthrough (SSL passthrough)"
+
+    # Note: SSL passthrough uses SNI-based TCP routing
+    # HAProxy does not terminate SSL - passes encrypted traffic directly to backend
+    # Points to haproxy-demo-backend which terminates SSL and forwards to echo-server
+
+    # Test HTTPS connectivity (using --insecure since it's a self-signed cert)
+    # Use --connect-to to ensure proper SNI is sent
+    local response
+    if ! response=$(curl -sk --max-time 5 --resolve echo-passthrough.localdev.me:30443:127.0.0.1 --connect-to echo-passthrough.localdev.me:30443:localhost:30443 https://echo-passthrough.localdev.me:30443/ 2>&1); then
+        err "SSL passthrough - Connection failed"
+        return 1
+    fi
+
+    # Check that response contains valid JSON with expected structure
+    if echo "$response" | grep -q "\"http\":"; then
+        ok "SSL passthrough - Encrypted traffic passed through to backend"
+    else
+        err "SSL passthrough - Invalid response"
+        echo "  Received: ${response:0:500}"
+        return 1
+    fi
+
+    ok "SSL passthrough annotation applied (SNI-based TCP routing, backend terminates SSL)"
 }
 
 #═══════════════════════════════════════════════════════════════════════════
@@ -1516,6 +1550,7 @@ main() {
         test_ingress_backend_ssl
         test_ingress_backend_mtls
         test_ingress_scale_slots
+        test_ingress_ssl_passthrough
         test_ingress_combined
     fi
 

@@ -634,7 +634,7 @@ metadata:
   namespace: echo
   annotations:
     # Enable PROXY protocol v2 when connecting to backends
-    # Points to haproxy-test-backend which accepts PROXY protocol
+    # Points to haproxy-demo-backend which accepts PROXY protocol
     # and forwards plain HTTP to echo-server
     haproxy.org/send-proxy-protocol: "proxy-v2"
 spec:
@@ -647,7 +647,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: haproxy-test-backend
+                name: haproxy-demo-backend
                 port:
                   number: 8080
 
@@ -662,7 +662,7 @@ metadata:
   namespace: echo
   annotations:
     # Enable SSL/TLS when connecting to backend (for backends that require HTTPS)
-    # Points to haproxy-test-backend which accepts SSL/TLS connections
+    # Points to haproxy-demo-backend which accepts SSL/TLS connections
     # and forwards plain HTTP to echo-server
     # Note: Not using HTTP/2 to avoid health check timeout issues
     haproxy.org/server-ssl: "true"
@@ -676,7 +676,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: haproxy-test-backend
+                name: haproxy-demo-backend
                 port:
                   number: 8443
 
@@ -778,3 +778,31 @@ spec:
                 name: echo-server
                 port:
                   number: 80
+
+---
+##############################################################################
+# 27. SSL PASSTHROUGH - TCP mode passthrough to HTTPS backend
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-ssl-passthrough
+  namespace: echo
+  annotations:
+    # Enable SSL passthrough (SNI-based TCP routing)
+    # HAProxy does not terminate SSL - passes encrypted traffic directly to backend
+    # Backend must handle SSL/TLS termination
+    haproxy.org/ssl-passthrough: "true"
+spec:
+  ingressClassName: haproxy-template-ic
+  rules:
+    - host: echo-passthrough.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: haproxy-demo-backend
+                port:
+                  number: 8443
