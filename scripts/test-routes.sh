@@ -1217,11 +1217,11 @@ test_ingress_scale_slots() {
     # Verify server slots in HAProxy config
     # This is a capacity planning feature - verify it's configured correctly
     local haproxy_pod
-    haproxy_pod=$(kubectl --context "${KUBE_CONTEXT}" -n echo get pods -l app=haproxy -o name 2>/dev/null | head -n1)
+    haproxy_pod=$(kubectl --context "kind-${CLUSTER_NAME}" -n echo get pods -l app=haproxy -o name 2>/dev/null | head -n1)
 
     if [[ -n "$haproxy_pod" ]]; then
         local backend_config
-        backend_config=$(kubectl --context "${KUBE_CONTEXT}" -n echo exec "$haproxy_pod" -- cat /etc/haproxy/haproxy.cfg 2>/dev/null | grep -A 20 "backend.*echo-scale-slots")
+        backend_config=$(kubectl --context "kind-${CLUSTER_NAME}" -n echo exec "$haproxy_pod" -- cat /etc/haproxy/haproxy.cfg 2>/dev/null | grep -A 20 "backend.*echo-scale-slots")
 
         if echo "$backend_config" | grep -q "server-template\|scale-server-slots"; then
             ok "Server slot pre-allocation configured in HAProxy"
