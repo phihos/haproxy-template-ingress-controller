@@ -634,7 +634,7 @@ metadata:
   namespace: echo
   annotations:
     # Enable PROXY protocol v2 when connecting to backends
-    # Points to haproxy-proxy-protocol which accepts PROXY protocol
+    # Points to haproxy-test-backend which accepts PROXY protocol
     # and forwards plain HTTP to echo-server
     haproxy.org/send-proxy-protocol: "proxy-v2"
 spec:
@@ -647,7 +647,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: haproxy-proxy-protocol
+                name: haproxy-test-backend
                 port:
                   number: 8080
 
@@ -662,9 +662,10 @@ metadata:
   namespace: echo
   annotations:
     # Enable SSL/TLS when connecting to backend (for backends that require HTTPS)
+    # Points to haproxy-test-backend which accepts SSL/TLS connections
+    # and forwards plain HTTP to echo-server
+    # Note: Not using HTTP/2 to avoid health check timeout issues
     haproxy.org/server-ssl: "true"
-    # Use HTTP/2 protocol to backend
-    haproxy.org/server-proto: "h2"
 spec:
   ingressClassName: haproxy-template-ic
   rules:
@@ -675,9 +676,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: echo-server
+                name: haproxy-test-backend
                 port:
-                  number: 80
+                  number: 8443
 
 ---
 ##############################################################################
