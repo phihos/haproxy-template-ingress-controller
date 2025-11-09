@@ -432,10 +432,11 @@ assert_path_rewrite() {
     fi
 
     # Check that the echo server received the expected path
-    if echo "$response" | grep -q "\"path\":\"${expected_path}\""; then
+    # The echo server returns the path in the "originalUrl" field
+    if echo "$response" | grep -q "\"originalUrl\":\"${expected_path}\""; then
         ok "$description - Path rewritten correctly"
     else
-        local actual_path=$(echo "$response" | grep -o '"path":"[^"]*"' | cut -d'"' -f4)
+        local actual_path=$(echo "$response" | grep -o '"originalUrl":"[^"]*"' | cut -d'"' -f4)
         err "$description - Path not rewritten. Expected: $expected_path, Got: $actual_path"
         debug "  Response: ${response:0:500}"
         return 1
