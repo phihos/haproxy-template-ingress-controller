@@ -744,6 +744,12 @@ EOF
 deploy_ingress_demo() {
 	log INFO "Deploying Ingress demo resources..."
 
+	# Deploy test backend for PROXY protocol and SSL testing
+	kubectl apply -f "${ASSETS_DIR}/haproxy-test-backend.yaml" >/dev/null || {
+		err "Failed to deploy test backend"
+		return 1
+	}
+
 	# Deploy comprehensive Ingress examples from ingress-demo.yaml
 	# This file demonstrates all supported haproxy.org/* annotations
 	kubectl apply -f "${ASSETS_DIR}/ingress-demo.yaml" >/dev/null || {
