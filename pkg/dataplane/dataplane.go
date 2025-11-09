@@ -201,7 +201,7 @@ type Client struct {
 //	defer client.Close()
 //
 //	result, err := client.Sync(ctx, desiredConfig, nil, nil)
-func NewClient(ctx context.Context, endpoint Endpoint) (*Client, error) {
+func NewClient(ctx context.Context, endpoint *Endpoint) (*Client, error) {
 	// Create logger with pod context
 	logger := slog.Default().With("pod", endpoint.PodName)
 
@@ -223,7 +223,7 @@ func NewClient(ctx context.Context, endpoint Endpoint) (*Client, error) {
 	}
 
 	return &Client{
-		Endpoint: endpoint,
+		Endpoint: *endpoint,
 		orch:     orch,
 	}, nil
 }
@@ -394,7 +394,7 @@ func (c *Client) Diff(ctx context.Context, desiredConfig string) (*DiffResult, e
 // Returns:
 //   - *SyncResult: Detailed information about the sync operation
 //   - error: Detailed error with actionable hints if the sync fails
-func Sync(ctx context.Context, endpoint Endpoint, desiredConfig string, auxFiles *AuxiliaryFiles, opts *SyncOptions) (*SyncResult, error) {
+func Sync(ctx context.Context, endpoint *Endpoint, desiredConfig string, auxFiles *AuxiliaryFiles, opts *SyncOptions) (*SyncResult, error) {
 	cli, err := NewClient(ctx, endpoint)
 	if err != nil {
 		return nil, err
@@ -417,7 +417,7 @@ func Sync(ctx context.Context, endpoint Endpoint, desiredConfig string, auxFiles
 // Returns:
 //   - *DiffResult: Detailed information about planned changes
 //   - error: Error if comparison fails
-func DryRun(ctx context.Context, endpoint Endpoint, desiredConfig string) (*DiffResult, error) {
+func DryRun(ctx context.Context, endpoint *Endpoint, desiredConfig string) (*DiffResult, error) {
 	cli, err := NewClient(ctx, endpoint)
 	if err != nil {
 		return nil, err
@@ -441,6 +441,6 @@ func DryRun(ctx context.Context, endpoint Endpoint, desiredConfig string) (*Diff
 // Returns:
 //   - *DiffResult: Detailed information about differences
 //   - error: Error if comparison fails
-func Diff(ctx context.Context, endpoint Endpoint, desiredConfig string) (*DiffResult, error) {
+func Diff(ctx context.Context, endpoint *Endpoint, desiredConfig string) (*DiffResult, error) {
 	return DryRun(ctx, endpoint, desiredConfig)
 }

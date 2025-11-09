@@ -71,7 +71,7 @@ func TestComponent_ConfigValidatedEvent(t *testing.T) {
 			Port: 5555,
 		},
 	}
-	bus.Publish(events.NewConfigValidatedEvent(config, "v1", "v1"))
+	bus.Publish(events.NewConfigValidatedEvent(config, nil, "v1", "v1"))
 
 	// Wait for HAProxyPodsDiscoveredEvent
 	select {
@@ -125,7 +125,7 @@ func TestComponent_CredentialsUpdatedEvent(t *testing.T) {
 			Port: 5555,
 		},
 	}
-	bus.Publish(events.NewConfigValidatedEvent(config, "v1", "v1"))
+	bus.Publish(events.NewConfigValidatedEvent(config, nil, "v1", "v1"))
 
 	// Wait briefly for config to be processed
 	time.Sleep(50 * time.Millisecond)
@@ -184,7 +184,7 @@ func TestComponent_ResourceIndexUpdatedEvent(t *testing.T) {
 			Port: 5555,
 		},
 	}
-	bus.Publish(events.NewConfigValidatedEvent(config, "v1", "v1"))
+	bus.Publish(events.NewConfigValidatedEvent(config, nil, "v1", "v1"))
 	bus.Publish(events.NewCredentialsUpdatedEvent(credentials, "v1"))
 
 	// Wait briefly for prerequisites to be processed
@@ -242,7 +242,7 @@ func TestComponent_ResourceIndexUpdatedEvent_InitialSync_Skipped(t *testing.T) {
 			Port: 5555,
 		},
 	}
-	bus.Publish(events.NewConfigValidatedEvent(config, "v1", "v1"))
+	bus.Publish(events.NewConfigValidatedEvent(config, nil, "v1", "v1"))
 	bus.Publish(events.NewCredentialsUpdatedEvent(credentials, "v1"))
 
 	// Wait briefly for prerequisites to be processed
@@ -300,7 +300,7 @@ func TestComponent_ResourceIndexUpdatedEvent_WrongResourceType_Ignored(t *testin
 			Port: 5555,
 		},
 	}
-	bus.Publish(events.NewConfigValidatedEvent(config, "v1", "v1"))
+	bus.Publish(events.NewConfigValidatedEvent(config, nil, "v1", "v1"))
 	bus.Publish(events.NewCredentialsUpdatedEvent(credentials, "v1"))
 
 	// Wait briefly for prerequisites to be processed
@@ -358,7 +358,7 @@ func TestComponent_ResourceSyncCompleteEvent(t *testing.T) {
 			Port: 5555,
 		},
 	}
-	bus.Publish(events.NewConfigValidatedEvent(config, "v1", "v1"))
+	bus.Publish(events.NewConfigValidatedEvent(config, nil, "v1", "v1"))
 	bus.Publish(events.NewCredentialsUpdatedEvent(credentials, "v1"))
 
 	// Wait briefly for prerequisites to be processed
@@ -410,7 +410,7 @@ func TestComponent_ResourceSyncCompleteEvent_WrongResourceType_Ignored(t *testin
 			Port: 5555,
 		},
 	}
-	bus.Publish(events.NewConfigValidatedEvent(config, "v1", "v1"))
+	bus.Publish(events.NewConfigValidatedEvent(config, nil, "v1", "v1"))
 	bus.Publish(events.NewCredentialsUpdatedEvent(credentials, "v1"))
 
 	// Wait briefly for prerequisites to be processed
@@ -508,7 +508,7 @@ func testMissingPrerequisite(t *testing.T, hasConfig, hasCredentials, hasPodStor
 				Port: 5555,
 			},
 		}
-		bus.Publish(events.NewConfigValidatedEvent(config, "v1", "v1"))
+		bus.Publish(events.NewConfigValidatedEvent(config, nil, "v1", "v1"))
 	}
 
 	if hasCredentials {

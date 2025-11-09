@@ -174,7 +174,7 @@ func TestReconciler_ConfigChangeImmediateTrigger(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Publish config change event
-	bus.Publish(events.NewConfigValidatedEvent(nil, "v1", "s1"))
+	bus.Publish(events.NewConfigValidatedEvent(nil, nil, "v1", "s1"))
 
 	// Should trigger immediately (within 100ms, not after 500ms debounce)
 	timeout := time.After(200 * time.Millisecond)
@@ -270,7 +270,7 @@ func TestReconciler_ConfigCancelsDebounce(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Publish config change (should trigger immediately and cancel debounce)
-	bus.Publish(events.NewConfigValidatedEvent(nil, "v2", "s2"))
+	bus.Publish(events.NewConfigValidatedEvent(nil, nil, "v2", "s2"))
 
 	// Should receive config_change trigger quickly
 	timeout := time.After(200 * time.Millisecond)

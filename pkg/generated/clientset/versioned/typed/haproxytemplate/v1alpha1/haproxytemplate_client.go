@@ -25,12 +25,22 @@ import (
 
 type HaproxyTemplateICV1alpha1Interface interface {
 	RESTClient() rest.Interface
+	HAProxyCfgsGetter
+	HAProxyMapFilesGetter
 	HAProxyTemplateConfigsGetter
 }
 
 // HaproxyTemplateICV1alpha1Client is used to interact with features provided by the haproxy-template-ic.github.io group.
 type HaproxyTemplateICV1alpha1Client struct {
 	restClient rest.Interface
+}
+
+func (c *HaproxyTemplateICV1alpha1Client) HAProxyCfgs(namespace string) HAProxyCfgInterface {
+	return newHAProxyCfgs(c, namespace)
+}
+
+func (c *HaproxyTemplateICV1alpha1Client) HAProxyMapFiles(namespace string) HAProxyMapFileInterface {
+	return newHAProxyMapFiles(c, namespace)
 }
 
 func (c *HaproxyTemplateICV1alpha1Client) HAProxyTemplateConfigs(namespace string) HAProxyTemplateConfigInterface {

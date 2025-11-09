@@ -744,65 +744,63 @@ EOF
 deploy_ingress_demo() {
 	log INFO "Deploying Ingress demo resources..."
 
-	# Deploy Ingress resources for echo-server
-	kubectl -n "${ECHO_NAMESPACE}" apply -f - >/dev/null <<EOF
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ${ECHO_APP_NAME}
-spec:
-  ingressClassName: haproxy-template-ic
-  rules:
-    - host: echo.localdev.me
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: ${ECHO_APP_NAME}
-                port:
-                  number: 80
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: echo-auth-secret
-type: Opaque
-data:
-  # Pre-generated SHA-512 encrypted passwords for development testing
-  # admin:admin (encrypted with openssl passwd -6)
-  admin: JDYkMVd3c2YxNmprcDBkMVBpTyRkS3FHUTF0SW0uOGF1VlJIcVA3dVcuMVV5dVNtZ3YveEc3dEFiOXdZNzc1REw3ZGE0N0hIeVB4ZllDS1BMTktZclJvMHRNQWQyQk1YUHBDd2Z5ZW03MA==
-  # user:password (encrypted with openssl passwd -6)
-  user: JDYkbkdxOHJ1T2kyd3l4MUtyZyQ1a2d1azEzb2tKWmpzZ2Z2c3JqdmkvOVoxQjZIbDRUcGVvdkpzb2lQeHA2eGRKWUpha21wUmIwSUVHb1ZUSC8zRzZrLmRMRzBuVUNMWEZnMEhTRTJ5MA==
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: echo-server-auth
-  annotations:
-    haproxy.org/auth-type: "basic-auth"
-    haproxy.org/auth-secret: "echo-auth-secret"
-    haproxy.org/auth-realm: "Echo-Server-Protected"
-spec:
-  ingressClassName: haproxy-template-ic
-  rules:
-    - host: echo-auth.localdev.me
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: ${ECHO_APP_NAME}
-                port:
-                  number: 80
-EOF
+	# Deploy test backend for PROXY protocol and SSL testing
+	kubectl apply -f "${ASSETS_DIR}/haproxy-test-backend.yaml" >/dev/null || {
+		err "Failed to deploy test backend"
+		return 1
+	}
+
+	# Deploy comprehensive Ingress examples from ingress-demo.yaml
+	# This file demonstrates all supported haproxy.org/* annotations
+	kubectl apply -f "${ASSETS_DIR}/ingress-demo.yaml" >/dev/null || {
+		err "Failed to deploy Ingress demo resources"
+		return 1
+	}
 
 	ok "Ingress demo resources deployed"
-	echo "Ingress resources:"
-	echo "  - echo-server (echo.localdev.me)"
-	echo "  - echo-server-auth (echo-auth.localdev.me - basic auth)"
+
+	# List all deployed Ingress resources
+	echo "Ingress resources (demonstrating haproxy.org/* annotations):"
+	echo "  Basic:"
+	echo "    - echo-basic (echo.localdev.me) - No annotations baseline"
+	echo "    - echo-auth (echo-auth.localdev.me) - Basic authentication"
+	echo ""
+	echo "  CORS & Access Control:"
+	echo "    - echo-cors (echo-cors.localdev.me) - CORS headers"
+	echo "    - echo-allowlist (echo-allowlist.localdev.me) - IP allowlist"
+	echo "    - echo-denylist (echo-denylist.localdev.me) - IP denylist"
+	echo ""
+	echo "  Traffic Management:"
+	echo "    - echo-ratelimit (echo-ratelimit.localdev.me) - Rate limiting"
+	echo "    - echo-loadbalance (echo-loadbalance.localdev.me) - Load balancing algorithm"
+	echo "    - echo-sticky (echo-sticky.localdev.me) - Sticky sessions"
+	echo "    - echo-maxconn (echo-maxconn.localdev.me) - Connection limits"
+	echo ""
+	echo "  Redirects:"
+	echo "    - echo-ssl-redirect (echo-ssl-redirect.localdev.me) - SSL redirect"
+	echo "    - echo-redirect (echo-redirect.localdev.me) - Request redirect"
+	echo ""
+	echo "  Headers & Routing:"
+	echo "    - echo-headers-request (echo-headers-request.localdev.me) - Request headers"
+	echo "    - echo-headers-response (echo-headers-response.localdev.me) - Response headers"
+	echo "    - echo-sethost (echo-sethost.localdev.me) - Host header override"
+	echo "    - echo-rewrite (echo-rewrite.localdev.me) - Path rewriting"
+	echo "    - echo-forwardedfor (echo-forwardedfor.localdev.me) - X-Forwarded-For"
+	echo ""
+	echo "  Backend Configuration:"
+	echo "    - echo-timeouts (echo-timeouts.localdev.me) - Custom timeouts"
+	echo "    - echo-healthcheck (echo-healthcheck.localdev.me) - Health checks"
+	echo "    - echo-capture (echo-capture.localdev.me) - Request capture"
+	echo "    - echo-srcip (echo-srcip.localdev.me) - Source IP header"
+	echo "    - echo-proxy-protocol (echo-proxy-protocol.localdev.me) - PROXY protocol to backends"
+	echo "    - echo-backend-ssl (echo-backend-ssl.localdev.me) - SSL/TLS + HTTP/2 to backends"
+	echo "    - echo-scale-slots (echo-scale-slots.localdev.me) - Server slot pre-allocation"
+	echo "    - echo-backend-snippet (echo-backend-snippet.localdev.me) - Raw HAProxy config"
+	echo ""
+	echo "  Combined:"
+	echo "    - echo-combined (echo-combined.localdev.me) - Multiple annotations"
+	echo ""
+	echo "Run './scripts/test-routes.sh' to test all examples"
 }
 
 # Development convenience functions
@@ -856,6 +854,7 @@ dev_restart() {
         "--set" "image.tag=${IMAGE_TAG}"
         "--wait"
         "--timeout" "${TIMEOUT}s"
+        "--reset-values"
     )
 
     # Add webhook CA bundle if set
@@ -1154,11 +1153,34 @@ post_deploy_tips() {
 	echo "    Combined matchers (method + headers + query):"
 	echo "      curl -X POST -H 'Host: echo-combined.localdev.me' -H 'Content-Type: application/json' 'http://localhost:30080/api?token=secret123'"
 	echo
+	echo "  CORS example:"
+	echo "    curl -H 'Host: echo-cors.localdev.me' -H 'Origin: https://example.com' http://localhost:30080"
+	echo
+	echo "  Rate limiting example:"
+	echo "    for i in {1..10}; do curl -s -H 'Host: echo-ratelimit.localdev.me' http://localhost:30080 && echo; done  # Exceeds limit after 5 requests"
+	echo
+	echo "  Redirect example:"
+	echo "    curl -v -H 'Host: echo-redirect.localdev.me' http://localhost:30080  # Returns 302 redirect"
+	echo
+	echo "  Header manipulation example:"
+	echo "    curl -H 'Host: echo-headers-response.localdev.me' http://localhost:30080 -I  # See response headers"
+	echo
+	echo "  Path rewrite example:"
+	echo "    curl -H 'Host: echo-rewrite.localdev.me' http://localhost:30080/api/v1/test  # Rewrites to /test"
+	echo
+	echo "  SSL redirect example:"
+	echo "    curl -v -H 'Host: echo-ssl-redirect.localdev.me' http://localhost:30080  # Returns 301 redirect to HTTPS"
+	echo
+	echo "  Backend SSL/HTTP2 example:"
+	echo "    curl -H 'Host: echo-backend-ssl.localdev.me' http://localhost:30080  # Uses HTTPS + HTTP/2 to backend (if backend supports it)"
+	echo
 	echo "  Browser test:"
 	echo "    Add to /etc/hosts:"
-	echo "      127.0.0.1 echo.localdev.me echo-auth.localdev.me echo-gateway.localdev.me echo-paths.localdev.me echo-split.localdev.me echo-methods.localdev.me echo-headers.localdev.me echo-query.localdev.me echo-combined.localdev.me"
+	echo "      127.0.0.1 echo.localdev.me echo-auth.localdev.me echo-cors.localdev.me echo-ratelimit.localdev.me echo-allowlist.localdev.me echo-denylist.localdev.me echo-ssl.localdev.me echo-redirect.localdev.me echo-headers-request.localdev.me echo-headers-response.localdev.me echo-sethost.localdev.me echo-rewrite.localdev.me echo-loadbalance.localdev.me echo-sticky.localdev.me echo-timeouts.localdev.me echo-forwardedfor.localdev.me echo-capture.localdev.me echo-healthcheck.localdev.me echo-maxconn.localdev.me echo-srcip.localdev.me echo-backend-snippet.localdev.me echo-ssl-redirect.localdev.me echo-proxy-protocol.localdev.me echo-backend-ssl.localdev.me echo-scale-slots.localdev.me echo-combined.localdev.me echo-gateway.localdev.me echo-paths.localdev.me echo-split.localdev.me echo-methods.localdev.me echo-headers.localdev.me echo-query.localdev.me"
 	echo "    Visit: http://echo.localdev.me:30080 (Ingress, no auth)"
 	echo "    Visit: http://echo-auth.localdev.me:30080 (Ingress, basic auth)"
+	echo "    Visit: http://echo-cors.localdev.me:30080 (Ingress, CORS)"
+	echo "    Visit: http://echo-ratelimit.localdev.me:30080 (Ingress, rate limiting)"
 	echo "    Visit: http://echo-gateway.localdev.me:30080 (HTTPRoute, basic)"
 	echo "    Visit: http://echo-split.localdev.me:30080 (HTTPRoute, traffic split - refresh multiple times)"
 	echo

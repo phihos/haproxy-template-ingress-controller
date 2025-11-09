@@ -528,9 +528,52 @@ logger.Error("reconciliation failed",
 
 - **Don't block in event handlers** - Process events quickly or spawn goroutines
 - **Buffer sizing matters** - Small buffers (10-50) for control events, large buffers (200+) for high-volume events
-- **Always call EventBus.Start()** after all components subscribe (prevents lost events during startup)
-- **Subscribe in constructors, not in Start()** - Leader-only components must subscribe BEFORE `startLeaderOnlyComponents()` to avoid missing state replay events (e.g., `HAProxyPodsDiscoveredEvent` published on `BecameLeaderEvent`). Subscribing in `Start()` which runs asynchronously creates race conditions.
+- **Always call EventBus.Start()** after all components are created (prevents lost events during startup)
+- **Subscribe in constructors, not in Start()** - ALL components must subscribe during construction (in `New()` functions) BEFORE `EventBus.Start()` is called. This ensures proper startup synchronization without race conditions or timing-based sleeps.
 - **Never use timing-based solutions** - Do not use `time.Sleep()` or delays to fix event ordering issues. These are brittle, non-deterministic, and bad practice. Fix the root cause by ensuring proper subscription ordering.
+
+### Proper Subscription Pattern
+
+**CORRECT Pattern** (all components follow this):
+```go
+// Component constructor subscribes immediately
+func New(eventBus *EventBus, ...) *Component {
+    // Subscribe BEFORE returning the component
+    eventChan := eventBus.Subscribe(EventBufferSize)
+
+    return &Component{
+        eventBus:  eventBus,
+        eventChan: eventChan,  // Store channel for use in Start()
+        // ...
+    }
+}
+
+// Start() uses pre-subscribed channel
+func (c *Component) Start(ctx context.Context) error {
+    for {
+        select {
+        case event := <-c.eventChan:  // Use stored channel
+            c.handleEvent(event)
+        case <-ctx.Done():
+            return ctx.Err()
+        }
+    }
+}
+
+// Controller startup sequence
+components := createAllComponents()  // All subscribe during construction
+eventBus.Start()                      // Now safe to start bus
+startAllComponents()                  // Start goroutines
+```
+
+**INCORRECT Pattern** (creates race conditions):
+```go
+// BAD - subscribes in Start()
+func (c *Component) Start(ctx context.Context) error {
+    eventChan := c.eventBus.Subscribe(EventBufferSize)  // TOO LATE!
+    // May miss events published before this subscription
+}
+```
 
 ### Context
 

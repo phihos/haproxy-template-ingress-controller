@@ -26,6 +26,14 @@ type FakeHaproxyTemplateICV1alpha1 struct {
 	*testing.Fake
 }
 
+func (c *FakeHaproxyTemplateICV1alpha1) HAProxyCfgs(namespace string) v1alpha1.HAProxyCfgInterface {
+	return newFakeHAProxyCfgs(c, namespace)
+}
+
+func (c *FakeHaproxyTemplateICV1alpha1) HAProxyMapFiles(namespace string) v1alpha1.HAProxyMapFileInterface {
+	return newFakeHAProxyMapFiles(c, namespace)
+}
+
 func (c *FakeHaproxyTemplateICV1alpha1) HAProxyTemplateConfigs(namespace string) v1alpha1.HAProxyTemplateConfigInterface {
 	return newFakeHAProxyTemplateConfigs(c, namespace)
 }

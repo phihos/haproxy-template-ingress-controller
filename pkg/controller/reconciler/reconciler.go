@@ -52,6 +52,7 @@ const (
 // to begin a reconciliation cycle.
 type Reconciler struct {
 	eventBus          *busevents.EventBus
+	eventChan         <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
 	logger            *slog.Logger
 	debounceInterval  time.Duration
 	debounceTimer     *time.Timer
@@ -81,8 +82,13 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger, config *Config) *Rec
 		debounceInterval = config.DebounceInterval
 	}
 
+	// Subscribe to EventBus during construction (before EventBus.Start())
+	// This ensures proper startup synchronization without timing-based sleeps
+	eventChan := eventBus.Subscribe(EventBufferSize)
+
 	return &Reconciler{
 		eventBus:         eventBus,
+		eventChan:        eventChan,
 		logger:           logger,
 		debounceInterval: debounceInterval,
 		// Timer is created on first use to avoid firing immediately
@@ -95,8 +101,10 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger, config *Config) *Rec
 // Start begins the reconciler's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to the EventBus and processes events:
+// The component is already subscribed to the EventBus (subscription happens in New()),
+// so this method only processes events:
 //   - ResourceIndexUpdatedEvent: Starts/resets debounce timer
+//   - ConfigValidatedEvent: Triggers immediate reconciliation
 //   - Debounce timer expiration: Publishes ReconciliationTriggeredEvent
 //
 // The component runs until the context is cancelled, at which point it
@@ -112,11 +120,9 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	r.logger.Info("Reconciler starting",
 		"debounce_interval", r.debounceInterval)
 
-	eventChan := r.eventBus.Subscribe(EventBufferSize)
-
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-r.eventChan:
 			r.handleEvent(event)
 
 		case <-r.getDebounceTimerChan():

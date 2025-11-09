@@ -43,23 +43,28 @@ const (
 //   - Maintains current state (dataplanePort, credentials, podStore)
 //   - Calls Discovery.DiscoverEndpoints() when relevant events occur
 //   - Publishes HAProxyPodsDiscoveredEvent with discovered endpoints
+//   - Publishes HAProxyPodTerminatedEvent when pods are removed
 //
 // Event Flow:
 //  1. ConfigValidatedEvent → Update dataplanePort → Trigger discovery
 //  2. CredentialsUpdatedEvent → Update credentials → Trigger discovery
 //  3. ResourceIndexUpdatedEvent (haproxy-pods) → Trigger discovery
 //  4. BecameLeaderEvent → Re-trigger discovery for new leader's DeploymentScheduler
-//  5. Discovery completes → Publish HAProxyPodsDiscoveredEvent
+//  5. Discovery completes → Compare with previous endpoints → Publish HAProxyPodTerminatedEvent for removed pods → Publish HAProxyPodsDiscoveredEvent
 type Component struct {
 	discovery *Discovery
 	eventBus  *busevents.EventBus
 	logger    *slog.Logger
+
+	// Subscribed in constructor for proper startup synchronization
+	eventChan <-chan busevents.Event
 
 	// State protected by mutex
 	mu               sync.RWMutex
 	dataplanePort    int
 	credentials      *coreconfig.Credentials
 	podStore         types.Store
+	lastEndpoints    map[string]string // Map of PodName → PodNamespace for tracking removals
 	hasCredentials   bool
 	hasDataplanePort bool
 }
@@ -73,15 +78,16 @@ type Component struct {
 // Returns a configured Component ready to be started.
 func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 	return &Component{
-		eventBus: eventBus,
-		logger:   logger.With("component", "discovery"),
+		eventBus:      eventBus,
+		logger:        logger.With("component", "discovery"),
+		eventChan:     eventBus.Subscribe(EventBufferSize),
+		lastEndpoints: make(map[string]string),
 	}
 }
 
 // Start begins the Discovery component's event processing loop.
 //
 // This method:
-//   - Subscribes to relevant events
 //   - Checks for existing pods and triggers initial discovery if needed
 //   - Maintains state from config and credential updates
 //   - Triggers discovery when HAProxy pods change
@@ -89,19 +95,19 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger) *Component {
 //   - Runs until context is cancelled
 //
 // Returns an error if the event loop fails.
+//
+// Note: Event subscription occurs in the constructor (New()) to ensure proper
+// startup synchronization and avoid missing events during initialization.
 func (c *Component) Start(ctx context.Context) error {
 	c.logger.Info("starting discovery component")
 
-	// Subscribe to events
-	eventChan := c.eventBus.Subscribe(EventBufferSize)
-
-	// Perform initial discovery check after subscribing
+	// Perform initial discovery check
 	// This ensures we discover pods even if ResourceSyncCompleteEvent was already published
 	c.performInitialDiscovery()
 
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-c.eventChan:
 			c.handleEvent(event)
 
 		case <-ctx.Done():
@@ -354,7 +360,8 @@ func (c *Component) performInitialDiscovery() {
 
 // triggerDiscovery performs endpoint discovery and publishes the results.
 //
-// This method calls the pure Discovery component and publishes HAProxyPodsDiscoveredEvent.
+// This method calls the pure Discovery component, detects removed pods,
+// publishes HAProxyPodTerminatedEvent for removed pods, and publishes HAProxyPodsDiscoveredEvent.
 func (c *Component) triggerDiscovery(podStore types.Store, credentials coreconfig.Credentials) {
 	c.logger.Debug("triggering HAProxy pod discovery")
 
@@ -378,6 +385,32 @@ func (c *Component) triggerDiscovery(podStore types.Store, credentials coreconfi
 				"url", ep.URL)
 		}
 	}
+
+	// Build map of current endpoints for comparison
+	currentEndpoints := make(map[string]string)
+	for _, ep := range endpoints {
+		currentEndpoints[ep.PodName] = ep.PodNamespace
+	}
+
+	// Detect removed pods and publish termination events
+	c.mu.Lock()
+	for podName, podNamespace := range c.lastEndpoints {
+		if _, exists := currentEndpoints[podName]; !exists {
+			// Pod was removed
+			c.logger.Info("detected pod termination",
+				"pod_name", podName,
+				"pod_namespace", podNamespace)
+
+			// Publish HAProxyPodTerminatedEvent (without holding lock)
+			c.mu.Unlock()
+			c.eventBus.Publish(events.NewHAProxyPodTerminatedEvent(podName, podNamespace))
+			c.mu.Lock()
+		}
+	}
+
+	// Update last endpoints cache
+	c.lastEndpoints = currentEndpoints
+	c.mu.Unlock()
 
 	// Convert endpoints to []interface{} for event
 	endpointsInterface := make([]interface{}, len(endpoints))

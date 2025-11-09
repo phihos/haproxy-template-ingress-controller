@@ -62,11 +62,50 @@ func (r *Runner) createStoresFromFixtures(fixtures map[string][]interface{}) (ma
 		stores[resourceType] = store.NewMemoryStore(numKeys)
 	}
 
+	// Create store for haproxy-pods (special controller metadata, not a watched resource)
+	r.logger.Debug("Creating empty store for haproxy-pods (controller metadata)")
+	stores["haproxy-pods"] = store.NewMemoryStore(2) // namespace + name keys
+
 	// PHASE 2: Populate stores with fixture data
 	for resourceType, resources := range fixtures {
 		r.logger.Debug("Populating fixture store",
 			"resource_type", resourceType,
 			"count", len(resources))
+
+		// Handle haproxy-pods specially (controller metadata, not a watched resource)
+		if resourceType == "haproxy-pods" {
+			storeInstance := stores["haproxy-pods"]
+
+			for i, resourceObj := range resources {
+				resourceMap, ok := resourceObj.(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("haproxy-pods fixture at index %d is not a map", i)
+				}
+
+				resource := &unstructured.Unstructured{Object: resourceMap}
+
+				// Ensure TypeMeta for haproxy-pods (Pod resources)
+				if resource.GetAPIVersion() == "" {
+					resource.SetAPIVersion("v1")
+				}
+				if resource.GetKind() == "" {
+					resource.SetKind("Pod")
+				}
+
+				r.logger.Debug("Adding haproxy-pods fixture to store",
+					"index", i,
+					"name", resource.GetName(),
+					"namespace", resource.GetNamespace())
+
+				// Use namespace + name as keys (matches discovery component indexing)
+				keys := []string{resource.GetNamespace(), resource.GetName()}
+
+				if err := storeInstance.Add(resource, keys); err != nil {
+					return nil, fmt.Errorf("failed to add haproxy-pods fixture: %w", err)
+				}
+			}
+			continue // Skip normal watched resource processing
+		}
 
 		// Verify resource type is in watched resources
 		watchedResource, exists := r.config.WatchedResources[resourceType]

@@ -1,5 +1,15 @@
 # HAProxyTech annotation library for HAProxy Template Ingress Controller
 # Contains template snippets for haproxy.org/* annotations and corresponding validation tests
+#
+# IMPORTANT: This library provides INGRESS-ONLY annotation support.
+# Gateway API resources (HTTPRoute, GRPCRoute) use filters instead of annotations.
+# See charts/haproxy-template-ic/docs/gateway-api-support.md for Gateway API filter documentation.
+
+watchedResources:
+  secrets:
+    apiVersion: v1
+    resources: secrets
+    indexBy: ["metadata.namespace", "metadata.name"]
 
 templateSnippets:
   util-auth-userlist-name:
@@ -12,12 +22,300 @@ templateSnippets:
       {%- endif -%}
       {%- endmacro -%}
 
-  global-top-haproxytech-auth:
+  frontend-filters-haproxytech-ssl-redirect:
+    priority: 400
+    template: |
+      {#-
+        HAProxy SSL Redirect (Ingress Only)
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#ssl-redirect
+
+        Annotations:
+          - haproxy.org/ssl-redirect: "true" or "false" (optional, forces HTTPS redirect)
+          - haproxy.org/ssl-redirect-code: HTTP status code for SSL redirect (optional, default: "302")
+          - haproxy.org/ssl-redirect-port: Target HTTPS port (optional, default: "443")
+
+        Format:
+          ssl-redirect: "true" or "false"
+          ssl-redirect-code: HTTP status code (e.g., "301", "302")
+          ssl-redirect-port: Port number (e.g., "443", "8443")
+
+        Generated HAProxy Config:
+          http-request redirect scheme https code <code> if !{ ssl_fc } { var(txn.host) -m str <host1> } or { var(txn.host) -m str <host2> } ...
+
+        Note: Redirect only applies to hosts defined in the ingress with this annotation
+      -#}
+      {%- set ns = namespace(processed_ingresses="") %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
+        {%- if ("|" ~ ingress_key ~ "|") not in ns.processed_ingresses %}
+          {%- set ns.processed_ingresses = ns.processed_ingresses ~ "|" ~ ingress_key ~ "|" %}
+          {%- set ssl_redirect = ingress.metadata.annotations["haproxy.org/ssl-redirect"] | default("") %}
+          {%- if ssl_redirect == "true" %}
+            {%- set ssl_redirect_code = ingress.metadata.annotations["haproxy.org/ssl-redirect-code"] | default("302") %}
+            {%- set ssl_redirect_port = ingress.metadata.annotations["haproxy.org/ssl-redirect-port"] | default("443") %}
+            {#- Extract all hosts from ingress rules -#}
+            {%- set ns_hosts = namespace(hosts=[]) %}
+            {%- if ingress.spec.rules %}
+              {%- for rule in ingress.spec.rules %}
+                {%- if rule.host %}
+                  {%- set ns_hosts.hosts = ns_hosts.hosts.append(rule.host) %}
+                {%- endif %}
+              {%- endfor %}
+            {%- endif %}
+            {#- Generate host-scoped redirect rule -#}
+            {%- if ns_hosts.hosts | length > 0 %}
+      # haproxytech/frontend-filters-haproxytech-ssl-redirect (for {{ ingress_key }})
+      http-request redirect scheme https code {{ ssl_redirect_code }} if !{ ssl_fc } {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+            {%- endif %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor -%}
+  frontend-filters-haproxytech-redirects:
+    priority: 450
+    template: |
+      {#-
+        HAProxy Request Redirect (Ingress Only)
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#request-redirect
+
+        Annotations:
+          - haproxy.org/request-redirect: Target host/URL for redirect (required to enable redirect)
+          - haproxy.org/request-redirect-code: HTTP status code for redirect (optional, default: "302")
+
+        Format:
+          request-redirect: "example.com", "example.com:8888", "https://example.com", "http://example.com"
+          request-redirect-code: HTTP status code (e.g., "301", "302", "303", "307", "308")
+
+        Generated HAProxy Config:
+          http-request redirect location <url> code <code> if { var(txn.host) -m str <host1> } or { var(txn.host) -m str <host2> } ...
+
+        Note:
+          - Redirect only applies to hosts defined in the ingress with this annotation
+          - Protocol prefix in redirect URL sets SSL flag
+      -#}
+      {%- set ns = namespace(processed_ingresses="") %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
+        {%- if ("|" ~ ingress_key ~ "|") not in ns.processed_ingresses %}
+          {%- set ns.processed_ingresses = ns.processed_ingresses ~ "|" ~ ingress_key ~ "|" %}
+          {%- set redirect_target = ingress.metadata.annotations["haproxy.org/request-redirect"] | default("") %}
+          {%- if redirect_target %}
+            {%- set redirect_code = ingress.metadata.annotations["haproxy.org/request-redirect-code"] | default("302") %}
+            {%- set valid_codes = ["301", "302", "303", "307", "308"] %}
+            {%- if redirect_code not in valid_codes %}
+              {{- fail("Invalid value '" ~ redirect_code ~ "' for annotation 'haproxy.org/request-redirect-code' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: " ~ valid_codes | join(", ")) -}}
+            {%- endif %}
+            {#- Extract all hosts from ingress rules -#}
+            {%- set ns_hosts = namespace(hosts=[]) %}
+            {%- if ingress.spec.rules %}
+              {%- for rule in ingress.spec.rules %}
+                {%- if rule.host %}
+                  {%- set ns_hosts.hosts = ns_hosts.hosts.append(rule.host) %}
+                {%- endif %}
+              {%- endfor %}
+            {%- endif %}
+            {#- Generate host-scoped redirect rule -#}
+            {%- if ns_hosts.hosts | length > 0 %}
+      # haproxytech/frontend-filters-haproxytech-redirects (for {{ ingress_key }})
+      http-request redirect location {{ redirect_target }} code {{ redirect_code }} if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+            {%- endif %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor -%}
+  frontend-filters-haproxytech-cors:
+    priority: 300
+    template: |
+      {#-
+        HAProxy CORS Configuration (Ingress Only)
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#cors-enable
+
+        Annotations:
+          - haproxy.org/cors-enable: "true" or "false" (required for CORS)
+          - haproxy.org/cors-allow-origin: Allowed origins - "*", exact URL, or regex (optional, default: "*")
+          - haproxy.org/cors-allow-methods: Allowed HTTP methods comma-separated (optional, default: "GET, POST")
+          - haproxy.org/cors-allow-headers: Allowed request headers comma-separated (optional)
+          - haproxy.org/cors-allow-credentials: "true" or "false" (optional, default: "false")
+          - haproxy.org/cors-max-age: Preflight cache duration, seconds (optional, default: 0)
+
+        Generated HAProxy Config:
+          http-request capture req.hdr(Origin) len 128
+          http-response set-header Access-Control-Allow-Origin ...
+          http-response set-header Access-Control-Allow-Methods ...
+          http-response set-header Access-Control-Allow-Headers ...
+          http-response set-header Access-Control-Allow-Credentials ...
+          http-response set-header Access-Control-Max-Age ...
+
+        Note: When cors-allow-credentials is true, cors-allow-origin cannot be "*"
+      -#}
+      {%- set ns = namespace(processed_ingresses="") %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
+        {%- if ("|" ~ ingress_key ~ "|") not in ns.processed_ingresses %}
+          {%- set ns.processed_ingresses = ns.processed_ingresses ~ "|" ~ ingress_key ~ "|" %}
+          {%- set cors_enable = ingress.metadata.annotations["haproxy.org/cors-enable"] | default("") %}
+          {%- if cors_enable == "true" %}
+            {%- set cors_origin = ingress.metadata.annotations["haproxy.org/cors-allow-origin"] | default("*") %}
+            {%- set cors_methods = ingress.metadata.annotations["haproxy.org/cors-allow-methods"] | default("GET, POST") %}
+            {%- set cors_headers = ingress.metadata.annotations["haproxy.org/cors-allow-headers"] | default("") %}
+            {%- set cors_credentials = ingress.metadata.annotations["haproxy.org/cors-allow-credentials"] | default("false") %}
+            {%- set cors_max_age = ingress.metadata.annotations["haproxy.org/cors-max-age"] | default("0") %}
+            {%- if cors_credentials == "true" and cors_origin == "*" %}
+              {{- fail("CORS configuration error on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "': cors-allow-credentials cannot be 'true' when cors-allow-origin is '*'. Specify an explicit origin.") -}}
+            {%- endif %}
+      # haproxytech/frontend-filters-haproxytech-cors (for {{ ingress_key }})
+      http-request capture req.hdr(Origin) len 128
+      http-response set-header Access-Control-Allow-Origin "{{ cors_origin }}"
+      http-response set-header Access-Control-Allow-Methods "{{ cors_methods }}"
+            {%- if cors_headers %}
+      http-response set-header Access-Control-Allow-Headers "{{ cors_headers }}"
+            {%- endif %}
+            {%- if cors_credentials == "true" %}
+      http-response set-header Access-Control-Allow-Credentials "true"
+            {%- endif %}
+            {%- if cors_max_age != "0" %}
+      http-response set-header Access-Control-Max-Age "{{ cors_max_age }}"
+            {%- endif %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor -%}
+  frontend-filters-haproxytech-access-control:
+    priority: 200
+    template: |
+      {#-
+        HAProxy Access Control - IP Allowlist/Denylist (Ingress Only)
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#allowlist
+
+        Annotations:
+          - haproxy.org/allowlist: Comma-separated list of IPs/CIDRs allowed (optional)
+          - haproxy.org/denylist: Comma-separated list of IPs/CIDRs denied (optional)
+
+        Format:
+          Values: "192.168.1.0/24, 10.0.0.1, 172.16.0.0/16"
+
+        Generated HAProxy Config:
+          acl allowlist_<sanitized> src <ip/cidr>
+          http-request deny if !allowlist_<sanitized>
+
+          acl denylist_<sanitized> src <ip/cidr>
+          http-request deny if denylist_<sanitized>
+
+        Note: Both allowlist and denylist can be used together
+      -#}
+      {%- set ns = namespace(processed_ingresses="") %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
+        {%- if ("|" ~ ingress_key ~ "|") not in ns.processed_ingresses %}
+          {%- set ns.processed_ingresses = ns.processed_ingresses ~ "|" ~ ingress_key ~ "|" %}
+          {%- set allowlist = ingress.metadata.annotations["haproxy.org/allowlist"] | default("") %}
+          {%- set denylist = ingress.metadata.annotations["haproxy.org/denylist"] | default("") %}
+          {%- if allowlist %}
+      # haproxytech/frontend-filters-haproxytech-access-control (allowlist for {{ ingress_key }})
+            {%- for ip in allowlist.split(",") %}
+              {%- set ip = ip | strip %}
+              {%- if ip %}
+                {%- set acl_name = "allowlist_" ~ ip.replace(".", "_", -1).replace("/", "_", -1) %}
+      acl {{ acl_name }} src {{ ip }}
+              {%- endif %}
+            {%- endfor %}
+      http-request deny if{% for ip in allowlist.split(",") %}{% set ip = ip | strip %}{% if ip %} !allowlist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
+          {%- endif %}
+          {%- if denylist %}
+      # haproxytech/frontend-filters-haproxytech-access-control (denylist for {{ ingress_key }})
+            {%- for ip in denylist.split(",") %}
+              {%- set ip = ip | strip %}
+              {%- if ip %}
+                {%- set acl_name = "denylist_" ~ ip.replace(".", "_", -1).replace("/", "_", -1) %}
+      acl {{ acl_name }} src {{ ip }}
+              {%- endif %}
+            {%- endfor %}
+      http-request deny if{% for ip in denylist.split(",") %}{% set ip = ip | strip %}{% if ip %}{% if not loop.first %} or{% endif %} denylist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor -%}
+  frontend-filters-haproxytech-logging:
     priority: 500
     template: |
       {#-
-        HAProxy Basic Authentication Support
+        HAProxy Request Capture & Source IP Detection (Ingress Only)
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#request-capture
 
+        Annotations:
+          - haproxy.org/src-ip-header: Extract true client IP from header (optional, e.g., "CF-Connecting-IP")
+          - haproxy.org/request-capture: Multiline list of HAProxy sample expressions to capture (optional)
+          - haproxy.org/request-capture-len: Maximum length for captured data (optional, default: 128)
+
+        Format:
+          request-capture: One expression per line (e.g., "hdr(User-Agent)", "cookie(session)")
+          request-capture-len: Integer (e.g., "256")
+
+        Generated HAProxy Config:
+          http-request set-src hdr(<header-name>)
+          capture request header <expression> len <length>
+
+        Note: src-ip-header useful when behind proxies/CDNs
+      -#}
+      {%- set ns = namespace(processed_ingresses="") %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
+        {%- if ("|" ~ ingress_key ~ "|") not in ns.processed_ingresses %}
+          {%- set ns.processed_ingresses = ns.processed_ingresses ~ "|" ~ ingress_key ~ "|" %}
+          {%- set src_ip_header = ingress.metadata.annotations["haproxy.org/src-ip-header"] | default("") %}
+          {%- set request_capture = ingress.metadata.annotations["haproxy.org/request-capture"] | default("") %}
+          {%- set capture_len = ingress.metadata.annotations["haproxy.org/request-capture-len"] | default("128") %}
+          {%- if src_ip_header %}
+      # haproxytech/frontend-filters-haproxytech-logging (src-ip-header for {{ ingress_key }})
+      http-request set-src hdr({{ src_ip_header }})
+          {%- endif %}
+          {%- if request_capture %}
+      # haproxytech/frontend-filters-haproxytech-logging (request-capture for {{ ingress_key }})
+            {%- for line in request_capture.split("\n") %}
+              {%- set line = line | strip %}
+              {%- if line %}
+      capture request header {{ line }} len {{ capture_len }}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor -%}
+  frontend-filters-haproxytech-basic-headers:
+    priority: 100
+    template: |
+      {#-
+        HAProxy Basic Header Manipulation (Ingress Only)
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#forwarded-for
+
+        Annotations:
+          - haproxy.org/forwarded-for: "true" or "false" (optional, default: true)
+          - haproxy.org/set-host: "<hostname>" (optional, set Host header after backend selection)
+
+        Generated HAProxy Config:
+          option forwardfor (if forwarded-for enabled)
+          http-request set-header Host "<hostname>" (if set-host specified)
+
+        Note: forwarded-for adds X-Forwarded-For header with client IP
+        Note: set-host modifies Host header after backend selection
+      -#}
+      {%- set ns = namespace(processed_ingresses="") %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
+        {%- if ("|" ~ ingress_key ~ "|") not in ns.processed_ingresses %}
+          {%- set ns.processed_ingresses = ns.processed_ingresses ~ "|" ~ ingress_key ~ "|" %}
+          {%- set forwarded_for = ingress.metadata.annotations["haproxy.org/forwarded-for"] | default("") %}
+          {%- if forwarded_for %}
+            {%- if forwarded_for not in ["true", "false"] %}
+              {{- fail("Invalid value '" ~ forwarded_for ~ "' for annotation 'haproxy.org/forwarded-for' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'true', 'false'") -}}
+            {%- endif %}
+            {%- if forwarded_for == "true" %}
+      # haproxytech/frontend-filters-haproxytech-basic-headers (forwarded-for)
+      option forwardfor
+            {%- endif %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor -%}
+  global-top-haproxytech-ingress-auth:
+    priority: 500
+    template: |
+      {#-
+        HAProxy Basic Authentication Support (Ingress Only)
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#auth-secret
 
         Annotations:
@@ -84,25 +382,602 @@ templateSnippets:
               {#- Fetch secret from store #}
               {%- set secret = resources.secrets.GetSingle(secret_namespace, secret_name) %}
               {%- if secret %}
-      # haproxytech/global-top-haproxytech-auth
-
+      # haproxytech/global-top-haproxytech-ingress-auth
       userlist {{ userlist_name }}
                 {%- for username in secret.data | default({}) %}
         user {{ username }} password {{ secret.data[username] | b64decode }}
-                {%- endfor %}
+                {%- endfor -%}
               {%- else %}
                 {{- fail("Secret '" ~ secret_namespace ~ "/" ~ secret_name ~ "' referenced by annotation 'haproxy.org/auth-secret' does not exist. Please create the secret or update the annotation.") -}}
               {%- endif %}
             {%- endif %}
           {%- endif %}
         {%- endif %}
-      {%- endfor %}
+      {%- endfor -%}
 
-  backend-directives-haproxytech-auth:
+  backend-directives-haproxytech-load-balance:
+    priority: 150
+    template: |
+      {#-
+        HAProxy Load Balancing Algorithm (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#load-balance
+
+        Annotations:
+          - haproxy.org/load-balance: "<algorithm>" (optional, default: roundrobin)
+
+        Valid Algorithms:
+          - roundrobin: Each server is used in turns
+          - leastconn: Server with lowest number of connections receives traffic
+          - source: Source IP hash determines server
+          - uri: URI hash determines server
+          - hdr: HTTP header hash determines server
+          - random: Random server selection
+          - rdp-cookie: RDP cookie-based persistence
+
+        Generated HAProxy Config:
+          balance <algorithm>
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+      -#}
+      {%- if ingress is defined %}
+      {%- set load_balance = ingress.metadata.annotations["haproxy.org/load-balance"] | default("") %}
+      {%- if load_balance %}
+        {%- set valid_algorithms = ["roundrobin", "leastconn", "source", "uri", "hdr", "random", "rdp-cookie"] %}
+        {%- if load_balance not in valid_algorithms %}
+          {{- fail("Invalid value '" ~ load_balance ~ "' for annotation 'haproxy.org/load-balance' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: " ~ valid_algorithms | join(", ")) -}}
+        {%- endif %}
+      # haproxytech/backend-directives-haproxytech-load-balance
+      balance {{ load_balance }}
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-rate-limiting:
+    priority: 250
+    template: |
+      {#-
+        HAProxy Rate Limiting (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#rate-limit-requests
+
+        Annotations:
+          - haproxy.org/rate-limit-requests: Maximum requests in period, per source IP (required to enable rate limiting)
+          - haproxy.org/rate-limit-period: Time window for rate limiting, duration format (optional, default: "1s")
+          - haproxy.org/rate-limit-size: Stick-table size for tracking IPs (optional, default: "100k")
+          - haproxy.org/rate-limit-status-code: HTTP status code when rate limit exceeded (optional, default: "403")
+
+        Format:
+          rate-limit-requests: Integer (e.g., "100")
+          rate-limit-period: Duration (e.g., "1m", "10s")
+          rate-limit-size: Integer with optional k/M suffix (e.g., "100k", "1000000")
+          rate-limit-status-code: HTTP status code (e.g., "429", "503")
+
+        Generated HAProxy Config:
+          stick-table type ip size <size> expire <period> store http_req_rate(<period>)
+          http-request track-sc0 src
+          http-request deny deny_status <code> if { sc_http_req_rate(0) gt <requests> }
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+        Note: Creates per-backend stick-table for rate limiting
+      -#}
+      {%- if ingress is defined %}
+      {%- set rate_requests = ingress.metadata.annotations["haproxy.org/rate-limit-requests"] | default("") %}
+      {%- if rate_requests %}
+        {%- set rate_period = ingress.metadata.annotations["haproxy.org/rate-limit-period"] | default("1s") %}
+        {%- set rate_size = ingress.metadata.annotations["haproxy.org/rate-limit-size"] | default("100k") %}
+        {%- set rate_status = ingress.metadata.annotations["haproxy.org/rate-limit-status-code"] | default("403") %}
+      # haproxytech/backend-directives-haproxytech-rate-limiting
+      stick-table type ip size {{ rate_size }} expire {{ rate_period }} store http_req_rate({{ rate_period }})
+      http-request track-sc0 src
+      http-request deny deny_status {{ rate_status }} if { sc_http_req_rate(0) gt {{ rate_requests }} }
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-session-persistence:
+    priority: 400
+    template: |
+      {#-
+        HAProxy Session Persistence - Sticky Sessions (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#cookie-persistence
+
+        Annotations:
+          - haproxy.org/cookie-persistence: Cookie name for dynamic sticky sessions (optional)
+
+        Format:
+          cookie-persistence: Cookie name (e.g., "SERVERID", "JSESSIONID")
+
+        Generated HAProxy Config:
+          cookie <name> insert indirect nocache dynamic
+          dynamic-cookie-key <generated-key>
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+        Note: Uses dynamic cookies for multi-instance controller deployments
+        Note: Mutually exclusive with cookie-persistence-no-dynamic
+      -#}
+      {%- if ingress is defined %}
+      {%- set cookie_name = ingress.metadata.annotations["haproxy.org/cookie-persistence"] | default("") %}
+      {%- if cookie_name %}
+      # haproxytech/backend-directives-haproxytech-session-persistence
+      cookie {{ cookie_name }} insert indirect nocache dynamic
+      # Note: dynamic-cookie-key would be set by base template for multi-instance support
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-advanced:
+    priority: 900
+    template: |
+      {#-
+        HAProxy Advanced Backend Configuration (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#backend-config-snippet
+
+        ## Server Protocol and Security
+        Annotations:
+          - haproxy.org/send-proxy-protocol: PROXY protocol for backends (optional)
+          - haproxy.org/server-ssl: Enable SSL/TLS to backend servers (optional)
+          - haproxy.org/server-proto: Backend protocol, e.g., "h2" for HTTP/2 (optional)
+          - haproxy.org/server-crt: Client cert for mTLS to backend (optional, requires secrets watching)
+          - haproxy.org/server-ca: CA cert for backend verification (optional, requires secrets watching)
+
+        ## Scaling Configuration
+        Annotations:
+          - haproxy.org/scale-server-slots: Pre-allocate server slots for scaling (optional, default: 10 from base library)
+
+        ## Raw Configuration Injection
+        Annotations:
+          - haproxy.org/backend-config-snippet: Raw HAProxy backend directives (optional)
+
+        Format:
+          send-proxy-protocol: "proxy", "proxy-v1", "proxy-v2", "proxy-v2-ssl", "proxy-v2-ssl-cn"
+          server-ssl: "true" or "false"
+          server-proto: Protocol string (e.g., "h2", "h2c")
+          server-crt: Secret name with client cert (e.g., "namespace/secret-name" or "secret-name")
+          server-ca: Secret name with CA cert (e.g., "namespace/secret-name" or "secret-name")
+          scale-server-slots: Integer (e.g., "100")
+          backend-config-snippet: Multiline YAML string with raw HAProxy config
+
+        Generated HAProxy Config:
+          (server directives with SSL, proto, and send-proxy flags)
+          (pre-allocated server slots for scaling)
+          <raw config from backend-config-snippet>
+
+        WARNING: backend-config-snippet bypasses validation - user is responsible for correct syntax
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+      -#}
+      {%- if ingress is defined %}
+      {#- Append to server option flags namespace #}
+      {#- This namespace is only initialized for Ingress backends (ingress.yaml:86), not Gateway API #}
+
+      {#- send-proxy-protocol #}
+      {%- set send_proxy = ingress.metadata.annotations["haproxy.org/send-proxy-protocol"] | default("") %}
+      {%- if send_proxy %}
+        {%- if send_proxy in ["proxy", "proxy-v1"] %}
+          {%- set ns_server_opts.flags = ns_server_opts.flags.append("send-proxy") %}
+        {%- elif send_proxy == "proxy-v2" %}
+          {%- set ns_server_opts.flags = ns_server_opts.flags.append("send-proxy-v2") %}
+        {%- elif send_proxy == "proxy-v2-ssl" %}
+          {%- set ns_server_opts.flags = ns_server_opts.flags.append("send-proxy-v2-ssl") %}
+        {%- elif send_proxy == "proxy-v2-ssl-cn" %}
+          {%- set ns_server_opts.flags = ns_server_opts.flags.append("send-proxy-v2-ssl-cn") %}
+        {%- endif %}
+      {%- endif %}
+
+      {#- server-ssl #}
+      {%- set server_ssl = ingress.metadata.annotations["haproxy.org/server-ssl"] | default("") %}
+      {%- if server_ssl == "true" %}
+        {%- set ns_server_opts.flags = ns_server_opts.flags.append("ssl verify none") %}
+      {%- endif %}
+
+      {#- server-proto #}
+      {%- set server_proto = ingress.metadata.annotations["haproxy.org/server-proto"] | default("") %}
+      {%- if server_proto %}
+        {%- set ns_server_opts.flags = ns_server_opts.flags.append("proto " ~ server_proto) %}
+      {%- endif %}
+
+      {#- server-ca: CA certificate for backend verification #}
+      {%- set server_ca = ingress.metadata.annotations["haproxy.org/server-ca"] | default("") %}
+      {%- if server_ca %}
+        {#- Parse secret namespace/name (format: "namespace/secret-name") #}
+        {%- if "/" in server_ca %}
+          {%- set ca_parts = server_ca.split("/") %}
+          {%- set ca_namespace = ca_parts[0] %}
+          {%- set ca_name = ca_parts[1] %}
+        {%- else %}
+          {#- Same namespace as ingress if not specified #}
+          {%- set ca_namespace = ingress.metadata.namespace %}
+          {%- set ca_name = server_ca %}
+        {%- endif %}
+
+        {#- Fetch secret from resource store #}
+        {%- set ca_secret = resources.secrets.GetSingle(ca_namespace, ca_name) %}
+        {%- if ca_secret %}
+          {#- Extract CA certificate content (base64 decode) #}
+          {%- set ca_content = ca_secret.data["ca.crt"] | b64decode %}
+          {%- if ca_content %}
+            {#- Register CA file with file registry and get path #}
+            {%- set ca_filename = ca_namespace ~ "-" ~ ca_name ~ "-ca.pem" %}
+            {%- set ca_path = file_registry.Register("file", ca_filename, ca_content) %}
+            {#- Add server option with CA file #}
+            {%- set ns_server_opts.flags = ns_server_opts.flags.append("ssl verify required ca-file " ~ ca_path) %}
+          {%- else %}
+            # Warning: Secret {{ ca_namespace }}/{{ ca_name }} missing 'ca.crt' key
+          {%- endif %}
+        {%- else %}
+          # Warning: Secret {{ ca_namespace }}/{{ ca_name }} referenced by haproxy.org/server-ca not found
+        {%- endif %}
+      {%- endif %}
+
+      {#- server-crt: Client certificate for mTLS #}
+      {%- set server_crt = ingress.metadata.annotations["haproxy.org/server-crt"] | default("") %}
+      {%- if server_crt %}
+        {#- Parse secret namespace/name (format: "namespace/secret-name") #}
+        {%- if "/" in server_crt %}
+          {%- set crt_parts = server_crt.split("/") %}
+          {%- set crt_namespace = crt_parts[0] %}
+          {%- set crt_name = crt_parts[1] %}
+        {%- else %}
+          {#- Same namespace as ingress if not specified #}
+          {%- set crt_namespace = ingress.metadata.namespace %}
+          {%- set crt_name = server_crt %}
+        {%- endif %}
+
+        {#- Fetch secret from resource store #}
+        {%- set crt_secret = resources.secrets.GetSingle(crt_namespace, crt_name) %}
+        {%- if crt_secret %}
+          {#- Extract client certificate and key, combine them (HAProxy needs combined PEM) #}
+          {%- set tls_crt = crt_secret.data["tls.crt"] | b64decode %}
+          {%- set tls_key = crt_secret.data["tls.key"] | b64decode %}
+          {%- if tls_crt and tls_key %}
+            {#- Combine certificate and key into single PEM file #}
+            {%- set combined_pem = tls_crt ~ "\n" ~ tls_key %}
+            {#- Register client cert file with file registry and get path #}
+            {%- set crt_filename = crt_namespace ~ "-" ~ crt_name ~ "-client.pem" %}
+            {%- set crt_path = file_registry.Register("cert", crt_filename, combined_pem) %}
+            {#- Add server option with client cert #}
+            {%- set ns_server_opts.flags = ns_server_opts.flags.append("crt " ~ crt_path) %}
+          {%- else %}
+            # Warning: Secret {{ crt_namespace }}/{{ crt_name }} missing 'tls.crt' or 'tls.key' keys
+          {%- endif %}
+        {%- else %}
+          # Warning: Secret {{ crt_namespace }}/{{ crt_name }} referenced by haproxy.org/server-crt not found
+        {%- endif %}
+      {%- endif %}
+
+      {#- scale-server-slots #}
+      {%- set server_slots = ingress.metadata.annotations["haproxy.org/scale-server-slots"] | default("") %}
+      {%- if server_slots %}
+      {%- set max_server_slots = server_slots | int %}
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-path-rewrite:
+    priority: 350
+    template: |
+      {#-
+        HAProxy Path Rewrite (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#path-rewrite
+
+        Annotations:
+          - haproxy.org/path-rewrite: URL path rewriting with regex (optional)
+
+        Format:
+          Single parameter: "<new-path>" (matches all paths with .*)
+          Two parameters: "<regex-pattern> <replacement>" (e.g., "^/api/(.*) /v2/$1")
+
+        Example:
+          haproxy.org/path-rewrite: "^/api/v1/(.*) /$1"
+          Rewrites /api/v1/users to /users
+
+        Generated HAProxy Config:
+          http-request replace-path <regex> <replacement>
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+        Note: Similar to Gateway API URLRewrite filter
+      -#}
+      {%- if ingress is defined %}
+      {%- set path_rewrite = ingress.metadata.annotations["haproxy.org/path-rewrite"] | default("") %}
+      {%- if path_rewrite %}
+        {%- if " " in path_rewrite %}
+          {#- Two parameters: regex and replacement -#}
+          {%- set parts = path_rewrite.split(" ") %}
+      # haproxytech/backend-directives-haproxytech-path-rewrite
+      http-request replace-path {{parts[0]}} {{parts[1]}}
+        {%- else %}
+          {#- Single parameter: match all paths -#}
+      # haproxytech/backend-directives-haproxytech-path-rewrite
+      http-request replace-path (.*) {{path_rewrite}}
+        {%- endif %}
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-header-manipulation:
+    priority: 300
+    template: |
+      {#-
+        HAProxy Request/Response Header Manipulation (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#request-set-header
+
+        Annotations:
+          - haproxy.org/request-set-header: Multiline list of "HeaderName HeaderValue" (optional)
+          - haproxy.org/response-set-header: Multiline list of "HeaderName HeaderValue" (optional)
+
+        Format:
+          Each line contains: HeaderName HeaderValue
+          Values are automatically quoted for HAProxy
+
+        Example:
+          haproxy.org/request-set-header: |
+            X-Forwarded-Proto https
+            X-Custom-Header custom-value
+
+        Generated HAProxy Config:
+          http-request set-header HeaderName "HeaderValue"
+          http-response set-header HeaderName "HeaderValue"
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+      -#}
+      {%- if ingress is defined %}
+      {%- set request_headers = ingress.metadata.annotations["haproxy.org/request-set-header"] | default("") %}
+      {%- set response_headers = ingress.metadata.annotations["haproxy.org/response-set-header"] | default("") %}
+      {%- if request_headers %}
+      # haproxytech/backend-directives-haproxytech-header-manipulation (request)
+        {%- for line in request_headers.split("\n") %}
+          {%- set line = line | strip %}
+          {%- if line and " " in line %}
+            {%- set all_parts = line.split(" ") %}
+            {%- set header_name = all_parts[0] %}
+            {%- set header_value = all_parts[1] %}
+      http-request set-header {{header_name}} "{{header_value}}"
+          {%- endif %}
+        {%- endfor %}
+      {%- endif %}
+      {%- if response_headers %}
+      # haproxytech/backend-directives-haproxytech-header-manipulation (response)
+        {%- for line in response_headers.split("\n") %}
+          {%- set line = line | strip %}
+          {%- if line and " " in line %}
+            {%- set all_parts = line.split(" ") %}
+            {%- set header_name = all_parts[0] %}
+            {%- set header_value = all_parts[1] %}
+      http-response set-header {{header_name}} "{{header_value}}"
+          {%- endif %}
+        {%- endfor %}
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-set-host:
+    priority: 250
+    template: |
+      {#-
+        HAProxy Set Host Header (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#set-host
+
+        Annotations:
+          - haproxy.org/set-host: "<hostname>" (optional, set Host header after backend selection)
+
+        Generated HAProxy Config:
+          http-request set-header Host "<hostname>"
+
+        Note: This happens AFTER backend selection, unlike request-set-header which happens before
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+      -#}
+      {%- if ingress is defined %}
+      {%- set set_host = ingress.metadata.annotations["haproxy.org/set-host"] | default("") %}
+      {%- if set_host %}
+      # haproxytech/backend-directives-haproxytech-set-host
+      http-request set-header Host "{{ set_host }}"
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-advanced-health-checks:
+    priority: 210
+    template: |
+      {#-
+        HAProxy Advanced Health Check Configuration (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#check-http
+
+        Annotations:
+          - haproxy.org/check-http: HTTP URI or full request for health checks (optional)
+          - haproxy.org/check-interval: Frequency of health checks, duration format (optional, e.g., "10s")
+
+        Format:
+          check-http: "/health" or "HEAD /health HTTP/1.1"
+          check-interval: "10s", "1m", etc.
+
+        Generated HAProxy Config:
+          option httpchk GET /health
+          option httpchk HEAD /health HTTP/1.1
+          (applied via server inter <duration>)
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+        Note: These affect backend-level config and server-level directives
+      -#}
+      {%- if ingress is defined %}
+      {%- set check_http = ingress.metadata.annotations["haproxy.org/check-http"] | default("") %}
+      {%- set check_interval = ingress.metadata.annotations["haproxy.org/check-interval"] | default("") %}
+      {%- if check_http %}
+      # haproxytech/backend-directives-haproxytech-advanced-health-checks
+        {%- if " " in check_http %}
+      option httpchk {{ check_http }}
+        {%- else %}
+      option httpchk GET {{ check_http }}
+        {%- endif %}
+      {%- endif %}
+      {%- if check_interval %}
+      # Note: check-interval annotation value: {{ check_interval }}
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-health-checks:
+    priority: 200
+    template: |
+      {#-
+        HAProxy Health Check Configuration (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#check
+
+        Annotations:
+          - haproxy.org/check: "true" or "false" (optional, default: true)
+
+        Generated HAProxy Config:
+          server <name> <address>:<port> check
+
+        Note: Health checks are enabled by default in HAProxy server directives
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+        Note: These annotations affect server-level directives which are handled by the base template
+      -#}
+      {%- if ingress is defined %}
+      {%- set check_enabled = ingress.metadata.annotations["haproxy.org/check"] | default("") %}
+      {%- if check_enabled %}
+        {%- if check_enabled not in ["true", "false"] %}
+          {{- fail("Invalid value '" ~ check_enabled ~ "' for annotation 'haproxy.org/check' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'true', 'false'") -}}
+        {%- endif %}
+      # haproxytech/backend-directives-haproxytech-health-checks
+      # Note: check annotation value: {{ check_enabled }}
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-pod-maxconn:
+    priority: 100
+    template: |
+      {#-
+        HAProxy Pod MaxConn Configuration (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#pod-maxconn
+
+        Annotations:
+          - haproxy.org/pod-maxconn: "<integer>" (optional, maximum connections per backend pod)
+
+        Generated HAProxy Config:
+          server <name> <address>:<port> maxconn <calculated_value>
+
+        Note: The annotation value is automatically divided by the number of HAProxy controller pods
+              to distribute the total connection limit across all replicas.
+
+        Example:
+          - Annotation value: "100"
+          - HAProxy pods: 2
+          - Generated maxconn: 50 (per replica)
+          - Total max connections per backend pod: 100
+
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+        Note: This annotation affects server-level directives which are handled by the base template
+      -#}
+      {%- if ingress is defined %}
+      {%- set pod_maxconn = ingress.metadata.annotations["haproxy.org/pod-maxconn"] | default("") %}
+      {%- if pod_maxconn %}
+        {#- Validate annotation value -#}
+        {%- if not pod_maxconn.isdigit() or (pod_maxconn | int) <= 0 %}
+          {{- fail("Invalid value '" ~ pod_maxconn ~ "' for annotation 'haproxy.org/pod-maxconn' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Must be a positive integer.") -}}
+        {%- endif %}
+
+        {#- Count HAProxy controller pods -#}
+        {%- set haproxy_pod_count = 0 %}
+        {%- if controller is defined and controller.haproxy_pods is defined %}
+          {%- set haproxy_pod_count = controller.haproxy_pods.List() | length %}
+        {%- endif %}
+
+        {#- Calculate per-pod maxconn (divide total by pod count, with ceiling rounding) -#}
+        {%- if haproxy_pod_count > 0 %}
+          {%- set per_pod_maxconn = ((pod_maxconn | int) / haproxy_pod_count) | round(0, 'ceil') | int %}
+      # haproxytech/backend-directives-haproxytech-pod-maxconn
+      # pod-maxconn: {{ pod_maxconn }} total / {{ haproxy_pod_count }} HAProxy pods = {{ per_pod_maxconn }} per pod
+          {#- Set variable in namespace for base.yaml to use (namespace persists across includes) -#}
+          {%- set ns_server_opts.pod_maxconn_value = per_pod_maxconn %}
+        {%- else %}
+          {#- No pods discovered yet, use full value as fallback -#}
+      # haproxytech/backend-directives-haproxytech-pod-maxconn
+      # pod-maxconn: {{ pod_maxconn }} (no HAProxy pods discovered yet, using full value)
+          {#- Set variable in namespace for base.yaml to use (namespace persists across includes) -#}
+          {%- set ns_server_opts.pod_maxconn_value = pod_maxconn | int %}
+        {%- endif %}
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-timeouts:
+    priority: 100
+    template: |
+      {#-
+        HAProxy Timeout Configuration (Ingress Only)
+
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#timeout-check
+
+        Annotations:
+          - haproxy.org/timeout-server: "<duration>" (optional, default: HAProxy global/backend default)
+          - haproxy.org/timeout-client: "<duration>" (optional, default: HAProxy global/frontend default)
+          - haproxy.org/timeout-connect: "<duration>" (optional, default: HAProxy global/backend default)
+          - haproxy.org/timeout-http-request: "<duration>" (optional, default: HAProxy global/frontend default)
+          - haproxy.org/timeout-http-keep-alive: "<duration>" (optional, default: HAProxy global/frontend default)
+          - haproxy.org/timeout-queue: "<duration>" (optional, default: HAProxy global/backend default)
+          - haproxy.org/timeout-tunnel: "<duration>" (optional, default: HAProxy global/backend default)
+          - haproxy.org/timeout-check: "<duration>" (optional, default: HAProxy global/backend default)
+
+        Duration Format:
+          HAProxy duration format: integer with optional unit suffix
+          - Units: us (microseconds), ms (milliseconds), s (seconds), m (minutes), h (hours), d (days)
+          - Examples: "5s", "100ms", "1m", "2h", "30s"
+          - Default unit if none specified: milliseconds
+
+        Generated HAProxy Config:
+          timeout server <duration>
+          timeout client <duration>
+          timeout connect <duration>
+          timeout http-request <duration>
+          timeout http-keep-alive <duration>
+          timeout queue <duration>
+          timeout tunnel <duration>
+          timeout check <duration>
+
+        Note: Backend directives apply to backend sections, frontend directives apply to frontend
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
+      -#}
+      {%- if ingress is defined %}
+      {%- set timeout_server = ingress.metadata.annotations["haproxy.org/timeout-server"] | default("") %}
+      {%- set timeout_client = ingress.metadata.annotations["haproxy.org/timeout-client"] | default("") %}
+      {%- set timeout_connect = ingress.metadata.annotations["haproxy.org/timeout-connect"] | default("") %}
+      {%- set timeout_http_request = ingress.metadata.annotations["haproxy.org/timeout-http-request"] | default("") %}
+      {%- set timeout_http_keep_alive = ingress.metadata.annotations["haproxy.org/timeout-http-keep-alive"] | default("") %}
+      {%- set timeout_queue = ingress.metadata.annotations["haproxy.org/timeout-queue"] | default("") %}
+      {%- set timeout_tunnel = ingress.metadata.annotations["haproxy.org/timeout-tunnel"] | default("") %}
+      {%- set timeout_check = ingress.metadata.annotations["haproxy.org/timeout-check"] | default("") %}
+      {%- if timeout_server %}
+      # haproxytech/backend-directives-haproxytech-timeouts
+      timeout server {{ timeout_server }}
+      {%- endif %}
+      {%- if timeout_client %}
+      timeout client {{ timeout_client }}
+      {%- endif %}
+      {%- if timeout_connect %}
+      timeout connect {{ timeout_connect }}
+      {%- endif %}
+      {%- if timeout_http_request %}
+      timeout http-request {{ timeout_http_request }}
+      {%- endif %}
+      {%- if timeout_http_keep_alive %}
+      timeout http-keep-alive {{ timeout_http_keep_alive }}
+      {%- endif %}
+      {%- if timeout_queue %}
+      timeout queue {{ timeout_queue }}
+      {%- endif %}
+      {%- if timeout_tunnel %}
+      timeout tunnel {{ timeout_tunnel }}
+      {%- endif %}
+      {%- if timeout_check %}
+      timeout check {{ timeout_check }}
+      {%- endif %}
+      {%- endif -%}
+
+  backend-directives-haproxytech-ingress-auth:
     priority: 500
     template: |
       {#-
-        HAProxy Basic Authentication - Backend Directive
+        HAProxy Basic Authentication - Backend Directive (Ingress Only)
 
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#auth-secret
 
@@ -114,8 +989,10 @@ templateSnippets:
         Generated HAProxy Config:
           http-request auth realm "<realm>" unless { http_auth(<userlist-name>) }
 
-        Note: Requires corresponding userlist created by top-level-annotation-haproxytech-auth
+        Note: Requires corresponding userlist created by global-top-haproxytech-ingress-auth
+        Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
       -#}
+      {%- if ingress is defined %}
       {%- set auth_type = ingress.metadata.annotations["haproxy.org/auth-type"] | default("") %}
       {%- if auth_type and auth_type != "basic-auth" %}
         {{- fail("Invalid value '" ~ auth_type ~ "' for annotation 'haproxy.org/auth-type' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'basic-auth'") -}}
@@ -128,10 +1005,11 @@ templateSnippets:
           {#- Generate userlist name using macro #}
           {%- include "util-auth-userlist-name" -%}
           {%- set userlist_name = get_userlist_name(auth_secret, ingress.metadata.namespace) | trim -%}
-      # haproxytech/backend-directives-haproxytech-auth
+      # haproxytech/backend-directives-haproxytech-ingress-auth
       http-request auth realm "{{ auth_realm }}" unless { http_auth({{ userlist_name }}) }
-        {%- endif %}
-      {%- endif %}
+        {%- endif -%}
+      {%- endif -%}
+      {%- endif -%}
 
 validationTests:
   test-auth-basic-cross-namespace:
@@ -530,3 +1408,2085 @@ validationTests:
         target: rendering_error
         pattern: "Please create the secret or update the annotation"
         description: Error must provide actionable guidance
+
+  test-timeouts-valid:
+    description: Valid timeout values with various duration formats
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: timeout-ingress
+            annotations:
+              haproxy.org/timeout-server: "30s"
+              haproxy.org/timeout-client: "60s"
+              haproxy.org/timeout-connect: "10s"
+              haproxy.org/timeout-http-request: "5s"
+              haproxy.org/timeout-http-keep-alive: "2m"
+              haproxy.org/timeout-queue: "15s"
+              haproxy.org/timeout-tunnel: "1h"
+              haproxy.org/timeout-check: "3s"
+          spec:
+            rules:
+              - host: timeout.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: timeout-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: timeout-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: timeout-service-abc123
+            namespace: default
+            labels:
+              kubernetes.io/service-name: timeout-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.6.50"
+              targetRef:
+                kind: Pod
+                name: timeout-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout server 30s"
+        description: Must generate timeout server directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout client 60s"
+        description: Must generate timeout client directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout connect 10s"
+        description: Must generate timeout connect directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout http-request 5s"
+        description: Must generate timeout http-request directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout http-keep-alive 2m"
+        description: Must generate timeout http-keep-alive directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout queue 15s"
+        description: Must generate timeout queue directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout tunnel 1h"
+        description: Must generate timeout tunnel directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout check 3s"
+        description: Must generate timeout check directive
+
+  test-timeouts-partial:
+    description: Ingress with only some timeouts configured
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: partial-timeout-ingress
+            annotations:
+              haproxy.org/timeout-server: "45s"
+              haproxy.org/timeout-connect: "8s"
+          spec:
+            rules:
+              - host: partial-timeout.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: partial-timeout-service
+                          port:
+                            number: 80
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: partial-timeout-service
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: partial-timeout-service-def456
+            namespace: default
+            labels:
+              kubernetes.io/service-name: partial-timeout-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.7.60"
+              targetRef:
+                kind: Pod
+                name: partial-timeout-pod-1
+          ports:
+            - port: 80
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout server 45s"
+        description: Must generate configured timeout server directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "timeout connect 8s"
+        description: Must generate configured timeout connect directive
+
+  test-load-balance-leastconn:
+    description: Load balancing with leastconn algorithm
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: lb-ingress
+            annotations:
+              haproxy.org/load-balance: leastconn
+          spec:
+            rules:
+              - host: lb.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: lb-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: lb-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: lb-service-xyz
+            namespace: default
+            labels:
+              kubernetes.io/service-name: lb-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.8.70"
+              targetRef:
+                kind: Pod
+                name: lb-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "balance leastconn"
+        description: Must generate balance leastconn directive
+
+  test-load-balance-invalid:
+    description: Invalid load balancing algorithm should fail with clear error
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: invalid-lb-ingress
+            annotations:
+              haproxy.org/load-balance: invalid-algorithm
+          spec:
+            rules:
+              - host: invalid-lb.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: invalid-lb-service
+                          port:
+                            number: 80
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: invalid-lb-service
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: invalid-lb-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: invalid-lb-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.9.80"
+              targetRef:
+                kind: Pod
+                name: invalid-lb-pod-1
+          ports:
+            - port: 80
+              protocol: TCP
+    assertions:
+      - type: contains
+        target: rendering_error
+        pattern: "Invalid value 'invalid-algorithm' for annotation 'haproxy.org/load-balance'"
+        description: Must fail with clear error for invalid algorithm
+
+      - type: contains
+        target: rendering_error
+        pattern: "Valid values: roundrobin, leastconn, source, uri, hdr, random, rdp-cookie"
+        description: Error must indicate valid algorithm values
+
+  test-forwarded-for-enabled:
+    description: Forwarded-for enabled adds X-Forwarded-For header
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: forwarded-for-ingress
+            annotations:
+              haproxy.org/forwarded-for: "true"
+          spec:
+            rules:
+              - host: forwarded-for.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: forwarded-for-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: forwarded-for-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: forwarded-for-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: forwarded-for-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.10.90"
+              targetRef:
+                kind: Pod
+                name: forwarded-for-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "option forwardfor"
+        description: Must generate option forwardfor directive
+
+  test-set-host-header:
+    description: Set-host annotation modifies Host header
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: set-host-ingress
+            annotations:
+              haproxy.org/set-host: "internal-api.example.svc.cluster.local"
+          spec:
+            rules:
+              - host: api.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: set-host-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: set-host-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: set-host-service-xyz
+            namespace: default
+            labels:
+              kubernetes.io/service-name: set-host-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.11.100"
+              targetRef:
+                kind: Pod
+                name: set-host-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request set-header Host "internal-api.example.svc.cluster.local"'
+        description: Must generate http-request set-header Host directive
+
+  test-health-check-annotations:
+    description: Health check annotations are documented in config
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: health-check-ingress
+            annotations:
+              haproxy.org/check: "true"
+              haproxy.org/pod-maxconn: "100"
+          spec:
+            rules:
+              - host: health-check.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: health-check-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: health-check-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: health-check-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: health-check-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.12.110"
+              targetRef:
+                kind: Pod
+                name: health-check-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "# Note: check annotation value: true"
+        description: Must document check annotation value
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "# pod-maxconn: 100"
+        description: Must configure pod-maxconn
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "maxconn 100"
+        description: Must generate maxconn server parameter
+
+  test-header-manipulation:
+    description: Request and response header manipulation
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: headers-ingress
+            annotations:
+              haproxy.org/request-set-header: |
+                X-Forwarded-Proto https
+                X-Custom-Request custom-req-value
+              haproxy.org/response-set-header: |
+                Strict-Transport-Security max-age=31536000
+                X-Custom-Response custom-resp-value
+          spec:
+            rules:
+              - host: headers.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: headers-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: headers-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: headers-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: headers-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.13.120"
+              targetRef:
+                kind: Pod
+                name: headers-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request set-header X-Forwarded-Proto "https"'
+        description: Must generate request header directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-response set-header Strict-Transport-Security "max-age=31536000"'
+        description: Must generate response header directive
+
+  test-access-control-allowlist:
+    description: IP allowlist access control
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: allowlist-ingress
+            annotations:
+              haproxy.org/allowlist: "192.168.1.0/24, 10.0.0.1"
+          spec:
+            rules:
+              - host: allowlist.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: allowlist-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: allowlist-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: allowlist-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: allowlist-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.14.130"
+              targetRef:
+                kind: Pod
+                name: allowlist-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "acl allowlist_192_168_1_0_24 src 192.168.1.0/24"
+        description: Must generate ACL for CIDR
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "acl allowlist_10_0_0_1 src 10.0.0.1"
+        description: Must generate ACL for single IP
+
+  test-cors-enabled:
+    description: CORS configuration with multiple headers
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: cors-ingress
+            annotations:
+              haproxy.org/cors-enable: "true"
+              haproxy.org/cors-allow-origin: "https://example.com"
+              haproxy.org/cors-allow-methods: "GET, POST, PUT, DELETE"
+              haproxy.org/cors-allow-headers: "Content-Type, Authorization"
+              haproxy.org/cors-allow-credentials: "true"
+              haproxy.org/cors-max-age: "3600"
+          spec:
+            rules:
+              - host: cors.example.com
+                http:
+                  paths:
+                    - path: /api
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: cors-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: cors-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: cors-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: cors-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.15.140"
+              targetRef:
+                kind: Pod
+                name: cors-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-response set-header Access-Control-Allow-Origin "https://example.com"'
+        description: Must set CORS origin header
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-response set-header Access-Control-Allow-Credentials "true"'
+        description: Must set CORS credentials header
+
+  test-rate-limiting:
+    description: Rate limiting with custom configuration
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: ratelimit-ingress
+            annotations:
+              haproxy.org/rate-limit-requests: "100"
+              haproxy.org/rate-limit-period: "1m"
+              haproxy.org/rate-limit-size: "100k"
+              haproxy.org/rate-limit-status-code: "429"
+          spec:
+            rules:
+              - host: ratelimit.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: ratelimit-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: ratelimit-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: ratelimit-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: ratelimit-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.16.150"
+              targetRef:
+                kind: Pod
+                name: ratelimit-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "stick-table type ip size 100k expire 1m"
+        description: Must generate stick-table for rate limiting
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request deny deny_status 429 if"
+        description: Must deny with custom status code
+
+  test-ssl-redirect:
+    description: SSL redirect forces HTTPS
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: ssl-redirect-ingress
+            annotations:
+              haproxy.org/ssl-redirect: "true"
+              haproxy.org/ssl-redirect-code: "301"
+          spec:
+            rules:
+              - host: ssl-redirect.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: ssl-redirect-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: ssl-redirect-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: ssl-redirect-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: ssl-redirect-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.17.160"
+              targetRef:
+                kind: Pod
+                name: ssl-redirect-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request redirect scheme https code 301"
+        description: Must generate SSL redirect directive
+
+  test-path-rewrite:
+    description: Path rewriting with regex
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: pathrewrite-ingress
+            annotations:
+              haproxy.org/path-rewrite: "^/api/v1/(.*) /$1"
+          spec:
+            rules:
+              - host: pathrewrite.example.com
+                http:
+                  paths:
+                    - path: /api/v1
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: pathrewrite-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: pathrewrite-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: pathrewrite-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: pathrewrite-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.18.170"
+              targetRef:
+                kind: Pod
+                name: pathrewrite-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request replace-path'
+        description: Must generate path rewrite directive
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: '/api/v1'
+        description: Must reference API path
+
+  test-advanced-health-checks:
+    description: Advanced health check configuration
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: healthcheck-ingress
+            annotations:
+              haproxy.org/check: "true"
+              haproxy.org/check-http: "/health"
+              haproxy.org/check-interval: "5s"
+          spec:
+            rules:
+              - host: healthcheck.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: healthcheck-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: healthcheck-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: healthcheck-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: healthcheck-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.20.100"
+              targetRef:
+                kind: Pod
+                name: healthcheck-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "option httpchk GET /health"
+        description: Must generate HTTP health check with custom path
+
+  test-source-ip-logging:
+    description: Source IP header and request capture
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: logging-ingress
+            annotations:
+              haproxy.org/src-ip-header: "X-Real-IP"
+              haproxy.org/request-capture: "User-Agent"
+              haproxy.org/request-capture-len: "128"
+          spec:
+            rules:
+              - host: logging.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: logging-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: logging-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: logging-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: logging-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.21.100"
+              targetRef:
+                kind: Pod
+                name: logging-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'http-request set-src'
+        description: Must extract source IP from header
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: 'X-Real-IP'
+        description: Must reference X-Real-IP header
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "capture request header User-Agent len 128"
+        description: Must generate request capture directive
+
+  test-access-control-denylist:
+    description: Access control with deny-list
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: denylist-ingress
+            annotations:
+              haproxy.org/denylist: "192.168.1.100, 192.168.1.101"
+          spec:
+            rules:
+              - host: denylist.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: denylist-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: denylist-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: denylist-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: denylist-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.22.100"
+              targetRef:
+                kind: Pod
+                name: denylist-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "acl denylist_192_168_1_100 src 192.168.1.100"
+        description: Must generate ACL for first IP
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "acl denylist_192_168_1_101 src 192.168.1.101"
+        description: Must generate ACL for second IP
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request deny if denylist_192_168_1_100 or denylist_192_168_1_101"
+        description: Must generate combined deny rule
+
+  test-request-redirect:
+    description: Request redirection with custom code
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: redirect-ingress
+            annotations:
+              haproxy.org/request-redirect: "https://new.example.com"
+              haproxy.org/request-redirect-code: "302"
+          spec:
+            rules:
+              - host: old.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: redirect-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: redirect-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: redirect-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: redirect-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.23.100"
+              targetRef:
+                kind: Pod
+                name: redirect-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "http-request redirect location https://new.example.com code 302"
+        description: Must generate redirect with custom code
+
+  test-session-persistence:
+    description: Cookie-based session persistence
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: session-ingress
+            annotations:
+              haproxy.org/cookie-persistence: "SESSION"
+          spec:
+            rules:
+              - host: session.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: session-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: session-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: session-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: session-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.24.100"
+              targetRef:
+                kind: Pod
+                name: session-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "cookie SESSION insert indirect nocache"
+        description: Must generate cookie persistence directive
+
+  test-backend-ssl:
+    description: Backend SSL/TLS configuration
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: backendssl-ingress
+            annotations:
+              haproxy.org/server-ssl: "true"
+              haproxy.org/server-proto: "h2"
+          spec:
+            rules:
+              - host: backendssl.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: backendssl-service
+                          port:
+                            number: 8443
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: backendssl-service
+          spec:
+            ports:
+              - port: 8443
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: backendssl-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: backendssl-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.25.100"
+              targetRef:
+                kind: Pod
+                name: backendssl-pod-1
+          ports:
+            - port: 8443
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_backendssl-ingress_backendssl-service_8443"
+        description: Backend must be generated
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_1 10.0.25.100:8443 ssl verify none proto h2 check"
+        description: Server must include SSL and proto directives
+
+  test-backend-mtls:
+    description: Backend mTLS with client certificate and CA verification
+    fixtures:
+      secrets:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            namespace: default
+            name: backend-mtls-ca
+          type: Opaque
+          data:
+            ca.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUREekNDQWZlZ0F3SUJBZ0lVTGJRKzlYeUFDbk9CS0xRZlhrMGFWeVlrWllzd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01SR1Z0YnlCdFZFeFRJRU5CTUI0WERUSTFNVEV3T0RFM016SXlOVm9YRFRJMgpNVEV3T0RFM016SXlOVm93RnpFVk1CTUdBMVVFQXd3TVJHVnRieUJ0VkV4VElFTkJNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFwdmdhNkl5cmRuN1pXUkI4UjJFZm9hSmF6Q1B5RjdObS9ZeVMKNk5RSVJhZzdCTVR1Z0RUTml5bmh2Mmx3TG14c2xyNmtncXdieEo0TkZETWRxK3pnVGNmbFFpRjE5N1lsbnlPVAovRzZPMVVNNitOLzQyMmpKYlFOeHI4bTh2TThVN0FkUXU0ek5MREtwZU9YbVo3c2ZWWDI3ZVNqUENmR2drWTl3CjI3c3JubXY4UzVGanVhRlBVbkxHSzBVUWhWRTlIcE5scC91cHhyUmQzOUNDOUFWZlN6WWUvNGNjay9yYVBoZDAKSkhCa1NEWDdmWkY5aE1UQXNsdHdUSGp4KzFQNHF4T3BFeGd6MHNTQ0dPVjNHRHRocmhKZndMaU5RZU1nQXdWawpzRWxUN095M2d1WGxVS3UxRVhvN1dnMTBOOXkzRjRyWURPa1p0c2loWVlOM3VvaEM3UUlEQVFBQm8xTXdVVEFkCkJnTlZIUTRFRmdRVWo4NWRiaXBQR2ZWMzVOeWJIdGlpd2NwNG9kRXdId1lEVlIwakJCZ3dGb0FVajg1ZGJpcFAKR2ZWMzVOeWJIdGlpd2NwNG9kRXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QU5CZ2txaGtpRzl3MEJBUXNGQUFPQwpBUUVBbCtXOUtLQ3hCOXpXQ1kxZ0t0TVJGU0FtRUNVODNwaDlrRVVMMnZJdklMLzBOMEJQZjFtWjV4S1BUL0hQClZYZE9YTFg5aTJGYi9xMndKSEtQNVNVYzBqaFVYK2NlVHA3TDhJNjdmWXpxYUd2cVIxY3dCQWh2eW9RV0U1NysKTkszRFo3L3NFT3BCNFdmR2hycEJiZ1FZUTVSb3h0c3A0aTV4UFJJaktha2tuZzJDdXg4bEpYT29sZ3ZIRm5FMgpBRys3Vit0d0JJbVhtUDNyRzB1QmliSVE4M1NmOUNmWG5IbEJqOVlJSUJ3MHE5Rk5Md2duai9CUkpwRXM0OERnCm9VUkZMd1VFWmxLTkZLWld2dGhMVTJrOGdteFQxc3dmd01BMW1zcmF4SUpCZEZMZkdDS1pWanpxWllRRFdPcHcKdjF4eC9sQmVVMDV5UVhxc3B6dU04THpyVFE9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            namespace: default
+            name: backend-mtls-client-cert
+          type: kubernetes.io/tls
+          data:
+            tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURBRENDQWVpZ0F3SUJBZ0lVVVFFNHBtcy9lQnJKamM4WmVyclpyd3hNSW1Jd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01SR1Z0YnlCdFZFeFRJRU5CTUI0WERUSTFNVEV3T0RFM016SXpPRm9YRFRJMgpNVEV3T0RFM016SXpPRm93R1RFWE1CVUdBMVVFQXd3T1ltRmphMlZ1WkMxamJHbGxiblF3Z2dFaU1BMEdDU3FHClNJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUN3Nk5LemtqR1BJb0N4N1ZSUTQyNW5kNU1nZmZMZ1BGZDIKbGZLRTdQRCtwUUdiWTNwTW4zUk1Ha2FhSHh6NTlueGhyYjAzZVdUdmZ6YzJEV1hoc2tXRjJxMEFLRGxmbzRyUwptVTREUjVWYktwUS8xdkp5T01TMU1ZQW9yVU9CdzRQTHdGZ2E0c0ZvRXFTV25BWHJwWDcwUHVLOElDV0FWbFN5CmorNUVTTlFYQ0pnRkgzQzF4REFsVWM2ZkhCZTZyWFdlUTMvN2plbnpSK3VneGFQUUl6bERUNE4zUWFuekpxNmQKQUtCZXhWWjJKcGgzb3ZiUVBKbE1RSlpsOWpicThEb3JnOEE5NzBJNHNmWEQzeUFReFhRR3JIdm9FRTJvOHl1RAoyMThZeEJpMzdReXZiT1drcElUY3lybG5sdFJoaGNYZld3UERtMlN1OFpMMHQ3SjRtNTZkQWdNQkFBR2pRakJBCk1CMEdBMVVkRGdRV0JCUWtpZXJidGNidVJzRXJjdjRrZGtnTGY3Y2VOakFmQmdOVkhTTUVHREFXZ0JTUHpsMXUKS2s4WjlYZmszSnNlMktMQnluaWgwVEFOQmdrcWhraUc5dzBCQVFzRkFBT0NBUUVBYmJNOUhwdFhwRndsQU5qdgowZXNZODJqRjhaUWVsK1ZVY1ZhR00wcDlwaTJoZGZoU3A3Ry8xV0RSVEFiVDFKSXYzak1kdEVFdW1MeDlUTnRHCnFEMVUzdkhSdXliSHltUkZURThYUDNDUjJTbEFJcEMvN045N25GRmpGT2EwcEZwRS8weWhkRmpNWkZKUVR0dVAKOXFSNVJSbk9JaXZFSGEwOExXcXlTVml4WUQrY3B1TGFXTm9QVHVIdEM0WVgyenEvMG1yelV1a2RBQWx3anppMwpqd2V2NHNWT3RNWGJXZGhya1lxejBjQ1QrZ1NXbGNsY3FUZEFESFpyZTd5QVFKY1RNV08wMVlycmQ2M2dINUQzCmQ1cWdoOTRTTXdMcExyTkhvaEx2cGRKT01XT0VoV0RiNitaSGZwcnBhUWppMTlaa0JjT0ZTSjQ0aitPZk1IaS8KOGlYNUxRPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+            tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2UUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktjd2dnU2pBZ0VBQW9JQkFRQ3c2Tkt6a2pHUElvQ3gKN1ZSUTQyNW5kNU1nZmZMZ1BGZDJsZktFN1BEK3BRR2JZM3BNbjNSTUdrYWFIeHo1OW54aHJiMDNlV1R2ZnpjMgpEV1hoc2tXRjJxMEFLRGxmbzRyU21VNERSNVZiS3BRLzF2SnlPTVMxTVlBb3JVT0J3NFBMd0ZnYTRzRm9FcVNXCm5BWHJwWDcwUHVLOElDV0FWbFN5ais1RVNOUVhDSmdGSDNDMXhEQWxVYzZmSEJlNnJYV2VRMy83amVuelIrdWcKeGFQUUl6bERUNE4zUWFuekpxNmRBS0JleFZaMkpwaDNvdmJRUEpsTVFKWmw5amJxOERvcmc4QTk3MEk0c2ZYRAozeUFReFhRR3JIdm9FRTJvOHl1RDIxOFl4QmkzN1F5dmJPV2twSVRjeXJsbmx0UmhoY1hmV3dQRG0yU3U4WkwwCnQ3SjRtNTZkQWdNQkFBRUNnZ0VBSUdDME0yWlZ5SzhWWTdzZWUrRnNFdWE1R0RERTgxSkg1YTNDNFo0bDYwMFMKMHJndHFYbGpoUXdvRU13Ujl4T3NKd3B2djRmcHQ4V09Pc2ZQOWpNMDh5OFhDNWpSQzFaNHNWdWFnaEluWFRTWgpSbWZXSHA2U0xlRmQ1ZFAwTDNzemsyWmtHYU9YcHk4R1RZUkh0eDJtY3hoUlVnSUdLd3RoMi81b3FybXppM1ZhCm1EbXhJQ1hwSm1LK25ITzNUM0R3SXZhUWFGa0JydmkrQWxXNDRFVjkxdzBUcUdGK29VVmVTVzhCUHJmVUJvQkQKZ1JDVGdpQ09FVDFHV0UveVRyZ01RUEdUajlnQ2FJQzVRNFhkejFOS00yT2hIUzlER0dWTElHcDMrT0pQWjdaNwprbmNuZWJFbG5VU0RYenAvRHNxcENqaGQwSEliLzhNbnFLOWhQNkVFUVFLQmdRRGttNTZjQkZxa2hWYlBNYldhCnNOSG10UmUxMG9uYjg5dG8zdDArVUlWa3lpZzQ0YU9jcDFkMDF2WlhSTmxtbjRNdUNWbmVVR1dJVkRzdTBtNGQKUUgvUDhQSXZjY2FPTnpsT2c4cjZFOGIra3RkVWw0ZUQwMEJXeXpiRTJxSGRSN3h0azlqZTFSMW5xMFZrM1RlMgpFRjY4NThRbUlOcTZRMWpONEp6WkFLeU1ZUUtCZ1FER0cyUmFCQ1hwMDcxaFdHbS9rb01uUlZEUDVJbk05enJOCmxiT0dhNTd2Kzg2Z3FZR0VGaFFHSTE0TnNCeVAzTEdRN1VFR3hRTUVyZmw3ai9DVk9teEE3aGJVK0JlZmp3eE0KbjBiaWNhSEpVN3g0WG5sWjgyWmVacmNrTW5QNFd6a0RraVVqeEJCZGRacEdpTVlNMTIyVDN1VzNtSHo2S1RIdQpBZU5BaU1IYnZRS0JnRk9PbGRDTXZ0eTNaOTFmVy9Ob2diQURyT0RtVFVFNXhvNTBOd1daeE1mc0kvdDJiYWpLCmVXclpUenppaTF1NUhlZHJ2NDlFYjNmKzRZcmhteUhSKzJWenVmR2hjbU4weDl0c3pIblBWTUtqeFZURDllSTMKQ3FNdXI1d1FGVzJkMUw5d2RLb3Qxd3VYVEV2cmwzdFNURzViZ0JRM21mck90dHk1SmxzaXBlN0JBb0dBQmhzcQpDS3hBRHVqNzJWaEVTaWRWNjR2elpiVUJtbE8wZUVtNDh0ZTJXbWRFZ3ljMldyL2pkaHo0OVNzTWRsS3pGbWg1CnJKKzk3Qk1Bc1pKS05BOU03dU5ueU1DczJib3JBdUdWNmJ6ZTQ3bTFBWERJQk1HLzBnRVFmQWtpRWZHZDNFSlEKNnIxTVU5VWdJRFJ2Qms1TmpsVThkMkEzMmU0VEgrYm0va0k0MTNFQ2dZRUE1R0xWRU81K1JSVlJaZFhURzgwcwo1aHhDR1lkQ1IydUI4SWlmRTI0UTRlWDNoaHJwQk43em53UlQvK1JJM2RYclZ0OThKNCtXMnNETHVaemhBSlNwCnYydXUyVzdGdFh1SUV3TG9YSmR6VzBZSG0vSldJTlAvR0Nkd08vSzc1SGFWYVVpT3pId0F0akVBMXQzS2xzWCsKRThjMjJYVW1ZTG1vL0d0ZXJCZy9BMkE9Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
+
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: backend-mtls-ingress
+            annotations:
+              haproxy.org/server-ssl: "true"
+              haproxy.org/server-ca: "backend-mtls-ca"
+              haproxy.org/server-crt: "backend-mtls-client-cert"
+          spec:
+            rules:
+              - host: mtls.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: mtls-service
+                          port:
+                            number: 8443
+
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: mtls-service
+          spec:
+            ports:
+              - port: 8443
+
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: mtls-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: mtls-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.30.100"
+              targetRef:
+                kind: Pod
+                name: mtls-pod-1
+          ports:
+            - port: 8443
+              protocol: TCP
+
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_backend-mtls-ingress_mtls-service_8443"
+        description: Backend must be generated
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "ssl verify required ca-file.*default-backend-mtls-ca-ca\\.pem"
+        description: Server must include CA file for verification
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "crt.*default-backend-mtls-client-cert-client\\.pem"
+        description: Server must include client certificate
+
+  test-backend-config-snippet:
+    description: Backend config snippet injection
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: snippet-ingress
+            annotations:
+              haproxy.org/backend-config-snippet: |
+                stick-table type string len 32 size 100k expire 30m
+                stick store-response res.cook(JSESSIONID)
+          spec:
+            rules:
+              - host: snippet.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: snippet-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: snippet-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: snippet-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: snippet-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.29.100"
+              targetRef:
+                kind: Pod
+                name: snippet-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_snippet-ingress_snippet-service_8080"
+        description: Backend must be generated
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "stick-table type string len 32 size 100k expire 30m"
+        description: Must include custom backend config snippet
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "stick store-response res\\.cook\\(JSESSIONID\\)"
+        description: Must include multiline snippet content
+
+  test-send-proxy-protocol:
+    description: PROXY protocol for backend connections
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: proxy-ingress
+            annotations:
+              haproxy.org/send-proxy-protocol: "proxy-v2"
+          spec:
+            rules:
+              - host: proxy.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: proxy-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: proxy-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: proxy-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: proxy-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.27.100"
+              targetRef:
+                kind: Pod
+                name: proxy-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_proxy-ingress_proxy-service_8080"
+        description: Backend must be generated
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_1 10.0.27.100:8080 send-proxy-v2 check"
+        description: Server must include send-proxy-v2 directive
+
+  test-scale-server-slots:
+    description: Scale server slots for dynamic backends
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: scale-ingress
+            annotations:
+              haproxy.org/scale-server-slots: "10"
+          spec:
+            rules:
+              - host: scale.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: scale-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: scale-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: scale-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: scale-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.28.100"
+              targetRef:
+                kind: Pod
+                name: scale-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_scale-ingress_scale-service_8080"
+        description: Backend must be generated
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_1 10.0.28.100:8080"
+        description: First server slot must use active endpoint
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_10 127.0.0.1:1 disabled"
+        description: Last (10th) server slot must be disabled placeholder
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_2 127.0.0.1:1 disabled"
+        description: Remaining server slots must be disabled placeholders
+
+  test-pod-maxconn-zero-pods:
+    description: pod-maxconn with zero HAProxy pods (fallback to full value)
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: maxconn-ingress
+            annotations:
+              haproxy.org/pod-maxconn: "100"
+          spec:
+            rules:
+              - host: maxconn.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: maxconn-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: maxconn-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: maxconn-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: maxconn-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.30.100"
+              targetRef:
+                kind: Pod
+                name: maxconn-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+      # No haproxy-pods - tests fallback behavior
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "# pod-maxconn: 100 \\(no HAProxy pods discovered yet, using full value\\)"
+        description: Comment shows fallback to full value when no pods
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_1 10\\.0\\.30\\.100:8080 maxconn 100 check"
+        description: Server must have maxconn 100 (full value, no division)
+
+  test-pod-maxconn-single-pod:
+    description: pod-maxconn with single HAProxy pod (no division needed)
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: maxconn-ingress
+            annotations:
+              haproxy.org/pod-maxconn: "100"
+          spec:
+            rules:
+              - host: maxconn.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: maxconn-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: maxconn-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: maxconn-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: maxconn-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.30.100"
+              targetRef:
+                kind: Pod
+                name: maxconn-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+      haproxy-pods:
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-1
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "# pod-maxconn: 100 total / 1 HAProxy pods = 100 per pod"
+        description: Comment shows calculation with single pod
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_1 10\\.0\\.30\\.100:8080 maxconn 100 check"
+        description: Server must have maxconn 100 (100/1 = 100)
+
+  test-pod-maxconn-multi-pod:
+    description: pod-maxconn with multiple HAProxy pods (division required)
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: maxconn-ingress
+            annotations:
+              haproxy.org/pod-maxconn: "100"
+          spec:
+            rules:
+              - host: maxconn.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: maxconn-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: maxconn-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: maxconn-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: maxconn-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.30.100"
+              targetRef:
+                kind: Pod
+                name: maxconn-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+      haproxy-pods:
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-1
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-2
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "# pod-maxconn: 100 total / 2 HAProxy pods = 50 per pod"
+        description: Comment shows calculation with 2 pods
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_1 10\\.0\\.30\\.100:8080 maxconn 50 check"
+        description: Server must have maxconn 50 (100/2 = 50)
+
+  test-pod-maxconn-rounding:
+    description: pod-maxconn with uneven division (ceiling rounding)
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: maxconn-ingress
+            annotations:
+              haproxy.org/pod-maxconn: "100"
+          spec:
+            rules:
+              - host: maxconn.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: maxconn-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: maxconn-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: maxconn-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: maxconn-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.30.100"
+              targetRef:
+                kind: Pod
+                name: maxconn-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+      haproxy-pods:
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-1
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-2
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-3
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "# pod-maxconn: 100 total / 3 HAProxy pods = 34 per pod"
+        description: Comment shows calculation with ceiling rounding (100/3=33.33 → 34)
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_1 10\\.0\\.30\\.100:8080 maxconn 34 check"
+        description: Server must have maxconn 34 (ceiling of 100/3 = 33.33)
+
+  test-pod-maxconn-minimum:
+    description: pod-maxconn minimum value protection (1 connection / 10 pods = 1 minimum)
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: maxconn-ingress
+            annotations:
+              haproxy.org/pod-maxconn: "1"
+          spec:
+            rules:
+              - host: maxconn.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: maxconn-service
+                          port:
+                            number: 8080
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: maxconn-service
+          spec:
+            ports:
+              - port: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: maxconn-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: maxconn-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.30.100"
+              targetRef:
+                kind: Pod
+                name: maxconn-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+      haproxy-pods:
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-1
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-2
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-3
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-4
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-5
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-6
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-7
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-8
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-9
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+        - apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: haproxy-template-ic
+            name: haproxy-pod-10
+            labels:
+              app: haproxy-template-ic
+          status:
+            phase: Running
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "# pod-maxconn: 1 total / 10 HAProxy pods = 1 per pod"
+        description: Comment shows minimum value protection (1/10=0.1 → 1)
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "server SRV_1 10\\.0\\.30\\.100:8080 maxconn 1 check"
+        description: Server must have maxconn 1 (minimum enforced by ceiling rounding)
+
+  test-empty-annotations-bool-error:
+    description: Ingress with empty annotations should not cause Bool() errors
+    fixtures:
+      ingresses:
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            namespace: default
+            name: empty-annotations-ingress
+            annotations: {}
+          spec:
+            rules:
+              - host: empty.example.com
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: test-service
+                          port:
+                            number: 80
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            namespace: default
+            name: test-service
+          spec:
+            ports:
+              - port: 80
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: test-service-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: test-service
+          addressType: IPv4
+          endpoints:
+            - addresses:
+                - "10.0.30.100"
+              targetRef:
+                kind: Pod
+                name: test-pod-1
+          ports:
+            - port: 8080
+              protocol: TCP
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be valid despite empty annotations
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "backend ing_default_empty-annotations-ingress_test-service_80"
+        description: Backend must be created for ingress with empty annotations

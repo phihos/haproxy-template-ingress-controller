@@ -59,13 +59,15 @@ type DeploymentScheduler struct {
 	ctx                   context.Context // Main event loop context for scheduling
 
 	// State protected by mutex
-	mu                  sync.RWMutex
-	lastRenderedConfig  string        // Last rendered HAProxy config (before validation)
-	lastAuxiliaryFiles  interface{}   // Last rendered auxiliary files
-	lastValidatedConfig string        // Last validated HAProxy config
-	lastValidatedAux    interface{}   // Last validated auxiliary files
-	currentEndpoints    []interface{} // Current HAProxy pod endpoints
-	hasValidConfig      bool          // Whether we have a validated config to deploy
+	mu                     sync.RWMutex
+	lastRenderedConfig     string        // Last rendered HAProxy config (before validation)
+	lastAuxiliaryFiles     interface{}   // Last rendered auxiliary files
+	lastValidatedConfig    string        // Last validated HAProxy config
+	lastValidatedAux       interface{}   // Last validated auxiliary files
+	currentEndpoints       []interface{} // Current HAProxy pod endpoints
+	hasValidConfig         bool          // Whether we have a validated config to deploy
+	runtimeConfigName      string        // Name of HAProxyCfg resource
+	runtimeConfigNamespace string        // Namespace of HAProxyCfg resource
 
 	// Deployment scheduling and rate limiting
 	schedulerMutex        sync.Mutex
@@ -138,6 +140,9 @@ func (s *DeploymentScheduler) handleEvent(ctx context.Context, event busevents.E
 
 	case *events.DeploymentCompletedEvent:
 		s.handleDeploymentCompleted(e)
+
+	case *events.ConfigPublishedEvent:
+		s.handleConfigPublished(e)
 
 	case *events.LostLeadershipEvent:
 		s.handleLostLeadership(e)
@@ -370,13 +375,19 @@ func (s *DeploymentScheduler) scheduleWithRateLimitUnlocked(
 		}
 	}
 
+	// Get runtime config metadata under lock
+	s.mu.RLock()
+	runtimeConfigName := s.runtimeConfigName
+	runtimeConfigNamespace := s.runtimeConfigNamespace
+	s.mu.RUnlock()
+
 	// Publish DeploymentScheduledEvent
 	s.logger.Info("scheduling deployment",
 		"reason", reason,
 		"endpoint_count", len(endpoints),
 		"config_bytes", len(config))
 
-	s.eventBus.Publish(events.NewDeploymentScheduledEvent(config, auxFiles, endpoints, reason))
+	s.eventBus.Publish(events.NewDeploymentScheduledEvent(config, auxFiles, endpoints, runtimeConfigName, runtimeConfigNamespace, reason))
 
 	// Note: We wait for DeploymentCompletedEvent to update lastDeploymentEndTime
 	// This is handled in handleDeploymentCompleted()
@@ -416,6 +427,22 @@ func (s *DeploymentScheduler) scheduleWithRateLimitUnlocked(
 	// Recursive: schedule pending (we're still marked as in-progress)
 	s.scheduleWithRateLimitUnlocked(ctx, pending.config, pending.auxFiles,
 		pending.endpoints, pending.reason)
+}
+
+// handleConfigPublished handles ConfigPublishedEvent by caching runtime config metadata.
+//
+// This caches the runtime config name and namespace for use when publishing
+// ConfigAppliedToPodEvent after successful deployments.
+func (s *DeploymentScheduler) handleConfigPublished(event *events.ConfigPublishedEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.runtimeConfigName = event.RuntimeConfigName
+	s.runtimeConfigNamespace = event.RuntimeConfigNamespace
+
+	s.logger.Debug("cached runtime config metadata for deployment events",
+		"runtime_config_name", event.RuntimeConfigName,
+		"runtime_config_namespace", event.RuntimeConfigNamespace)
 }
 
 // handleLostLeadership handles LostLeadershipEvent by clearing deployment state.

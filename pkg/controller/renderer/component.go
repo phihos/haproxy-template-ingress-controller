@@ -50,11 +50,14 @@ const (
 // The component caches the last rendered output to support state replay during
 // leadership transitions (when new leader-only components start subscribing).
 type Component struct {
-	eventBus *busevents.EventBus
-	engine   *templating.TemplateEngine
-	config   *config.Config
-	stores   map[string]types.Store
-	logger   *slog.Logger
+	eventBus        *busevents.EventBus
+	eventChan       <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
+	engine          *templating.TemplateEngine
+	config          *config.Config
+	stores          map[string]types.Store
+	haproxyPodStore types.Store              // HAProxy controller pods store for pod-maxconn calculations
+	pathResolver    *templating.PathResolver // For FileRegistry to compute auxiliary file paths
+	logger          *slog.Logger
 
 	// State protected by mutex (for leadership transition replay)
 	mu                   sync.RWMutex
@@ -74,6 +77,7 @@ type Component struct {
 //   - eventBus: The EventBus for subscribing to events and publishing results
 //   - config: Controller configuration containing templates
 //   - stores: Map of resource type names to their stores (e.g., "ingresses" -> Store)
+//   - haproxyPodStore: Store containing HAProxy controller pods for pod-maxconn calculations
 //   - logger: Structured logger for component logging
 //
 // Returns:
@@ -83,6 +87,7 @@ func New(
 	eventBus *busevents.EventBus,
 	config *config.Config,
 	stores map[string]types.Store,
+	haproxyPodStore types.Store,
 	logger *slog.Logger,
 ) (*Component, error) {
 	// Log stores received during initialization
@@ -95,6 +100,9 @@ func New(
 
 	// Extract all templates from config
 	templates := extractTemplates(config)
+
+	// Extract post-processor configurations from config
+	postProcessorConfigs := extractPostProcessorConfigs(config)
 
 	// Create path resolver for get_path filter
 	pathResolver := &templating.PathResolver{
@@ -115,26 +123,35 @@ func New(
 		"fail": failFunction,
 	}
 
-	// Pre-compile all templates with custom filters and functions
-	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
+	// Pre-compile all templates with custom filters, functions, and post-processors
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions, postProcessorConfigs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create template engine: %w", err)
 	}
 
+	// Subscribe to EventBus during construction (before EventBus.Start())
+	// This ensures proper startup synchronization without timing-based sleeps
+	eventChan := eventBus.Subscribe(EventBufferSize)
+
 	return &Component{
-		eventBus: eventBus,
-		engine:   engine,
-		config:   config,
-		stores:   stores,
-		logger:   logger,
+		eventBus:        eventBus,
+		eventChan:       eventChan,
+		engine:          engine,
+		config:          config,
+		stores:          stores,
+		haproxyPodStore: haproxyPodStore,
+		pathResolver:    pathResolver,
+		logger:          logger,
 	}, nil
 }
 
 // Start begins the renderer's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to the EventBus and processes events:
+// The component is already subscribed to the EventBus (subscription happens in New()),
+// so this method only processes events:
 //   - ReconciliationTriggeredEvent: Starts template rendering
+//   - BecameLeaderEvent: Replays last rendered state for new leader-only components
 //
 // The component runs until the context is cancelled, at which point it
 // performs cleanup and returns.
@@ -148,11 +165,9 @@ func New(
 func (c *Component) Start(ctx context.Context) error {
 	c.logger.Info("Renderer starting")
 
-	eventChan := c.eventBus.Subscribe(EventBufferSize)
-
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-c.eventChan:
 			c.handleEvent(event)
 
 		case <-ctx.Done():
@@ -179,9 +194,9 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 
 	c.logger.Info("Template rendering triggered", "reason", event.Reason)
 
-	// Build rendering context from all resource stores
+	// Build rendering context from all resource stores (includes FileRegistry)
 	c.logger.Info("building rendering context")
-	context := c.buildRenderingContext()
+	context, fileRegistry := c.buildRenderingContext()
 
 	// Render main HAProxy configuration
 	c.logger.Info("rendering main template")
@@ -191,11 +206,26 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 		return
 	}
 
-	// Render all auxiliary files
-	auxiliaryFiles, err := c.renderAuxiliaryFiles(context)
+	// Render all pre-declared auxiliary files
+	staticFiles, err := c.renderAuxiliaryFiles(context)
 	if err != nil {
 		// Error already published by renderAuxiliaryFiles
 		return
+	}
+
+	// Extract dynamic files registered during template rendering
+	dynamicFiles := fileRegistry.GetFiles()
+
+	// Merge static (pre-declared) and dynamic (registered) files
+	auxiliaryFiles := MergeAuxiliaryFiles(staticFiles, dynamicFiles)
+
+	// Log counts
+	staticCount := len(staticFiles.MapFiles) + len(staticFiles.GeneralFiles) + len(staticFiles.SSLCertificates)
+	dynamicCount := len(dynamicFiles.MapFiles) + len(dynamicFiles.GeneralFiles) + len(dynamicFiles.SSLCertificates)
+	if dynamicCount > 0 {
+		c.logger.Info("merged auxiliary files",
+			"static_count", staticCount,
+			"dynamic_count", dynamicCount)
 	}
 
 	// Calculate metrics
@@ -359,6 +389,84 @@ func extractTemplates(cfg *config.Config) map[string]string {
 	}
 
 	return templates
+}
+
+// extractPostProcessorConfigs extracts post-processor configurations from all templates in the config.
+// Returns a map of template names to their post-processor configurations.
+func extractPostProcessorConfigs(cfg *config.Config) map[string][]templating.PostProcessorConfig {
+	configs := make(map[string][]templating.PostProcessorConfig)
+
+	// Main HAProxy config
+	if len(cfg.HAProxyConfig.PostProcessing) > 0 {
+		configs["haproxy.cfg"] = convertPostProcessorConfigs(cfg.HAProxyConfig.PostProcessing)
+	}
+
+	// Map files
+	for name, mapDef := range cfg.Maps {
+		if len(mapDef.PostProcessing) > 0 {
+			configs[name] = convertPostProcessorConfigs(mapDef.PostProcessing)
+		}
+	}
+
+	// General files
+	for name, fileDef := range cfg.Files {
+		if len(fileDef.PostProcessing) > 0 {
+			configs[name] = convertPostProcessorConfigs(fileDef.PostProcessing)
+		}
+	}
+
+	// SSL certificates
+	for name, certDef := range cfg.SSLCertificates {
+		if len(certDef.PostProcessing) > 0 {
+			configs[name] = convertPostProcessorConfigs(certDef.PostProcessing)
+		}
+	}
+
+	return configs
+}
+
+// convertPostProcessorConfigs converts config.PostProcessorConfig to templating.PostProcessorConfig.
+func convertPostProcessorConfigs(postProcessors []config.PostProcessorConfig) []templating.PostProcessorConfig {
+	ppConfigs := make([]templating.PostProcessorConfig, len(postProcessors))
+	for i, pp := range postProcessors {
+		ppConfigs[i] = templating.PostProcessorConfig{
+			Type:   templating.PostProcessorType(pp.Type),
+			Params: pp.Params,
+		}
+	}
+	return ppConfigs
+}
+
+// mergeAuxiliaryFiles merges static (pre-declared) and dynamic (registered during rendering) auxiliary files.
+//
+// The function combines both sets of files into a single AuxiliaryFiles structure.
+// Both static and dynamic files are included in the merged result.
+//
+// Parameters:
+//   - static: Pre-declared auxiliary files from config (templates in config.Maps, config.Files, config.SSLCertificates)
+//   - dynamic: Dynamically registered files from FileRegistry during template rendering
+//
+// Returns:
+//   - Merged AuxiliaryFiles containing all files from both sources
+//
+// MergeAuxiliaryFiles merges static (pre-declared) and dynamic (FileRegistry-registered) auxiliary files.
+// Exported for use by test runner.
+func MergeAuxiliaryFiles(static, dynamic *dataplane.AuxiliaryFiles) *dataplane.AuxiliaryFiles {
+	merged := &dataplane.AuxiliaryFiles{}
+
+	// Merge map files
+	merged.MapFiles = append(merged.MapFiles, static.MapFiles...)
+	merged.MapFiles = append(merged.MapFiles, dynamic.MapFiles...)
+
+	// Merge general files
+	merged.GeneralFiles = append(merged.GeneralFiles, static.GeneralFiles...)
+	merged.GeneralFiles = append(merged.GeneralFiles, dynamic.GeneralFiles...)
+
+	// Merge SSL certificates
+	merged.SSLCertificates = append(merged.SSLCertificates, static.SSLCertificates...)
+	merged.SSLCertificates = append(merged.SSLCertificates, dynamic.SSLCertificates...)
+
+	return merged
 }
 
 // failFunction is a global function that causes template rendering to fail with a custom error message.

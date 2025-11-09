@@ -290,9 +290,6 @@ func TestLeaderElection_TwoReplicas(t *testing.T) {
 			}
 			t.Log("Created test ingress")
 
-			// Wait for reconciliation
-			time.Sleep(10 * time.Second)
-
 			// Get leader pod
 			holderIdentity, err := GetLeaseHolder(ctx, cfg.Client().RESTConfig(), namespace, LeaderElectionLeaseName)
 			if err != nil {
@@ -323,21 +320,28 @@ func TestLeaderElection_TwoReplicas(t *testing.T) {
 			}
 			defer debugClient.Stop()
 
-			rendered, err := debugClient.GetRenderedConfig(ctx)
+			// Wait for reconciliation by polling the rendered config
+			// This replaces the previous 10s sleep with proper condition checking
+			expectedBackend := fmt.Sprintf("ing_%s_test-ingress", namespace)
+			err = WaitForCondition(ctx, "ingress backend in rendered config", 30*time.Second, 100*time.Millisecond, func() (bool, error) {
+				rendered, err := debugClient.GetRenderedConfig(ctx)
+				if err != nil {
+					// Transient error, keep trying
+					return false, err
+				}
+				return strings.Contains(rendered, expectedBackend), nil
+			})
+
 			if err != nil {
-				t.Logf("Warning: Could not get rendered config: %v", err)
-				// Don't fail test if debug endpoint not available
-				return ctx
+				// Get final rendered config for debugging
+				rendered, getErr := debugClient.GetRenderedConfig(ctx)
+				if getErr == nil {
+					t.Logf("Final rendered config:\n%s", rendered)
+				}
+				t.Fatalf("Reconciliation did not complete: %v", err)
 			}
 
-			// Verify config contains the ingress backend
-			expectedBackend := fmt.Sprintf("ing_%s_test-ingress", namespace)
-			if !strings.Contains(rendered, expectedBackend) {
-				t.Logf("Warning: Rendered config does not contain expected backend %s", expectedBackend)
-				t.Logf("Rendered config:\n%s", rendered)
-			} else {
-				t.Logf("✓ Leader successfully deployed config with ingress backend")
-			}
+			t.Logf("✓ Leader successfully deployed config with ingress backend")
 
 			return ctx
 		}).
@@ -632,34 +636,48 @@ func TestLeaderElection_Failover(t *testing.T) {
 
 		FailoverComplete:
 
-			// Wait a bit for metrics to update
-			time.Sleep(5 * time.Second)
-
-			// Verify exactly one leader among current pods
-			pods, err := GetAllControllerPods(ctx, client, namespace)
-			if err != nil {
-				t.Fatal("Failed to get controller pods:", err)
-			}
-
-			leaderCount := 0
-			for _, pod := range pods {
-				isLeader, err := checkPodIsLeader(ctx, t, cfg.Client().RESTConfig(), &pod)
+			// Wait for metrics to update by polling until exactly one leader is reported
+			// This replaces the previous 5s sleep with proper condition checking
+			err = WaitForCondition(ctx, "exactly one leader in metrics", 30*time.Second, 500*time.Millisecond, func() (bool, error) {
+				pods, err := GetAllControllerPods(ctx, client, namespace)
 				if err != nil {
-					// Pod might be terminating
-					t.Logf("Warning: Failed to check pod %s: %v", pod.Name, err)
-					continue
+					// Transient error, keep trying
+					return false, nil
 				}
 
-				if isLeader {
-					leaderCount++
-					if pod.Name != newLeader {
-						t.Fatalf("Pod %s reports is_leader=1 but Lease holder is %s", pod.Name, newLeader)
+				leaderCount := 0
+				correctLeader := false
+				for _, pod := range pods {
+					isLeader, err := checkPodIsLeader(ctx, t, cfg.Client().RESTConfig(), &pod)
+					if err != nil {
+						// Pod might be terminating, keep trying
+						continue
+					}
+
+					if isLeader {
+						leaderCount++
+						if pod.Name == newLeader {
+							correctLeader = true
+						}
 					}
 				}
-			}
 
-			if leaderCount != 1 {
-				t.Fatalf("Expected exactly 1 leader after failover, found %d", leaderCount)
+				// Success condition: exactly one leader and it's the expected one
+				return leaderCount == 1 && correctLeader, nil
+			})
+
+			if err != nil {
+				// Get final state for debugging
+				pods, _ := GetAllControllerPods(ctx, client, namespace)
+				leaderCount := 0
+				for _, pod := range pods {
+					isLeader, checkErr := checkPodIsLeader(ctx, t, cfg.Client().RESTConfig(), &pod)
+					if checkErr == nil && isLeader {
+						leaderCount++
+						t.Logf("Pod %s reports is_leader=1", pod.Name)
+					}
+				}
+				t.Fatalf("Metrics did not converge: %v (found %d leaders, expected 1)", err, leaderCount)
 			}
 
 			t.Log("✓ Failover successful, exactly one leader active")
@@ -823,18 +841,29 @@ watched_resources:
 			}
 			t.Log("Controller pod is ready")
 
-			// Wait a bit for potential Lease creation
-			time.Sleep(10 * time.Second)
-
-			// Try to get Lease - should not exist
+			// Poll to verify Lease is NOT created (leader election disabled)
+			// This replaces the previous 10s sleep with active checking
+			// We poll for 10 seconds to ensure Lease doesn't appear
 			clientset, err := kubernetes.NewForConfig(cfg.Client().RESTConfig())
 			if err != nil {
 				t.Fatal("Failed to create clientset:", err)
 			}
 
-			_, err = clientset.CoordinationV1().Leases(namespace).Get(ctx, LeaderElectionLeaseName, metav1.GetOptions{})
-			if err == nil {
-				t.Fatal("Lease resource exists but leader election is disabled")
+			err = WaitForCondition(ctx, "Lease to remain absent", 10*time.Second, 500*time.Millisecond, func() (bool, error) {
+				_, err := clientset.CoordinationV1().Leases(namespace).Get(ctx, LeaderElectionLeaseName, metav1.GetOptions{})
+				if err == nil {
+					// Lease exists - this is a failure condition!
+					// Return true to stop polling and fail the test
+					return true, fmt.Errorf("Lease resource exists but leader election is disabled")
+				}
+				// Lease doesn't exist - keep polling until timeout (which is success)
+				return false, nil
+			})
+
+			// For this test, timeout is actually success (Lease remained absent)
+			// But if we get an error message, that means Lease was created (failure)
+			if err != nil && strings.Contains(err.Error(), "Lease resource exists") {
+				t.Fatal(err)
 			}
 
 			t.Log("✓ No Lease resource created (as expected)")

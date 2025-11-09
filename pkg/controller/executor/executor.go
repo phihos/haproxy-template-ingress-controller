@@ -51,8 +51,9 @@ const (
 //   - ReconciliationCompletedEvent: Full cycle completes
 //   - ReconciliationFailedEvent: Any stage fails
 type Executor struct {
-	eventBus *busevents.EventBus
-	logger   *slog.Logger
+	eventBus  *busevents.EventBus
+	eventChan <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
+	logger    *slog.Logger
 }
 
 // New creates a new Executor component.
@@ -64,17 +65,27 @@ type Executor struct {
 // Returns:
 //   - A new Executor instance ready to be started
 func New(eventBus *busevents.EventBus, logger *slog.Logger) *Executor {
+	// Subscribe to EventBus during construction (before EventBus.Start())
+	// This ensures proper startup synchronization without timing-based sleeps
+	eventChan := eventBus.Subscribe(EventBufferSize)
+
 	return &Executor{
-		eventBus: eventBus,
-		logger:   logger,
+		eventBus:  eventBus,
+		eventChan: eventChan,
+		logger:    logger,
 	}
 }
 
 // Start begins the executor's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
-// It subscribes to the EventBus and processes events:
+// The component is already subscribed to the EventBus (subscription happens in New()),
+// so this method only processes events:
 //   - ReconciliationTriggeredEvent: Starts orchestration of reconciliation cycle
+//   - TemplateRenderedEvent: Handles successful template rendering
+//   - TemplateRenderFailedEvent: Handles template rendering failures
+//   - ValidationCompletedEvent: Handles successful validation
+//   - ValidationFailedEvent: Handles validation failures
 //
 // The component runs until the context is cancelled, at which point it
 // performs cleanup and returns.
@@ -88,11 +99,9 @@ func New(eventBus *busevents.EventBus, logger *slog.Logger) *Executor {
 func (e *Executor) Start(ctx context.Context) error {
 	e.logger.Info("Executor starting")
 
-	eventChan := e.eventBus.Subscribe(EventBufferSize)
-
 	for {
 		select {
-		case event := <-eventChan:
+		case event := <-e.eventChan:
 			e.handleEvent(event)
 
 		case <-ctx.Done():

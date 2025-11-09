@@ -114,7 +114,7 @@ func TestGonjaFilter_SortBy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil)
+			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil, nil)
 			require.NoError(t, err)
 
 			got, err := engine.Render("test", tt.context)
@@ -179,7 +179,7 @@ b: count={{ grouped["b"] | length }}{%- endif %}`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil)
+			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil, nil)
 			require.NoError(t, err)
 
 			got, err := engine.Render("test", tt.context)
@@ -256,7 +256,7 @@ func TestGonjaFilter_Extract(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil)
+			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil, nil)
 			require.NoError(t, err)
 
 			got, err := engine.Render("test", tt.context)
@@ -327,7 +327,7 @@ func TestGonjaFilter_Debug(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil)
+			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil, nil)
 			require.NoError(t, err)
 
 			got, err := engine.Render("test", tt.context)
@@ -408,7 +408,7 @@ func TestGonjaFilter_Eval(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil)
+			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil, nil)
 			require.NoError(t, err)
 
 			got, err := engine.Render("test", tt.context)
@@ -468,7 +468,7 @@ func TestGonjaFilter_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil)
+			engine, err := New(EngineTypeGonja, map[string]string{"test": tt.template}, nil, nil, nil)
 			require.NoError(t, err)
 
 			got, err := engine.Render("test", tt.context)

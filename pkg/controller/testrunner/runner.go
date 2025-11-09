@@ -267,7 +267,7 @@ func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templ
 	}
 
 	// Compile all templates with worker-specific filters
-	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile templates for worker: %w", err)
 	}
@@ -546,7 +546,7 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 	}
 
 	// 2. Render HAProxy configuration and auxiliary files (using worker-specific engine)
-	haproxyConfig, auxiliaryFiles, err := r.renderWithStores(engine, stores)
+	haproxyConfig, auxiliaryFiles, err := r.renderWithStores(engine, stores, validationPaths)
 	if err != nil {
 		result.RenderError = dataplane.SimplifyRenderingError(err)
 
@@ -566,7 +566,7 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 	}
 
 	// 3. Build template context for JSONPath assertions
-	templateContext := r.buildRenderingContext(stores)
+	templateContext := r.buildRenderingContext(stores, validationPaths)
 
 	// 4. Run all assertions (whether rendering succeeded or failed)
 	r.executeAssertions(ctx, &result, &test, haproxyConfig, auxiliaryFiles, templateContext, validationPaths)
@@ -647,9 +647,9 @@ func hasRenderingErrorAssertions(assertions []config.ValidationAssertion) bool {
 // renderWithStores renders HAProxy configuration using test fixture stores and worker-specific engine.
 //
 // This follows the same pattern as DryRunValidator.renderWithOverlayStores.
-func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[string]types.Store) (string, *dataplane.AuxiliaryFiles, error) {
+func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[string]types.Store, validationPaths dataplane.ValidationPaths) (string, *dataplane.AuxiliaryFiles, error) {
 	// Build rendering context with fixture stores
-	context := r.buildRenderingContext(stores)
+	context := r.buildRenderingContext(stores, validationPaths)
 
 	// Render main HAProxy configuration using worker-specific engine
 	haproxyConfig, err := engine.Render("haproxy.cfg", context)
@@ -657,17 +657,27 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 		return "", nil, fmt.Errorf("failed to render haproxy.cfg: %w", err)
 	}
 
-	// Render auxiliary files using worker-specific engine
-	auxiliaryFiles, err := r.renderAuxiliaryFiles(engine, context)
+	// Render auxiliary files using worker-specific engine (pre-declared files)
+	staticFiles, err := r.renderAuxiliaryFiles(engine, context)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to render auxiliary files: %w", err)
 	}
 
+	// Extract dynamic files registered during template rendering
+	fileRegistry := context["file_registry"].(*renderer.FileRegistry)
+	dynamicFiles := fileRegistry.GetFiles()
+
+	// Merge static (pre-declared) and dynamic (registered) files
+	auxiliaryFiles := renderer.MergeAuxiliaryFiles(staticFiles, dynamicFiles)
+
 	// Debug logging
-	r.logger.Debug("Rendered auxiliary files",
-		"map_count", len(auxiliaryFiles.MapFiles),
-		"file_count", len(auxiliaryFiles.GeneralFiles),
-		"cert_count", len(auxiliaryFiles.SSLCertificates))
+	staticCount := len(staticFiles.MapFiles) + len(staticFiles.GeneralFiles) + len(staticFiles.SSLCertificates)
+	dynamicCount := len(dynamicFiles.MapFiles) + len(dynamicFiles.GeneralFiles) + len(dynamicFiles.SSLCertificates)
+	if dynamicCount > 0 {
+		r.logger.Debug("Merged auxiliary files",
+			"static_count", staticCount,
+			"dynamic_count", dynamicCount)
+	}
 
 	return haproxyConfig, auxiliaryFiles, nil
 }
@@ -676,11 +686,16 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 //
 // This mirrors DryRunValidator.buildRenderingContext and Renderer.buildRenderingContext.
 // The context includes resources (fixture stores), template snippets, and controller configuration.
-func (r *Runner) buildRenderingContext(stores map[string]types.Store) map[string]interface{} {
-	// Create resources map with wrapped stores
+func (r *Runner) buildRenderingContext(stores map[string]types.Store, validationPaths dataplane.ValidationPaths) map[string]interface{} {
+	// Create resources map with wrapped stores (excluding haproxy-pods)
 	resources := make(map[string]interface{})
 
 	for resourceTypeName, store := range stores {
+		// Skip haproxy-pods - it goes in controller namespace, not resources
+		if resourceTypeName == "haproxy-pods" {
+			continue
+		}
+
 		resources[resourceTypeName] = &renderer.StoreWrapper{
 			Store:        store,
 			ResourceType: resourceTypeName,
@@ -688,13 +703,35 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store) map[string
 		}
 	}
 
+	// Create controller namespace with haproxy_pods store
+	controller := make(map[string]interface{})
+	if haproxyPodStore, exists := stores["haproxy-pods"]; exists {
+		r.logger.Debug("wrapping haproxy-pods store for rendering context")
+		controller["haproxy_pods"] = &renderer.StoreWrapper{
+			Store:        haproxyPodStore,
+			ResourceType: "haproxy-pods",
+			Logger:       r.logger,
+		}
+	}
+
 	// Build template snippets list
 	snippetNames := r.sortSnippetsByPriority()
+
+	// Create file registry for dynamic auxiliary file registration
+	// Use test-specific validation paths to ensure files are registered with correct paths
+	pathResolver := &templating.PathResolver{
+		MapsDir:    validationPaths.MapsDir,
+		SSLDir:     validationPaths.SSLCertsDir,
+		GeneralDir: validationPaths.GeneralStorageDir,
+	}
+	fileRegistry := renderer.NewFileRegistry(pathResolver)
 
 	// Build final context
 	context := map[string]interface{}{
 		"resources":         resources,
+		"controller":        controller,
 		"template_snippets": snippetNames,
+		"file_registry":     fileRegistry,
 	}
 
 	// Merge extraContext variables into top-level context

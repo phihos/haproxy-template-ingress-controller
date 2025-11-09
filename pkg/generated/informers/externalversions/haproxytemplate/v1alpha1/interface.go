@@ -22,6 +22,10 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
+	// HAProxyCfgs returns a HAProxyCfgInformer.
+	HAProxyCfgs() HAProxyCfgInformer
+	// HAProxyMapFiles returns a HAProxyMapFileInformer.
+	HAProxyMapFiles() HAProxyMapFileInformer
 	// HAProxyTemplateConfigs returns a HAProxyTemplateConfigInformer.
 	HAProxyTemplateConfigs() HAProxyTemplateConfigInformer
 }
@@ -35,6 +39,16 @@ type version struct {
 // New returns a new Interface.
 func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakListOptions internalinterfaces.TweakListOptionsFunc) Interface {
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
+}
+
+// HAProxyCfgs returns a HAProxyCfgInformer.
+func (v *version) HAProxyCfgs() HAProxyCfgInformer {
+	return &hAProxyCfgInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// HAProxyMapFiles returns a HAProxyMapFileInformer.
+func (v *version) HAProxyMapFiles() HAProxyMapFileInformer {
+	return &hAProxyMapFileInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // HAProxyTemplateConfigs returns a HAProxyTemplateConfigInformer.

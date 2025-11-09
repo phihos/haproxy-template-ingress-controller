@@ -79,7 +79,9 @@ func TestNew_Success(t *testing.T) {
 		"ingresses": &mockStore{},
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	haproxyPodStore := &mockStore{}
+
+	renderer, err := New(bus, cfg, stores, haproxyPodStore, logger)
 
 	require.NoError(t, err)
 	assert.NotNil(t, renderer)
@@ -103,7 +105,9 @@ func TestNew_InvalidTemplate(t *testing.T) {
 		"ingresses": &mockStore{},
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	haproxyPodStore := &mockStore{}
+
+	renderer, err := New(bus, cfg, stores, haproxyPodStore, logger)
 
 	assert.Error(t, err)
 	assert.Nil(t, renderer)
@@ -146,7 +150,7 @@ defaults
 		"ingresses": ingressStore,
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
 	require.NoError(t, err)
 
 	// Subscribe to events
@@ -229,7 +233,7 @@ func TestRenderer_WithAuxiliaryFiles(t *testing.T) {
 		"ingresses": ingressStore,
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -287,7 +291,9 @@ func TestRenderer_RenderFailure(t *testing.T) {
 		"ingresses": &mockStore{},
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	haproxyPodStore := &mockStore{}
+
+	renderer, err := New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -343,7 +349,7 @@ func TestRenderer_EmptyStores(t *testing.T) {
 		"ingresses": &mockStore{items: []interface{}{}}, // Empty store
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -415,7 +421,7 @@ func TestRenderer_MultipleStores(t *testing.T) {
 		},
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -466,7 +472,9 @@ func TestRenderer_ContextCancellation(t *testing.T) {
 		"ingresses": &mockStore{},
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	haproxyPodStore := &mockStore{}
+
+	renderer, err := New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
 	bus.Start()
@@ -514,7 +522,7 @@ func TestRenderer_MultipleReconciliations(t *testing.T) {
 		"ingresses": ingressStore,
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -600,14 +608,18 @@ func TestBuildRenderingContext(t *testing.T) {
 		},
 	}
 
-	renderer, err := New(bus, cfg, stores, logger)
+	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
 	require.NoError(t, err)
 
 	// Build context
-	ctx := renderer.buildRenderingContext()
+	ctx, fileRegistry := renderer.buildRenderingContext()
+
+	// Verify file registry was created
+	require.NotNil(t, fileRegistry)
 
 	// Verify structure
 	require.Contains(t, ctx, "resources")
+	require.Contains(t, ctx, "file_registry")
 
 	resources, ok := ctx["resources"].(map[string]interface{})
 	require.True(t, ok, "resources should be a map")

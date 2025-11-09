@@ -31,8 +31,12 @@ import (
 //	    "secrets": StoreWrapper,
 //	    // ... other watched resources
 //	  },
+//	  "controller": {
+//	    "haproxy_pods": StoreWrapper,  // HAProxy controller pods for pod-maxconn calculations
+//	  },
 //	  "template_snippets": ["snippet1", "snippet2", ...]  // Sorted by priority
 //	  "config": Config,  // Controller configuration (e.g., config.debug.headers.enabled)
+//	  "file_registry": FileRegistry,  // For dynamic auxiliary file registration
 //	}
 //
 // Templates can access resources:
@@ -40,6 +44,13 @@ import (
 //	{% for ingress in resources.ingresses.List() %}
 //	  {{ ingress.metadata.name }}
 //	{% endfor %}
+//
+// Templates can access controller metadata:
+//
+//	{%- set pod_count = controller.haproxy_pods.List() | length %}
+//	{%- if pod_count > 0 %}
+//	  {# Distribute load across {{ pod_count }} HAProxy replicas #}
+//	{%- endif %}
 //
 // Iterate over matching template snippets:
 //
@@ -53,7 +64,13 @@ import (
 //	{%- if config.debug.headers.enabled | default(false) %}
 //	  http-response set-header X-Debug-Info %[var(txn.backend_name)]
 //	{%- endif %}
-func (c *Component) buildRenderingContext() map[string]interface{} {
+//
+// And dynamically register auxiliary files:
+//
+//	{%- set ca_content = secret.data["ca.crt"] | b64decode %}
+//	{%- set ca_path = file_registry.Register("cert", "ca.pem", ca_content) %}
+//	server backend:443 ssl ca-file {{ ca_path }} verify required
+func (c *Component) buildRenderingContext() (map[string]interface{}, *FileRegistry) {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
 
@@ -68,17 +85,36 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 		}
 	}
 
+	// Create controller namespace with HAProxy pods store
+	controller := make(map[string]interface{})
+	if c.haproxyPodStore != nil {
+		c.logger.Info("wrapping HAProxy pods store for rendering context")
+		controller["haproxy_pods"] = &StoreWrapper{
+			Store:        c.haproxyPodStore,
+			ResourceType: "haproxy-pods",
+			Logger:       c.logger,
+		}
+	} else {
+		c.logger.Warn("HAProxy pods store is nil, controller.haproxy_pods will not be available")
+	}
+
 	// Sort template snippets by priority for template access
 	snippetNames := sortSnippetsByPriority(c.config.TemplateSnippets)
 
+	// Create file registry for dynamic auxiliary file registration
+	fileRegistry := NewFileRegistry(c.pathResolver)
+
 	c.logger.Info("rendering context built",
 		"resource_count", len(resources),
+		"controller_fields", len(controller),
 		"snippet_count", len(snippetNames))
 
 	// Build final context
 	context := map[string]interface{}{
 		"resources":         resources,
+		"controller":        controller,
 		"template_snippets": snippetNames,
+		"file_registry":     fileRegistry,
 	}
 
 	// Merge extraContext variables into top-level context
@@ -89,7 +125,7 @@ func (c *Component) buildRenderingContext() map[string]interface{} {
 			"variable_count", len(c.config.TemplatingSettings.ExtraContext))
 	}
 
-	return context
+	return context, fileRegistry
 }
 
 // sortSnippetsByPriority sorts template snippet names by priority, then alphabetically.

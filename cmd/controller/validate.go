@@ -373,7 +373,7 @@ func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, valida
 
 	// Compile all templates with custom filters and functions
 	logger.Info("Compiling templates", "template_count", len(templates))
-	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, filters, functions, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile templates: %w", err)
 	}

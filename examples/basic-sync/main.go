@@ -43,7 +43,7 @@ func main() {
 
 	// Create client - this establishes connection and should be reused
 	fmt.Println("Creating dataplane client...")
-	client, err := dataplane.NewClient(ctx, endpoint)
+	client, err := dataplane.NewClient(ctx, &endpoint)
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}

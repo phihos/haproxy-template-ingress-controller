@@ -22,6 +22,8 @@ package deployer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -125,7 +127,7 @@ func (c *Component) handleDeploymentScheduled(ctx context.Context, event *events
 		"config_bytes", len(event.Config))
 
 	// Execute deployment
-	c.deployToEndpoints(ctx, event.Config, event.AuxiliaryFiles, event.Endpoints, event.Reason)
+	c.deployToEndpoints(ctx, event.Config, event.AuxiliaryFiles, event.Endpoints, event.RuntimeConfigName, event.RuntimeConfigNamespace, event.Reason)
 }
 
 // convertEndpoints converts []interface{} to []dataplane.Endpoint.
@@ -167,12 +169,15 @@ func (c *Component) convertAuxFiles(auxFilesRaw interface{}) *dataplane.Auxiliar
 //  1. Publishes DeploymentStartedEvent
 //  2. Deploys to all endpoints in parallel
 //  3. Publishes InstanceDeployedEvent or InstanceDeploymentFailedEvent for each endpoint
-//  4. Publishes DeploymentCompletedEvent with summary
+//  4. Publishes ConfigAppliedToPodEvent for successful deployments
+//  5. Publishes DeploymentCompletedEvent with summary
 func (c *Component) deployToEndpoints(
 	ctx context.Context,
 	config string,
 	auxFilesRaw interface{},
 	endpointsRaw []interface{},
+	runtimeConfigName string,
+	runtimeConfigNamespace string,
 	reason string,
 ) {
 	// Clear deployment flag after this function completes (after wg.Wait())
@@ -189,6 +194,10 @@ func (c *Component) deployToEndpoints(
 
 	auxFiles := c.convertAuxFiles(auxFilesRaw)
 
+	// Calculate config checksum for ConfigAppliedToPodEvent
+	hash := sha256.Sum256([]byte(config))
+	checksum := hex.EncodeToString(hash[:])
+
 	c.logger.Info("starting deployment",
 		"reason", reason,
 		"endpoint_count", len(endpoints),
@@ -204,14 +213,17 @@ func (c *Component) deployToEndpoints(
 	failureCount := 0
 	var countMutex sync.Mutex
 
-	for _, endpoint := range endpoints {
+	for i := range endpoints {
 		wg.Add(1)
-		go func(ep dataplane.Endpoint) {
+		go func(ep *dataplane.Endpoint) {
 			defer wg.Done()
 
 			instanceStart := time.Now()
-			err := c.deployToSingleEndpoint(ctx, config, auxFiles, ep)
+			syncResult, err := c.deployToSingleEndpoint(ctx, config, auxFiles, ep)
 			durationMs := time.Since(instanceStart).Milliseconds()
+
+			// Determine if this is a drift check based on deployment reason
+			isDriftCheck := reason == "drift_prevention"
 
 			if err != nil {
 				c.logger.Error("deployment failed for endpoint",
@@ -227,6 +239,22 @@ func (c *Component) deployToEndpoints(
 					true, // retryable
 				))
 
+				// Publish ConfigAppliedToPodEvent with error info (for status tracking)
+				if runtimeConfigName != "" && runtimeConfigNamespace != "" {
+					syncMetadata := &events.SyncMetadata{
+						Error: err.Error(),
+					}
+					c.eventBus.Publish(events.NewConfigAppliedToPodEvent(
+						runtimeConfigName,
+						runtimeConfigNamespace,
+						ep.PodName,
+						ep.PodNamespace,
+						checksum,
+						isDriftCheck,
+						syncMetadata,
+					))
+				}
+
 				countMutex.Lock()
 				failureCount++
 				countMutex.Unlock()
@@ -234,20 +262,37 @@ func (c *Component) deployToEndpoints(
 				c.logger.Info("deployment succeeded for endpoint",
 					"endpoint", ep.URL,
 					"pod", ep.PodName,
-					"duration_ms", durationMs)
+					"duration_ms", durationMs,
+					"reload_triggered", syncResult.ReloadTriggered)
 
 				// Publish InstanceDeployedEvent
 				c.eventBus.Publish(events.NewInstanceDeployedEvent(
 					ep,
 					durationMs,
-					true, // reloadRequired (we don't track this granularly yet)
+					syncResult.ReloadTriggered, // Now tracking this accurately
 				))
+
+				// Publish ConfigAppliedToPodEvent (for runtime config status updates)
+				if runtimeConfigName != "" && runtimeConfigNamespace != "" {
+					// Convert dataplane.SyncResult to events.SyncMetadata
+					syncMetadata := c.convertSyncResultToMetadata(syncResult)
+
+					c.eventBus.Publish(events.NewConfigAppliedToPodEvent(
+						runtimeConfigName,
+						runtimeConfigNamespace,
+						ep.PodName,
+						ep.PodNamespace,
+						checksum,
+						isDriftCheck,
+						syncMetadata,
+					))
+				}
 
 				countMutex.Lock()
 				successCount++
 				countMutex.Unlock()
 			}
-		}(endpoint)
+		}(&endpoints[i])
 	}
 
 	// Wait for all deployments to complete
@@ -271,23 +316,25 @@ func (c *Component) deployToEndpoints(
 }
 
 // deployToSingleEndpoint deploys configuration to a single HAProxy endpoint.
+//
+// Returns the sync result containing detailed operation metadata, or an error if the sync failed.
 func (c *Component) deployToSingleEndpoint(
 	ctx context.Context,
 	config string,
 	auxFiles *dataplane.AuxiliaryFiles,
-	endpoint dataplane.Endpoint,
-) error {
+	endpoint *dataplane.Endpoint,
+) (*dataplane.SyncResult, error) {
 	// Create client for this endpoint
 	client, err := dataplane.NewClient(ctx, endpoint)
 	if err != nil {
-		return fmt.Errorf("failed to create client: %w", err)
+		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
 	defer client.Close()
 
 	// Sync configuration with default options
 	result, err := client.Sync(ctx, config, auxFiles, nil)
 	if err != nil {
-		return fmt.Errorf("sync failed: %w", err)
+		return nil, fmt.Errorf("sync failed: %w", err)
 	}
 
 	c.logger.Debug("sync completed for endpoint",
@@ -297,5 +344,47 @@ func (c *Component) deployToSingleEndpoint(
 		"reload_triggered", result.ReloadTriggered,
 		"duration", result.Duration)
 
-	return nil
+	return result, nil
+}
+
+// convertSyncResultToMetadata converts dataplane.SyncResult to events.SyncMetadata.
+func (c *Component) convertSyncResultToMetadata(result *dataplane.SyncResult) *events.SyncMetadata {
+	if result == nil {
+		return nil
+	}
+
+	// Count total servers added/removed/modified across all backends
+	totalServersAdded := 0
+	for _, servers := range result.Details.ServersAdded {
+		totalServersAdded += len(servers)
+	}
+	totalServersRemoved := 0
+	for _, servers := range result.Details.ServersDeleted {
+		totalServersRemoved += len(servers)
+	}
+	totalServersModified := 0
+	for _, servers := range result.Details.ServersModified {
+		totalServersModified += len(servers)
+	}
+
+	return &events.SyncMetadata{
+		ReloadTriggered:        result.ReloadTriggered,
+		ReloadID:               result.ReloadID,
+		SyncDuration:           result.Duration,
+		VersionConflictRetries: result.Retries,
+		FallbackUsed:           result.FallbackToRaw,
+		OperationCounts: events.OperationCounts{
+			TotalAPIOperations: result.Details.TotalOperations,
+			BackendsAdded:      len(result.Details.BackendsAdded),
+			BackendsRemoved:    len(result.Details.BackendsDeleted),
+			BackendsModified:   len(result.Details.BackendsModified),
+			ServersAdded:       totalServersAdded,
+			ServersRemoved:     totalServersRemoved,
+			ServersModified:    totalServersModified,
+			FrontendsAdded:     len(result.Details.FrontendsAdded),
+			FrontendsRemoved:   len(result.Details.FrontendsDeleted),
+			FrontendsModified:  len(result.Details.FrontendsModified),
+		},
+		Error: "", // Empty on success
+	}
 }

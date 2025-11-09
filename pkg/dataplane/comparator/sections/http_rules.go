@@ -4,7 +4,10 @@ package sections
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 
 	"github.com/haproxytech/client-native/v6/models"
 
@@ -75,7 +78,38 @@ func (op *CreateHTTPRequestRuleFrontendOperation) Execute(ctx context.Context, c
 
 	// Check response status
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP request rule creation failed with status %d", resp.StatusCode)
+		// Read response body for detailed error information
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			slog.Error("failed to read error response body",
+				"status", resp.StatusCode,
+				"frontend", op.FrontendName,
+				"index", op.Index,
+				"read_error", readErr)
+			return fmt.Errorf("HTTP request rule creation failed with status %d", resp.StatusCode)
+		}
+
+		// Log the full error response for debugging
+		slog.Error("HTTP request rule creation failed",
+			"status", resp.StatusCode,
+			"frontend", op.FrontendName,
+			"index", op.Index,
+			"rule_type", op.Rule.Type,
+			"response_body", string(bodyBytes))
+
+		// Try to parse as JSON for structured error
+		var apiError map[string]interface{}
+		if jsonErr := json.Unmarshal(bodyBytes, &apiError); jsonErr == nil {
+			// Log the API request payload that caused the error
+			if apiRuleJSON, marshalErr := json.MarshalIndent(apiRule, "", "  "); marshalErr == nil {
+				slog.Error("API request payload that caused the error",
+					"frontend", op.FrontendName,
+					"payload", string(apiRuleJSON))
+			}
+			return fmt.Errorf("HTTP request rule creation failed with status %d: %v", resp.StatusCode, apiError)
+		}
+
+		return fmt.Errorf("HTTP request rule creation failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	return nil
@@ -281,7 +315,38 @@ func (op *CreateHTTPRequestRuleBackendOperation) Execute(ctx context.Context, c 
 
 	// Check response status
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP request rule creation failed with status %d", resp.StatusCode)
+		// Read response body for detailed error information
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			slog.Error("failed to read error response body",
+				"status", resp.StatusCode,
+				"backend", op.BackendName,
+				"index", op.Index,
+				"read_error", readErr)
+			return fmt.Errorf("HTTP request rule creation failed with status %d", resp.StatusCode)
+		}
+
+		// Log the full error response for debugging
+		slog.Error("HTTP request rule creation failed",
+			"status", resp.StatusCode,
+			"backend", op.BackendName,
+			"index", op.Index,
+			"rule_type", op.Rule.Type,
+			"response_body", string(bodyBytes))
+
+		// Try to parse as JSON for structured error
+		var apiError map[string]interface{}
+		if jsonErr := json.Unmarshal(bodyBytes, &apiError); jsonErr == nil {
+			// Log the API request payload that caused the error
+			if apiRuleJSON, marshalErr := json.MarshalIndent(apiRule, "", "  "); marshalErr == nil {
+				slog.Error("API request payload that caused the error",
+					"backend", op.BackendName,
+					"payload", string(apiRuleJSON))
+			}
+			return fmt.Errorf("HTTP request rule creation failed with status %d: %v", resp.StatusCode, apiError)
+		}
+
+		return fmt.Errorf("HTTP request rule creation failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	return nil

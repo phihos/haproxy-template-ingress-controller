@@ -262,7 +262,7 @@ func TestRunner_RunTests(t *testing.T) {
 			templates := map[string]string{
 				"haproxy.cfg": tt.config.HAProxyConfig.Template,
 			}
-			engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil)
+			engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil, nil)
 			require.NoError(t, err)
 
 			// Convert CRD spec to internal config format
@@ -366,7 +366,7 @@ backend {{ svc.metadata.namespace }}-{{ svc.metadata.name }}
 	templates := map[string]string{
 		"haproxy.cfg": config.HAProxyConfig.Template,
 	}
-	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Convert CRD spec to internal config format
@@ -436,7 +436,7 @@ func TestRunner_RenderError(t *testing.T) {
 	templates := map[string]string{
 		"haproxy.cfg": config.HAProxyConfig.Template,
 	}
-	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil)
+	engine, err := templating.New(templating.EngineTypeGonja, templates, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Convert CRD spec to internal config format

@@ -260,14 +260,246 @@ spec:
 
 ### spec.rules[].filters
 
-| Filter Type | Status | Notes |
-|-------------|--------|-------|
-| `RequestHeaderModifier` | ❌ Not Implemented | Add/Set/Remove request headers not supported |
-| `ResponseHeaderModifier` | ❌ Not Implemented | Add/Set/Remove response headers not supported |
-| `RequestRedirect` | ❌ Not Implemented | HTTP redirects not supported |
-| `URLRewrite` | ❌ Not Implemented | Path/hostname rewriting not supported |
-| `RequestMirror` | ❌ Not Implemented | Traffic mirroring not supported |
-| `ExtensionRef` | ❌ Not Implemented | Custom filters not supported |
+| Filter Type | Conformance | Status | Notes |
+|-------------|-------------|--------|-------|
+| `RequestHeaderModifier` | Core | ✅ Supported | Add/Set/Remove request headers |
+| `ResponseHeaderModifier` | Extended | ✅ Supported | Add/Set/Remove response headers |
+| `RequestRedirect` | Core | ✅ Supported | HTTP redirects with scheme/hostname/port/path/statusCode |
+| `URLRewrite` | Extended | ✅ Supported | Path and hostname rewriting |
+| `RequestMirror` | Extended | ❌ Not Implemented | Requires external SPOE agent (see [Criteo traffic-mirroring](https://github.com/criteo/traffic-mirroring)) |
+| `ExtensionRef` | Implementation-specific | ❌ Not Implemented | Planned as Gateway API equivalent of Ingress annotations |
+
+#### RequestHeaderModifier Filter
+
+The `RequestHeaderModifier` filter modifies HTTP request headers before forwarding to backends. Supports set (replace), add (append), and remove operations.
+
+**Supported Operations:**
+
+- `set` - Sets a header value, replacing any existing values
+- `add` - Adds a header value, appending to existing values
+- `remove` - Removes all values for a header
+
+**Example - Set and add headers:**
+
+```yaml
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: X-API-Version
+                value: "v2"
+            add:
+              - name: X-Request-ID
+                value: "%[rand]"
+            remove:
+              - Authorization
+      backendRefs:
+        - name: api-svc
+          port: 8080
+```
+
+**HAProxy Implementation:**
+
+Generates `http-request` directives with conditions based on route matching:
+
+```haproxy
+# Set header (replaces existing)
+http-request set-header X-API-Version "v2" if <route-conditions>
+
+# Add header (appends to existing)
+http-request add-header X-Request-ID "%[rand]" if <route-conditions>
+
+# Remove header
+http-request del-header Authorization if <route-conditions>
+```
+
+#### ResponseHeaderModifier Filter
+
+The `ResponseHeaderModifier` filter modifies HTTP response headers before returning to clients. Supports the same set/add/remove operations as RequestHeaderModifier.
+
+**Example - Add security headers:**
+
+```yaml
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+              - name: X-Frame-Options
+                value: "DENY"
+            add:
+              - name: X-Custom-Header
+                value: "custom-value"
+            remove:
+              - Server
+              - X-Powered-By
+      backendRefs:
+        - name: web-svc
+          port: 80
+```
+
+**HAProxy Implementation:**
+
+Generates `http-response` directives:
+
+```haproxy
+# Set response header (replaces existing)
+http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains" if <route-conditions>
+
+# Add response header (appends to existing)
+http-response add-header X-Custom-Header "custom-value" if <route-conditions>
+
+# Remove response header
+http-response del-header Server if <route-conditions>
+```
+
+#### RequestRedirect Filter
+
+The `RequestRedirect` filter implements HTTP redirects with support for scheme, hostname, port, path, and status code modifications. **Only available for HTTPRoute** (not applicable to gRPC).
+
+**Supported Fields:**
+
+- `scheme` - Change protocol (http/https)
+- `hostname` - Change destination hostname
+- `port` - Change destination port
+- `path.type` - ReplaceFullPath or ReplacePrefixMatch
+- `path.replaceFullPath` - New absolute path
+- `path.replacePrefixMatch` - New path prefix
+- `statusCode` - HTTP status code (default: 302)
+
+**Example - HTTPS redirect:**
+
+```yaml
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+```
+
+**Example - Path rewrite with redirect:**
+
+```yaml
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /old-api
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /api/v2
+            statusCode: 308
+```
+
+**HAProxy Implementation:**
+
+Generates `http-request redirect` directives:
+
+```haproxy
+# HTTPS redirect
+http-request redirect scheme https code 301 if <route-conditions>
+
+# Path prefix replacement
+http-request redirect prefix "/api/v2" code 308 if <route-conditions>
+
+# Full path replacement
+http-request redirect location "https://example.com/new/path" code 302 if <route-conditions>
+```
+
+#### URLRewrite Filter
+
+The `URLRewrite` filter rewrites request URLs before forwarding to backends, supporting both hostname and path modifications. **Only available for HTTPRoute** (not applicable to gRPC).
+
+**Supported Fields:**
+
+- `hostname` - Rewrite the Host header
+- `path.type` - ReplaceFullPath or ReplacePrefixMatch
+- `path.replaceFullPath` - New absolute path
+- `path.replacePrefixMatch` - New path prefix
+
+**Example - Strip path prefix:**
+
+```yaml
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: api-svc
+          port: 8080
+```
+
+**Example - Hostname and path rewrite:**
+
+```yaml
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /external
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            hostname: internal-api.example.svc.cluster.local
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /api
+      backendRefs:
+        - name: internal-api-svc
+          port: 8080
+```
+
+**HAProxy Implementation:**
+
+Generates `http-request` directives for header and path manipulation:
+
+```haproxy
+# Hostname rewrite
+http-request set-header Host "internal-api.example.svc.cluster.local" if <route-conditions>
+
+# Full path replacement
+http-request set-path "/new/path" if <route-conditions>
+
+# Prefix replacement (using regex)
+http-request replace-path "^/api/v1(.*)" "/\1" if <route-conditions>
+```
+
+**Difference from RequestRedirect:**
+
+- **URLRewrite** rewrites the request and forwards to backend (transparent to client)
+- **RequestRedirect** sends HTTP redirect response to client (client sees new URL)
 
 ### spec.rules[].backendRefs
 
@@ -404,12 +636,14 @@ spec:
 
 ### spec.rules[].filters
 
-| Filter Type | Status | Notes |
-|-------------|--------|-------|
-| `RequestHeaderModifier` | ❌ Not Implemented | |
-| `ResponseHeaderModifier` | ❌ Not Implemented | |
-| `RequestMirror` | ❌ Not Implemented | |
-| `ExtensionRef` | ❌ Not Implemented | |
+| Filter Type | Conformance | Status | Notes |
+|-------------|-------------|--------|-------|
+| `RequestHeaderModifier` | Core | ✅ Supported | Same implementation as HTTPRoute |
+| `ResponseHeaderModifier` | Extended | ✅ Supported | Same implementation as HTTPRoute |
+| `RequestRedirect` | Core | N/A | HTTPRoute only - not applicable to gRPC |
+| `URLRewrite` | Extended | N/A | HTTPRoute only - not applicable to gRPC |
+| `RequestMirror` | Extended | ❌ Not Implemented | Requires external SPOE agent (see [Criteo traffic-mirroring](https://github.com/criteo/traffic-mirroring)) |
+| `ExtensionRef` | Implementation-specific | ❌ Not Implemented | Planned as Gateway API equivalent of Ingress annotations |
 
 ### spec.rules[].backendRefs
 
@@ -458,9 +692,13 @@ These headers are useful for:
 
 ## Known Limitations
 
-### Critical Gaps
+### Not Implemented
 
-1. **No filter support** - All filter types (header modification, redirects, rewrites, mirroring) are not implemented for either HTTPRoute or GRPCRoute.
+1. **RequestMirror filter** - Requires external SPOE (Stream Processing Offload Engine) agent running alongside HAProxy. Cannot be implemented with configuration templates alone. Consider using [Criteo traffic-mirroring](https://github.com/criteo/traffic-mirroring) for modular traffic mirroring with HAProxy SPOE support.
+
+2. **ExtensionRef filter** - Custom filter extension mechanism not yet implemented. This is planned as the Gateway API equivalent of Ingress annotations, enabling custom functionality beyond standard filters.
+
+3. **Per-backend filters** (`backendRefs[].filters[]`) - Filters currently apply at the rule level only, not per-backend. This Gateway API feature allows different filter behavior for different backends within the same rule.
 
 ### Untested Features
 
@@ -481,26 +719,33 @@ The gateway library includes comprehensive validation tests:
 - HTTPRoute weighted backends (various weight combinations, defaults)
 - HTTPRoute default behaviors (no matches → PathPrefix /)
 - HTTPRoute match precedence and tie-breaking rules
+- HTTPRoute filters (RequestHeaderModifier, ResponseHeaderModifier, RequestRedirect, URLRewrite)
 - Backend deduplication (multiple routes to same service+port)
 - GRPCRoute backend generation with HTTP/2
 - GRPCRoute method-based routing (service and method matching)
+- GRPCRoute filters (RequestHeaderModifier, ResponseHeaderModifier)
 - Complex route conflict resolution with VAR qualifiers
 
 **Untested:**
 - Cross-namespace references
 - Wildcard hostnames
-- Any filter types
+- Per-backend filters (`backendRefs[].filters[]`)
+- RequestMirror filter (requires external SPOE agent)
+- ExtensionRef filter (not yet implemented)
 
 ## Future Development
 
 Priority areas for future enhancement:
 
-1. **Basic filters** - Start with `RequestHeaderModifier` and `ResponseHeaderModifier`
-2. **Request redirect** - Implement `RequestRedirect` filter for HTTP redirects
-3. **URL rewriting** - Support `URLRewrite` filter for path and hostname rewriting
-4. **Request mirroring** - Add `RequestMirror` filter for traffic shadowing
-5. **Cross-namespace testing** - Validate cross-namespace references work correctly
-6. **Wildcard hostname support** - Test and document wildcard hostname patterns
+1. **ExtensionRef support** - Implement custom filter extension mechanism as the Gateway API equivalent of Ingress annotations. This will enable custom functionality beyond standard filters.
+
+2. **Per-backend filters** - Support `backendRefs[].filters[]` to allow different filter behavior for different backends within the same rule.
+
+3. **Request mirroring** - Investigate integration with external SPOE agents (e.g., [Criteo traffic-mirroring](https://github.com/criteo/traffic-mirroring)) for traffic shadowing capabilities.
+
+4. **Cross-namespace testing** - Validate cross-namespace backend and Gateway references work correctly.
+
+5. **Wildcard hostname support** - Test and document wildcard hostname patterns (e.g., `*.example.com`).
 
 ## See Also
 

@@ -16,4 +16,8 @@
 
 package v1alpha1
 
+type HAProxyCfgExpansion interface{}
+
+type HAProxyMapFileExpansion interface{}
+
 type HAProxyTemplateConfigExpansion interface{}

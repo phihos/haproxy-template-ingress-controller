@@ -19,11 +19,14 @@ type Endpoint struct {
 
 	// PodName is the Kubernetes pod name (for observability)
 	PodName string
+
+	// PodNamespace is the Kubernetes pod namespace (for observability)
+	PodNamespace string
 }
 
 // Redacted returns a redacted version of the endpoint for safe logging.
 // Credentials are masked to prevent exposure in logs.
-func (e Endpoint) Redacted() map[string]string {
+func (e *Endpoint) Redacted() map[string]string {
 	return map[string]string{
 		"url":      e.URL,
 		"username": e.Username,
