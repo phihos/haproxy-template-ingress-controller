@@ -15,6 +15,9 @@ data:
   # Username: admin, Password: admin (bcrypt hash)
   # Generated with: htpasswd -nbB admin admin | cut -d: -f2 | base64 -w0
   admin: JDJ5JDA1JG1OMVdWazVRbmJnNFF3ZEFkWGJmei44YjNjZUg2UTVLT1ZDS3hSMklrTkFmSmdMaTVwSUtX
+  # Username: user, Password: password (bcrypt hash)
+  # Generated with: htpasswd -nbB user password | cut -d: -f2 | base64 -w0
+  user: JDJ5JDA1JE9mazBoemZEQk5iTGV1alFNckNyQy50YW4xd1UwM25SNDYuUy52a2NXZ09oeXBQNnZHT1k2
 
 ---
 ##############################################################################
