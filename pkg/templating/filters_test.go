@@ -55,10 +55,10 @@ func TestPathResolver_GetPath(t *testing.T) {
 			want:     "/etc/haproxy/ssl/cert.pem",
 		},
 		{
-			name:     "empty filename",
+			name:     "empty filename returns directory",
 			filename: "",
 			args:     []interface{}{"map"},
-			wantErr:  true,
+			want:     "/etc/haproxy/maps",
 		},
 		{
 			name:     "non-string filename",
