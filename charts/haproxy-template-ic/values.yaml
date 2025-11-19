@@ -29,7 +29,7 @@ controller:
 
   # Template libraries
   # Control which predefined template libraries to include
-  # Libraries are merged in order: base -> ingress -> gateway -> haproxytech -> values.yaml
+  # Libraries are merged in order: base -> ssl -> ingress -> gateway -> haproxytech -> values.yaml
   # User-provided config in controller.config always takes precedence
   # Each library can define its own watched resources (conditionally included when enabled)
   templateLibraries:
@@ -37,6 +37,12 @@ controller:
     # Provides generic HAProxy configuration, error pages, and plugin orchestration
     # Uses resource_* patterns to discover and include resource-specific implementations
     base:
+      enabled: true
+    # SSL library: SSL/TLS infrastructure and certificate management
+    # Provides HTTPS frontend, SSL passthrough infrastructure, and default certificate loading
+    # Watched resources: secrets (for SSL certificate loading)
+    # Features: HTTPS termination, SSL passthrough (coordinated with resource libraries)
+    ssl:
       enabled: true
     # Ingress library: Kubernetes Ingress resource support
     # Provides routing and backend management for networking.k8s.io/v1 Ingress resources

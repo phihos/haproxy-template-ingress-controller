@@ -62,8 +62,37 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
+Filter validationTests based on _helm_skip_test condition
+Evaluates _helm_skip_test Go template and excludes tests where it evaluates to "true"
+*/}}
+{{- define "haproxy-template-ic.filterTests" -}}
+{{- $library := index . 0 }}
+{{- $context := index . 1 }}
+{{- if $library.validationTests }}
+  {{- $filteredTests := dict }}
+  {{- range $testName, $testDef := $library.validationTests }}
+    {{- $skipTest := false }}
+    {{- if $testDef._helm_skip_test }}
+      {{- /* Evaluate _helm_skip_test template expression */ -}}
+      {{- $skipCondition := tpl $testDef._helm_skip_test $context }}
+      {{- if eq $skipCondition "true" }}
+        {{- $skipTest = true }}
+      {{- end }}
+    {{- end }}
+    {{- if not $skipTest }}
+      {{- /* Include test, removing _helm_skip_test metadata */ -}}
+      {{- $cleanTest := omit $testDef "_helm_skip_test" }}
+      {{- $_ := set $filteredTests $testName $cleanTest }}
+    {{- end }}
+  {{- end }}
+  {{- $_ := set $library "validationTests" $filteredTests }}
+{{- end }}
+{{- $library | toYaml }}
+{{- end }}
+
+{{/*
 Deep merge template libraries based on enabled flags
-Returns merged config with libraries applied in order: base -> ingress -> gateway -> haproxytech -> values.yaml
+Returns merged config with libraries applied in order: base -> ssl -> ingress -> gateway -> haproxytech -> haproxyIngress -> pathRegexLast -> values.yaml
 Uses mustMergeOverwrite for deep merging of all nested structures
 */}}
 {{- define "haproxy-template-ic.mergeLibraries" -}}
@@ -74,6 +103,12 @@ Uses mustMergeOverwrite for deep merging of all nested structures
 {{- if $context.Values.controller.templateLibraries.base.enabled }}
   {{- $baseLibrary := $context.Files.Get "libraries/base.yaml" | fromYaml }}
   {{- $merged = mustMergeOverwrite $merged $baseLibrary }}
+{{- end }}
+
+{{- /* Load ssl library if enabled */ -}}
+{{- if $context.Values.controller.templateLibraries.ssl.enabled }}
+  {{- $sslLibrary := $context.Files.Get "libraries/ssl.yaml" | fromYaml }}
+  {{- $merged = mustMergeOverwrite $merged $sslLibrary }}
 {{- end }}
 
 {{- /* Load ingress library if enabled */ -}}
@@ -91,7 +126,21 @@ Uses mustMergeOverwrite for deep merging of all nested structures
 {{- /* Load haproxytech library if enabled */ -}}
 {{- if $context.Values.controller.templateLibraries.haproxytech.enabled }}
   {{- $haproxytechLibrary := $context.Files.Get "libraries/haproxytech.yaml" | fromYaml }}
-  {{- $merged = mustMergeOverwrite $merged $haproxytechLibrary }}
+  {{- /* Filter tests based on _helm_skip_test conditions */ -}}
+  {{- $filteredLibrary := include "haproxy-template-ic.filterTests" (list $haproxytechLibrary $context) | fromYaml }}
+  {{- $merged = mustMergeOverwrite $merged $filteredLibrary }}
+{{- end }}
+
+{{- /* Load haproxy-ingress library if enabled */ -}}
+{{- if $context.Values.controller.templateLibraries.haproxyIngress.enabled }}
+  {{- $haproxyIngressLibrary := $context.Files.Get "libraries/haproxy-ingress.yaml" | fromYaml }}
+  {{- $merged = mustMergeOverwrite $merged $haproxyIngressLibrary }}
+{{- end }}
+
+{{- /* Load path-regex-last library if enabled (overrides routing order) */ -}}
+{{- if $context.Values.controller.templateLibraries.pathRegexLast.enabled }}
+  {{- $pathRegexLastLibrary := $context.Files.Get "libraries/path-regex-last.yaml" | fromYaml }}
+  {{- $merged = mustMergeOverwrite $merged $pathRegexLastLibrary }}
 {{- end }}
 
 {{- /* Merge user-provided config from values.yaml (highest priority) */ -}}

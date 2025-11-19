@@ -1,10 +1,13 @@
 # Base template library for HAProxy Template Ingress Controller
 # Contains resource-agnostic core template snippets, files, and HAProxy configuration
 # Uses plugin patterns (resource_*) to discover resource-specific implementations
-
-# Test certificate fixtures (YAML anchors for reuse across validation tests)
-_test_tls_crt: &test_tls_crt LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURDekNDQWZPZ0F3SUJBZ0lVT2FGRWhyWlRXZ1JpbEorSFJCOWhJQnlzT2xNd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0ZERVNNQkFHQTFVRUF3d0piRzlqWVd4b2IzTjBNQ0FYRFRJMU1URXhPVEU0TWpVMU1Wb1lEekl4TWpVeApNREkyTVRneU5UVXhXakFVTVJJd0VBWURWUVFEREFsc2IyTmhiR2h2YzNRd2dnRWlNQTBHQ1NxR1NJYjNEUUVCCkFRVUFBNElCRHdBd2dnRUtBb0lCQVFDWDJIQnA0V00rbFIvSXljLzRMR01qUHk0bUdFcUtVYm5xaFdRbU9nMXgKNHlnRkkzMkcyNWZYR1djZ0ZtVmg4YkZSZVFxdTB0Z1k2SUo5UE9nWmd5eHNhaUgzeldBMi8wbkdEejVvN2dYeQp5Z0VLaTdZY3M3bHNFNng0Y3lLK2tZaFdvZkNNaDJDck5LNWVCVzlRUnh3U3pieDNWREZqVS9HdVVaQnRBVWxICkRLd2ZCb0ZHNEhzaEZDUHl2Y3BuTlNLbUdwS0wwZ0UyczNBTHN5NWpqYjRpMnpyQng4Mng0Y3hQZUlCOEt6ckMKMDZvQXVwbzJDdUxaQTFMMkMrZVB5UlQ0QWxRUGNOL2l3WmdqMyt3eG8vWkFJaUxQK2NXbUY1dUdXeTZUREoybAo2K2FLYWFOajFCVVBWSkxTdW92WFhCMmc2akYxdWxIM1VWNVhPMlVMQ1ZzUkFnTUJBQUdqVXpCUk1CMEdBMVVkCkRnUVdCQlRHdi9VWG5nZ2tKaytpTkN0WnFwMStTSS9JaGpBZkJnTlZIU01FR0RBV2dCVEd2L1VYbmdna0prK2kKTkN0WnFwMStTSS9JaGpBUEJnTlZIUk1CQWY4RUJUQURBUUgvTUEwR0NTcUdTSWIzRFFFQkN3VUFBNElCQVFBSwozb3QyQTRyR05DWEpuZHB5OWlBa0dUUnk2SWxCcExKUlNJZ1JOWmlZQkU4SEtlWnUyR3JnUGI3V0ZUL1RyWkI2Cm5jMjhzVjdsYUNDNXlyZVUxeGVpL2ZjTllPSHlscWdBR2lFYmt2Um1za1hTd24wSlFaanpUNWl1a2hObVBkV0QKSWx0bWhCU3FsZlRsWFRYaytjMVlzeUJrVkN5TVNOdUZMd3pkODlLanJlU2xsZzE5clRVUmlLRzZGU0o2azBPSQprVE1lbWczRGZabldZSytNZnBxdjlVSDJSblBhMVJlbHJ4aTNLTWZoV0h2b2wxeUlVSGdnT0g3MkE4Wkd6eFZMClh4L09rSS8weXozUFhvM0xtUkRqczMzWUpXSzRTMmRwaFpyS3RMS2hqcEFIZzI1Nk8zUlN1bWd2d2NpYzZVRWMKaEpvWitneWZacUdBcnJ6M1dWTTkKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
-_test_tls_key: &test_tls_key LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV1d0lCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktVd2dnU2hBZ0VBQW9JQkFRQ1gySEJwNFdNK2xSL0kKeWMvNExHTWpQeTRtR0VxS1VibnFoV1FtT2cxeDR5Z0ZJMzJHMjVmWEdXY2dGbVZoOGJGUmVRcXUwdGdZNklKOQpQT2daZ3l4c2FpSDN6V0EyLzBuR0R6NW83Z1h5eWdFS2k3WWNzN2xzRTZ4NGN5SytrWWhXb2ZDTWgyQ3JOSzVlCkJXOVFSeHdTemJ4M1ZERmpVL0d1VVpCdEFVbEhES3dmQm9GRzRIc2hGQ1B5dmNwbk5TS21HcEtMMGdFMnMzQUwKc3k1ampiNGkyenJCeDgyeDRjeFBlSUI4S3pyQzA2b0F1cG8yQ3VMWkExTDJDK2VQeVJUNEFsUVBjTi9pd1pnagozK3d4by9aQUlpTFArY1dtRjV1R1d5NlRESjJsNithS2FhTmoxQlVQVkpMU3VvdlhYQjJnNmpGMXVsSDNVVjVYCk8yVUxDVnNSQWdNQkFBRUNnZjhKSHBhaHhVZVFtcVF1Q3ZEU2x0ZmRaZzMvZTdYK1dLb3h5NUVZT3FSVUVyQjAKbm8wTGJHVFNKbFJyT08wZDFNWXhmbk9GekdQdUd3aTdQTTB6dXcwUDljL1VjaUUxTEYvaDVVaDZSTkZXbzRzcwpkdmVaQWJKQksyMVFUcG5ubUJYNEhnRzBidXovVzBxZG12WDBmRkRUVUVmaFlzMFVpaFlad2d4S2Y2bEcrd1FzClZRclNiTzlMKzRJaHN2cnNSQlRGYU1nV0FMNGp0a3VpcTdSaVFkamRpejRkMmZJd1FtcVR5VEFvWlh5ZW9WRmEKM2JlRXh3aWtJME5pcXBNTWlaUjlXeTYzZkw2TlowZ0F5T0dKL09FaVU2Q3kyV2JCQzZrbVhnRlpOVW1Va1B5dAp3TXlqNTg5ZG1taDNaTGw1VEloNzVOc1dTNlVvTm1abzV3MmxLWUVDZ1lFQXh5N3dJeWxFbDlLaURvT1Q5V3gyCjFOcnp3bjQzLzVVbFAxakVFM0NiMXBiRDJCQjRUNXM4TmxCSEFOa0tFeFI1RUJnNTNYakw3aVlvTU1rWWUwL1YKRFVOdWFLRzlaaHhUSklualdPNURNUDE2NVFwNlBzdklObmlVZ1JLcW1Bc1hSNkNkN0NXeVIzcEZVOUZPcEJpWgo2aWt1eFVNYnZFWW8xVHNUWjB2Umw5RUNnWUVBd3lpNVNORWpEM2x6UHozcm5OVllRTEJBL2V1NS8wS1JXc2hQCmJVcit0YUszN1l4ZEJMV1JHOVpjOHd2ZU9pVWZTUHhWNmwyWnFRdVQ0VVVFdmYrbTlJWEZGZXZxUE1IanNZUVQKVVlRQVRxMkgwelF3Mm5kS2thdDlWSk81UVZKV252N0YxaWY5S3VPRFozbEhiUk96aEJjZjZXUWlBS0RNQWQ3cwpQNDNYbjBFQ2dZRUFxNmFacjlONmwxUWY4RjRYL2lLdzdaS2JDdnQzQ3J6ZlVvNE91Nm9Kd280K3pFNjFQL1ZKCm1JenFBNk1HK1pabEZpZXFobC81Ym94WGltTml3N0h5cXZGM2pwZ0QvcUZlVFZpL0lmNkN6UTlFLzJsZUhBdkYKeUp0MWJ4NUZBYTVkSzQ4UlNWYmJJcG9PY01NcUFHUnJEODdaelltZHQwekhGNnRIZDNkeGNtRUNnWUFzRWJNZApWVlNVZHZsbVM0WTc2UlUvcmsxT3lYODd1LzEwd1l6bUFpeFlPY0ZNM0FoWk91TGtwVmhoN2NrbDJpSWhhaEhBCmxaaFFTdlAreDRZVm5YaEcrVG9UQkMzbHdHYTVQRGpjakhGQlV3QTcyaW81K3Z3VXZ1UFRTSFJwNHJ6NnRFOWEKVjdkY2l2bXVVUDJuRE83Wm9oc3JxZGZmeW0rbThIN3FydzRFd1FLQmdEV1RqME82TXpyUUVhQVlrUVVucERVLwpYOFd5OGlPcStFYU5ZejNWWUtKSm5xVkJTeldLZDIrRFRQVmlvVHZqOVhVYkhGK1p3MW9ieXljcklDcVgrd0RCCkl4ZXBoMlBNNERKUHVlRnFJVzRqY3lQSkJuVGt4OVBuNUNKem1XSUJybE1vZjZON2tvWFIzMFBMbjlDRlRpNFoKa1dhTnhjR3BROVNldjVQeEoxL2QKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=
+#
+# NOTE: SSL/TLS infrastructure moved to ssl.yaml library
+# - SSL test fixtures (moved to ssl.yaml)
+# - util-ssl-bind-options (moved to ssl.yaml)
+# - sslCertificates.default.pem (moved to ssl.yaml)
+# - frontend https (moved to ssl.yaml)
+# - SSL passthrough infrastructure (moved to ssl.yaml)
 
 templateSnippets:
   util-macros:
@@ -27,10 +30,6 @@ templateSnippets:
       {%- set result = pattern | replace("$", "\\$") -%}
       {{- result -}}
       {%- endmacro -%}
-
-  util-ssl-bind-options:
-    template: >-
-      {{- " " -}}ssl crt {{ "" | get_path("cert") }}/ alpn h2,http/1.1
 
   frontend-routing-logic:
     template: |-
@@ -290,21 +289,6 @@ files:
       <p>The server didn't respond in time.</p>
       </body></html>
 
-sslCertificates:
-  default.pem:
-    template: |
-      {#- Default SSL certificate for HTTPS frontend #}
-      {#- Loads certificate from TLS Secret (configurable via values.yaml) #}
-      {#- Secret name and namespace come from templatingSettings.extraContext #}
-      {%- set cert_namespace = default_ssl_cert_namespace | default("haproxy-template-ic") %}
-      {%- set cert_name = default_ssl_cert_name | default("default-ssl-cert") %}
-      {%- set secret = resources.secrets.GetSingle(cert_namespace, cert_name) %}
-      {%- if not secret %}
-      {{- fail("SSL certificate Secret not found: " ~ cert_namespace ~ "/" ~ cert_name ~ ". Create a TLS Secret or configure default_ssl_cert_name/default_ssl_cert_namespace.") -}}
-      {%- endif %}
-      {{- secret.data["tls.crt"] | b64decode -}}
-      {{- secret.data["tls.key"] | b64decode -}}
-
 haproxyConfig:
   template: |
     global
@@ -339,11 +323,14 @@ haproxyConfig:
 
     {#- Initialize global feature registry for conditional infrastructure #}
     {#- Libraries can register feature needs via features-* snippets #}
-    {%- set global_features = namespace(
-        ssl_passthrough_backends=[]
-    ) %}
+    {#- Features are initialized by libraries (e.g., ssl.yaml adds ssl_passthrough_backends) #}
+    {%- set global_features = namespace() %}
 
     {#- Phase 1: Feature Registration #}
+    {#- Initialize SSL features first (if SSL library is loaded) #}
+    {%- if template_snippets | glob_match("features-ssl-initialization") %}
+      {%- include "features-ssl-initialization" %}
+    {%- endif %}
     {#- Let resource libraries scan resources and register infrastructure needs #}
     {%- from "util-macros" import include_matching -%}
     {{- include_matching("features-*") | trim }}
@@ -390,58 +377,6 @@ haproxyConfig:
         # Default backend
         default_backend default_backend
 
-    {#- SSL Passthrough Infrastructure - Conditional Architecture #}
-    {#- Only generated when SSL passthrough backends are registered #}
-    {#- Architecture: TCP frontend + unix socket HTTPS frontend + loopback backend #}
-    {%- if global_features.ssl_passthrough_backends | length > 0 %}
-    {#- TCP frontend extracts SNI and routes to passthrough backends or loopback #}
-    # base/frontends-ssl-tcp
-
-    frontend ssl-tcp
-        mode tcp
-        bind *:{{ httpsPort | default(8443) | int }}
-
-        # Extract SNI for routing decisions (wait up to 5s for client hello)
-        tcp-request inspect-delay 5s
-        tcp-request content accept if { req_ssl_hello_type 1 }
-
-        # Route to passthrough backends based on SNI
-        {%- for backend in global_features.ssl_passthrough_backends %}
-        use_backend {{ backend.name }} if { req_ssl_sni -m str {{ backend.sni }} }
-        {%- endfor %}
-
-        # Default: route to loopback backend for SSL termination
-        default_backend ssl-loopback
-
-    # base/backends-ssl-loopback
-
-    backend ssl-loopback
-        mode tcp
-        server loopback unix@/var/run/ssl-frontend.sock send-proxy-v2
-
-    {%- endif %}
-
-    # base/frontends-https
-
-    frontend https
-        mode http
-        {%- if global_features.ssl_passthrough_backends | length > 0 %}
-        bind unix@/var/run/ssl-frontend.sock{% include "util-ssl-bind-options" %} accept-proxy
-        {%- else %}
-        bind *:{{ httpsPort | default(8443) | int }}{% include "util-ssl-bind-options" %}
-        {%- endif %}
-
-        {#- Reuse frontend routing logic from base.yaml #}
-        {%- filter indent(8, first=False) %}
-        {% include "frontend-routing-logic" -%}
-        {%- endfilter %}
-
-        # Use backend from txn.backend_name (set by qualifier logic)
-        use_backend %[var(txn.backend_name)] if { var(txn.backend_name) -m found }
-
-        # Default backend
-        default_backend default_backend
-
     {#- Extension point for additional frontends (e.g., custom TCP services) #}
     {#- Resource libraries can inject frontends-* snippets #}
     {%- from "util-macros" import include_matching -%}
@@ -464,30 +399,11 @@ haproxyConfig:
 
 # Global fixtures merged with all validation tests
 # Test fixtures override global fixtures when same resource exists (by namespace/name)
+# NOTE: SSL certificate fixtures moved to ssl.yaml library
 validationTests:
   _global:
-    description: Global fixtures for all validation tests
-    fixtures:
-      secrets:
-        # Provide default SSL certificate in both common namespaces for test flexibility
-        - apiVersion: v1
-          kind: Secret
-          type: kubernetes.io/tls
-          metadata:
-            name: default-ssl-cert
-            namespace: haproxy-template-ic
-          data:
-            tls.crt: *test_tls_crt
-            tls.key: *test_tls_key
-        - apiVersion: v1
-          kind: Secret
-          type: kubernetes.io/tls
-          metadata:
-            name: default-ssl-cert
-            namespace: default
-          data:
-            tls.crt: *test_tls_crt
-            tls.key: *test_tls_key
+    description: Global fixtures for all validation tests (SSL fixtures moved to ssl.yaml)
+    fixtures: {}
     assertions:
       - type: haproxy_valid
-        description: Global fixtures provide default SSL certificates (validation only, no specific test)
+        description: Base configuration must be valid
