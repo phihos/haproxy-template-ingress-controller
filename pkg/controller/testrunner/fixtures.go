@@ -25,6 +25,126 @@ import (
 	"haproxy-template-ic/pkg/k8s/types"
 )
 
+// mergeFixtures deep merges global fixtures with test fixtures by resource identity.
+//
+// Resource identity is defined by: apiVersion + kind + namespace + name
+//
+// Merge strategy:
+//   - Global fixtures are added first
+//   - Test fixtures override global fixtures when same resource identity exists
+//   - Resource types not in global fixtures are taken from test fixtures
+//
+// Parameters:
+//   - globalFixtures: Fixtures from validationTests._global
+//   - testFixtures: Fixtures from specific test
+//
+// Returns:
+//   - Merged fixtures map (resource type → list of resources)
+func mergeFixtures(globalFixtures, testFixtures map[string][]interface{}) map[string][]interface{} {
+	// Build identity map for test fixtures to detect overrides
+	testIdentities := buildFixtureIdentityMap(testFixtures)
+
+	// Collect all resource types from both fixtures
+	allResourceTypes := collectResourceTypes(globalFixtures, testFixtures)
+
+	// Merge fixtures for each resource type
+	merged := make(map[string][]interface{})
+	for resourceType := range allResourceTypes {
+		mergedResources := mergeResourceType(
+			resourceType,
+			globalFixtures[resourceType],
+			testFixtures[resourceType],
+			testIdentities,
+		)
+
+		if len(mergedResources) > 0 {
+			merged[resourceType] = mergedResources
+		}
+	}
+
+	return merged
+}
+
+// buildFixtureIdentityMap creates a map of resource identities for deduplication.
+func buildFixtureIdentityMap(fixtures map[string][]interface{}) map[string]interface{} {
+	identities := make(map[string]interface{})
+
+	for resourceType, resources := range fixtures {
+		for _, resourceObj := range resources {
+			resourceMap, ok := resourceObj.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			resource := &unstructured.Unstructured{Object: resourceMap}
+			identity := buildResourceIdentity(resourceType, resource)
+			identities[identity] = resourceObj
+		}
+	}
+
+	return identities
+}
+
+// collectResourceTypes collects all unique resource types from multiple fixture maps.
+func collectResourceTypes(fixtureMaps ...map[string][]interface{}) map[string]bool {
+	allTypes := make(map[string]bool)
+
+	for _, fixtures := range fixtureMaps {
+		for resourceType := range fixtures {
+			allTypes[resourceType] = true
+		}
+	}
+
+	return allTypes
+}
+
+// mergeResourceType merges global and test fixtures for a single resource type.
+func mergeResourceType(
+	resourceType string,
+	globalResources []interface{},
+	testResources []interface{},
+	testIdentities map[string]interface{},
+) []interface{} {
+	var merged []interface{}
+
+	// Add global fixtures that are NOT overridden by test fixtures
+	for _, resourceObj := range globalResources {
+		resourceMap, ok := resourceObj.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		resource := &unstructured.Unstructured{Object: resourceMap}
+		identity := buildResourceIdentity(resourceType, resource)
+
+		// Only add if not overridden by test fixture
+		if _, overridden := testIdentities[identity]; !overridden {
+			merged = append(merged, resourceObj)
+		}
+	}
+
+	// Add all test fixtures (these override global fixtures)
+	merged = append(merged, testResources...)
+
+	return merged
+}
+
+// buildResourceIdentity creates a unique identity key for a resource.
+//
+// Identity format: "resourceType|apiVersion|kind|namespace|name"
+//
+// This ensures resources are uniquely identified across different resource types
+// and API versions.
+func buildResourceIdentity(resourceType string, resource *unstructured.Unstructured) string {
+	return fmt.Sprintf("%s|%s|%s|%s|%s",
+		resourceType,
+		resource.GetAPIVersion(),
+		resource.GetKind(),
+		resource.GetNamespace(),
+		resource.GetName(),
+	)
+}
+
 // createStoresFromFixtures creates resource stores from test fixtures.
 //
 // This converts the test fixtures (map of resource type → list of resources)
