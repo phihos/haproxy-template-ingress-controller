@@ -751,9 +751,9 @@ haproxy.org/ssl-redirect-port: "8443"
 
 ### haproxy.org/ssl-passthrough
 
-**Status**: ❌ Not Implemented
+**Status**: ✅ Supported
 
-**Description**: Enable TCP mode SSL passthrough (Layer 4). When enabled, HAProxy operates in TCP mode and cannot inspect HTTP traffic.
+**Description**: Enable TCP mode SSL passthrough (Layer 4) for specific ingresses while allowing SSL termination for others. Uses SNI-based routing with unix socket loopback to support mixed passthrough and termination traffic.
 
 **Usage**:
 
@@ -785,21 +785,44 @@ spec:
 **Generated HAProxy Configuration**:
 
 ```haproxy
-frontend ssl-passthrough
+# TCP frontend for SNI-based routing
+frontend ssl-tcp
     mode tcp
-    bind :443
+    bind *:443
     tcp-request inspect-delay 5s
     tcp-request content accept if { req_ssl_hello_type 1 }
-    use_backend secure-backend if { req_ssl_sni -i secure.example.com }
+    use_backend ssl-passthrough-default-ssl-passthrough-ingress if { req_ssl_sni -m str secure.example.com }
+    default_backend ssl-loopback
 
-backend secure-backend
+# HTTPS frontend on unix socket (for SSL termination)
+frontend ssl-https
+    mode http
+    bind unix@/var/run/ssl-frontend.sock accept-proxy
+    # Standard HTTP routing logic applies here
+
+# SSL passthrough backend (TCP mode)
+backend ssl-passthrough-default-ssl-passthrough-ingress
     mode tcp
-    server pod1 10.0.1.5:443
+    balance roundrobin
+    server SRV_1 10.0.1.30:8443 check
+
+# Loopback backend for SSL termination
+backend ssl-loopback
+    mode tcp
+    server loopback unix@/var/run/ssl-frontend.sock send-proxy-v2
 ```
+
+**Implementation Notes**:
+
+- Uses unix socket loopback pattern to support mixed passthrough and termination
+- TCP frontend extracts SNI without terminating SSL
+- Passthrough traffic routes directly to backend pods
+- Non-passthrough traffic routes to unix socket frontend for SSL termination
+- PROXY protocol v2 preserves client IP information
 
 **Dependencies**: None
 
-**Warning**: When enabled, HTTP-level features (headers, path rewriting, etc.) are unavailable.
+**Warning**: For passthrough traffic, HTTP-level features (headers, path rewriting, etc.) are unavailable. Non-passthrough traffic on other hosts continues to support all HTTP features.
 
 ---
 
@@ -852,11 +875,9 @@ server pod1 10.0.1.5:8443 ssl verify none proto h2
 
 ### haproxy.org/server-crt
 
-**Status**: ⚠️ Partially Implemented
+**Status**: ✅ Supported
 
 **Description**: Client certificate for mTLS (mutual TLS) to backend. References a Secret containing `tls.crt` and `tls.key`. Supports cross-namespace format `namespace/secretname`.
-
-**Note**: Annotation is recognized and validated but not yet applied to server directives in generated HAProxy configuration.
 
 **Usage**:
 
@@ -880,11 +901,9 @@ server pod1 10.0.1.5:8443 ssl crt /etc/haproxy/certs/client-cert.pem ca-file /et
 
 ### haproxy.org/server-ca
 
-**Status**: ⚠️ Partially Implemented
+**Status**: ✅ Supported
 
 **Description**: CA certificate for verifying backend server certificates. References a Secret containing `tls.crt`. Supports cross-namespace format `namespace/secretname`.
-
-**Note**: Annotation is recognized and validated but not yet applied to server directives in generated HAProxy configuration.
 
 **Usage**:
 
@@ -1199,14 +1218,31 @@ backend app-backend
 
 ### haproxy.org/cookie-persistence-no-dynamic
 
-**Status**: ❌ Not Implemented
+**Status**: ✅ Supported
 
-**Description**: Enable sticky sessions using static cookies (without dynamic-cookie-key).
+**Description**: Enable sticky sessions using static cookies (without dynamic-cookie-key). Use only in single-instance controller deployments.
 
 **Usage**:
 
 ```yaml
-haproxy.org/cookie-persistence-no-dynamic: "SERVERID"
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: static-sticky-sessions
+  annotations:
+    haproxy.org/cookie-persistence-no-dynamic: "SERVERID"
+spec:
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app-service
+                port:
+                  number: 8080
 ```
 
 **Generated HAProxy Configuration**:
@@ -1219,7 +1255,9 @@ backend app-backend
 
 **Dependencies**: None
 
-**Note**: Use only in single-instance deployments. Multi-instance setups should use `cookie-persistence` instead.
+**Note**: Mutually exclusive with `cookie-persistence`. For multi-instance deployments, use `cookie-persistence` (dynamic mode) instead to ensure consistent cookie values across controller instances.
+
+**Warning**: Static cookies will differ across controller instances, breaking session affinity. Only use in single-instance deployments.
 
 ---
 
@@ -1572,27 +1610,11 @@ server pod1 10.0.1.5:8080 send-proxy-v2
 
 ### haproxy.org/standalone-backend
 
-**Status**: ❌ Not Implemented
+**Status**: ❌ Not Implemented (Not Planned)
 
 **Description**: Create a dedicated backend for this ingress instead of sharing backends across ingresses.
 
-**Usage**:
-
-```yaml
-haproxy.org/standalone-backend: "true"
-```
-
-**Generated HAProxy Configuration**:
-
-```haproxy
-# Creates backend specific to this ingress
-backend ingress-namespace-ingressname-backend
-    # ... backend config
-```
-
-**Dependencies**: None
-
-**Note**: Prevents backend deduplication, useful for ingress-specific backend configuration.
+**Note**: This controller's architecture already generates standalone backends (one backend per ingress+service+port combination) rather than sharing backends across ingresses. Each unique combination of `namespace/ingress-name/service-name/port` gets its own dedicated backend, making this annotation redundant. Implementation is not planned.
 
 ---
 
@@ -1756,15 +1778,15 @@ haproxy.org/auth-realm: "API Access"
 ### Other Annotations
 
 The remaining 51 annotations have varying levels of test coverage:
-- **44 fully supported annotations** include validation tests in the template library
-- **2 partially implemented annotations** have validation tests for parsing but not complete integration tests
-- **5 not implemented annotations** (including 2 deprecated) have no test coverage
+- **47 fully supported annotations** include validation tests in the template library
+- **0 partially implemented annotations** - all features are either fully supported or not implemented
+- **3 not implemented annotations** (including 2 deprecated) have no test coverage
 
 ## Implementation Status Summary
 
 **Total annotations**: 54
 
-- ✅ **Fully Supported**: 47 (87.0%)
+- ✅ **Fully Supported**: 51 (94.4%)
   - Access Control & IP Filtering: 2 annotations (allowlist, denylist)
   - Authentication: 3 annotations (auth-type, auth-secret, auth-realm)
   - CORS: 6 annotations (enable, allow-origin, allow-methods, allow-headers, allow-credentials, max-age)
@@ -1772,24 +1794,23 @@ The remaining 51 annotations have varying levels of test coverage:
   - Header Manipulation: 3 annotations (forwarded-for, request-set-header, response-set-header)
   - Path Manipulation: 1 annotation (path-rewrite)
   - Request Redirect: 2 annotations (request-redirect, request-redirect-code)
-  - SSL/TLS: 3 annotations (ssl-redirect, ssl-redirect-code, ssl-redirect-port)
+  - SSL/TLS: 4 annotations (ssl-redirect, ssl-redirect-code, ssl-redirect-port, ssl-passthrough)
   - Health Checks: 3 annotations (check, check-http, check-interval)
   - Load Balancing: 1 annotation (load-balance)
-  - Session Persistence: 1 annotation (cookie-persistence)
+  - Session Persistence: 2 annotations (cookie-persistence, cookie-persistence-no-dynamic)
   - Timeouts: 8 annotations (server, client, connect, http-request, http-keep-alive, queue, tunnel, check)
   - Logging: 3 annotations (src-ip-header, request-capture, request-capture-len)
   - Host Manipulation: 1 annotation (set-host)
   - Connection Management: 1 annotation (pod-maxconn)
   - Server Scaling: 1 annotation (scale-server-slots)
-  - Backend Server Options: 2 annotations (server-ssl, server-proto)
+  - Backend Server Options: 4 annotations (server-ssl, server-proto, server-crt, server-ca)
   - Proxy Protocol: 1 annotation (send-proxy-protocol)
   - Advanced Backend Config: 1 annotation (backend-config-snippet)
 
-- ⚠️ **Partially Implemented**: 2 (3.7%)
-  - Backend Server SSL Certificates: 2 annotations (server-crt, server-ca) - recognized and validated but not yet applied to server directives (requires secrets watching)
+- ⚠️ **Partially Implemented**: 0 (0%)
 
-- ❌ **Not Implemented**: 5 (9.3%)
-  - 3 annotations: ssl-passthrough, cookie-persistence-no-dynamic, standalone-backend
+- ❌ **Not Implemented**: 3 (5.6%)
+  - 1 annotation: standalone-backend (not planned - architecture already provides this functionality)
   - 2 deprecated annotations: whitelist, blacklist (replaced by allowlist/denylist)
 
 ## See Also

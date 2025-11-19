@@ -69,6 +69,54 @@ controller:
     pathRegexLast:
       enabled: false
 
+  # Default SSL Certificate Configuration
+  # REQUIRED: A default SSL certificate is required for HTTPS traffic
+  # The certificate must be provided as a Kubernetes TLS Secret containing:
+  #   - tls.crt: PEM-encoded certificate
+  #   - tls.key: PEM-encoded private key
+  #
+  # For development/testing (quick start):
+  #   Run: ./scripts/generate-dev-ssl-cert.sh
+  #   This creates a self-signed certificate valid for *.example.com
+  #
+  # For production (recommended):
+  #   Use cert-manager to automatically provision and renew certificates
+  #   See: https://cert-manager.io/docs/
+  #
+  # The Secret must exist before HAProxy can serve HTTPS traffic.
+  # The template will reference this Secret by name and namespace.
+  defaultSSLCertificate:
+    # Enable default SSL certificate requirement
+    # Set to false to disable HTTPS support (HTTP only mode)
+    enabled: true
+
+    # Name of the Kubernetes TLS Secret containing the default certificate
+    # The Secret must exist in the specified namespace (or Release.Namespace)
+    secretName: "default-ssl-cert"
+
+    # Namespace of the TLS Secret
+    # Defaults to Release.Namespace if empty
+    # Leave empty to use the same namespace as the controller
+    namespace: ""
+
+    # ADVANCED: Create TLS Secret from inline certificate and key
+    # WARNING: NOT recommended for production - use for testing/development only
+    #
+    # When enabled, creates a Secret with the provided certificate and key
+    # This embeds secrets in Helm values which is a security risk
+    # Production deployments should use cert-manager or external secret management
+    #
+    # Leave create=false (default) to reference an existing Secret
+    create: false
+    # cert: |
+    #   -----BEGIN CERTIFICATE-----
+    #   MIIDXTCCAkWgAwIBAgIJAKJ... (your certificate)
+    #   -----END CERTIFICATE-----
+    # key: |
+    #   -----BEGIN PRIVATE KEY-----
+    #   MIIEvQIBADANBgkqhkiG9w... (your private key)
+    #   -----END PRIVATE KEY-----
+
   # HAProxyTemplateConfig specification
   # This configuration is rendered into a HAProxyTemplateConfig CRD
   # Users can customize this configuration using Helm values or create
@@ -142,6 +190,12 @@ controller:
         # When enabled, HAProxy adds headers like X-HAProxy-Backend, X-Gateway-Matched-Route
         # to show internal routing decisions
         debug: true
+
+        # HAProxy bind ports for HTTP and HTTPS frontends
+        # These are the ports HAProxy listens on inside the container
+        # The HAProxy Service (haproxyService) exposes these ports externally
+        httpPort: 8080
+        httpsPort: 8443
 
     watchedResourcesIgnoreFields:
       - metadata.managedFields
@@ -349,6 +403,50 @@ service:
   # Prometheus metrics endpoint port
   # Must match controller.config.controller.metrics_port
   metricsPort: 9090
+
+# HAProxy Service configuration
+# Service for HAProxy pods (deployed separately from this chart)
+# Creates a Service that routes traffic to HAProxy pods matching controller.config.podSelector
+haproxyService:
+  # Enable HAProxy Service creation
+  # Set to false if you manage your own HAProxy Service externally
+  enabled: true
+
+  # Service type
+  # - ClusterIP: Internal cluster access only (default)
+  # - LoadBalancer: Expose externally via cloud provider load balancer
+  # - NodePort: Expose on each node's IP at a static port
+  type: ClusterIP
+
+  # HTTP port (exposed on Service)
+  httpPort: 80
+
+  # HTTPS port (exposed on Service)
+  httpsPort: 443
+
+  # NodePort configuration (only used when type: NodePort)
+  # If not specified, Kubernetes will auto-assign ports in the range 30000-32767
+  # httpNodePort: 30080
+  # httpsNodePort: 30443
+
+  # LoadBalancer configuration (only used when type: LoadBalancer)
+  # Static IP address for the LoadBalancer (cloud provider specific)
+  loadBalancerIP: ""
+
+  # External traffic policy
+  # - Cluster: Traffic may be routed to any node (default)
+  # - Local: Traffic only routed to nodes with HAProxy pods (preserves source IP)
+  externalTrafficPolicy: ""
+
+  # Additional annotations for the Service
+  # Useful for cloud provider specific configuration
+  # Example for AWS:
+  #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+  #   service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+  annotations: {}
+
+  # Additional labels for the Service
+  labels: {}
 
 # Liveness and readiness probes
 # Disabled until /healthz endpoint is implemented in the controller

@@ -1,0 +1,42 @@
+{{- if .Values.haproxyService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-haproxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    app.kubernetes.io/component: haproxy
+    {{- with .Values.haproxyService.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.haproxyService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.haproxyService.type }}
+  {{- if and (eq .Values.haproxyService.type "LoadBalancer") .Values.haproxyService.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.haproxyService.loadBalancerIP }}
+  {{- end }}
+  {{- if .Values.haproxyService.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.haproxyService.externalTrafficPolicy }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.haproxyService.httpPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+      {{- if and (eq .Values.haproxyService.type "NodePort") .Values.haproxyService.httpNodePort }}
+      nodePort: {{ .Values.haproxyService.httpNodePort }}
+      {{- end }}
+    - port: {{ .Values.haproxyService.httpsPort }}
+      targetPort: https
+      protocol: TCP
+      name: https
+      {{- if and (eq .Values.haproxyService.type "NodePort") .Values.haproxyService.httpsNodePort }}
+      nodePort: {{ .Values.haproxyService.httpsNodePort }}
+      {{- end }}
+  selector:
+    {{- toYaml .Values.controller.config.podSelector.matchLabels | nindent 4 }}
+{{- end }}

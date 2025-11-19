@@ -23,7 +23,7 @@ data:
         http-request return status 200 content-type text/plain string "OK" if { path /healthz }
 
     frontend http_frontend
-        bind *:80
+        bind *:8080
         default_backend default_backend
 
     backend default_backend
@@ -71,10 +71,10 @@ spec:
               exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 8080
               protocol: TCP
             - name: https
-              containerPort: 443
+              containerPort: 8443
               protocol: TCP
             - name: healthz
               containerPort: 8404
@@ -218,12 +218,12 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: 80
+      targetPort: 8080
       nodePort: 30080
       protocol: TCP
     - name: https
       port: 443
-      targetPort: 443
+      targetPort: 8443
       nodePort: 30443
       protocol: TCP
     - name: healthz

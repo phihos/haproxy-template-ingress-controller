@@ -536,8 +536,25 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 		Assertions:  make([]AssertionResult, 0),
 	}
 
-	// 1. Create resource stores from fixtures
-	stores, err := r.createStoresFromFixtures(test.Fixtures)
+	// 1. Merge global fixtures with test-specific fixtures
+	fixtures := test.Fixtures
+
+	// Check for global fixtures in validationTests._global
+	if globalTest, hasGlobal := r.config.ValidationTests["_global"]; hasGlobal {
+		r.logger.Debug("Merging global fixtures with test fixtures",
+			"test", testName,
+			"global_fixture_types", len(globalTest.Fixtures),
+			"test_fixture_types", len(test.Fixtures))
+
+		fixtures = mergeFixtures(globalTest.Fixtures, test.Fixtures)
+
+		r.logger.Debug("Fixture merge completed",
+			"test", testName,
+			"merged_fixture_types", len(fixtures))
+	}
+
+	// 2. Create resource stores from merged fixtures
+	stores, err := r.createStoresFromFixtures(fixtures)
 	if err != nil {
 		result.Passed = false
 		result.RenderError = fmt.Sprintf("failed to create fixture stores: %v", err)

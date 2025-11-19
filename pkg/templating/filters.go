@@ -45,23 +45,20 @@ type PathResolver struct {
 //	{{ "host.map" | get_path("map") }}        → /etc/haproxy/maps/host.map
 //	{{ "504.http" | get_path("file") }}       → /etc/haproxy/general/504.http
 //	{{ "cert.pem" | get_path("cert") }}       → /etc/haproxy/ssl/cert.pem
+//	{{ "" | get_path("cert") }}               → /etc/haproxy/ssl (directory only)
 //
 // Parameters:
-//   - filename: The base filename (without directory path)
+//   - filename: The base filename (without directory path), or empty string for directory only
 //   - args: Single argument specifying file type: "map", "file", or "cert"
 //
 // Returns:
-//   - Absolute path to the file
+//   - Absolute path to the file, or base directory if filename is empty
 //   - Error if filename is not a string, file type is missing/invalid, or path construction fails
 func (pr *PathResolver) GetPath(filename interface{}, args ...interface{}) (interface{}, error) {
 	// Validate filename is a string
 	filenameStr, ok := filename.(string)
 	if !ok {
 		return nil, fmt.Errorf("get_path: filename must be a string, got %T", filename)
-	}
-
-	if filenameStr == "" {
-		return nil, fmt.Errorf("get_path: filename cannot be empty")
 	}
 
 	// Validate file type argument is provided
@@ -87,6 +84,11 @@ func (pr *PathResolver) GetPath(filename interface{}, args ...interface{}) (inte
 		basePath = pr.SSLDir
 	default:
 		return nil, fmt.Errorf("get_path: invalid file type %q, must be \"map\", \"file\", or \"cert\"", fileType)
+	}
+
+	// If filename is empty, return just the base directory
+	if filenameStr == "" {
+		return basePath, nil
 	}
 
 	// Construct absolute path

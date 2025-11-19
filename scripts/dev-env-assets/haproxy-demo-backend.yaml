@@ -1,0 +1,127 @@
+---
+# TLS certificate for SSL passthrough demo
+apiVersion: v1
+kind: Secret
+metadata:
+  name: haproxy-demo-backend-tls
+  namespace: echo
+type: Opaque
+data:
+  # Combined PEM file (certificate + private key) for echo-passthrough.localdev.me
+  # Valid for 10 years from 2025-11-09
+  tls.pem: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURXRENDQWtDZ0F3SUJBZ0lVSzhGZWJTQ3RyNFJsV2hFRnRDd1E2SnZJbEI4d0RRWUpLb1pJaHZjTkFRRUwKQlFBd0p6RWxNQ01HQTFVRUF3d2NaV05vYnkxd1lYTnpkR2h5YjNWbmFDNXNiMk5oYkdSbGRpNXRaVEFlRncweQpOVEV4TURreU1qTTNORGxhRncwek5URXhNRGN5TWpNM05EbGFNQ2N4SlRBakJnTlZCQU1NSEdWamFHOHRjR0Z6CmMzUm9jbTkxWjJndWJHOWpZV3hrWlhZdWJXVXdnZ0VpTUEwR0NTcUdTSWIzRFFFQkFRVUFBNElCRHdBd2dnRUsKQW9JQkFRRFE1a2VHQTlIVFpxY0hHZmRQVFV1RHJyZmR3cVAzaU9iMWRwaXVOSC90M09vUXpaRVBjN1VhVlZUZApDYUkyOThSYjUxT1ZtRkJqcUFlY0pFYmdJeGtaRFFQTE4yTUZCdXhkSnQvUnZJZklBSGhoL0UySFg3VVY0SlRrCm1jYXQwWDVOdDFZeVpCMUtCckJ1ZGhubDFUSlR4SWNLdmR5WU5TZjZSdGlqQXErT1dCRFMvU3BoQWJLdEE1ZnEKQ1pCYW9OMjI5cExacC9OdkpQdjVnMEZhRlJWZmc1eDJnUHl1QjhHcnJBa2tydkxpUlBVVlV1d1lMQWxScktINwo1bkpUUXhPUEsvQnFTQjRqaU93TFZoTzZDSTFUM0FQei91ZFBQMUVEMUwrVENqNU52NHlpUndxb0dHMzI2QVlGCmJQUFZoenhibHNCOWZyeGxxVmc5QnVkcy9TWXZBZ01CQUFHamZEQjZNQjBHQTFVZERnUVdCQlJ6c2JJdzhtKysKK2NsakRMQnJpUzNiMGM0V2RqQWZCZ05WSFNNRUdEQVdnQlJ6c2JJdzhtKysrY2xqRExCcmlTM2IwYzRXZGpBUApCZ05WSFJNQkFmOEVCVEFEQVFIL01DY0dBMVVkRVFRZ01CNkNIR1ZqYUc4dGNHRnpjM1JvY205MVoyZ3ViRzlqCllXeGtaWFl1YldVd0RRWUpLb1pJaHZjTkFRRUxCUUFEZ2dFQkFJdHpnRHIxaExpYmNuTW95U3NGTzM4M0NLN0gKUmhXSThIRXBLM0ZNU0R0c0JZREVSVDI0bDh3ZHpDYlJHNWJoc2NZR0c2TGc0R25LSTJCZkR1WEs2WG91azVDdApsVDFHY1dTdFp2UnhmRlZQdjdEbW1NKzAyT1Y3amtqYzJFaG9rM3RsSGd6cmJ5OTErUkhzbTN0R1NhczUwMWJTCi9lZXduSml6WENoNU9uLy9KYXUrRXU1RzNJS05SeTdZNVB2MGhzQUorWndCTVRpUFg1a2s2Z1hFVXQzcXYvS0QKOEkvZFh4WVYwaENtOTlwMXNHWklVbmlXbEdJaER2VWR2K3QyNC80dXZLOXpOektKek5qcUFJUnVDK3pPZlk1MworQW1yOXMwYk5TeEFQVk9TOXByMUZFNmFnNzZKQ3NscjY0cjVJQ3YvbmZyLzhZWmhIMC96UWs4SUdSOD0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQotLS0tLUJFR0lOIFBSSVZBVEUgS0VZLS0tLS0KTUlJRXZRSUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS2N3Z2dTakFnRUFBb0lCQVFEUTVrZUdBOUhUWnFjSApHZmRQVFV1RHJyZmR3cVAzaU9iMWRwaXVOSC90M09vUXpaRVBjN1VhVlZUZENhSTI5OFJiNTFPVm1GQmpxQWVjCkpFYmdJeGtaRFFQTE4yTUZCdXhkSnQvUnZJZklBSGhoL0UySFg3VVY0SlRrbWNhdDBYNU50MVl5WkIxS0JyQnUKZGhubDFUSlR4SWNLdmR5WU5TZjZSdGlqQXErT1dCRFMvU3BoQWJLdEE1ZnFDWkJhb04yMjlwTFpwL052SlB2NQpnMEZhRlJWZmc1eDJnUHl1QjhHcnJBa2tydkxpUlBVVlV1d1lMQWxScktINzVuSlRReE9QSy9CcVNCNGppT3dMClZoTzZDSTFUM0FQei91ZFBQMUVEMUwrVENqNU52NHlpUndxb0dHMzI2QVlGYlBQVmh6eGJsc0I5ZnJ4bHFWZzkKQnVkcy9TWXZBZ01CQUFFQ2dnRUFHQ215dHpVazVaTjNtWEl1OFh6SzBjbjVXWXpFZzRMUjJDMm1IbXhUS2RQRwpQVGhSNFp3c0pBWWZ3VXQyZUc0elI4QWJvbStTU055c09LclhpZUIxYkRqZHFmbFhta0xCUDBzYVUzdS9wdW9yCkFvWjQvMElhUTVRTkZONFdwWTlZVVN2MksvRDVsRkR1d25BbHNiaDEwRXVvcFJ6dDhhc2dXeW9ycjd0RlRDejkKRWJpYWdMeFd4czNZZFZHeXgxRmZ4L3gwaktTc01ReTlBbnpaYVNWdXdnbXJrbXpNd1pUVGgxV3k2WThqenEzLwp3bWI5TnJUZmtvdlcrUVREdGdld3ZiSmNFSE9uWTRISW5DSFcxUjlmWWl1Tk9WSktuS04zeHBTaTFHLytnTW0wCkpFQWp1d3ZxeHkrdGNueC9DUWxjQm9SQXhPNXJLWXJML1o2dDlEcUVrUUtCZ1FEbm4zTCswTGFHUnZnUG5wYVQKTTFCMFNyT0Zwc29VNWVQNkwxb3VYaFNZZHpPaWlOYy9YTXBsZlNsVGhRN1psRVU3Nmd6RjI3SE5KWnJkMEdIbQo3WStCNDBjWGhXbHZ6elF4THU3a0ZIWklhS0h2S3ZkWHNDU1BHSml2OWxvaVNJNzFLNnM0NHR2SXBNMEpTcEh3ClV2K3l1cDZyZ25DTU9RODBxZVAxTXVOZUh3S0JnUURtNHBvZWpPZXZIdXRqL0VqMUx0K2x4ckU2VURCdGYyRFoKMU1UdUcxUmxGVWZlR1JSdXMrcFVxWWUzVWZ3Q3dIakc2c2U1WnkyRDN0SlBhWHF4UzR5YTdiRnNHNG1aeGtCTAphNEpCTVNnQ1RleWw3OHhIVGJiTWRDbGEzakZFb3hocUFtQnpiTjdXRlJVOTNrekplVHFuK2VEYTFvSk9YZUFMCkpQUU5pS2NWOFFLQmdFUlhacTNLMVdBdlJuZ05XZTVhNEswL2NWTEpFSzB6MjUxeEpWR3pEcTZoMVVscXlOLzQKTi92VC8wS1dhdmhGNkZ1eVJreUc4eUpOcXpFeGtBRjhMTEN0WjhlSDVNRkp5T09PTG94N2dSOENTRzF5SndMbgpoUkgzdHUyTWFiSGQ2TmhzSnh3a3k2YWJBYWh4S1RoWXRQdCtWdHpTSXZVc3pOREVJKyt3TVNnUEFvR0FjNCtECm1EcnFVMnBrWXQwSkh6N2d6YmFQU2lLTXVxR0F0a2FhY3ByWE9PalgyY0F2eStEZExwYlR5TnVPQ1VxUXFPOG0KSEJRYVllQ0szeGhxUW9jUHp4T2ROQURzZEQwWVBTZUlRRno4SzNzWk1VeStzQW1qcnQyTlBWL3N4Ty9rN2xwVwpNQytUc1E5SVhIa0JjZTN0ZjltL3c0aU9HKzg4amhkbTE4ZEg2ZUVDZ1lFQXFEMlBtait3RVZaRXNLVmY2TUxJCjM4T050SmdzQ3hnRGh5M21MTDB2WFdxUjBjRm1SRzYvbE1oRTFBZWFaK0xEazBMNi9HUEYzeWtIMkdjMHF2RXcKbUpBS2xzZGJZWTU2WllQWWVZa0Z4VnFzMXNocGtxL3drZjk1VXFMQ0pOamJYR0tzalZ2RjlKMDVPMTJyQi9hQQpVdW9IelFOSGt3ZklpczhBeTJEaUh5MD0KLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-demo-backend-config
+  namespace: echo
+data:
+  haproxy.cfg: |
+    global
+        log stdout format raw local0 info
+
+    defaults
+        mode http
+        log global
+        timeout connect 5000ms
+        timeout client 50000ms
+        timeout server 50000ms
+
+    # Frontend accepting PROXY protocol
+    frontend proxy_frontend
+        bind *:8080 accept-proxy
+        mode http
+        default_backend echo_backend
+
+    # Frontend accepting HTTPS connections
+    frontend https_frontend
+        bind *:8443 ssl crt /etc/ssl/demo/tls.pem
+        mode http
+        default_backend echo_backend
+
+    # Backend forwarding plain HTTP to echo-server
+    backend echo_backend
+        mode http
+        server echo1 echo-server.echo.svc.cluster.local:80 check
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-demo-backend
+  namespace: echo
+  labels:
+    app: haproxy-demo-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: haproxy-demo-backend
+  template:
+    metadata:
+      labels:
+        app: haproxy-demo-backend
+    spec:
+      containers:
+        - name: haproxy
+          image: haproxytech/haproxy-debian:3.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp /config/haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg
+              exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: tls
+              mountPath: /etc/ssl/demo
+              readOnly: true
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: haproxy-demo-backend-config
+        - name: tls
+          secret:
+            secretName: haproxy-demo-backend-tls
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-demo-backend
+  namespace: echo
+  labels:
+    app: haproxy-demo-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: haproxy-demo-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: https
+      port: 8443
+      targetPort: 8443
+      protocol: TCP

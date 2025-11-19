@@ -598,6 +598,21 @@ deploy_controller() {
         ok "Using existing namespace '${CTRL_NAMESPACE}'"
     fi
 
+    # Deploy default SSL certificate Secret for HTTPS frontend
+    log INFO "Setting up default SSL certificate..."
+    if kubectl get secret default-ssl-cert -n "${CTRL_NAMESPACE}" &>/dev/null; then
+        ok "Default SSL certificate already exists, skipping generation"
+    else
+        # Generate self-signed certificate for development
+        # Uses generate-dev-ssl-cert.sh which creates a wildcard cert for *.example.com
+        log INFO "Generating self-signed certificate for development..."
+        "${SCRIPT_DIR}/generate-dev-ssl-cert.sh" "${CTRL_NAMESPACE}" "default-ssl-cert" >/dev/null || {
+            err "Failed to generate SSL certificate"
+            return 1
+        }
+        ok "Default SSL certificate generated"
+    fi
+
     # Setup webhook certificates if webhook is enabled
     setup_webhook_certificates || {
         err "Failed to setup webhook certificates"
@@ -614,7 +629,8 @@ deploy_controller() {
         "--namespace" "${CTRL_NAMESPACE}"
         "--values" "${ASSETS_DIR}/dev-values.yaml"
         "--set" "image.tag=${IMAGE_TAG}"
-        "--wait"
+        # Note: --wait is removed because readiness probes are disabled in dev mode
+        # We use kubectl rollout status instead to wait for pods
         "--timeout" "${TIMEOUT}s"
     )
 
@@ -625,16 +641,27 @@ deploy_controller() {
     fi
 
     # Use helm upgrade --install for idempotent deployment
-    # The --wait flag ensures all resources are ready before returning
     # Override image.tag with unique SHA-based tag to force pod restart
     if helm upgrade --install "${helm_args[@]}" 2>&1 | tee /tmp/helm-output.log; then
-        ok "Controller deployed and ready."
+        ok "Controller Helm release deployed."
     else
         err "Helm deployment failed."
         cat /tmp/helm-output.log
         cleanup_failed_deployment
         return 1
     fi
+
+    # Wait for controller deployment to become ready
+    # (readiness probes are disabled in dev mode, so we wait for pods to exist)
+    log INFO "Waiting for controller deployment to become ready..."
+    if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/${HELM_RELEASE_NAME} --timeout="${TIMEOUT}s"; then
+        warn "Controller deployment rollout did not complete in ${TIMEOUT}s."
+        echo "  - Check controller deployment status: kubectl -n ${CTRL_NAMESPACE} describe deploy/${HELM_RELEASE_NAME}"
+        echo "  - Check controller pod logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/${HELM_RELEASE_NAME}"
+        return 1
+    fi
+
+    ok "Controller deployed and ready."
 }
 
 deploy_haproxy() {
@@ -744,9 +771,9 @@ EOF
 deploy_ingress_demo() {
 	log INFO "Deploying Ingress demo resources..."
 
-	# Deploy test backend for PROXY protocol and SSL testing
-	kubectl apply -f "${ASSETS_DIR}/haproxy-test-backend.yaml" >/dev/null || {
-		err "Failed to deploy test backend"
+	# Deploy demo backend for PROXY protocol, SSL, and SSL passthrough testing
+	kubectl apply -f "${ASSETS_DIR}/haproxy-demo-backend.yaml" >/dev/null || {
+		err "Failed to deploy demo backend"
 		return 1
 	}
 

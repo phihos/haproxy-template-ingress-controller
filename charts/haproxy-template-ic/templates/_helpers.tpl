@@ -105,6 +105,9 @@ Uses mustMergeOverwrite for deep merging of all nested structures
 {{- if $context.Values.controller.config.files }}
   {{- $_ := set $userConfig "files" $context.Values.controller.config.files }}
 {{- end }}
+{{- if $context.Values.controller.config.sslCertificates }}
+  {{- $_ := set $userConfig "sslCertificates" $context.Values.controller.config.sslCertificates }}
+{{- end }}
 {{- if $context.Values.controller.config.haproxyConfig }}
   {{- $_ := set $userConfig "haproxyConfig" $context.Values.controller.config.haproxyConfig }}
 {{- end }}

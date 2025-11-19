@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Default SSL certificate support**: Quick-start TLS configuration for development and testing
+  - Optional reference to existing Kubernetes TLS Secret via `controller.defaultSSLCertificate.secretName`
+  - Optional inline certificate creation via `controller.defaultSSLCertificate.create` with cert/key in values
+  - Development helper script `scripts/generate-dev-ssl-cert.sh` for self-signed certificate generation
+  - Certificate name/namespace passed to templates via `extraContext` (variables: `default_ssl_cert_name`, `default_ssl_cert_namespace`)
+  - Comprehensive SSL configuration documentation in Helm chart README
+  - Removed static certificate from Git repository for improved security
+
 - **Leader election for high availability**: Multiple controller replicas now supported with automatic leader election
   - Only the leader replica deploys configurations to HAProxy instances
   - All replicas continue watching resources, rendering templates, and validating configs (hot standby)
@@ -35,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Service architecture refactored**: Controller and HAProxy now have separate Services
+  - **Controller Service** (`haproxy-template-ic`): ClusterIP service for operational endpoints (healthz:8080, metrics:9090)
+  - **HAProxy Service** (`haproxy-template-ic-haproxy`): Configurable service for ingress traffic (http:80, https:443)
+  - Removed `service.httpPort` and `service.httpsPort` from Helm values
+  - Added `haproxyService` section with enabled, type, ports, annotations, and labels configuration
+  - Default HAProxy Service type is ClusterIP (override to LoadBalancer in production)
+  - Development values (`values-dev.yaml`) use LoadBalancer for kind clusters
 - **Default replica count changed from 1 to 2**: Helm chart now deploys 2 replicas by default for HA
 - **Updated Helm chart**: Added POD_NAME and POD_NAMESPACE environment variables via downward API
 - **Updated RBAC**: Added permissions for coordination.k8s.io/v1 Lease resources

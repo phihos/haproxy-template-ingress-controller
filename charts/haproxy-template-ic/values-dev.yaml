@@ -1,0 +1,10 @@
+# Development environment values
+# Override defaults for local development with kind cluster
+#
+# Usage: helm install -f values-dev.yaml
+
+# HAProxy Service - expose externally via LoadBalancer for dev/testing
+haproxyService:
+  type: LoadBalancer
+  # kind cluster maps LoadBalancer services to localhost
+  # This makes HAProxy accessible at http://localhost and https://localhost
