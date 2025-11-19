@@ -1099,9 +1099,11 @@ templateSnippets:
         {%- endfor %}
       {%- endcompute_once %}
 
-      {#- Register backends with global feature registry #}
-      {%- set global_features.ssl_passthrough_backends =
-          global_features.ssl_passthrough_backends + ssl_passthrough_analysis.backends %}
+      {#- Register backends with global feature registry (only if SSL library is loaded) #}
+      {%- if global_features.ssl_passthrough_backends is defined %}
+        {%- set global_features.ssl_passthrough_backends =
+            global_features.ssl_passthrough_backends + ssl_passthrough_analysis.backends %}
+      {%- endif %}
 
   backends-haproxytech-ssl-passthrough:
     priority: 501
@@ -3661,6 +3663,7 @@ validationTests:
         description: Backend must be created for ingress with empty annotations
 
   test-ssl-passthrough-basic:
+    _helm_skip_test: "{{ not .Values.controller.templateLibraries.ssl.enabled }}"
     description: SSL passthrough with basic configuration
     fixtures:
       ingresses:
@@ -3782,6 +3785,7 @@ validationTests:
         description: HTTPS frontend must terminate SSL and accept PROXY protocol
 
   test-ssl-passthrough-no-annotation:
+    _helm_skip_test: "{{ not .Values.controller.templateLibraries.ssl.enabled }}"
     description: No SSL passthrough frontends when annotation not present
     fixtures:
       ingresses:

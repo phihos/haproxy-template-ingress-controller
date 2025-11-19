@@ -114,9 +114,11 @@ templateSnippets:
         {#- TLSRoute is the natural Gateway API resource for SSL passthrough #}
       {%- endcompute_once %}
 
-      {#- Register backends with global feature registry #}
-      {%- set global_features.ssl_passthrough_backends =
-          global_features.ssl_passthrough_backends + ssl_passthrough_gateway_analysis.backends %}
+      {#- Register backends with global feature registry (only if SSL library is loaded) #}
+      {%- if global_features.ssl_passthrough_backends is defined %}
+        {%- set global_features.ssl_passthrough_backends =
+            global_features.ssl_passthrough_backends + ssl_passthrough_gateway_analysis.backends %}
+      {%- endif %}
 
   # Route analysis system - collects and analyzes all routes for conflicts
   util-analyze-routes:
