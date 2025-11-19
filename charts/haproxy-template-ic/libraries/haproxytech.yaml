@@ -1045,162 +1045,63 @@ templateSnippets:
       {%- endif -%}
       {%- endif -%}
 
-  frontends-ssl-tcp:
-    priority: 300
+  features-haproxytech-ssl-passthrough:
+    priority: 100
     template: |
       {#-
-        HAProxy SSL TCP Frontend (Ingress Only)
-
-        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#ssl-passthrough
+        HAProxy SSL Passthrough Feature Registration (Ingress Only)
 
         Purpose:
-          Implements SSL passthrough support by creating a TCP frontend on port 443 that:
-          - Extracts SNI (Server Name Indication) without terminating SSL
-          - Routes to passthrough backends for hosts with haproxy.org/ssl-passthrough="true"
-          - Routes to loopback backend for SSL termination for other hosts
-
-        Architecture:
-          Based on official HAProxy Kubernetes Ingress Controller implementation
-          (see /home/phil/Quellcode/GitHub/kubernetes-ingress/pkg/handler/https.go:206-316)
+          Scans Ingress resources to detect SSL passthrough needs and registers
+          backends with the global feature registry. Uses compute_once to ensure
+          expensive resource scanning happens only once per render.
 
         Flow:
-          1. TCP frontend receives connection on port 443
-          2. Extracts SNI hostname using req_ssl_sni
-          3. Routes to passthrough backends for hosts with annotation enabled
-          4. Routes to loopback backend for SSL termination for other hosts
+          1. Scan all Ingress resources for haproxy.org/ssl-passthrough="true"
+          2. Build list of passthrough backends with SNI information
+          3. Register backends with global_features.ssl_passthrough_backends
+          4. Cached analysis is reused by backends-haproxytech-ssl-passthrough
 
         Annotations:
-          - haproxy.org/ssl-passthrough: "true" (enables passthrough for all hosts in this ingress)
+          - haproxy.org/ssl-passthrough: "true" (enables passthrough for all hosts in ingress)
 
-        Generated HAProxy Config:
-          frontend ssl-tcp
-            mode tcp
-            bind *:443
-            tcp-request inspect-delay 5s
-            tcp-request content accept if { req_ssl_hello_type 1 }
-            use_backend <passthrough-backend> if { req_ssl_sni -m str <hostname> }
-            default_backend ssl-loopback
+        Registration Format:
+          {
+            'name': 'ssl-passthrough-<namespace>-<name>',
+            'sni': '<hostname>',
+            'namespace': '<namespace>',
+            'ingress': '<name>'
+          }
       -#}
-      {#- Only generate TCP frontend if at least one ingress has ssl-passthrough -#}
-      {%- set ns = namespace(has_passthrough=false) %}
-      {%- for ingress in resources.ingresses.List() %}
-        {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
-        {%- if ssl_passthrough == "true" %}
-          {%- set ns.has_passthrough = true %}
-        {%- endif %}
-      {%- endfor %}
-
-      {%- if ns.has_passthrough %}
-      # haproxytech/frontends-ssl-tcp
-
-      frontend ssl-tcp
-          mode tcp
-          bind *:443
-
-          # Extract SNI for routing decisions (wait up to 5s for client hello)
-          tcp-request inspect-delay 5s
-          tcp-request content accept if { req_ssl_hello_type 1 }
-
-          # Route to passthrough backends based on SNI
-          {%- set ns_routes = namespace(seen="") %}
-          {%- for ingress in resources.ingresses.List() %}
-            {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
-            {%- if ssl_passthrough == "true" %}
-              {%- for rule in (ingress.spec.rules | default([])) %}
-                {%- if rule.host is defined %}
-                  {%- set host_key = rule.host %}
-                  {%- if ("|" ~ host_key ~ "|") not in ns_routes.seen %}
-                    {%- set ns_routes.seen = ns_routes.seen ~ "|" ~ host_key ~ "|" %}
-                    {%- set backend_name = "ssl-passthrough-" ~ ingress.metadata.namespace ~ "-" ~ ingress.metadata.name %}
-          use_backend {{ backend_name }} if { req_ssl_sni -m str {{ host_key }} }
-                  {%- endif %}
+      {%- set ssl_passthrough_analysis = namespace(backends=[]) %}
+      {%- compute_once ssl_passthrough_analysis %}
+        {%- set ns = namespace(seen="") %}
+        {%- for ingress in resources.ingresses.List() %}
+          {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
+          {%- if ssl_passthrough == "true" %}
+            {%- for rule in (ingress.spec.rules | default([])) %}
+              {%- if rule.host is defined %}
+                {%- set host_key = rule.host %}
+                {#- Deduplicate by hostname to prevent duplicate use_backend rules #}
+                {%- if ("|" ~ host_key ~ "|") not in ns.seen %}
+                  {%- set ns.seen = ns.seen ~ "|" ~ host_key ~ "|" %}
+                  {%- set backend_name = "ssl-passthrough-" ~ ingress.metadata.namespace ~ "-" ~ ingress.metadata.name %}
+                  {%- set ssl_passthrough_analysis.backends = ssl_passthrough_analysis.backends.append({
+                      'name': backend_name,
+                      'sni': host_key,
+                      'namespace': ingress.metadata.namespace,
+                      'ingress': ingress.metadata.name
+                  }) %}
                 {%- endif %}
-              {%- endfor %}
-            {%- endif %}
-          {%- endfor %}
-
-          # Default: route to loopback backend for SSL termination
-          default_backend ssl-loopback
-      {%- endif %}
-
-  frontends-ssl-https:
-    priority: 301
-    template: |
-      {#-
-          HAProxy SSL HTTPS Frontend (Ingress Only)
-
-          Purpose:
-            Unix socket frontend for SSL-terminated traffic from the loopback backend.
-            Uses PROXY protocol v2 to preserve client IP information.
-
-          Architecture:
-            Receives traffic from ssl-loopback backend after SSL termination.
-            Applies same routing logic as http_frontend but on unix socket.
-
-          Flow:
-            1. ssl-tcp frontend routes non-passthrough traffic to ssl-loopback backend
-            2. ssl-loopback backend terminates SSL and sends to this frontend via unix socket
-            3. This frontend uses PROXY protocol v2 to get real client IP
-            4. Standard HTTP routing logic applies (same as port 80)
-      -#}
-      {#- Only generate HTTPS frontend if at least one ingress has ssl-passthrough -#}
-      {%- set ns = namespace(has_passthrough=false) %}
-      {%- for ingress in resources.ingresses.List() %}
-          {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
-          {%- if ssl_passthrough == "true" %}
-            {%- set ns.has_passthrough = true %}
+              {%- endif %}
+            {%- endfor %}
           {%- endif %}
-      {%- endfor %}
+        {%- endfor %}
+      {%- endcompute_once %}
 
-      {%- if ns.has_passthrough %}
-      # haproxytech/frontends-ssl-https
-
-      frontend ssl-https
-          mode http
-          bind unix@/var/run/ssl-frontend.sock accept-proxy
-
-          {#- Reuse frontend routing logic from base.yaml #}
-          {%- filter indent(8, first=False) %}
-          {% include "frontend-routing-logic" -%}
-          {%- endfilter %}
-
-          # Use backend from txn.backend_name (set by qualifier logic)
-          use_backend %[var(txn.backend_name)] if { var(txn.backend_name) -m found }
-
-          # Default backend
-          default_backend default_backend
-      {%- endif %}
-
-  backends-haproxytech-ssl-loopback:
-    priority: 500
-    template: |
-      {#-
-          HAProxy SSL Loopback Backend (Ingress Only)
-
-          Purpose:
-            Routes SSL-terminated traffic to the ssl-https frontend using unix socket.
-            Uses PROXY protocol v2 to preserve client IP information.
-
-          Architecture:
-            Acts as intermediary between ssl-tcp frontend and ssl-https frontend.
-            Terminates SSL and forwards to unix socket with client info via PROXY protocol.
-      -#}
-      {#- Only generate loopback backend if at least one ingress has ssl-passthrough -#}
-      {%- set ns = namespace(has_passthrough=false) %}
-      {%- for ingress in resources.ingresses.List() %}
-          {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
-          {%- if ssl_passthrough == "true" %}
-            {%- set ns.has_passthrough = true %}
-          {%- endif %}
-      {%- endfor %}
-
-      {%- if ns.has_passthrough %}
-      # haproxytech/backends-haproxytech-ssl-loopback
-
-      backend ssl-loopback
-          mode tcp
-          server loopback unix@/var/run/ssl-frontend.sock send-proxy-v2
-      {%- endif %}
+      {#- Register backends with global feature registry #}
+      {%- set global_features.ssl_passthrough_backends =
+          global_features.ssl_passthrough_backends + ssl_passthrough_analysis.backends %}
 
   backends-haproxytech-ssl-passthrough:
     priority: 501
@@ -1211,6 +1112,7 @@ templateSnippets:
           Purpose:
             TCP backends for SSL passthrough - forward encrypted traffic directly to pods.
             No SSL termination occurs in HAProxy.
+            Reuses cached analysis from features-haproxytech-ssl-passthrough.
 
           Annotations:
             - haproxy.org/ssl-passthrough: "true" (enables passthrough for this ingress)
@@ -1220,37 +1122,62 @@ templateSnippets:
               mode tcp
               server SRV_1 <pod-ip>:<pod-port> check
       -#}
-      {%- set ns = namespace(processed="") %}
-      {%- for ingress in resources.ingresses.List() %}
+      {#- Reuse cached analysis from features phase via compute_once #}
+      {%- set ssl_passthrough_analysis = namespace(backends=[]) %}
+      {%- compute_once ssl_passthrough_analysis %}
+        {%- set ns = namespace(seen="") %}
+        {%- for ingress in resources.ingresses.List() %}
           {%- set ssl_passthrough = ingress.metadata.annotations["haproxy.org/ssl-passthrough"] | default("") %}
           {%- if ssl_passthrough == "true" %}
-            {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
-            {%- if ("|" ~ ingress_key ~ "|") not in ns.processed %}
-              {%- set ns.processed = ns.processed ~ "|" ~ ingress_key ~ "|" %}
-              {%- set backend_name = "ssl-passthrough-" ~ ingress.metadata.namespace ~ "-" ~ ingress.metadata.name %}
-              {%- set ns_backend = namespace(generated=false) %}
-              {%- for rule in (ingress.spec.rules | default([])) %}
-                {%- if not ns_backend.generated and rule.http is defined %}
-                  {%- for path in (rule.http.paths | default([])) %}
-                    {%- if not ns_backend.generated %}
-                      {%- set service_name = path.backend.service.name %}
-                      {%- set service_port = path.backend.service.port.number | default(path.backend.service.port.name) %}
-                      {%- set port = service_port %}
+            {%- for rule in (ingress.spec.rules | default([])) %}
+              {%- if rule.host is defined %}
+                {%- set host_key = rule.host %}
+                {#- Deduplicate by hostname to prevent duplicate use_backend rules #}
+                {%- if ("|" ~ host_key ~ "|") not in ns.seen %}
+                  {%- set ns.seen = ns.seen ~ "|" ~ host_key ~ "|" %}
+                  {%- set backend_name = "ssl-passthrough-" ~ ingress.metadata.namespace ~ "-" ~ ingress.metadata.name %}
+                  {%- set ssl_passthrough_analysis.backends = ssl_passthrough_analysis.backends.append({
+                      'name': backend_name,
+                      'sni': host_key,
+                      'namespace': ingress.metadata.namespace,
+                      'ingress': ingress.metadata.name
+                  }) %}
+                {%- endif %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endcompute_once %}
+
+      {%- set ns = namespace(processed="") %}
+      {%- for backend_info in ssl_passthrough_analysis.backends %}
+        {%- set ingress_key = backend_info.namespace ~ "/" ~ backend_info.ingress %}
+        {%- if ("|" ~ ingress_key ~ "|") not in ns.processed %}
+          {%- set ns.processed = ns.processed ~ "|" ~ ingress_key ~ "|" %}
+          {#- Get the actual ingress resource to extract service details #}
+          {%- set ingress = resources.ingresses.GetSingle(backend_info.namespace, backend_info.ingress) %}
+          {%- set ns_backend = namespace(generated=false) %}
+          {%- for rule in (ingress.spec.rules | default([])) %}
+            {%- if not ns_backend.generated and rule.http is defined %}
+              {%- for path in (rule.http.paths | default([])) %}
+                {%- if not ns_backend.generated %}
+                  {%- set service_name = path.backend.service.name %}
+                  {%- set service_port = path.backend.service.port.number | default(path.backend.service.port.name) %}
+                  {%- set port = service_port %}
       # haproxytech/backends-haproxytech-ssl-passthrough
 
-      backend {{ backend_name }}
+      backend {{ backend_info.name }}
           mode tcp
           balance roundrobin
-                      {%- filter indent(8, first=False) -%}
-                      {%- include "util-backend-servers" -%}
-                      {%- endfilter %}
-                      {%- set ns_backend.generated = true %}
-                    {%- endif %}
-                  {%- endfor %}
+                  {%- filter indent(8, first=False) -%}
+                  {%- include "util-backend-servers" -%}
+                  {%- endfilter %}
+                  {%- set ns_backend.generated = true %}
                 {%- endif %}
               {%- endfor %}
             {%- endif %}
-          {%- endif %}
+          {%- endfor %}
+        {%- endif %}
       {%- endfor %}
 
 validationTests:
@@ -3780,6 +3707,16 @@ validationTests:
           ports:
             - port: 8443
               protocol: TCP
+      secrets:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: default-ssl-cert
+            namespace: haproxy-template-ic
+          type: kubernetes.io/tls
+          data:
+            tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURPRENDQWlDZ0F3SUJBZ0lVZWhzTG4zZXdrWXYzcDArb0RRREp5clNVeUVJd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0dERVdNQlFHQTFVRUF3d05LaTVsZUdGdGNHeGxMbU52YlRBZUZ3MHlOVEV4TVRneU1USTJNalphRncweQpOakV4TVRneU1USTJNalphTUJneEZqQVVCZ05WQkFNTURTb3VaWGhoYlhCc1pTNWpiMjB3Z2dFaU1BMEdDU3FHClNJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUNISGNYaW16Kys3U0FBSkFpOEloTWNyQ2VDWW9PaWRXNW4KS3BHbTE0NjNyTU0vSnJ0YmtlajdlK1kwYWVwL0xyTUlPT2ZSVGpWTEo5RVcrdFFuQWJGajVzcHJ0WWtFMkdvNwpWU0c3aXh5L2VYcTQ5VFdRd0E4YTJkT2dJQ3daTWM3OGlZMGI5T2tQc3MxUUJxajNMbSsvV3FDOTNzSU1Xc3VrCkZqZW5xdEp1Y2ZhdzZ4VUc2YXZXVE15WUtMenB4SGtEbUt6dEJodlJDMjhoOVZNSytDZzJTeXpyWUhOQkJWRSsKZlF3NCtxdWZFRi8zT0sxVnQvL1BJcWpGclhXd3FFajRJRTMvMW0wcVZJMWtzTnFvSW5hR2NUTzJDWjBzT29LWApsUkJuSkZwc1ZzcUk0SU9uMHNHYTQ4WFFIbDJFR3o4STZuVzVMS3dOcUg0eUlaTWt3VkhYQWdNQkFBR2plakI0Ck1CMEdBMVVkRGdRV0JCU2tQZ0crUEFSVG5vdmRpem45RHhISldYNXNJREFmQmdOVkhTTUVHREFXZ0JTa1BnRysKUEFSVG5vdmRpem45RHhISldYNXNJREFQQmdOVkhSTUJBZjhFQlRBREFRSC9NQ1VHQTFVZEVRUWVNQnlDRFNvdQpaWGhoYlhCc1pTNWpiMjJDQzJWNFlXMXdiR1V1WTI5dE1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQkFRQVJ0SFFCCnA2NFNJb0hWbWFMTldtVy9nNE9JdE4rTGFCQUp3VDZtR0ZGWEtGdkxEVm5aSkdKS20xMmI2QzRaUmRCM3dteXIKTFV0MTYyeDIzcjRUdy9LNytFQ1NuajFUcVlyM25qR0JlRGRHV3ZPZkpwSTBWMFZWNm9CdkxPNUdGN3cxd1MvbApaeWs0R1VQamJ5TVpiRElTWUJnYk1xU1lTbzJ1eHpKMW9CMTRxaE9uS2lWYUNJUzUwZ2FVZ2Zhd2VlMndPT2tQCktrUG9BUUlya2hTZGlXOVpsSWt3ZksrTWd3Q2IwbWp2M05NTy9wYWxnc2Y0SGpLVy8wTnlkVDZZRXA2eXhES1IKMmxGTHEybDJRZjgvcEp0MFlUaXdPMjVSNTV0S2k2UFRjUkFmRjcrMzdEN3B2TlNaaW53V0d0dkJrRytZdjN2agppZ1oxbGxOTlN4T2VDNjVTCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+            tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQW9JQkFRQ0hIY1hpbXorKzdTQUEKSkFpOEloTWNyQ2VDWW9PaWRXNW5LcEdtMTQ2M3JNTS9KcnRia2VqN2UrWTBhZXAvTHJNSU9PZlJUalZMSjlFVwordFFuQWJGajVzcHJ0WWtFMkdvN1ZTRzdpeHkvZVhxNDlUV1F3QThhMmRPZ0lDd1pNYzc4aVkwYjlPa1BzczFRCkJxajNMbSsvV3FDOTNzSU1Xc3VrRmplbnF0SnVjZmF3NnhVRzZhdldUTXlZS0x6cHhIa0RtS3p0Qmh2UkMyOGgKOVZNSytDZzJTeXpyWUhOQkJWRStmUXc0K3F1ZkVGLzNPSzFWdC8vUElxakZyWFd3cUVqNElFMy8xbTBxVkkxawpzTnFvSW5hR2NUTzJDWjBzT29LWGxSQm5KRnBzVnNxSTRJT24wc0dhNDhYUUhsMkVHejhJNm5XNUxLd05xSDR5CklaTWt3VkhYQWdNQkFBRUNnZ0VBS0NJNVZhcU1vRDhaK3NDNVVYeURsY2d6QWlFVi9Zc0pESjdSM2E5NGhtbE0KSTNWelFHdFNPMlRkaDZNUVVzL0J3UWI2SUtzczNGS0s0bHNGNmtJditUOGowQ04vZkE5MldvSmFmelQraUlkaQpZdzcrNXF5TnNBbVV1U0xsUm1TTG1XcVlIZjQ4dmZ0N3piSDB2VnN2T1RVSHV1NHdVSEFsdmVzVmcvbVRBTmZ0Cmk4eWp0UWExMWxFZEhiZUc0NVEya1dkRGdmc0hSaENwKzFaK3YyYkdnYllzY25BdGNlSjJxTnZGU0Zoc3REakQKNXhWMzFpUjBXRnNITmVoU0FyalZNSDk3QldGempPa1RxdFhLOUgvODJFaHIzNzlzVGNCQU5FSnphMENMdnBQMgpHaTBmS0M3R3FOeElXM1oweGVlY0tMVE1qRHExUjk0c2tkdUk2MlVjUFFLQmdRQytwM1VYRHhsMFF3OHdTaFFPCkFUMzJYbE9qQktzREN3c21KUzZaeTlCbjRNKzdKdWs1VjQvL04xM0drTDVVUm5BcWxQMWFzQ1A4bDhPdG9oR0cKOTJ0TUdkVldvdjhrbVpFVzRzNW9mOForZHBwc09XWjlJY3licG5Ec2tXMzdvQTFtNE1maUJydzRMWVJZcmlZTwo4RUlJOC9oc1ZxNEVaMnRhRlFHbHQwcmViUUtCZ1FDMWJVUTFxb0hwbHkvQjBEVEFCQjc4UGk3TG1KQWFzdVRSCnJVRHlMWWhzak9RR0p5cmF3SUJYRjkweHJma3FrTmlMZjBPSlcvWjNWeUFTdys0WmlzSkFwbGN0TU5HclFlamcKTy83REthZkZzTldJMElRQ2UyYUlISVlMbWcrU2ZFNnhlWU5kak5ZeEtmTUtpQWQzZW5TeE9uSU12T0lscU1pNwpKTWlmU3dVMjB3S0JnRVArbXY3UFRzZXRCdVMwOXJRTDgxcERSOWJTMmw2cWVKNXhFazZkWnNVMVkwQ2UzdnlwCll0eWxsVmMwMWZ4ZVpyQjVGR1pjZldrZmd4VVF3T2wrb2hDeEFlbjFGY09xMVJqeGFLWFNOQ3QwQnh6ajE4NTIKMkc4R2pDMkNyRlBhUUExWnkwK3NFVUtEMFRpRFcyVm1nRmFMRkNVblFNYW5UNXovOHVkMEdFcDlBb0dBTVFzYwppVFZTY1FiQmppN3VVNG5KcG41WXdBaTV5NzNZUlNZRWpITHFrZzEwQm9YSCsrSlZ6elZRUWdHNWZWd3liV00xCnFvZ0ZsRFVsSW0xOGk4TUt4OWN2Y2JQa3VkclRUT3BxNys3dXYyNFNDeTN5d1lrQ0tvRXJheTkyVGk3MFJ0MkcKT1YrODl3VlVBZURMdyt5Q1p2Wlpwai9aRWowU0ppVEhadWdzdktrQ2dZQmlYTUxXZkpnTnRSTytURDR6T091RQorZ1dIM2JvZlNXcjFCeGJaOHdLdC8xVUZLdU9QaXdqNUJMUWpoZnpMbS9IeU5RYnhGNVNXQXNCL3BBTUF5bnFqCnZ6MVEvSnUzZi9PWkxtdGE2OFRCcUdsZjRzaGpZK2dkaUZzYmtBRkdIbUlvbGFvMHZhcXdvNVN4S3Q2RWVoeTIKRi8yR0dZMTI3Nm1PUzZWcVZMaml2Zz09Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
     assertions:
       - type: haproxy_valid
         description: HAProxy configuration must be syntactically valid
@@ -3796,8 +3733,8 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "bind \\*:443"
-        description: TCP frontend must bind to port 443
+        pattern: "bind \\*:8443"
+        description: TCP frontend must bind to port 8443
 
       - type: contains
         target: haproxy.cfg
@@ -3836,13 +3773,13 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "frontend ssl-https"
+        pattern: "frontend https"
         description: Must generate HTTPS frontend on unix socket
 
       - type: contains
         target: haproxy.cfg
-        pattern: "bind unix@/var/run/ssl-frontend\\.sock accept-proxy"
-        description: HTTPS frontend must accept PROXY protocol
+        pattern: "bind unix@/var/run/ssl-frontend\\.sock ssl crt .*/ssl/ alpn h2,http/1\\.1 accept-proxy"
+        description: HTTPS frontend must terminate SSL and accept PROXY protocol
 
   test-ssl-passthrough-no-annotation:
     description: No SSL passthrough frontends when annotation not present
@@ -3889,6 +3826,16 @@ validationTests:
           ports:
             - port: 8080
               protocol: TCP
+      secrets:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: default-ssl-cert
+            namespace: haproxy-template-ic
+          type: kubernetes.io/tls
+          data:
+            tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURPRENDQWlDZ0F3SUJBZ0lVZWhzTG4zZXdrWXYzcDArb0RRREp5clNVeUVJd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0dERVdNQlFHQTFVRUF3d05LaTVsZUdGdGNHeGxMbU52YlRBZUZ3MHlOVEV4TVRneU1USTJNalphRncweQpOakV4TVRneU1USTJNalphTUJneEZqQVVCZ05WQkFNTURTb3VaWGhoYlhCc1pTNWpiMjB3Z2dFaU1BMEdDU3FHClNJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUNISGNYaW16Kys3U0FBSkFpOEloTWNyQ2VDWW9PaWRXNW4KS3BHbTE0NjNyTU0vSnJ0YmtlajdlK1kwYWVwL0xyTUlPT2ZSVGpWTEo5RVcrdFFuQWJGajVzcHJ0WWtFMkdvNwpWU0c3aXh5L2VYcTQ5VFdRd0E4YTJkT2dJQ3daTWM3OGlZMGI5T2tQc3MxUUJxajNMbSsvV3FDOTNzSU1Xc3VrCkZqZW5xdEp1Y2ZhdzZ4VUc2YXZXVE15WUtMenB4SGtEbUt6dEJodlJDMjhoOVZNSytDZzJTeXpyWUhOQkJWRSsKZlF3NCtxdWZFRi8zT0sxVnQvL1BJcWpGclhXd3FFajRJRTMvMW0wcVZJMWtzTnFvSW5hR2NUTzJDWjBzT29LWApsUkJuSkZwc1ZzcUk0SU9uMHNHYTQ4WFFIbDJFR3o4STZuVzVMS3dOcUg0eUlaTWt3VkhYQWdNQkFBR2plakI0Ck1CMEdBMVVkRGdRV0JCU2tQZ0crUEFSVG5vdmRpem45RHhISldYNXNJREFmQmdOVkhTTUVHREFXZ0JTa1BnRysKUEFSVG5vdmRpem45RHhISldYNXNJREFQQmdOVkhSTUJBZjhFQlRBREFRSC9NQ1VHQTFVZEVRUWVNQnlDRFNvdQpaWGhoYlhCc1pTNWpiMjJDQzJWNFlXMXdiR1V1WTI5dE1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQkFRQVJ0SFFCCnA2NFNJb0hWbWFMTldtVy9nNE9JdE4rTGFCQUp3VDZtR0ZGWEtGdkxEVm5aSkdKS20xMmI2QzRaUmRCM3dteXIKTFV0MTYyeDIzcjRUdy9LNytFQ1NuajFUcVlyM25qR0JlRGRHV3ZPZkpwSTBWMFZWNm9CdkxPNUdGN3cxd1MvbApaeWs0R1VQamJ5TVpiRElTWUJnYk1xU1lTbzJ1eHpKMW9CMTRxaE9uS2lWYUNJUzUwZ2FVZ2Zhd2VlMndPT2tQCktrUG9BUUlya2hTZGlXOVpsSWt3ZksrTWd3Q2IwbWp2M05NTy9wYWxnc2Y0SGpLVy8wTnlkVDZZRXA2eXhES1IKMmxGTHEybDJRZjgvcEp0MFlUaXdPMjVSNTV0S2k2UFRjUkFmRjcrMzdEN3B2TlNaaW53V0d0dkJrRytZdjN2agppZ1oxbGxOTlN4T2VDNjVTCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+            tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQW9JQkFRQ0hIY1hpbXorKzdTQUEKSkFpOEloTWNyQ2VDWW9PaWRXNW5LcEdtMTQ2M3JNTS9KcnRia2VqN2UrWTBhZXAvTHJNSU9PZlJUalZMSjlFVwordFFuQWJGajVzcHJ0WWtFMkdvN1ZTRzdpeHkvZVhxNDlUV1F3QThhMmRPZ0lDd1pNYzc4aVkwYjlPa1BzczFRCkJxajNMbSsvV3FDOTNzSU1Xc3VrRmplbnF0SnVjZmF3NnhVRzZhdldUTXlZS0x6cHhIa0RtS3p0Qmh2UkMyOGgKOVZNSytDZzJTeXpyWUhOQkJWRStmUXc0K3F1ZkVGLzNPSzFWdC8vUElxakZyWFd3cUVqNElFMy8xbTBxVkkxawpzTnFvSW5hR2NUTzJDWjBzT29LWGxSQm5KRnBzVnNxSTRJT24wc0dhNDhYUUhsMkVHejhJNm5XNUxLd05xSDR5CklaTWt3VkhYQWdNQkFBRUNnZ0VBS0NJNVZhcU1vRDhaK3NDNVVYeURsY2d6QWlFVi9Zc0pESjdSM2E5NGhtbE0KSTNWelFHdFNPMlRkaDZNUVVzL0J3UWI2SUtzczNGS0s0bHNGNmtJditUOGowQ04vZkE5MldvSmFmelQraUlkaQpZdzcrNXF5TnNBbVV1U0xsUm1TTG1XcVlIZjQ4dmZ0N3piSDB2VnN2T1RVSHV1NHdVSEFsdmVzVmcvbVRBTmZ0Cmk4eWp0UWExMWxFZEhiZUc0NVEya1dkRGdmc0hSaENwKzFaK3YyYkdnYllzY25BdGNlSjJxTnZGU0Zoc3REakQKNXhWMzFpUjBXRnNITmVoU0FyalZNSDk3QldGempPa1RxdFhLOUgvODJFaHIzNzlzVGNCQU5FSnphMENMdnBQMgpHaTBmS0M3R3FOeElXM1oweGVlY0tMVE1qRHExUjk0c2tkdUk2MlVjUFFLQmdRQytwM1VYRHhsMFF3OHdTaFFPCkFUMzJYbE9qQktzREN3c21KUzZaeTlCbjRNKzdKdWs1VjQvL04xM0drTDVVUm5BcWxQMWFzQ1A4bDhPdG9oR0cKOTJ0TUdkVldvdjhrbVpFVzRzNW9mOForZHBwc09XWjlJY3licG5Ec2tXMzdvQTFtNE1maUJydzRMWVJZcmlZTwo4RUlJOC9oc1ZxNEVaMnRhRlFHbHQwcmViUUtCZ1FDMWJVUTFxb0hwbHkvQjBEVEFCQjc4UGk3TG1KQWFzdVRSCnJVRHlMWWhzak9RR0p5cmF3SUJYRjkweHJma3FrTmlMZjBPSlcvWjNWeUFTdys0WmlzSkFwbGN0TU5HclFlamcKTy83REthZkZzTldJMElRQ2UyYUlISVlMbWcrU2ZFNnhlWU5kak5ZeEtmTUtpQWQzZW5TeE9uSU12T0lscU1pNwpKTWlmU3dVMjB3S0JnRVArbXY3UFRzZXRCdVMwOXJRTDgxcERSOWJTMmw2cWVKNXhFazZkWnNVMVkwQ2UzdnlwCll0eWxsVmMwMWZ4ZVpyQjVGR1pjZldrZmd4VVF3T2wrb2hDeEFlbjFGY09xMVJqeGFLWFNOQ3QwQnh6ajE4NTIKMkc4R2pDMkNyRlBhUUExWnkwK3NFVUtEMFRpRFcyVm1nRmFMRkNVblFNYW5UNXovOHVkMEdFcDlBb0dBTVFzYwppVFZTY1FiQmppN3VVNG5KcG41WXdBaTV5NzNZUlNZRWpITHFrZzEwQm9YSCsrSlZ6elZRUWdHNWZWd3liV00xCnFvZ0ZsRFVsSW0xOGk4TUt4OWN2Y2JQa3VkclRUT3BxNys3dXYyNFNDeTN5d1lrQ0tvRXJheTkyVGk3MFJ0MkcKT1YrODl3VlVBZURMdyt5Q1p2Wlpwai9aRWowU0ppVEhadWdzdktrQ2dZQmlYTUxXZkpnTnRSTytURDR6T091RQorZ1dIM2JvZlNXcjFCeGJaOHdLdC8xVUZLdU9QaXdqNUJMUWpoZnpMbS9IeU5RYnhGNVNXQXNCL3BBTUF5bnFqCnZ6MVEvSnUzZi9PWkxtdGE2OFRCcUdsZjRzaGpZK2dkaUZzYmtBRkdIbUlvbGFvMHZhcXdvNVN4S3Q2RWVoeTIKRi8yR0dZMTI3Nm1PUzZWcVZMaml2Zz09Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
     assertions:
       - type: haproxy_valid
         description: HAProxy configuration must be syntactically valid
@@ -3898,10 +3845,10 @@ validationTests:
         pattern: "frontend ssl-tcp"
         description: Must NOT generate TCP frontend when no passthrough annotation
 
-      - type: not_contains
+      - type: contains
         target: haproxy.cfg
-        pattern: "frontend ssl-https"
-        description: Must NOT generate HTTPS frontend when no passthrough annotation
+        pattern: "bind \\*:8443 ssl"
+        description: HTTPS frontend must bind to regular port when no passthrough
 
       - type: not_contains
         target: haproxy.cfg

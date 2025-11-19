@@ -606,8 +606,9 @@ wait_for_services_ready() {
             # Configuration must be deployed after Ingress creation
             if [[ $deployed_epoch -gt $ingress_created_epoch ]]; then
                 # Also verify the configuration actually contains backends
+                # Use // "" to convert null to empty string before grep
                 local backend_count=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
-                    jq -r '.items[0].spec.content' | grep -c "^backend.*echo" || echo 0)
+                    jq -r '.items[0].spec.content // ""' | grep -c "^backend.*echo" 2>/dev/null || echo 0)
 
                 debug "Configuration has $backend_count echo backends"
 

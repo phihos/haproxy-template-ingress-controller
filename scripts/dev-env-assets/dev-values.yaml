@@ -20,6 +20,12 @@ controller:
       extraContext:
         debug: true  # Enable introspection headers for development
 
+# HAProxy Service - expose externally via LoadBalancer for dev/testing
+haproxyService:
+  type: LoadBalancer
+  # kind cluster maps LoadBalancer services to localhost
+  # This makes HAProxy accessible at http://localhost and https://localhost
+
 # Resource limits for development (allow more flexibility)
 resources:
   limits:

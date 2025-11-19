@@ -577,6 +577,95 @@ networkPolicy:
       - cidr: 0.0.0.0/0  # kind requires broader access
 ```
 
+## Service Architecture
+
+The chart deploys two separate Kubernetes Services:
+
+### Controller Service
+
+Exposes the controller's operational endpoints:
+- **healthz** (8080): Liveness and readiness probes
+- **metrics** (9090): Prometheus metrics endpoint
+
+This service is for cluster-internal monitoring only. Default configuration:
+
+```yaml
+service:
+  type: ClusterIP
+  healthzPort: 8080
+  metricsPort: 9090
+```
+
+### HAProxy Service
+
+Exposes the HAProxy load balancer for ingress traffic:
+- **http** (80): HTTP traffic routing
+- **https** (443): HTTPS/TLS traffic routing
+
+This service routes external traffic to HAProxy pods. You can configure it based on your deployment environment:
+
+**Development (kind cluster)**:
+
+```yaml
+haproxyService:
+  enabled: true
+  type: LoadBalancer  # kind maps to localhost
+```
+
+**Production (cloud provider)**:
+
+```yaml
+haproxyService:
+  enabled: true
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+  externalTrafficPolicy: Local  # Preserve client IPs
+```
+
+**Production (NodePort for external LB)**:
+
+```yaml
+haproxyService:
+  enabled: true
+  type: NodePort
+  httpNodePort: 30080
+  httpsNodePort: 30443
+```
+
+**Production (managed externally)**:
+
+```yaml
+haproxyService:
+  enabled: false  # Manage HAProxy Service separately
+```
+
+### Configuration Options
+
+The HAProxy Service supports standard Kubernetes Service configuration:
+
+```yaml
+haproxyService:
+  enabled: true
+  type: ClusterIP  # ClusterIP, NodePort, or LoadBalancer
+  httpPort: 80
+  httpsPort: 443
+  httpNodePort: 30080  # Optional, only for NodePort type
+  httpsNodePort: 30443  # Optional, only for NodePort type
+  loadBalancerIP: ""  # Optional, for LoadBalancer type
+  externalTrafficPolicy: ""  # Optional: Local or Cluster
+  annotations: {}  # Cloud provider annotations
+  labels: {}  # Additional service labels
+```
+
+### Why Separate Services?
+
+Separating the controller and HAProxy services provides:
+- **Clear separation of concerns**: Operational metrics vs data plane traffic
+- **Independent scaling**: Controller runs as single replica, HAProxy scales independently
+- **Security**: Controller endpoints remain internal, only HAProxy exposed externally
+- **Flexibility**: Different service types for different purposes (ClusterIP for controller, LoadBalancer for HAProxy)
+
 ## HAProxy Pod Requirements
 
 The controller manages HAProxy pods deployed separately. Each HAProxy pod must:
@@ -693,6 +782,213 @@ spec:
       - name: haproxy-config
         emptyDir: {}
 ```
+
+## SSL Certificate Configuration
+
+The controller requires a default SSL certificate for HTTPS traffic. The certificate must be provided as a Kubernetes TLS Secret before HAProxy can serve HTTPS traffic.
+
+### Quick Start (Development/Testing)
+
+For local development and testing, use the provided helper script to generate a self-signed certificate:
+
+```bash
+# Generate wildcard certificate for *.example.com
+./scripts/generate-dev-ssl-cert.sh
+
+# Or specify custom namespace and secret name
+./scripts/generate-dev-ssl-cert.sh my-namespace my-cert-secret
+```
+
+This creates a self-signed certificate valid for 365 days.
+
+### Production Deployment
+
+For production, use **cert-manager** (recommended) or provide your own certificate:
+
+#### Option 1: Using cert-manager (Recommended)
+
+Install cert-manager and create a Certificate resource:
+
+```bash
+# Install cert-manager (if not already installed)
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+
+# Create an Issuer or ClusterIssuer (example with Let's Encrypt)
+kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: your-email@example.com
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          class: haproxy
+EOF
+
+# Create Certificate resource for default SSL
+kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: default-ssl-cert
+  namespace: haproxy-template-ic
+spec:
+  secretName: default-ssl-cert
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - '*.example.com'
+    - 'example.com'
+EOF
+```
+
+The certificate will be automatically created, renewed, and stored in the Secret `default-ssl-cert`.
+
+#### Option 2: Manual Certificate
+
+Create a TLS Secret manually with your own certificate:
+
+```bash
+kubectl create secret tls default-ssl-cert \
+  --cert=path/to/tls.crt \
+  --key=path/to/tls.key \
+  --namespace=haproxy-template-ic
+```
+
+#### Option 3: Inline Certificate (Testing Only)
+
+**WARNING**: Not recommended for production. Embeds secrets in Helm values.
+
+```yaml
+controller:
+  defaultSSLCertificate:
+    create: true
+    cert: |
+      -----BEGIN CERTIFICATE-----
+      MIIDXTCCAkWgAwIBAgIJAKJ...
+      -----END CERTIFICATE-----
+    key: |
+      -----BEGIN PRIVATE KEY-----
+      MIIEvQIBADANBgkqhkiG9w...
+      -----END PRIVATE KEY-----
+```
+
+### Configuration
+
+Configure the SSL certificate in `values.yaml`:
+
+```yaml
+controller:
+  defaultSSLCertificate:
+    # Enable default SSL certificate requirement
+    enabled: true
+
+    # Name of the TLS Secret (must exist in cluster)
+    secretName: "default-ssl-cert"
+
+    # Namespace of the Secret (defaults to Release.Namespace)
+    namespace: ""
+
+    # Advanced: Create Secret from inline cert/key (testing only)
+    create: false
+    # cert: |
+    #   -----BEGIN CERTIFICATE-----
+    #   ...
+    # key: |
+    #   -----BEGIN PRIVATE KEY-----
+    #   ...
+```
+
+### Custom Certificate Names
+
+To use a different Secret name or namespace:
+
+```yaml
+controller:
+  defaultSSLCertificate:
+    secretName: "my-wildcard-cert"
+    namespace: "certificates"
+```
+
+The controller will reference the Secret at `certificates/my-wildcard-cert`.
+
+### TLS Secret Format
+
+The Secret must be of type `kubernetes.io/tls` and contain two keys:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: default-ssl-cert
+  namespace: haproxy-template-ic
+type: kubernetes.io/tls
+data:
+  tls.crt: LS0tLS1CRUdJTi... # Base64-encoded certificate
+  tls.key: LS0tLS1CRUdJTi... # Base64-encoded private key
+```
+
+### Disabling HTTPS
+
+To run in HTTP-only mode (not recommended):
+
+```yaml
+controller:
+  defaultSSLCertificate:
+    enabled: false
+```
+
+Note: This disables HTTPS support entirely. HAProxy will only serve HTTP traffic.
+
+### Certificate Rotation
+
+**With cert-manager**: Certificates are automatically renewed before expiration.
+
+**Manual certificates**: You must update the Secret with a new certificate before the old one expires:
+
+```bash
+# Update Secret with new certificate
+kubectl create secret tls default-ssl-cert \
+  --cert=new-tls.crt \
+  --key=new-tls.key \
+  --namespace=haproxy-template-ic \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The controller watches the Secret and will automatically deploy the updated certificate to HAProxy.
+
+### Troubleshooting
+
+**"Secret not found" errors:**
+
+Check that the Secret exists in the correct namespace:
+
+```bash
+kubectl get secret default-ssl-cert -n haproxy-template-ic
+```
+
+**HAProxy fails to start with SSL errors:**
+
+Verify the certificate and key are valid:
+
+```bash
+# Extract and verify certificate
+kubectl get secret default-ssl-cert -n haproxy-template-ic -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -text -noout
+
+# Verify key
+kubectl get secret default-ssl-cert -n haproxy-template-ic -o jsonpath='{.data.tls\.key}' | base64 -d | openssl rsa -check -noout
+```
+
+**Certificate not being updated:**
+
+The controller watches Secrets with `store: on-demand`. Changes are detected automatically, but HAProxy deployment follows the configured drift prevention interval (default: 60s).
 
 ## Ingress Annotations
 

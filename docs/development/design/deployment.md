@@ -16,6 +16,8 @@ graph TB
 
             CM[ConfigMap<br/>haproxy-config<br/>Templates & Settings]
 
+            CTRL_SVC[Controller Service<br/>ClusterIP<br/>:8080 healthz<br/>:9090 metrics]
+
             subgraph "HAProxy StatefulSet"
                 subgraph "haproxy-0"
                     HAP1[HAProxy Container<br/>:80, :443, :8404]
@@ -33,7 +35,7 @@ graph TB
                 end
             end
 
-            SVC[Service<br/>haproxy<br/>LoadBalancer/NodePort]
+            HAP_SVC[HAProxy Service<br/>LoadBalancer/NodePort<br/>:80 http<br/>:443 https]
         end
 
         subgraph "Application Namespace"
@@ -48,11 +50,12 @@ graph TB
         end
     end
 
-    USERS[External Users] --> SVC
-    SVC --> HAP1
-    SVC --> HAP2
-    SVC --> HAPN
+    USERS[External Users] --> HAP_SVC
+    HAP_SVC --> HAP1
+    HAP_SVC --> HAP2
+    HAP_SVC --> HAPN
 
+    CTRL_SVC --> CTRL_POD
     API --> CTRL_POD
     CM --> CTRL_POD
     ING -.Watch.-> CTRL_POD
@@ -70,8 +73,8 @@ graph TB
     HAP2 --> PODS
     HAPN --> PODS
 
-    CTRL_POD -.Metrics.-> PROM
-    CTRL_POD -.Traces.-> JAEGER
+    CTRL_SVC -.Metrics.-> PROM
+    CTRL_SVC -.Health.-> PROM
 
     style CTRL_POD fill:#4CAF50
     style HAP1 fill:#FF9800
@@ -86,14 +89,24 @@ graph TB
    - Watches Kubernetes resources cluster-wide
    - Renders templates and validates configurations
    - Deploys to HAProxy instances via Dataplane API
-   - Exposes metrics and health endpoints
+   - Exposes metrics and health endpoints via Controller Service
 
-2. **HAProxy StatefulSet**: Multiple replicas for high availability
+2. **Controller Service**: ClusterIP service for operational endpoints
+   - Port 8080: Health checks (liveness/readiness probes)
+   - Port 9090: Prometheus metrics
+   - Internal use only (not exposed externally)
+
+3. **HAProxy StatefulSet**: Multiple replicas for high availability
    - Each pod runs HAProxy + Dataplane API sidecar
    - Service selector targets HAProxy pods for traffic routing
    - Scales horizontally based on load
 
-3. **ConfigMap**: Contains controller configuration
+4. **HAProxy Service**: LoadBalancer/NodePort service for ingress traffic
+   - Port 80: HTTP traffic routing
+   - Port 443: HTTPS/TLS traffic routing
+   - Exposes HAProxy pods externally for user traffic
+
+5. **ConfigMap**: Contains controller configuration
    - Template definitions (haproxy.cfg, maps, certificates)
    - Watched resource types and indexing configuration
    - Rendering and deployment settings
@@ -152,11 +165,12 @@ graph LR
     end
 
     subgraph "Kubernetes Cluster Network"
-        LB[LoadBalancer Service<br/>External IP]
+        HAP_LB[HAProxy Service<br/>LoadBalancer<br/>External IP]
+        CTRL_SVC_NET[Controller Service<br/>ClusterIP<br/>10.96.0.10]
 
         subgraph "Pod Network"
-            subgraph "Controller"
-                CTRL[Controller<br/>ClusterIP only]
+            subgraph "Controller Pod<br/>10.0.0.10"
+                CTRL[Controller Process<br/>:8080, :9090]
             end
 
             subgraph "HAProxy Instances"
@@ -178,11 +192,15 @@ graph LR
         end
 
         KUBE_API[Kubernetes API<br/>443]
+        PROM_NET[Prometheus]
     end
 
-    INET --> LB
-    LB --> HAP1
-    LB --> HAP2
+    INET --> HAP_LB
+    HAP_LB --> HAP1
+    HAP_LB --> HAP2
+
+    CTRL_SVC_NET --> CTRL
+    PROM_NET --> CTRL_SVC_NET
 
     CTRL --> KUBE_API
     CTRL --> DP1
@@ -199,15 +217,18 @@ graph LR
     style CTRL fill:#4CAF50
     style HAP1 fill:#FF9800
     style HAP2 fill:#FF9800
-    style LB fill:#2196F3
+    style HAP_LB fill:#2196F3
+    style CTRL_SVC_NET fill:#4CAF50
 ```
 
 **Network Flow:**
 
-1. **Ingress Traffic**: Internet → LoadBalancer → HAProxy Pods → Application Pods
+1. **Ingress Traffic**: Internet → HAProxy Service (LoadBalancer) → HAProxy Pods → Application Pods
 2. **Control Plane**: Controller → Kubernetes API (resource watching)
 3. **Configuration Deployment**: Controller → Dataplane API endpoints (HTTP)
 4. **Service Discovery**: Controller watches HAProxy pods via Kubernetes API
+5. **Monitoring**: Prometheus → Controller Service (ClusterIP) → Controller Pod (metrics endpoint)
+6. **Health Checks**: Kubernetes → Controller Service → Controller Pod (healthz endpoint)
 
 **Scaling Considerations:**
 

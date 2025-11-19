@@ -48,6 +48,76 @@ watchedResources:
     indexBy: ["metadata.namespace", "metadata.labels.kubernetes\\.io/service-name"]
 
 templateSnippets:
+  features-gateway-ssl-passthrough:
+    priority: 100
+    template: |
+      {#-
+        Gateway API SSL Passthrough Feature Registration
+
+        Purpose:
+          Scans Gateway API resources (HTTPRoute, TLSRoute) to detect SSL passthrough
+          needs and registers backends with the global feature registry.
+
+        Mechanism:
+          Checks for extension references that indicate SSL passthrough requirement.
+          The exact mechanism depends on how SSL passthrough is expressed in Gateway API:
+          - ExtensionRef in HTTPRoute.spec.rules[].filters
+          - TLSRoute resources (future support)
+
+        Registration Format:
+          {
+            'name': 'ssl-passthrough-<namespace>-<name>',
+            'sni': '<hostname>',
+            'namespace': '<namespace>',
+            'route': '<name>'
+          }
+      -#}
+      {%- set ssl_passthrough_gateway_analysis = namespace(backends=[]) %}
+      {%- compute_once ssl_passthrough_gateway_analysis %}
+        {#- Scan HTTPRoutes for SSL passthrough extension refs #}
+        {%- set ns = namespace(seen="") %}
+        {%- for httproute in resources.httproutes.List() %}
+          {%- set has_ssl_passthrough = false %}
+          {#- Check if any rule has SSL passthrough filter #}
+          {%- for rule in (httproute.spec.rules | default([])) %}
+            {%- for filter in (rule.filters | default([])) %}
+              {%- if filter.type == "ExtensionRef" %}
+                {%- if filter.extensionRef.kind == "SSLPassthrough" %}
+                  {%- set has_ssl_passthrough = true %}
+                {%- elif filter.extensionRef.name and (filter.extensionRef.name | lower | regex_search("ssl.*passthrough")) %}
+                  {%- set has_ssl_passthrough = true %}
+                {%- endif %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endfor %}
+
+          {%- if has_ssl_passthrough %}
+            {#- Register each hostname as a passthrough backend #}
+            {%- for hostname in (httproute.spec.hostnames | default([])) %}
+              {%- if ("|" ~ hostname ~ "|") not in ns.seen %}
+                {%- set ns.seen = ns.seen ~ "|" ~ hostname ~ "|" %}
+                {%- set backend_name = "ssl-passthrough-" ~ httproute.metadata.namespace ~ "-" ~ httproute.metadata.name %}
+                {%- set ssl_passthrough_gateway_analysis.backends =
+                    ssl_passthrough_gateway_analysis.backends.append({
+                      'name': backend_name,
+                      'sni': hostname,
+                      'namespace': httproute.metadata.namespace,
+                      'route': httproute.metadata.name,
+                      'route_type': 'httproute'
+                    }) %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+        {%- endfor %}
+
+        {#- TODO: Add TLSRoute support when available #}
+        {#- TLSRoute is the natural Gateway API resource for SSL passthrough #}
+      {%- endcompute_once %}
+
+      {#- Register backends with global feature registry #}
+      {%- set global_features.ssl_passthrough_backends =
+          global_features.ssl_passthrough_backends + ssl_passthrough_gateway_analysis.backends %}
+
   # Route analysis system - collects and analyzes all routes for conflicts
   util-analyze-routes:
     template: |
@@ -325,6 +395,99 @@ templateSnippets:
       {{ generate_gateway_backends(resources.httproutes.List(), "", ns) -}}
       {#- GRPCRoute backends (HTTP/2 protocol) #}
       {{- generate_gateway_backends(resources.grpcroutes.List(), "h2", ns) -}}
+
+  backends-gateway-ssl-passthrough:
+    priority: 501
+    template: |
+      {#-
+        Gateway API SSL Passthrough Backends
+
+        Purpose:
+          TCP backends for SSL passthrough from Gateway API resources.
+          Forwards encrypted traffic directly to pods without SSL termination.
+          Reuses cached analysis from features-gateway-ssl-passthrough.
+
+        Supported Resources:
+          - HTTPRoute with ExtensionRef filters indicating SSL passthrough
+          - TLSRoute (future support)
+
+        Generated HAProxy Config:
+          backend ssl-passthrough-<namespace>-<name>
+            mode tcp
+            server SRV_1 <pod-ip>:<pod-port> check
+      -#}
+      {#- Reuse cached analysis from features phase via compute_once #}
+      {%- set ssl_passthrough_gateway_analysis = namespace(backends=[]) %}
+      {%- compute_once ssl_passthrough_gateway_analysis %}
+        {#- Scan HTTPRoutes for SSL passthrough extension refs #}
+        {%- set ns = namespace(seen="") %}
+        {%- for httproute in resources.httproutes.List() %}
+          {%- set has_ssl_passthrough = false %}
+          {#- Check if any rule has SSL passthrough filter #}
+          {%- for rule in (httproute.spec.rules | default([])) %}
+            {%- for filter in (rule.filters | default([])) %}
+              {%- if filter.type == "ExtensionRef" %}
+                {%- if filter.extensionRef.kind == "SSLPassthrough" %}
+                  {%- set has_ssl_passthrough = true %}
+                {%- elif filter.extensionRef.name and (filter.extensionRef.name | lower | regex_search("ssl.*passthrough")) %}
+                  {%- set has_ssl_passthrough = true %}
+                {%- endif %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endfor %}
+
+          {%- if has_ssl_passthrough %}
+            {#- Register each hostname as a passthrough backend #}
+            {%- for hostname in (httproute.spec.hostnames | default([])) %}
+              {%- if ("|" ~ hostname ~ "|") not in ns.seen %}
+                {%- set ns.seen = ns.seen ~ "|" ~ hostname ~ "|" %}
+                {%- set backend_name = "ssl-passthrough-" ~ httproute.metadata.namespace ~ "-" ~ httproute.metadata.name %}
+                {%- set ssl_passthrough_gateway_analysis.backends =
+                    ssl_passthrough_gateway_analysis.backends.append({
+                      'name': backend_name,
+                      'sni': hostname,
+                      'namespace': httproute.metadata.namespace,
+                      'route': httproute.metadata.name,
+                      'route_type': 'httproute'
+                    }) %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+        {%- endfor %}
+      {%- endcompute_once %}
+
+      {%- set ns = namespace(processed="") %}
+      {%- for backend_info in ssl_passthrough_gateway_analysis.backends %}
+        {%- set route_key = backend_info.namespace ~ "/" ~ backend_info.route %}
+        {%- if ("|" ~ route_key ~ "|") not in ns.processed %}
+          {%- set ns.processed = ns.processed ~ "|" ~ route_key ~ "|" %}
+          {#- Get the actual HTTPRoute resource to extract service details #}
+          {%- if backend_info.route_type == "httproute" %}
+            {%- set route = resources.httproutes.GetSingle(backend_info.namespace, backend_info.route) %}
+            {%- set ns_backend = namespace(generated=false) %}
+            {%- for rule in (route.spec.rules | default([])) %}
+              {%- if not ns_backend.generated %}
+                {%- for backendRef in (rule.backendRefs | default([])) %}
+                  {%- if not ns_backend.generated %}
+                    {%- set service_name = backendRef.name %}
+                    {%- set port = backendRef.port | default(80) %}
+      # gateway/backends-gateway-ssl-passthrough
+
+      backend {{ backend_info.name }}
+          mode tcp
+          balance roundrobin
+                    {%- filter indent(8, first=False) -%}
+                    {%- include "util-backend-servers" -%}
+                    {%- endfilter %}
+                    {%- set ns_backend.generated = true %}
+                  {%- endif %}
+                {%- endfor %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor %}
+
   util-path-map-entry-gateway:
     template: |
       {#- Generate HTTPRoute path matching map entries with qualifiers #}
