@@ -488,4 +488,6 @@ validationTests:
           data:
             tls.crt: *test_tls_crt
             tls.key: *test_tls_key
-    assertions: []
+    assertions:
+      - type: haproxy_valid
+        description: Global fixtures provide default SSL certificates (validation only, no specific test)
