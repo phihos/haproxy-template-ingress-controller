@@ -15,3 +15,12 @@ sources:
   - https://github.com/phihos/haproxy-template-ingress-controller
 maintainers:
   - name: phihos
+annotations:
+  # Document all component images (Artifact Hub standard)
+  images: |
+    - name: controller
+      image: ghcr.io/phihos/haproxy-template-ic:0.1.0
+    - name: haproxy
+      image: haproxytech/haproxy-debian:3.2
+  # Minimum HAProxy version requirement
+  haproxy.org/minimum-version: "3.0"

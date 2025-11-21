@@ -1,4 +1,5 @@
-{{- if .Values.haproxyService.enabled }}
+{{- if .Values.haproxy.enabled }}
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -6,37 +7,55 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "haproxy-template-ic.labels" . | nindent 4 }}
-    app.kubernetes.io/component: haproxy
-    {{- with .Values.haproxyService.labels }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
-  {{- with .Values.haproxyService.annotations }}
+    app.kubernetes.io/component: loadbalancer
+  {{- with .Values.haproxy.service.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  type: {{ .Values.haproxyService.type }}
-  {{- if and (eq .Values.haproxyService.type "LoadBalancer") .Values.haproxyService.loadBalancerIP }}
-  loadBalancerIP: {{ .Values.haproxyService.loadBalancerIP }}
-  {{- end }}
-  {{- if .Values.haproxyService.externalTrafficPolicy }}
-  externalTrafficPolicy: {{ .Values.haproxyService.externalTrafficPolicy }}
-  {{- end }}
-  ports:
-    - port: {{ .Values.haproxyService.httpPort }}
-      targetPort: http
-      protocol: TCP
-      name: http
-      {{- if and (eq .Values.haproxyService.type "NodePort") .Values.haproxyService.httpNodePort }}
-      nodePort: {{ .Values.haproxyService.httpNodePort }}
-      {{- end }}
-    - port: {{ .Values.haproxyService.httpsPort }}
-      targetPort: https
-      protocol: TCP
-      name: https
-      {{- if and (eq .Values.haproxyService.type "NodePort") .Values.haproxyService.httpsNodePort }}
-      nodePort: {{ .Values.haproxyService.httpsNodePort }}
-      {{- end }}
+  type: {{ .Values.haproxy.service.type }}
   selector:
-    {{- toYaml .Values.controller.config.podSelector.matchLabels | nindent 4 }}
+    {{- include "haproxy-template-ic.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: loadbalancer
+  ports:
+    - name: http
+      port: {{ .Values.haproxy.service.http.port }}
+      targetPort: {{ .Values.haproxy.service.http.targetPort }}
+      protocol: TCP
+      {{- if eq .Values.haproxy.service.type "NodePort" }}
+      nodePort: {{ .Values.haproxy.service.http.nodePort }}
+      {{- end }}
+    - name: https
+      port: {{ .Values.haproxy.service.https.port }}
+      targetPort: {{ .Values.haproxy.service.https.targetPort }}
+      protocol: TCP
+      {{- if eq .Values.haproxy.service.type "NodePort" }}
+      nodePort: {{ .Values.haproxy.service.https.nodePort }}
+      {{- end }}
+    - name: stats
+      port: {{ .Values.haproxy.service.stats.port }}
+      targetPort: {{ .Values.haproxy.service.stats.targetPort }}
+      protocol: TCP
+      {{- if eq .Values.haproxy.service.type "NodePort" }}
+      nodePort: {{ .Values.haproxy.service.stats.nodePort }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-haproxy-dataplane
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    app.kubernetes.io/component: loadbalancer
+spec:
+  type: {{ .Values.haproxy.dataplane.service.type }}
+  selector:
+    {{- include "haproxy-template-ic.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: loadbalancer
+  ports:
+    - name: dataplane
+      port: {{ .Values.haproxy.dataplane.service.port }}
+      targetPort: 5555
+      protocol: TCP
 {{- end }}

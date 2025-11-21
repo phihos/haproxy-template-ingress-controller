@@ -17,6 +17,7 @@ The HAProxy Template Ingress Controller:
 - Kubernetes 1.19+
 - Helm 3.0+
 - HAProxy pods with Dataplane API sidecars (deployed separately)
+- **HAProxy 3.0 or newer** (template libraries require HAProxy 3.0+ for SSL/TLS features)
 
 ## Installation
 
