@@ -809,6 +809,14 @@ func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error 
 		}
 	}
 
+	// Write CRT-list files
+	for _, crtList := range auxFiles.CRTListFiles {
+		crtListPath := resolveAuxiliaryFilePath(crtList.Path, configDir, paths.SSLCertsDir)
+		if err := writeFileWithDir(crtListPath, crtList.Content, "CRT-list file "+crtList.Path); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

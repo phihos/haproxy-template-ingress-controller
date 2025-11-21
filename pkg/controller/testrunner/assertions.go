@@ -17,6 +17,7 @@ package testrunner
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -432,6 +433,10 @@ func (r *Runner) resolveAuxiliaryFile(target string, auxiliaryFiles *dataplane.A
 		return r.findCertificate(strings.TrimPrefix(target, "cert:"), auxiliaryFiles)
 	}
 
+	if strings.HasPrefix(target, "crt-list:") {
+		return r.findCRTListFile(strings.TrimPrefix(target, "crt-list:"), auxiliaryFiles)
+	}
+
 	return ""
 }
 
@@ -462,13 +467,36 @@ func (r *Runner) findGeneralFile(fileName string, auxiliaryFiles *dataplane.Auxi
 }
 
 // findCertificate searches for a certificate by path.
+// The certName parameter should be just the filename (e.g., "certs.crt-list"),
+// and this method will match it against the basename of the certificate's Path.
 func (r *Runner) findCertificate(certName string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
 	if auxiliaryFiles == nil {
 		return ""
 	}
 	for _, sslCert := range auxiliaryFiles.SSLCertificates {
-		if sslCert.Path == certName {
+		// Extract basename from the absolute path for comparison
+		// sslCert.Path is like "/tmp/.../ssl/certs.crt-list"
+		// certName is like "certs.crt-list"
+		if filepath.Base(sslCert.Path) == certName {
 			return sslCert.Content
+		}
+	}
+	return ""
+}
+
+// findCRTListFile searches for a crt-list file by name.
+// The crtListName parameter should be just the filename (e.g., "certificate-list.txt"),
+// and this method will match it against the basename of the crt-list file's Path.
+func (r *Runner) findCRTListFile(crtListName string, auxiliaryFiles *dataplane.AuxiliaryFiles) string {
+	if auxiliaryFiles == nil {
+		return ""
+	}
+	for _, crtList := range auxiliaryFiles.CRTListFiles {
+		// Extract basename from the absolute path for comparison
+		// crtList.Path is like "/tmp/.../ssl/certificate-list.txt"
+		// crtListName is like "certificate-list.txt"
+		if filepath.Base(crtList.Path) == crtListName {
+			return crtList.Content
 		}
 	}
 	return ""

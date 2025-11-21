@@ -34,29 +34,6 @@ func sanitizeSSLCertName(name string) string {
 	return sanitizedBase + ext
 }
 
-// unsanitizeSSLCertName attempts to reverse the sanitization.
-// This is a best-effort conversion and may not be perfect for all cases.
-// For filenames like "example_com.pem", we assume underscores between
-// word-like segments were originally dots (common for domain names).
-func unsanitizeSSLCertName(name string) string {
-	// Get the file extension
-	ext := filepath.Ext(name)
-	if ext == "" {
-		// No extension, can't reliably unsanitize
-		return name
-	}
-
-	// Get the base name without extension
-	base := strings.TrimSuffix(name, ext)
-
-	// For domain-like patterns (word_word.ext), convert underscores to dots
-	// This heuristic works for common certificate naming patterns
-	unsanitizedBase := strings.ReplaceAll(base, "_", ".")
-
-	// Return unsanitized base + original extension
-	return unsanitizedBase + ext
-}
-
 // GetAllSSLCertificates retrieves all SSL certificate names from the storage.
 // Note: This returns only certificate names, not the certificate contents.
 // Use GetSSLCertificateContent to retrieve the actual certificate contents.
@@ -83,13 +60,14 @@ func (c *DataplaneClient) GetAllSSLCertificates(ctx context.Context) ([]string, 
 		return nil, fmt.Errorf("failed to decode SSL certificates response: %w", err)
 	}
 
-	// Extract and unsanitize certificate names
+	// Extract certificate names (no unsanitization)
+	// Note: We keep names as-is from the API to match how templates generate them.
+	// Templates use namespace_secretname patterns which already contain underscores,
+	// so unsanitizing would incorrectly convert these to dots.
 	names := make([]string, 0, len(apiCerts))
 	for _, apiCert := range apiCerts {
 		if apiCert.StorageName != nil {
-			// Unsanitize the name to restore dots (e.g., "example_com.pem" -> "example.com.pem")
-			unsanitizedName := unsanitizeSSLCertName(*apiCert.StorageName)
-			names = append(names, unsanitizedName)
+			names = append(names, *apiCert.StorageName)
 		}
 	}
 

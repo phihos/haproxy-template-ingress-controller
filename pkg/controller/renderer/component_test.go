@@ -642,3 +642,77 @@ func TestBuildRenderingContext(t *testing.T) {
 	services := servicesWrapper.List()
 	assert.Len(t, services, 1)
 }
+
+// TestPathResolverInitialization tests that the PathResolver is correctly initialized
+// with all required directory paths for the get_path template filter.
+func TestPathResolverInitialization(t *testing.T) {
+	bus := busevents.NewEventBus(100)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	// Create a config with templates that use get_path filter for crt-list
+	cfg := &config.Config{
+		HAProxyConfig: config.HAProxyConfig{
+			Template: `global
+    daemon
+
+frontend test
+    bind *:80
+    bind *:443 ssl crt-list {{ "certificate-list.txt" | get_path("crt-list") }}
+`,
+		},
+		Dataplane: config.DataplaneConfig{
+			MapsDir:           "/etc/haproxy/maps",
+			SSLCertsDir:       "/etc/haproxy/ssl",
+			GeneralStorageDir: "/etc/haproxy/files",
+		},
+	}
+
+	stores := map[string]types.Store{
+		"ingresses": &mockStore{},
+	}
+
+	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
+	require.NoError(t, err)
+
+	// Get the path resolver from the engine
+	// We'll test this through the template rendering since pathResolver is not exported
+	eventChan := bus.Subscribe(50)
+	bus.Start()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go renderer.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
+
+	// Trigger rendering
+	bus.Publish(events.NewReconciliationTriggeredEvent("test"))
+
+	// Wait for rendered event
+	timeout := time.After(1 * time.Second)
+	var renderedEvent *events.TemplateRenderedEvent
+
+	for {
+		select {
+		case event := <-eventChan:
+			if e, ok := event.(*events.TemplateRenderedEvent); ok {
+				renderedEvent = e
+				goto Done
+			}
+		case <-timeout:
+			t.Fatal("Timeout waiting for TemplateRenderedEvent")
+		}
+	}
+
+Done:
+	require.NotNil(t, renderedEvent)
+
+	// CRITICAL: Verify that get_path("crt-list") returns the full path, not just the filename
+	// This is the TDD test that will initially FAIL because CRTListDir is not set
+	assert.Contains(t, renderedEvent.HAProxyConfig, "crt-list /etc/haproxy/ssl/certificate-list.txt",
+		"get_path('crt-list') should return full path with directory prefix")
+
+	// Ensure it doesn't contain just the filename (which is what happens when CRTListDir is empty)
+	assert.NotContains(t, renderedEvent.HAProxyConfig, "crt-list certificate-list.txt",
+		"get_path('crt-list') should not return just the filename without directory")
+}

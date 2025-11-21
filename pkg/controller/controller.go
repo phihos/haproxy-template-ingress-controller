@@ -872,6 +872,7 @@ func setupWebhook(
 	pathResolver := &templating.PathResolver{
 		MapsDir:    cfg.Dataplane.MapsDir,
 		SSLDir:     cfg.Dataplane.SSLCertsDir,
+		CRTListDir: cfg.Dataplane.SSLCertsDir, // CRT-list files stored in SSL directory
 		GeneralDir: cfg.Dataplane.GeneralStorageDir,
 	}
 

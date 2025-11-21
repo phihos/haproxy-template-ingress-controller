@@ -22,7 +22,7 @@ import (
 
 // PathResolver resolves auxiliary file names to absolute paths based on file type.
 // This is used by the get_path filter to automatically construct absolute paths
-// for HAProxy auxiliary files (maps, SSL certificates, general files).
+// for HAProxy auxiliary files (maps, SSL certificates, crt-list files, general files).
 type PathResolver struct {
 	// MapsDir is the absolute path to the HAProxy maps directory.
 	// Default: /etc/haproxy/maps
@@ -31,6 +31,10 @@ type PathResolver struct {
 	// SSLDir is the absolute path to the HAProxy SSL certificates directory.
 	// Default: /etc/haproxy/ssl
 	SSLDir string
+
+	// CRTListDir is the absolute path to the HAProxy crt-list files directory.
+	// Default: /etc/haproxy/ssl (same as SSL certificates)
+	CRTListDir string
 
 	// GeneralDir is the absolute path to the HAProxy general files directory.
 	// Default: /etc/haproxy/general
@@ -42,14 +46,15 @@ type PathResolver struct {
 //
 // Usage in templates:
 //
-//	{{ "host.map" | get_path("map") }}        → /etc/haproxy/maps/host.map
-//	{{ "504.http" | get_path("file") }}       → /etc/haproxy/general/504.http
-//	{{ "cert.pem" | get_path("cert") }}       → /etc/haproxy/ssl/cert.pem
-//	{{ "" | get_path("cert") }}               → /etc/haproxy/ssl (directory only)
+//	{{ "host.map" | get_path("map") }}              → /etc/haproxy/maps/host.map
+//	{{ "504.http" | get_path("file") }}             → /etc/haproxy/general/504.http
+//	{{ "cert.pem" | get_path("cert") }}             → /etc/haproxy/ssl/cert.pem
+//	{{ "certificate-list.txt" | get_path("crt-list") }} → /etc/haproxy/ssl/certificate-list.txt
+//	{{ "" | get_path("cert") }}                     → /etc/haproxy/ssl (directory only)
 //
 // Parameters:
 //   - filename: The base filename (without directory path), or empty string for directory only
-//   - args: Single argument specifying file type: "map", "file", or "cert"
+//   - args: Single argument specifying file type: "map", "file", "cert", or "crt-list"
 //
 // Returns:
 //   - Absolute path to the file, or base directory if filename is empty
@@ -63,7 +68,7 @@ func (pr *PathResolver) GetPath(filename interface{}, args ...interface{}) (inte
 
 	// Validate file type argument is provided
 	if len(args) == 0 {
-		return nil, fmt.Errorf("get_path: file type argument required (\"map\", \"file\", or \"cert\")")
+		return nil, fmt.Errorf("get_path: file type argument required (\"map\", \"file\", \"cert\", or \"crt-list\")")
 	}
 
 	// Extract and validate file type
@@ -82,8 +87,10 @@ func (pr *PathResolver) GetPath(filename interface{}, args ...interface{}) (inte
 		basePath = pr.GeneralDir
 	case "cert":
 		basePath = pr.SSLDir
+	case "crt-list":
+		basePath = pr.CRTListDir
 	default:
-		return nil, fmt.Errorf("get_path: invalid file type %q, must be \"map\", \"file\", or \"cert\"", fileType)
+		return nil, fmt.Errorf("get_path: invalid file type %q, must be \"map\", \"file\", \"cert\", or \"crt-list\"", fileType)
 	}
 
 	// If filename is empty, return just the base directory

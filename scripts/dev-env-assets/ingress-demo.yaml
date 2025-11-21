@@ -806,3 +806,134 @@ spec:
                 name: haproxy-demo-backend
                 port:
                   number: 8443
+
+---
+##############################################################################
+# 28. TLS TERMINATION - Basic single-host HTTPS
+##############################################################################
+
+# TLS Secret for single host
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: echo-tls-cert
+  namespace: echo
+type: kubernetes.io/tls
+data:
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURIekNDQWdlZ0F3SUJBZ0lVR1AyWUpEVCttcGFjN21rNFdPb09EdXRsd3Vrd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0h6RWRNQnNHQTFVRUF3d1VaV05vYnkxMGJITXViRzlqWVd4a1pYWXViV1V3SGhjTk1qVXhNVEl3TVRBeQpPVEV3V2hjTk1qWXhNVEl3TVRBeU9URXdXakFmTVIwd0d3WURWUVFEREJSbFkyaHZMWFJzY3k1c2IyTmhiR1JsCmRpNXRaVENDQVNJd0RRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0NBUW9DZ2dFQkFOdzB1NmZoUkFXeG5Ta0YKWk1ZWXArcmxMTmg3WFRuaVo4QVFMdGxpdHBpRW9ncWdZMmVVUjJQbUZIbHpjKzE5U2k3T0ZWcVBVakxUR0JvdwpMcDNRVjFPVjZoN2JoMzdybHg2ZzJMd1lBRnJ6d2JRK04xTnRMRUQ5OWswTWlQODhLM1pESkpLUE1jYVJSamE4CndHb0dQUWZCdlRMSjZ1STBadE82aUFDZUZlZEJVLytubXZQTVg5OVg1NlA5bmpsdkthaXFKVXNkWGZlOE1xS1QKRkNjb25IQ3IwZWVmMXE4SHJZTHo2QUZoZ2tUNnpYb1BNeWpJMFIvS2ljbzNoOUIvbGU4RDdvQ0xHM3gxN3QwcQpna0xqN0xOY1IxSW9YSGxaQzJkYlE4dEVzWXFMd3hlaFhWZ0lVRmZtSjVSMm1tcU1sdmJ5U2dWdzRPYUErd0VQCmhucngvdkVDQXdFQUFhTlRNRkV3SFFZRFZSME9CQllFRkpMRjFmclZMMVp2akR5NWVqeWV1aUo0aEkrcU1COEcKQTFVZEl3UVlNQmFBRkpMRjFmclZMMVp2akR5NWVqeWV1aUo0aEkrcU1BOEdBMVVkRXdFQi93UUZNQU1CQWY4dwpEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBRDZPTVEvUDVJQ1puSlM2MXRhcmJab2NjMFhIMHp1alM4bUNtaXIrCkdDdVZtQThYVkl3Rnd0b2FBbU9XTkpGVlE2SnZXTnZIR25rTjZaWTVFcEtVeUZ1aSszdFpjQjNkTW9oZUZoUUIKMzE3NmZyNjBIVTBBeXdPVGJud3lRVWZtTm9KQ1NOb3A0NjZzNm1VNkI5TVRRWkMwYXZNcHlwcFFrN1lDb0gyUAprRVAwRmtJQklmUTIrVWozdzkvYkxjZHNXNVdJT3BnM3JFRGxPR1lmbDFhWVNrcjlqbkh2L2RlYXdMaUlvYzRsCnoxTkNlcWd1WmV0R2luTjFKNjZGZ2tjcjE2RHBKQnlKZ1grRlhtd2dxWEFHRUE0b2RiWXllZEtkRE9ORG9BZ1kKQkpGeEhJMjZ3QVk1OXNkNWVZYkFZd1F2alA5TUptR21SVmFmcFJ5ZmRHY0h3SFE9Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQW9JQkFRRGNOTHVuNFVRRnNaMHAKQldUR0dLZnE1U3pZZTEwNTRtZkFFQzdaWXJhWWhLSUtvR05ubEVkajVoUjVjM1B0ZlVvdXpoVmFqMUl5MHhnYQpNQzZkMEZkVGxlb2UyNGQrNjVjZW9OaThHQUJhODhHMFBqZFRiU3hBL2ZaTkRJai9QQ3QyUXlTU2p6SEdrVVkyCnZNQnFCajBId2IweXllcmlOR2JUdW9nQW5oWG5RVlAvcDVyenpGL2ZWK2VqL1o0NWJ5bW9xaVZMSFYzM3ZES2kKa3hRbktKeHdxOUhubjlhdkI2MkM4K2dCWVlKRStzMTZEek1veU5FZnlvbktONGZRZjVYdkErNkFpeHQ4ZGU3ZApLb0pDNCt5elhFZFNLRng1V1F0blcwUExSTEdLaThNWG9WMVlDRkJYNWllVWRwcHFqSmIyOGtvRmNPRG1nUHNCCkQ0WjY4Zjd4QWdNQkFBRUNnZ0VBRVczbUZZTmR1aktrL1JoMWNiMkZXdkVCUS9BOXdJVmtUMTRvaXlIR1VKdWMKNU1qdG5VYnVBS0QzS1diRE8vNnc5clB1bWtDaVVhNEdLQnA4c2hhSnR1NjBmWFZFUy80ek02UXBDM2c5M1BVUwp0YVRBQmMwc0ZjZlVMU1NMR21LbGtRSisvRSt6c2FNUmd1Y2ROcmNnTVFNN2FhLzBOS3ZQb0w0UW9qWGhCM0R0CmJvYVFZRXFiNUUzT3JPbXFtSnJJb3h5aFNOOGxhWS9lMW5OR2diMXV6eVFkVUxid0NRSkovd1VmOE45OW9xZFUKR3JvQTluR3NSSW50QVpJL0xnL0tYOG9hVmZaNDMwR3pjOHJwTmt6T1NNdmx6TVhFQkkwZWZpY1hSUFhpYkpPbwpaYzF5TXErMW15MDlEdmV1N2ZwWjRaU3VsbkxVNnZTUndiNzF4OXhlVVFLQmdRRDBUT1Z4MHZNNGxKeTYwY2pYClU2ZUZNMkFNLzZsa1YvTGdOUjFHR1U4aG9OemlIRGMrcnBSVHpBbmtMcFU5VTdnaitsd3VRT3Raby9nQ01kMWkKQU9vZy9uR0lKM1p2QlNjbTZWSUhFbWkycTFGMXZDeVZnRHl3Y09YNituYmJ4cGN1VXVCUXJDUTN6VjliQ0xDZQp0UmVVS05KTTFwemtobVlWT0NxeVZTMGNtUUtCZ1FEbXdIRUJxcGI5QnNPUTN2aXRxbHFabmtaMTEwaEk1Y1AvCk40elVZZmo5Q1B4MEdrOUFhdFpHbk1ucDNWQXZxaWlhbmRYbXlwZkNYVk5scy9PMHFCMitzU2Z0ODNtVTRIOVkKWVh6Q3ZUSFZTTmd3L0o2ZnI0NjUwLzUvb1c1YmZHcDcyUTdIVFEzRmRvalBraW95ZE9kSGxJcG9aS21aYVRMaQphY3RzYm1oVUdRS0JnQmNHbkdXakRWdWEzajdaZ1FXU2srcUJFaCtIaFU2NDMySjBmeUxaUmRVVWxWMFdiYnFSCnQ5ZENGdmlUejJzdFZlREdPeVA4NkhIVmU0MnhaMzFTT3I4TFhHWUoyaWJTcElNTllMYmI3RlN6UndWQ3pDejMKSGtFL0V0NFo5MVAxbnRBMTdZQ05DUWpkYVl4cUFFT2xLK2pDQkRoTHpoUFgrdzBxOHhORjVlK1pBb0dBV3d0ZgpDeXRGdTd2cGVjV2dGTlY4UGRSbk5LT21qNnlvY3BCMmJtM2hrZVR6eHRPQ3BZWUIyWWFQWEVqSUZLWnNzdVRICnV2SUFndDNUdy9NR215Y2g1VlY4emJRZEtwS1JiRXU2c0JONkVBOVh6YXcrNGY2Z3I4MW5RdkJzM0lmd2M4RW0KeFpndmNOUGVFeGcyc2dYU0l6b0dpajM5ZE53L0NYcDRtdVhOSURFQ2dZQUdpYm1nRmp5SkQwYnNsY0RIVDVoSQpSUTU5ZXZjQWV5cVAvSmc1UkVlNWVNOXFKclY5ZVdoMXpwRjZlU0pqNUlQMnp2OTBtQm5QRi9RWmMvM2QzMDBGCkFxNVVTS2pGWS9kUDJoblNsT1BnNGRqVmM0dkV5WWxxNUN4cUdWbHVXbmJ4YjFSMGpGeVRhSDEwNkpxRWtScnkKam82TGFZKzRRWHhlblcwSGtRc0F5dz09Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
+
+# Ingress with basic TLS termination
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-tls
+  namespace: echo
+spec:
+  ingressClassName: haproxy-template-ic
+  tls:
+    - hosts:
+        - echo-tls.localdev.me
+      secretName: echo-tls-cert
+  rules:
+    - host: echo-tls.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 29. TLS TERMINATION - Multi-host with SAN certificate
+##############################################################################
+
+# TLS Secret for multiple hosts (SAN certificate)
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: echo-tls-multi-cert
+  namespace: echo
+type: kubernetes.io/tls
+data:
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURiakNDQWxhZ0F3SUJBZ0lVRDF3RUNZd3BXcVgxTjVaOTJTMWd0UWxhSHA4d0RRWUpLb1pJaHZjTkFRRUwKQlFBd0pURWpNQ0VHQTFVRUF3d2FaV05vYnkxMGJITXRiWFZzZEdrdWJHOWpZV3hrWlhZdWJXVXdIaGNOTWpVeApNVEl3TVRBeU9URXlXaGNOTWpZeE1USXdNVEF5T1RFeVdqQWxNU013SVFZRFZRUUREQnBsWTJodkxYUnNjeTF0CmRXeDBhUzVzYjJOaGJHUmxkaTV0WlRDQ0FTSXdEUVlKS29aSWh2Y05BUUVCQlFBRGdnRVBBRENDQVFvQ2dnRUIKQUtCUjBPT1o5UUVNb1dUSnJMV3BBU1lGVTg3R25qb3psQ1BOT093cVFpMGx1UGhBdDdZU2xPcEJ2Q0NxV2VVRApIanZTdzVCUU4waFI5WndTcXA2a01tUWs2RW45Sm9QL0JsUXl4aXViZHVaNXM0a0VZeGdiOEFwQ0YwVStGeTJlCm4vZElRYnN6b2daQnJsRmQ0RjdDdW40cE5SYk80aEkrSjdJRkRtQmIwcVZQSDl0S1ZnMGZ4dmRPaVphb0M1cCsKWk5WVXNyR1Y3Lzl2UVROdmx0eFgvTGlTbUdYeWZVZjRDcEFMWm9xR0J0dUs1ZVVYQXEzWkVvelI0NGd0SFBxcAo1MkFESUVJanZiMWRSQitDdTVoWmIyb2dHeTF3UVljRjNBS05zeHR0SEJhUEhlSk1qK3VLMUpFb2YxbnhxQUFhCmZ6Ujk3WGFOcFlYN0NwOFFFWlR2UzIwQ0F3RUFBYU9CbFRDQmtqQWRCZ05WSFE0RUZnUVVlYkZBK1daMG9rYk8KN2VkNjMvZWE2ZWU0TGk4d0h3WURWUjBqQkJnd0ZvQVVlYkZBK1daMG9rYk83ZWQ2My9lYTZlZTRMaTh3RHdZRApWUjBUQVFIL0JBVXdBd0VCL3pBL0JnTlZIUkVFT0RBMmdocGxZMmh2TFhSc2N5MXRkV3gwYVM1c2IyTmhiR1JsCmRpNXRaWUlZWldOb2J5MTBiSE10WVd4MExteHZZMkZzWkdWMkxtMWxNQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUIKQVFBUTVoc0pXN2VaQnNhR0MxZzJLVnZXVkU1Y1JycHkwdGVUV0lLSHJpVGJPdUxWN3AzcVlNS1VBckhQNWRTcwo3bXpjTER0YmF0Slh5VmQ4L21kWUwvMndRWEVMcUVZSDhCNXNUUzVHYzNZSEZDck1uWG1lRWJxODdmams5TURSCndFRGlKWHQ3VlhaSm9QZTFVeGJrQVhGTWtVQmM5bmhiYTFvWjd3eWdZblo0YUIyVlNTdnFvWEJzY1M4eC9YQVcKdCtuSjhhb2thQ3dvaitKdFdDOFpROWZEaS85REtMWHZHYmV1Rk0xSkFob0JiYk5EQUQxSy93Qm1pZ0JhTWs5dwpPcUh1aGpFU0tmdlppUDUyL2tBLytUTnhPTlYyS2QwOWpXQlNuMzd5dGxkemhrTkNTREY4b0NUWFpTbzV0K0V4CjRCK05HSFVadUlRaiszd0k3Mncvdk1wSQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQW9JQkFRQ2dVZERqbWZVQkRLRmsKeWF5MXFRRW1CVlBPeHA0Nk01UWp6VGpzS2tJdEpiajRRTGUyRXBUcVFid2dxbG5sQXg0NzBzT1FVRGRJVWZXYwpFcXFlcERKa0pPaEovU2FEL3daVU1zWXJtM2JtZWJPSkJHTVlHL0FLUWhkRlBoY3RucC8zU0VHN002SUdRYTVSClhlQmV3cnArS1RVV3p1SVNQaWV5QlE1Z1c5S2xUeC9iU2xZTkg4YjNUb21XcUF1YWZtVFZWTEt4bGUvL2IwRXoKYjViY1YveTRrcGhsOG4xSCtBcVFDMmFLaGdiYml1WGxGd0t0MlJLTTBlT0lMUno2cWVkZ0F5QkNJNzI5WFVRZgpncnVZV1c5cUlCc3RjRUdIQmR3Q2piTWJiUndXangzaVRJL3JpdFNSS0g5WjhhZ0FHbjgwZmUxMmphV0Yrd3FmCkVCR1U3MHR0QWdNQkFBRUNnZ0VBRWdicEkzS2dJVmhUZkpNTjI5WnZaZUJTK20wTWhUUmdDNytMajBpNExMM3gKWk43WUdYM1E1MTl4WVVYdWVra2x1T25iNmlvTzhVK2YrOGNBanZxZEhQUW1kNDFpNjVROVdMSGw1U2pqejRvdgpSVENzV04xcFdpbncxbTBqSzVMSzM0SXRPL2pVRnZxRE9LeUM2bnpnZmdleHE4a2pGQlNQbjUyZ2JuYmN3cEFyCnl1V013UUNPZHE3K3VSL0w2Um9VN09MQ054SzdzUVJUUDMzcXlKaGFrOWhVVFNITUgrWDhMNEw4Q25FR1R4bCsKS0doVWp2NDdBb0k0aFZLc0JiKzJUQ2RxZHptWDFaRCs4eGh1a3RaQ05IN0tiQWd5QjA5cmYwUko5NnpsdGdPNwpsTW9CenNpSGF3ZnFOdmJlbFAyTnBtTVEzWmhJcE14S0dYL1FWekFZa1FLQmdRRFF4WFl5WGJQZ0ZyMnFxdFdJCmw4SU5vTERTSk1WK0FrVEdxdkd6RzR4cXNpNWJoNENFSEtOUlFydGNmWndGSzUraDlTSTNyTG9NMlZlU2JtbXQKZnRYWVVLVWd4Rk9oRlUxdkRCVzJLeGdKazdwbTdJRzVJR2ZqV1BRamppMWhkVmd6UXAzWGxnRDAyS0N1OEczSQphRE12Z25ZcEtDZEJDM3MwZDdEdmhqYXRmUUtCZ1FERWxtQi9OQVNaSFVxQWFPUDV2a1l4U2dodktNYkx4OG41CksvTThxSWl4SXE1VXM0RWkrcjZtRG9aWDFXR3c0VXh5aEZ5R1VISTdDd202RWxCY0FhL09uN25sVDQ1VTZTSkEKaWFOUDh5bWVGcUUyL2J2ZlpVcEVEcEU5eHdxNHFVK0dsV0VjSVFsTVRkT3psVUhadGNISjBvRDJWVndsR0M2SQptUVhwWDBZNHNRS0JnQTVhcFVmTlBZTFl6VzJnbFZIdzdUeTJvYkd4S1lzQ2FPd244THBaMkl1MWVJNStnSTJVCjBuM1Iwc1FITnVUOEhOdXIyUkJ1NWRQZ1ZhOFJ2RjViYkNTVlZ1VXIybndtMU00ZnpKWmIzQ2s4YVFLT25GUzQKTDZ4bi8xRTZnMUJDR3pCYkVqTXljeHBpa3BtMG1qZS9RbFd2NktQbnlOc21DUENRa2kvRjBKaVpBb0dBU2plVAplcktDd2VPREN2T09qZXk5eDBIeDZUVjF4OTFIYlNDZ2xkZnlzeDBxdjZOOUwxMkd1RjVuYmFXTFdpSFVvSzlECjF4bHI1c3FHQTQrQ2N4blg2NlAxcEpMaVkwQVl4RkN5TFM3YUdXcmx0a01ZdUlBZkI0NlFXc2hZVGRydHdSdUkKSy94MDdDKzlxdURBbVphNjhKemVQeUYreGlwWTl3eitaRnFwd2lFQ2dZQkpNclRPaloyWHM4Ti8xUkJsU2N3RApoczRlQVJhT211ZHVsRHNMd0tLVzRGZmNZTnVhbWhiLzROUlU4OWVSYXp5K2VBS1JodjdZQ1lXUVBsRlZBaFhyClVtZnBMeFcvdnVTVEpEWVhyd0doQ09QMHdKWnd2ZXlFOERkWlF4WTJJMCs1Vy9uUjl5bVdidWhEaG5WOGY2bFoKZ0ZrcnBUd2ttUy9ialp0bFk0SndRUT09Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
+
+# Ingress with multi-host TLS (SAN certificate)
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-tls-multi
+  namespace: echo
+spec:
+  ingressClassName: haproxy-template-ic
+  tls:
+    - hosts:
+        - echo-tls-multi.localdev.me
+        - echo-tls-alt.localdev.me
+      secretName: echo-tls-multi-cert
+  rules:
+    - host: echo-tls-multi.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+    - host: echo-tls-alt.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80
+
+---
+##############################################################################
+# 30. TLS TERMINATION - Combined with other annotations
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-tls-combined
+  namespace: echo
+  annotations:
+    # Force HTTPS redirect for HTTP requests
+    haproxy.org/ssl-redirect: "true"
+    haproxy.org/ssl-redirect-code: "301"
+    # Add security headers
+    haproxy.org/response-set-header: |
+      Strict-Transport-Security max-age=31536000; includeSubDomains
+      X-Frame-Options DENY
+      X-Content-Type-Options nosniff
+spec:
+  ingressClassName: haproxy-template-ic
+  tls:
+    - hosts:
+        - echo-tls-combined.localdev.me
+      secretName: echo-tls-cert
+  rules:
+    - host: echo-tls-combined.localdev.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-server
+                port:
+                  number: 80

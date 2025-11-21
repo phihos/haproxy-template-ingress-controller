@@ -351,6 +351,7 @@ func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, valida
 	pathResolver := &templating.PathResolver{
 		MapsDir:    validationPaths.MapsDir,
 		SSLDir:     validationPaths.SSLCertsDir,
+		CRTListDir: validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
 		GeneralDir: validationPaths.GeneralStorageDir,
 	}
 
