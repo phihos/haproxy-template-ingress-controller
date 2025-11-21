@@ -372,7 +372,7 @@ templateSnippets:
           {%- for route in ns_updated.routes %}
             {%- set ns_ids.route_ids = ns_ids.route_ids.append(route.route_id) %}
           {%- endfor %}
-          {%- set conflict_group = ns_ids.route_ids | join("__") %}
+          {%- set conflict_group = (ns_ids.route_ids | sort) | join("__") %}
           {#- Add conflict_group to each route #}
           {%- set ns_final = namespace(routes=[]) %}
           {%- for route in ns_updated.routes %}
