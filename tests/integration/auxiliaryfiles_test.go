@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
+	"haproxy-template-ic/pkg/dataplane/client"
 )
 
 // TestGeneralFiles tests Create, Update, and Delete operations for general files
@@ -245,15 +246,15 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify certificate exists
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
-				assert.Contains(t, certs, "example.com.pem", "certificate should exist")
+				assert.Contains(t, certs, client.SanitizeSSLCertName("example.com.pem"), "certificate should exist")
 
 				// Verify GetSSLCertificateContent returns fingerprint (or placeholder if API doesn't support it)
-				fingerprint, err := client.GetSSLCertificateContent(ctx, "example.com.pem")
+				fingerprint, err := dataplaneClient.GetSSLCertificateContent(ctx, "example.com.pem")
 				require.NoError(t, err)
 				assert.NotEmpty(t, fingerprint, "fingerprint should not be empty")
 				// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
@@ -285,18 +286,18 @@ func TestSSLCertificates(t *testing.T) {
 				}
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify all certificates exist
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
 				assert.Len(t, certs, 2, "should have 2 certificates")
-				assert.Contains(t, certs, "example.com.pem")
-				assert.Contains(t, certs, "test.com.pem")
+				assert.Contains(t, certs, client.SanitizeSSLCertName("example.com.pem"))
+				assert.Contains(t, certs, client.SanitizeSSLCertName("test.com.pem"))
 
 				// Verify each certificate returns a fingerprint (or placeholder if API doesn't support it)
 				for _, certName := range []string{"example.com.pem", "test.com.pem"} {
-					fingerprint, err := client.GetSSLCertificateContent(ctx, certName)
+					fingerprint, err := dataplaneClient.GetSSLCertificateContent(ctx, certName)
 					require.NoError(t, err)
 					assert.NotEmpty(t, fingerprint, "fingerprint for %s should not be empty", certName)
 					// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
@@ -319,15 +320,15 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify certificate still exists
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
-				assert.Contains(t, certs, "example.com.pem", "certificate should still exist")
+				assert.Contains(t, certs, client.SanitizeSSLCertName("example.com.pem"), "certificate should still exist")
 
 				// Verify GetSSLCertificateContent returns fingerprint (or placeholder if API doesn't support it)
-				fingerprint, err := client.GetSSLCertificateContent(ctx, "example.com.pem")
+				fingerprint, err := dataplaneClient.GetSSLCertificateContent(ctx, "example.com.pem")
 				require.NoError(t, err)
 				assert.NotEmpty(t, fingerprint, "fingerprint should not be empty")
 				// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
@@ -382,15 +383,15 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify only one certificate remains
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
 				assert.Len(t, certs, 1, "should have 1 certificate remaining")
-				assert.Contains(t, certs, "test.com.pem", "test.com.pem should still exist")
-				assert.NotContains(t, certs, "example.com.pem", "example.com.pem should be deleted")
-				assert.NotContains(t, certs, "updated.com.pem", "updated.com.pem should be deleted")
+				assert.Contains(t, certs, client.SanitizeSSLCertName("test.com.pem"), "test.com.pem should still exist")
+				assert.NotContains(t, certs, client.SanitizeSSLCertName("example.com.pem"), "example.com.pem should be deleted")
+				assert.NotContains(t, certs, client.SanitizeSSLCertName("updated.com.pem"), "updated.com.pem should be deleted")
 			},
 		},
 	}
