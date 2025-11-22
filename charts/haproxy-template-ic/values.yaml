@@ -716,6 +716,17 @@ networkPolicy:
         - port: 8080  # Healthz
           protocol: TCP
 
+    # Allow controller to access HAProxy Dataplane API
+    # IMPORTANT: This is required for the controller to sync configurations
+    dataplaneApi:
+      enabled: true
+      # Allow from controller pods in the same namespace
+      from:
+        - podSelector: { }
+      ports:
+        - port: 5555  # Dataplane API
+          protocol: TCP
+
     # Allow Kubernetes API server to call webhook
     # IMPORTANT: Enable this when webhook is enabled with NetworkPolicy
     webhook:

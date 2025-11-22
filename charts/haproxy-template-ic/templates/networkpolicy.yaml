@@ -81,6 +81,17 @@ spec:
         {{- end }}
     {{- end }}
 
+    {{- if .Values.networkPolicy.ingress.dataplaneApi.enabled }}
+    # Allow controller to access HAProxy Dataplane API
+    - from:
+        {{- toYaml .Values.networkPolicy.ingress.dataplaneApi.from | nindent 8 }}
+      ports:
+        {{- range .Values.networkPolicy.ingress.dataplaneApi.ports }}
+        - port: {{ .port }}
+          protocol: {{ .protocol }}
+        {{- end }}
+    {{- end }}
+
     {{- if .Values.networkPolicy.ingress.monitoring.enabled }}
     # Allow Prometheus/monitoring to scrape metrics
     - from:
