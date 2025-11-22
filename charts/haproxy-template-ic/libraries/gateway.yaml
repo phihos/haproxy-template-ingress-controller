@@ -282,11 +282,14 @@ templateSnippets:
           {%- endfor %}
         {%- endfor %}
 
+        {#- Sort all routes for deterministic processing #}
+        {%- set sorted_all_routes = ns_routes.all_routes | sort_by(["$.route.metadata.namespace", "$.route.metadata.name", "$.rule_idx"]) %}
+
         {#- Group by path key to detect conflicts #}
         {#- Manual grouping since group_by result may not iterate properly in namespace #}
         {#- MUST use namespace for mutable state - plain dicts don't persist across iterations! #}
         {%- set ns_groups = namespace(data={}) %}
-        {%- for route_info in ns_routes.all_routes %}
+        {%- for route_info in sorted_all_routes %}
           {%- set path_key = route_info.hostname ~ '|' ~ route_info.path.type ~ '|' ~ route_info.path.value %}
           {%- if path_key not in ns_groups.data %}
             {%- set ns_groups.data = ns_groups.data.update({path_key: []}) %}
@@ -297,7 +300,7 @@ templateSnippets:
           {%- set ns_groups.data = ns_groups.data.update({path_key: current_list}) %}
         {%- endfor %}
         {#- Check for conflicts and mark routes needing VAR qualifier #}
-        {%- for path_key in ns_groups.data.keys() | list %}
+        {%- for path_key in ns_groups.data.keys() | list | sort %}
           {%- set routes = ns_groups.data[path_key] %}
           {#- DEBUG CONFLICT: path_key={{ path_key }} routes_count={{ routes | length }} -#}
           {#- Check if routes in this group have different matchers #}
@@ -387,8 +390,9 @@ templateSnippets:
         {%- set path_groups = ns_groups.data %}
 
         {#- Rebuild all_routes from updated path_groups #}
+        {#- IMPORTANT: Sort path_keys for deterministic iteration order #}
         {%- set ns_all = namespace(routes=[]) %}
-        {%- for path_key in path_groups %}
+        {%- for path_key in path_groups.keys() | list | sort %}
           {%- for route in path_groups[path_key] %}
             {%- set ns_all.routes = ns_all.routes.append(route) %}
           {%- endfor %}

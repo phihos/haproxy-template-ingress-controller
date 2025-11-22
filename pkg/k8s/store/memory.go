@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"haproxy-template-ic/pkg/k8s/types"
@@ -115,6 +116,18 @@ func (s *MemoryStore) List() ([]interface{}, error) {
 	for _, resourceSlice := range s.data {
 		items = append(items, resourceSlice...)
 	}
+
+	// Sort items by namespace and name for deterministic order
+	sort.Slice(items, func(i, j int) bool {
+		nsI, nameI := extractNamespaceName(items[i])
+		nsJ, nameJ := extractNamespaceName(items[j])
+
+		// Sort by namespace first, then by name
+		if nsI != nsJ {
+			return nsI < nsJ
+		}
+		return nameI < nameJ
+	})
 
 	s.allItems = items
 	s.dirty = false
