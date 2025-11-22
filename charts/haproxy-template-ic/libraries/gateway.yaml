@@ -282,14 +282,11 @@ templateSnippets:
           {%- endfor %}
         {%- endfor %}
 
-        {#- Sort all routes for deterministic processing #}
-        {%- set sorted_all_routes = ns_routes.all_routes | sort_by(["$.route.metadata.namespace", "$.route.metadata.name", "$.rule_idx"]) %}
-
         {#- Group by path key to detect conflicts #}
         {#- Manual grouping since group_by result may not iterate properly in namespace #}
         {#- MUST use namespace for mutable state - plain dicts don't persist across iterations! #}
         {%- set ns_groups = namespace(data={}) %}
-        {%- for route_info in sorted_all_routes %}
+        {%- for route_info in ns_routes.all_routes %}
           {%- set path_key = route_info.hostname ~ '|' ~ route_info.path.type ~ '|' ~ route_info.path.value %}
           {%- if path_key not in ns_groups.data %}
             {%- set ns_groups.data = ns_groups.data.update({path_key: []}) %}

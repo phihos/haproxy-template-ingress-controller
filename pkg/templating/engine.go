@@ -310,7 +310,6 @@ func buildFilters(customFilters map[string]FilterFunc) *exec.FilterSet {
 		"eval":       evalFilter,
 		"strip":      stripFilter,
 		"trim":       trimFilter, // Override builtin trim to pass through errors
-		"sort":       sortFilter, // Override builtin sort for deterministic behavior
 	}
 	genericFilterSet := exec.NewFilterSet(genericFilterMap)
 	return filters.Update(genericFilterSet)
@@ -1136,85 +1135,6 @@ func conflictsByTest(ctx *exec.Context, in *exec.Value, params *exec.VarArgs) (b
 	return false, nil
 }
 
-// sortFilter provides deterministic sorting by always using string comparison.
-// This overrides Gonja's built-in sort filter which can be non-deterministic
-// when sorting complex types (maps) due to Go's randomized map iteration in String() methods.
-// Usage: items | sort or items | sort(reverse=true, case_sensitive=true).
-func sortFilter(e *exec.Evaluator, in *exec.Value, params *exec.VarArgs) *exec.Value {
-	// Extract items array
-	items := in.Interface()
-	itemsSlice, ok := convertToSlice(items)
-	if !ok {
-		return exec.AsValue(fmt.Errorf("sort: expected array/slice, got %T", items))
-	}
-	if len(itemsSlice) == 0 {
-		return in
-	}
-
-	// Extract parameters
-	var reverse bool
-	var caseSensitive bool
-	if err := params.Take(
-		exec.KeywordArgument("reverse", exec.AsValue(false), exec.BoolArgument(&reverse)),
-		exec.KeywordArgument("case_sensitive", exec.AsValue(false), exec.BoolArgument(&caseSensitive)),
-	); err != nil {
-		return exec.AsValue(err)
-	}
-
-	// Create a slice of indices to sort
-	type indexedItem struct {
-		index    int
-		strValue string
-		original interface{}
-	}
-	indexed := make([]indexedItem, len(itemsSlice))
-
-	for i, item := range itemsSlice {
-		// Unwrap *exec.Value if needed to avoid non-deterministic String() method
-		unwrapped := item
-		if execVal, ok := item.(*exec.Value); ok {
-			// For *exec.Value, use the underlying Interface() value
-			// This avoids the non-deterministic String() method that iterates over maps
-			unwrapped = execVal.Interface()
-		}
-		// Convert to string for comparison
-		strValue := fmt.Sprint(unwrapped)
-		indexed[i] = indexedItem{
-			index:    i,
-			strValue: strValue,
-			original: item, // Keep original item
-		}
-	}
-
-	// Sort by string value deterministically
-	if caseSensitive {
-		sort.Slice(indexed, func(i, j int) bool {
-			return indexed[i].strValue < indexed[j].strValue
-		})
-	} else {
-		// Case-insensitive sort
-		sort.Slice(indexed, func(i, j int) bool {
-			return strings.ToLower(indexed[i].strValue) < strings.ToLower(indexed[j].strValue)
-		})
-	}
-
-	// Reverse if needed
-	if reverse {
-		for i := 0; i < len(indexed)/2; i++ {
-			j := len(indexed) - 1 - i
-			indexed[i], indexed[j] = indexed[j], indexed[i]
-		}
-	}
-
-	// Extract original items in sorted order
-	result := make([]interface{}, len(indexed))
-	for i, item := range indexed {
-		result[i] = item.original
-	}
-
-	return exec.AsValue(result)
-}
-
 // Helper types and functions for the generic functions
 
 type sortableItems struct {
@@ -1738,25 +1658,10 @@ func convertToMap(v interface{}) (map[string]interface{}, bool) {
 	// Try reflection for other map types
 	val := reflect.ValueOf(v)
 	if val.Kind() == reflect.Map {
-		// Get keys and sort them for deterministic iteration
-		// Go's map iteration is deliberately randomized, which causes
-		// non-deterministic template rendering. Sort keys alphabetically
-		// to ensure consistent output.
-		keys := val.MapKeys()
-		keyStrs := make([]string, len(keys))
-		for i, key := range keys {
-			keyStrs[i] = fmt.Sprint(key.Interface())
-		}
-		sort.Strings(keyStrs)
-
-		// Build map in sorted key order
 		result := make(map[string]interface{})
-		keyMap := make(map[string]reflect.Value, len(keys))
-		for _, key := range keys {
-			keyMap[fmt.Sprint(key.Interface())] = key
-		}
-		for _, keyStr := range keyStrs {
-			result[keyStr] = val.MapIndex(keyMap[keyStr]).Interface()
+		for _, key := range val.MapKeys() {
+			keyStr := fmt.Sprint(key.Interface())
+			result[keyStr] = val.MapIndex(key).Interface()
 		}
 		return result, true
 	}
