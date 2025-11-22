@@ -1254,10 +1254,8 @@ func evaluateExpression(item interface{}, expr string) interface{} {
 		return nil
 	}
 
-	// Unwrap *exec.Value if needed
-	if execVal, ok := item.(*exec.Value); ok {
-		item = execVal.Interface()
-	}
+	// Don't unwrap *exec.Value here - let navigateJSONPath handle it
+	// using Gonja's GetItem/GetAttribute methods for proper field access
 
 	// Handle concatenation operator ~
 	if strings.Contains(expr, " ~ ") {
@@ -1396,6 +1394,11 @@ func navigateJSONPath(item interface{}, path string) interface{} {
 		}
 	}
 
+	// Unwrap final result if it's a Gonja Value
+	if execVal, ok := current.(*exec.Value); ok {
+		return execVal.Interface()
+	}
+
 	return current
 }
 
@@ -1461,6 +1464,18 @@ func processNumericIndex(current interface{}, indexStr string) (interface{}, boo
 
 // processFieldAccess handles regular field access.
 func processFieldAccess(current interface{}, segment string) interface{} {
+	// If current is a Gonja Value, use its GetItem method for proper access
+	if execVal, ok := current.(*exec.Value); ok {
+		if val, found := execVal.GetItem(segment); found {
+			return val
+		}
+		// Also try GetAttribute for struct fields
+		if val, found := execVal.GetAttribute(segment); found {
+			return val
+		}
+		return nil
+	}
+
 	if m, ok := convertToMap(current); ok {
 		return m[segment]
 	}
