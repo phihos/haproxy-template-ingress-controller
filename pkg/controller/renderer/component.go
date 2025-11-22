@@ -108,6 +108,7 @@ func New(
 	pathResolver := &templating.PathResolver{
 		MapsDir:    config.Dataplane.MapsDir,
 		SSLDir:     config.Dataplane.SSLCertsDir,
+		CRTListDir: config.Dataplane.SSLCertsDir,
 		GeneralDir: config.Dataplane.GeneralStorageDir,
 	}
 
@@ -465,6 +466,10 @@ func MergeAuxiliaryFiles(static, dynamic *dataplane.AuxiliaryFiles) *dataplane.A
 	// Merge SSL certificates
 	merged.SSLCertificates = append(merged.SSLCertificates, static.SSLCertificates...)
 	merged.SSLCertificates = append(merged.SSLCertificates, dynamic.SSLCertificates...)
+
+	// Merge CRT-list files
+	merged.CRTListFiles = append(merged.CRTListFiles, static.CRTListFiles...)
+	merged.CRTListFiles = append(merged.CRTListFiles, dynamic.CRTListFiles...)
 
 	return merged
 }

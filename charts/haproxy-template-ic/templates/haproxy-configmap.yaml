@@ -1,0 +1,13 @@
+{{- if .Values.haproxy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-haproxy-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    app.kubernetes.io/component: loadbalancer
+data:
+  haproxy.cfg: |
+{{ .Values.haproxy.initialConfig | nindent 4 }}
+{{- end }}

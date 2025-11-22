@@ -13,10 +13,11 @@ import (
 	"strings"
 )
 
-// sanitizeSSLCertName sanitizes a certificate name for HAProxy Data Plane API storage.
+// SanitizeSSLCertName sanitizes a certificate name for HAProxy Data Plane API storage.
 // The API replaces dots in the filename (excluding the extension) with underscores.
 // For example: "example.com.pem" becomes "example_com.pem".
-func sanitizeSSLCertName(name string) string {
+// This function is exported for use in tests to compare certificate names.
+func SanitizeSSLCertName(name string) string {
 	// Get the file extension
 	ext := filepath.Ext(name)
 	if ext == "" {
@@ -32,29 +33,6 @@ func sanitizeSSLCertName(name string) string {
 
 	// Return sanitized base + original extension
 	return sanitizedBase + ext
-}
-
-// unsanitizeSSLCertName attempts to reverse the sanitization.
-// This is a best-effort conversion and may not be perfect for all cases.
-// For filenames like "example_com.pem", we assume underscores between
-// word-like segments were originally dots (common for domain names).
-func unsanitizeSSLCertName(name string) string {
-	// Get the file extension
-	ext := filepath.Ext(name)
-	if ext == "" {
-		// No extension, can't reliably unsanitize
-		return name
-	}
-
-	// Get the base name without extension
-	base := strings.TrimSuffix(name, ext)
-
-	// For domain-like patterns (word_word.ext), convert underscores to dots
-	// This heuristic works for common certificate naming patterns
-	unsanitizedBase := strings.ReplaceAll(base, "_", ".")
-
-	// Return unsanitized base + original extension
-	return unsanitizedBase + ext
 }
 
 // GetAllSSLCertificates retrieves all SSL certificate names from the storage.
@@ -83,13 +61,14 @@ func (c *DataplaneClient) GetAllSSLCertificates(ctx context.Context) ([]string, 
 		return nil, fmt.Errorf("failed to decode SSL certificates response: %w", err)
 	}
 
-	// Extract and unsanitize certificate names
+	// Extract certificate names (no unsanitization)
+	// Note: We keep names as-is from the API to match how templates generate them.
+	// Templates use namespace_secretname patterns which already contain underscores,
+	// so unsanitizing would incorrectly convert these to dots.
 	names := make([]string, 0, len(apiCerts))
 	for _, apiCert := range apiCerts {
 		if apiCert.StorageName != nil {
-			// Unsanitize the name to restore dots (e.g., "example_com.pem" -> "example.com.pem")
-			unsanitizedName := unsanitizeSSLCertName(*apiCert.StorageName)
-			names = append(names, unsanitizedName)
+			names = append(names, *apiCert.StorageName)
 		}
 	}
 
@@ -113,7 +92,7 @@ func (c *DataplaneClient) GetAllSSLCertificates(ctx context.Context) ([]string, 
 // automatically before calling the API.
 func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name string) (string, error) {
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
-	sanitizedName := sanitizeSSLCertName(name)
+	sanitizedName := SanitizeSSLCertName(name)
 
 	resp, err := c.client.GetOneStorageSSLCertificate(ctx, sanitizedName)
 	if err != nil {
@@ -184,7 +163,7 @@ func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name str
 // automatically before calling the API.
 func (c *DataplaneClient) CreateSSLCertificate(ctx context.Context, name, content string) error {
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
-	sanitizedName := sanitizeSSLCertName(name)
+	sanitizedName := SanitizeSSLCertName(name)
 
 	// Create multipart form-data
 	body := &bytes.Buffer{}
@@ -234,7 +213,7 @@ func (c *DataplaneClient) CreateSSLCertificate(ctx context.Context, name, conten
 // automatically before calling the API.
 func (c *DataplaneClient) UpdateSSLCertificate(ctx context.Context, name, content string) error {
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
-	sanitizedName := sanitizeSSLCertName(name)
+	sanitizedName := SanitizeSSLCertName(name)
 
 	// Send certificate content as text/plain (per API spec: postHAProxyConfigurationData)
 	body := bytes.NewBufferString(content)
@@ -265,7 +244,7 @@ func (c *DataplaneClient) UpdateSSLCertificate(ctx context.Context, name, conten
 // automatically before calling the API.
 func (c *DataplaneClient) DeleteSSLCertificate(ctx context.Context, name string) error {
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
-	sanitizedName := sanitizeSSLCertName(name)
+	sanitizedName := SanitizeSSLCertName(name)
 
 	resp, err := c.client.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
 	if err != nil {

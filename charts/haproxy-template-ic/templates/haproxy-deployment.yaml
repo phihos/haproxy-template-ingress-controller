@@ -1,0 +1,160 @@
+{{- if .Values.haproxy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "haproxy-template-ic.fullname" . }}-haproxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "haproxy-template-ic.labels" . | nindent 4 }}
+    app.kubernetes.io/component: loadbalancer
+spec:
+  replicas: {{ .Values.haproxy.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "haproxy-template-ic.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: loadbalancer
+  template:
+    metadata:
+      labels:
+        {{- include "haproxy-template-ic.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: loadbalancer
+        app: haproxy
+        component: loadbalancer
+    spec:
+      containers:
+        # HAProxy container
+        - name: haproxy
+          image: {{ include "haproxy-template-ic.haproxy.image" . }}
+          imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Create required directories
+              mkdir -p /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors /etc/haproxy/general
+              chown -R haproxy:haproxy /etc/haproxy
+
+              # Copy initial config
+              cp /config/haproxy.cfg /etc/haproxy/haproxy.cfg
+
+              # Start HAProxy in master-worker mode with master socket
+              exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: stats
+              containerPort: 8404
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: haproxy-runtime
+              mountPath: /etc/haproxy
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8404
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8404
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.haproxy.resources | nindent 12 }}
+
+        # Dataplane API sidecar
+        - name: dataplane
+          image: {{ include "haproxy-template-ic.haproxy.image" . }}
+          imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Wait for HAProxy to create the socket
+              while [ ! -S /etc/haproxy/haproxy-master.sock ]; do
+                echo "Waiting for HAProxy master socket..."
+                sleep 1
+              done
+
+              # Create required directories
+              mkdir -p /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
+              mkdir -p /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/general
+              chown -R haproxy:haproxy /var/lib/dataplaneapi /etc/haproxy
+
+              # Create Dataplane API config
+              cat > /etc/haproxy/dataplaneapi.yaml <<'EOF'
+              config_version: 2
+              name: haproxy-dataplaneapi
+              dataplaneapi:
+                host: 0.0.0.0
+                port: 5555
+                user:
+                  - name: {{ .Values.haproxy.dataplane.credentials.username }}
+                    password: {{ .Values.haproxy.dataplane.credentials.password }}
+                    insecure: true
+                transaction:
+                  transaction_dir: /var/lib/dataplaneapi/transactions
+                  backups_number: 10
+                  backups_dir: /var/lib/dataplaneapi/backups
+                resources:
+                  maps_dir: /etc/haproxy/maps
+                  ssl_certs_dir: /etc/haproxy/certs
+                  general_storage_dir: /etc/haproxy/general
+              haproxy:
+                config_file: /etc/haproxy/haproxy.cfg
+                haproxy_bin: /usr/local/sbin/haproxy
+                master_worker_mode: true
+                master_runtime: /etc/haproxy/haproxy-master.sock
+                reload:
+                  reload_delay: 1
+                  reload_cmd: /bin/sh -c "echo 'reload' | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock"
+                  restart_cmd: /bin/sh -c "echo 'reload' | socat stdio unix-connect:/etc/haproxy/haproxy-master.sock"
+                  reload_strategy: custom
+              log_targets:
+                - log_to: stdout
+                  log_level: trace
+                  log_types:
+                  - access
+                  - app
+              EOF
+
+              # Start Dataplane API
+              exec dataplaneapi -f /etc/haproxy/dataplaneapi.yaml
+          ports:
+            - name: dataplane
+              containerPort: 5555
+              protocol: TCP
+          volumeMounts:
+            - name: haproxy-runtime
+              mountPath: /etc/haproxy
+          livenessProbe:
+            httpGet:
+              path: /v3/info
+              port: 5555
+              httpHeaders:
+                - name: Authorization
+                  value: "Basic YWRtaW46YWRtaW5wYXNz"  # admin:adminpass
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /v3/info
+              port: 5555
+              httpHeaders:
+                - name: Authorization
+                  value: "Basic YWRtaW46YWRtaW5wYXNz"  # admin:adminpass
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "haproxy-template-ic.fullname" . }}-haproxy-config
+        - name: haproxy-runtime
+          emptyDir: {}
+{{- end }}

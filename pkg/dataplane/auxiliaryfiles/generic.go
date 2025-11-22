@@ -68,12 +68,12 @@ func categorizeFile[T FileItem](currentMap map[string]T, id string, desiredFile 
 	currentContent := currentFile.GetContent()
 	desiredContent := desiredFile.GetContent()
 
-	// Special case: If current content is __NO_FINGERPRINT__, treat as non-existent
-	// This happens when the API doesn't provide metadata (older versions).
-	// We need to CREATE, not UPDATE, because the file doesn't actually exist
-	// in a way that allows updates.
+	// Special case: If current content is __NO_FINGERPRINT__, use UPDATE
+	// This happens when the API has metadata but no content fingerprint (older API versions
+	// or stale metadata). UPDATE works whether the file physically exists or not, and is
+	// idempotent. Using CREATE would fail with 409 Conflict if metadata exists.
 	if currentContent == "__NO_FINGERPRINT__" {
-		diff.ToCreate = append(diff.ToCreate, desiredFile)
+		diff.ToUpdate = append(diff.ToUpdate, desiredFile)
 	} else if currentContent != desiredContent {
 		// File exists and content differs → update
 		diff.ToUpdate = append(diff.ToUpdate, desiredFile)

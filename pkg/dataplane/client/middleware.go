@@ -8,15 +8,17 @@ import (
 )
 
 // loggingRoundTripper is an HTTP RoundTripper that logs request details when
-// the Dataplane API returns a 422 Unprocessable Entity status code.
+// the Dataplane API returns a non-2xx status code.
 //
-// This helps debug why the API rejects certain requests by capturing:
+// This helps debug API errors by capturing:
 // - HTTP method (GET, POST, PUT, etc.)
 // - Full request URL including query parameters
 // - Request body payload
+// - Response body payload
+// - Status code
 //
-// The middleware is transparent for successful requests and only adds logging
-// overhead when a 422 error occurs.
+// The middleware is transparent for successful requests (2xx status codes) and
+// only adds logging overhead when errors occur.
 type loggingRoundTripper struct {
 	base   http.RoundTripper
 	logger *slog.Logger
@@ -40,7 +42,7 @@ func newLoggingRoundTripper(base http.RoundTripper, logger *slog.Logger) *loggin
 // RoundTrip implements the http.RoundTripper interface.
 //
 // It captures the request body, executes the request, and logs details if
-// the response status is 422 Unprocessable Entity.
+// the response status is non-2xx (< 200 or >= 300).
 func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Capture request body for potential logging
 	// We need to read the body before the request is sent, then restore it
@@ -58,8 +60,8 @@ func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	// Execute the actual HTTP request
 	resp, err := t.base.RoundTrip(req)
 
-	// Check for 422 status and log if found
-	if err == nil && resp.StatusCode == 422 {
+	// Check for non-2xx status and log if found
+	if err == nil && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 		// Capture response body for logging
 		var responseBody []byte
 		if resp.Body != nil {
@@ -71,12 +73,12 @@ func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 			resp.Body = io.NopCloser(bytes.NewBuffer(responseBody))
 		}
 
-		t.logger.Error("Dataplane API returned 422 Unprocessable Entity",
+		t.logger.Error("Dataplane API returned non-2xx status code",
 			"method", req.Method,
 			"url", req.URL.String(),
+			"status_code", resp.StatusCode,
 			"request_body", string(requestBody),
 			"response_body", string(responseBody),
-			"status_code", resp.StatusCode,
 		)
 	}
 

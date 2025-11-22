@@ -35,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -246,6 +247,7 @@ func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templ
 	pathResolver := &templating.PathResolver{
 		MapsDir:    testPaths.MapsDir,
 		SSLDir:     testPaths.SSLCertsDir,
+		CRTListDir: testPaths.SSLCertsDir, // CRT-list files stored in SSL directory
 		GeneralDir: testPaths.GeneralStorageDir,
 	}
 
@@ -688,8 +690,8 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 	auxiliaryFiles := renderer.MergeAuxiliaryFiles(staticFiles, dynamicFiles)
 
 	// Debug logging
-	staticCount := len(staticFiles.MapFiles) + len(staticFiles.GeneralFiles) + len(staticFiles.SSLCertificates)
-	dynamicCount := len(dynamicFiles.MapFiles) + len(dynamicFiles.GeneralFiles) + len(dynamicFiles.SSLCertificates)
+	staticCount := len(staticFiles.MapFiles) + len(staticFiles.GeneralFiles) + len(staticFiles.SSLCertificates) + len(staticFiles.CRTListFiles)
+	dynamicCount := len(dynamicFiles.MapFiles) + len(dynamicFiles.GeneralFiles) + len(dynamicFiles.SSLCertificates) + len(dynamicFiles.CRTListFiles)
 	if dynamicCount > 0 {
 		r.logger.Debug("Merged auxiliary files",
 			"static_count", staticCount,
@@ -739,6 +741,7 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 	pathResolver := &templating.PathResolver{
 		MapsDir:    validationPaths.MapsDir,
 		SSLDir:     validationPaths.SSLCertsDir,
+		CRTListDir: validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
 		GeneralDir: validationPaths.GeneralStorageDir,
 	}
 	fileRegistry := renderer.NewFileRegistry(pathResolver)
@@ -757,21 +760,38 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 	return context
 }
 
-// sortSnippetsByPriority sorts template snippet names alphabetically.
+// sortSnippetsByPriority sorts template snippets by their priority field (ascending),
+// with alphabetical ordering as a tiebreaker for snippets with the same priority.
+// Snippets without an explicit priority (priority == 0) default to 500.
 func (r *Runner) sortSnippetsByPriority() []string {
-	// Extract snippet names
-	names := make([]string, 0, len(r.config.TemplateSnippets))
-	for name := range r.config.TemplateSnippets {
-		names = append(names, name)
+	// Create slice of snippet names with their priorities
+	type snippetWithPriority struct {
+		name     string
+		priority int
 	}
 
-	// Sort alphabetically (simple bubble sort)
-	for i := 0; i < len(names)-1; i++ {
-		for j := 0; j < len(names)-i-1; j++ {
-			if names[j] > names[j+1] {
-				names[j], names[j+1] = names[j+1], names[j]
-			}
+	snippets := make([]snippetWithPriority, 0, len(r.config.TemplateSnippets))
+	for name, snippet := range r.config.TemplateSnippets {
+		// Default priority is 500 if not specified (priority == 0)
+		priority := snippet.Priority
+		if priority == 0 {
+			priority = 500
 		}
+		snippets = append(snippets, snippetWithPriority{name, priority})
+	}
+
+	// Sort by priority (ascending), then alphabetically for same priority
+	sort.Slice(snippets, func(i, j int) bool {
+		if snippets[i].priority != snippets[j].priority {
+			return snippets[i].priority < snippets[j].priority
+		}
+		return snippets[i].name < snippets[j].name
+	})
+
+	// Extract sorted names
+	names := make([]string, len(snippets))
+	for i, s := range snippets {
+		names[i] = s.name
 	}
 
 	return names

@@ -3,8 +3,8 @@
 #
 # Usage: helm install -f values-dev.yaml
 
-# HAProxy Service - expose externally via LoadBalancer for dev/testing
-haproxyService:
-  type: LoadBalancer
-  # kind cluster maps LoadBalancer services to localhost
-  # This makes HAProxy accessible at http://localhost and https://localhost
+# HAProxy configuration overrides for development
+haproxy:
+  enabled: true
+  # HAProxy image tag will be overridden by start-dev-env.sh via --set haproxy.image.tag=${HAPROXY_VERSION}
+  # This allows testing different HAProxy versions in CI matrix

@@ -26,6 +26,7 @@ func TestPathResolver_GetPath(t *testing.T) {
 	resolver := &PathResolver{
 		MapsDir:    "/etc/haproxy/maps",
 		SSLDir:     "/etc/haproxy/ssl",
+		CRTListDir: "/etc/haproxy/ssl", // CRT-list files stored in SSL directory
 		GeneralDir: "/etc/haproxy/general",
 	}
 
@@ -53,6 +54,12 @@ func TestPathResolver_GetPath(t *testing.T) {
 			filename: "cert.pem",
 			args:     []interface{}{"cert"},
 			want:     "/etc/haproxy/ssl/cert.pem",
+		},
+		{
+			name:     "crt-list file",
+			filename: "certificate-list.txt",
+			args:     []interface{}{"crt-list"},
+			want:     "/etc/haproxy/ssl/certificate-list.txt",
 		},
 		{
 			name:     "empty filename returns directory",

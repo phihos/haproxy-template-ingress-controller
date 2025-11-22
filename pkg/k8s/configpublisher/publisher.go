@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	haproxyv1alpha1 "haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
@@ -839,6 +840,9 @@ func (p *Publisher) generateSecretName(certPath string) string {
 	if ext := filepath.Ext(name); ext != "" {
 		name = name[:len(name)-len(ext)]
 	}
+	// Replace underscores with hyphens to comply with DNS-1123 subdomain naming
+	// (Kubernetes secret names can't contain underscores)
+	name = strings.ReplaceAll(name, "_", "-")
 	return "haproxy-cert-" + name
 }
 

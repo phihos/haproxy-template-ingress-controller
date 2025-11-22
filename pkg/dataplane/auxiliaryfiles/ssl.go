@@ -78,10 +78,12 @@ func (o *sslCertificateOps) Delete(ctx context.Context, id string) error {
 func CompareSSLCertificates(ctx context.Context, c *client.DataplaneClient, desired []SSLCertificate) (*SSLCertificateDiff, error) {
 	// Normalize desired certificates to use filenames for identifiers
 	// and calculate SHA256 fingerprints for content comparison
+	// IMPORTANT: Sanitize names to match HAProxy Dataplane API behavior
+	// (dots in basename are replaced with underscores)
 	normalizedDesired := make([]SSLCertificate, len(desired))
 	for i, cert := range desired {
 		normalizedDesired[i] = SSLCertificate{
-			Path:    filepath.Base(cert.Path),
+			Path:    client.SanitizeSSLCertName(filepath.Base(cert.Path)),
 			Content: calculateCertificateFingerprint(cert.Content),
 		}
 	}
@@ -109,7 +111,8 @@ func CompareSSLCertificates(ctx context.Context, c *client.DataplaneClient, desi
 	// for Create/Update operations, but use normalized paths for Delete operations
 	desiredMap := make(map[string]SSLCertificate)
 	for _, cert := range desired {
-		desiredMap[filepath.Base(cert.Path)] = cert
+		// Use sanitized basename as key to match normalized paths from genericDiff
+		desiredMap[client.SanitizeSSLCertName(filepath.Base(cert.Path))] = cert
 	}
 
 	diff := &SSLCertificateDiff{

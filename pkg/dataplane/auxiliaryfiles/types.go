@@ -1,11 +1,12 @@
 // Package auxiliaryfiles provides functionality for synchronizing auxiliary files
-// (general files, SSL certificates, map files) with the HAProxy Dataplane API.
+// (general files, SSL certificates, map files, crt-lists) with the HAProxy Dataplane API.
 //
 // Auxiliary files are supplementary files that HAProxy needs but are not part of the
 // main configuration file, such as:
 //   - General files: Error pages, custom response files, ACL files
 //   - SSL certificates: TLS/SSL certificate and key files
 //   - Map files: Dynamic key-value mappings
+//   - CRT-list files: SSL certificate lists with per-certificate options
 package auxiliaryfiles
 
 // GeneralFile represents a general-purpose file (error files, custom response files, etc.).
@@ -87,6 +88,34 @@ func (m MapFile) GetContent() string {
 	return m.Content
 }
 
+// CRTListFile represents a HAProxy crt-list file for SSL certificate lists with per-certificate options.
+// CRT-list files allow specifying multiple certificates with individual SSL options and SNI filters.
+type CRTListFile struct {
+	// Path is the absolute file path to the crt-list file.
+	// Example: "/etc/haproxy/crt-lists/crt-list.txt"
+	Path string
+
+	// Content is the crt-list file contents (one certificate entry per line).
+	// Format: <cert-path> [ssl-options] [sni-filter]
+	// Example: "/etc/haproxy/ssl/cert.pem [ocsp-update on] example.com"
+	Content string
+
+	// Future fields that might be added:
+	// - Parsed entries for validation
+	// - Certificate metadata
+	// - OCSP stapling configuration
+}
+
+// GetIdentifier implements the FileItem interface.
+func (c CRTListFile) GetIdentifier() string {
+	return c.Path
+}
+
+// GetContent implements the FileItem interface.
+func (c CRTListFile) GetContent() string {
+	return c.Content
+}
+
 // FileDiff represents the differences between current and desired file states.
 // It contains lists of files that need to be created, updated, or deleted.
 type FileDiff struct {
@@ -141,5 +170,24 @@ type MapFileDiff struct {
 
 // HasChanges returns true if there are any changes to map files.
 func (d *MapFileDiff) HasChanges() bool {
+	return len(d.ToCreate) > 0 || len(d.ToUpdate) > 0 || len(d.ToDelete) > 0
+}
+
+// CRTListDiff represents the differences between current and desired crt-list file states.
+// It contains lists of crt-list files that need to be created, updated, or deleted.
+type CRTListDiff struct {
+	// ToCreate contains crt-list files that exist in the desired state but not in the current state.
+	ToCreate []CRTListFile
+
+	// ToUpdate contains crt-list files that exist in both states but have different content.
+	ToUpdate []CRTListFile
+
+	// ToDelete contains crt-list file paths that exist in the current state but not in the desired state.
+	// These are file paths (not full CRTListFile structs) since we only need the path to delete.
+	ToDelete []string
+}
+
+// HasChanges returns true if there are any changes to crt-list files.
+func (d *CRTListDiff) HasChanges() bool {
 	return len(d.ToCreate) > 0 || len(d.ToUpdate) > 0 || len(d.ToDelete) > 0
 }
