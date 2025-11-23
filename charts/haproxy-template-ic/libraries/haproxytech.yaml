@@ -193,12 +193,12 @@ templateSnippets:
 
         Generated HAProxy Config:
           acl allowlist_<sanitized> src <ip/cidr>
-          http-request deny if !allowlist_<sanitized>
+          http-request deny if { var(txn.host) -m str <host> } !allowlist_<sanitized>
 
           acl denylist_<sanitized> src <ip/cidr>
-          http-request deny if denylist_<sanitized>
+          http-request deny if { var(txn.host) -m str <host> } denylist_<sanitized>
 
-        Note: Both allowlist and denylist can be used together
+        Note: Both allowlist and denylist can be used together. Deny rules only apply to hosts defined in the ingress with this annotation.
       -#}
       {%- set ns = namespace(processed_ingresses="") %}
       {%- for ingress in resources.ingresses.List() %}
@@ -207,7 +207,16 @@ templateSnippets:
           {%- set ns.processed_ingresses = ns.processed_ingresses ~ "|" ~ ingress_key ~ "|" %}
           {%- set allowlist = ingress.metadata.annotations["haproxy.org/allowlist"] | default("") %}
           {%- set denylist = ingress.metadata.annotations["haproxy.org/denylist"] | default("") %}
-          {%- if allowlist %}
+          {#- Extract all hosts from ingress rules -#}
+          {%- set ns_hosts = namespace(hosts=[]) %}
+          {%- if ingress.spec.rules %}
+            {%- for rule in ingress.spec.rules %}
+              {%- if rule.host %}
+                {%- set ns_hosts.hosts = ns_hosts.hosts.append(rule.host) %}
+              {%- endif %}
+            {%- endfor %}
+          {%- endif %}
+          {%- if allowlist and ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-access-control (allowlist for {{ ingress_key }})
             {%- for ip in allowlist.split(",") %}
               {%- set ip = ip | strip %}
@@ -216,9 +225,9 @@ templateSnippets:
       acl {{ acl_name }} src {{ ip }}
               {%- endif %}
             {%- endfor %}
-      http-request deny if{% for ip in allowlist.split(",") %}{% set ip = ip | strip %}{% if ip %} !allowlist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
+      http-request deny if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}{% for ip in allowlist.split(",") %}{% set ip = ip | strip %}{% if ip %} !allowlist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
           {%- endif %}
-          {%- if denylist %}
+          {%- if denylist and ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-access-control (denylist for {{ ingress_key }})
             {%- for ip in denylist.split(",") %}
               {%- set ip = ip | strip %}
@@ -227,7 +236,7 @@ templateSnippets:
       acl {{ acl_name }} src {{ ip }}
               {%- endif %}
             {%- endfor %}
-      http-request deny if{% for ip in denylist.split(",") %}{% set ip = ip | strip %}{% if ip %}{% if not loop.first %} or{% endif %} denylist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
+      http-request deny if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}{% for ip in denylist.split(",") %}{% set ip = ip | strip %}{% if ip %}{% if not loop.first %} or{% endif %} denylist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
           {%- endif %}
         {%- endif %}
       {%- endfor -%}

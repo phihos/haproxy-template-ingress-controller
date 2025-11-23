@@ -1,5 +1,38 @@
 # Default values for haproxy-template-ic.
 
+# =============================================================================
+# Port Configuration Architecture
+# =============================================================================
+#
+# Port Flow: Container → Service → External
+#
+# 1. Container Ports (controller.ports.* and haproxy.ports.*)
+#    - Defined once, source of truth for all port numbers
+#    - Used in: container specs, health probes, NetworkPolicies
+#
+# 2. Named Port References
+#    - Containers expose named ports (e.g., "http", "https", "metrics")
+#    - Services reference by name (targetPort: http)
+#    - Reduces duplication - port numbers defined only once
+#
+# 3. Service Ports (*.service.*.port)
+#    - External-facing port numbers
+#    - Can differ from container ports (e.g., 80 → 8080)
+#
+# 4. NodePorts (*.service.*.nodePort)
+#    - Only used when service.type: NodePort
+#    - Maps to host ports on Kubernetes nodes (30000-32767 range)
+#
+# Example Flow:
+#   Container listens on: 8080 (haproxy.ports.http)
+#   Named as: "http" in container port spec
+#   Service exposes as: 80 (haproxy.service.http.port)
+#   Service targetPort: http (references the named port)
+#   NodePort maps to: 30080 (haproxy.service.http.nodePort)
+#   External access: http://node-ip:30080 → Service:80 → Pod:8080
+#
+# =============================================================================
+
 # Replica count for controller
 # Default: 2 replicas for high availability with leader election
 # Only the leader replica deploys configs; followers remain ready for failover
@@ -26,6 +59,14 @@ controller:
   # Exposes /debug/vars and /debug/pprof endpoints for introspection
   # Access via: kubectl port-forward pod/controller-xxx 6060:6060
   debugPort: 0
+
+  # Controller container ports
+  # These are the ports the controller container listens on
+  # Services and health probes reference these by name
+  ports:
+    healthz: 8080   # Health check endpoint
+    metrics: 9090   # Prometheus metrics endpoint
+    webhook: 9443   # Admission webhook HTTPS endpoint
 
   # Template libraries
   # Control which predefined template libraries to include
@@ -137,10 +178,12 @@ controller:
 
     podSelector:
       matchLabels:
-        app: haproxy
-        component: loadbalancer
+        app.kubernetes.io/component: loadbalancer
+        # app.kubernetes.io/name and app.kubernetes.io/instance are set dynamically by template
 
     controller:
+      # Health check and metrics ports
+      # These must match the container ports defined in controller.ports
       healthzPort: 8080
       metricsPort: 9090
 
@@ -166,7 +209,7 @@ controller:
         retryPeriod: 2s
 
     dataplane:
-      port: 5555
+      # port: References haproxy.ports.dataplane (set in template)
       # Minimum time between consecutive deployments (rate limiting)
       # Prevents rapid-fire deployments from hammering HAProxy instances
       # Default: 2s
@@ -197,11 +240,7 @@ controller:
         # to show internal routing decisions
         debug: true
 
-        # HAProxy bind ports for HTTP and HTTPS frontends
-        # These are the ports HAProxy listens on inside the container
-        # The HAProxy Service (haproxyService) exposes these ports externally
-        httpPort: 8080
-        httpsPort: 8443
+        # HAProxy bind ports are defined in haproxy.ports (referenced by templates)
 
     watchedResourcesIgnoreFields:
       - metadata.managedFields
@@ -274,8 +313,7 @@ webhook:
   # Requires watched_resources to have enable_validation_webhook: true
   enabled: true
 
-  # Webhook HTTPS server port (inside container)
-  port: 9443
+  # Webhook HTTPS server port is defined in controller.ports.webhook
 
   # Secret name containing webhook TLS certificates
   # The Secret must contain keys: tls.crt, tls.key, ca.crt
@@ -387,88 +425,71 @@ podAnnotations: { }
 # Pod labels
 podLabels: { }
 
+# Priority class for pod scheduling
+# Used to mark critical workloads for preferential scheduling and preemption
+# Common values:
+#   - system-cluster-critical: Highest priority for cluster infrastructure
+#   - system-node-critical: High priority for node management components
+#   - "" (empty): Default priority (recommended for most deployments)
+# Requires priority class to be pre-created in the cluster
+priorityClassName: ""
+
+# Topology spread constraints for high availability
+# Controls pod distribution across topology domains (zones, nodes, etc.)
+# Default: [] (empty, user opt-in)
+# Example for zone spreading:
+#   - maxSkew: 1
+#     topologyKey: topology.kubernetes.io/zone
+#     whenUnsatisfiable: DoNotSchedule
+#     labelSelector:
+#       matchLabels:
+#         app.kubernetes.io/name: haproxy-template-ic
+#         app.kubernetes.io/component: controller
+topologySpreadConstraints: []
+
 # Pod security context
-podSecurityContext: { }
-# fsGroup: 2000
+# Complies with Pod Security Standards (PSS) Restricted profile
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532  # nonroot user
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
 
 # Container security context
-securityContext: { }
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-# runAsUser: 1000
+# Complies with Pod Security Standards (PSS) Restricted profile
+# No capabilities required - controller uses only standard syscalls
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
 
 # Service configuration
 # Exposes controller endpoints (health and metrics)
+# Ports are defined in controller.ports and referenced in template
 service:
   type: ClusterIP
-  # Health check endpoint port
-  healthzPort: 8080
-  # Prometheus metrics endpoint port
-  # Must match controller.config.controller.metrics_port
-  metricsPort: 9090
-
-# HAProxy Service configuration
-# Service for HAProxy pods (deployed separately from this chart)
-# Creates a Service that routes traffic to HAProxy pods matching controller.config.podSelector
-haproxyService:
-  # Enable HAProxy Service creation
-  # Set to false if you manage your own HAProxy Service externally
-  enabled: true
-
-  # Service type
-  # - ClusterIP: Internal cluster access only (default)
-  # - LoadBalancer: Expose externally via cloud provider load balancer
-  # - NodePort: Expose on each node's IP at a static port
-  type: ClusterIP
-
-  # HTTP port (exposed on Service)
-  httpPort: 80
-
-  # HTTPS port (exposed on Service)
-  httpsPort: 443
-
-  # NodePort configuration (only used when type: NodePort)
-  # If not specified, Kubernetes will auto-assign ports in the range 30000-32767
-  # httpNodePort: 30080
-  # httpsNodePort: 30443
-
-  # LoadBalancer configuration (only used when type: LoadBalancer)
-  # Static IP address for the LoadBalancer (cloud provider specific)
-  loadBalancerIP: ""
-
-  # External traffic policy
-  # - Cluster: Traffic may be routed to any node (default)
-  # - Local: Traffic only routed to nodes with HAProxy pods (preserves source IP)
-  externalTrafficPolicy: ""
-
-  # Additional annotations for the Service
-  # Useful for cloud provider specific configuration
-  # Example for AWS:
-  #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-  #   service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
-  annotations: {}
-
-  # Additional labels for the Service
-  labels: {}
 
 # Liveness and readiness probes
-# Disabled until /healthz endpoint is implemented in the controller
-# livenessProbe:
-#   httpGet:
-#     path: /healthz
-#     port: healthz
-#   initialDelaySeconds: 10
-#   periodSeconds: 10
-#
-# readinessProbe:
-#   httpGet:
-#     path: /healthz
-#     port: healthz
-#   initialDelaySeconds: 5
-#   periodSeconds: 5
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: healthz
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: healthz
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 3
 
 # Resources limits and requests
 # Note: The controller automatically detects and respects container resource limits:
@@ -477,17 +498,17 @@ haproxyService:
 #
 # The AUTOMEMLIMIT environment variable can be used to adjust the memory limit ratio (default: 0.9)
 # Example: AUTOMEMLIMIT=0.8 sets GOMEMLIMIT to 80% of the container memory limit
-resources: { }
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+#
+# Default requests ensure proper scheduling and QoS (Burstable class)
+# Limits can be set based on workload requirements
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  # Optional limits - comment out if you prefer unbounded limits
   # limits:
-  #   cpu: 200m
-  #   memory: 256Mi
-  # requests:
-  #   cpu: 100m
-#   memory: 128Mi
+  #   cpu: 500m
+  #   memory: 512Mi
 
 # Node selector
 nodeSelector: { }
@@ -507,8 +528,10 @@ autoscaling:
   # targetMemoryUtilizationPercentage: 80
 
 # Pod Disruption Budget
+# Enabled by default to protect against simultaneous pod eviction during cluster operations
+# Only applies when replicaCount > 1 (see template conditional)
 podDisruptionBudget:
-  enabled: false
+  enabled: true
   # Only one of minAvailable or maxUnavailable should be set
   minAvailable: 1
   # maxUnavailable: 1
@@ -561,6 +584,15 @@ haproxy:
   # Set to false to use external HAProxy pods (bring your own HAProxy)
   enabled: true
 
+  # HAProxy container ports
+  # These are the ports HAProxy listens on inside the container
+  # Services and NetworkPolicies reference these by name or value
+  ports:
+    http: 8080       # HTTP frontend
+    https: 8443      # HTTPS frontend
+    stats: 8404      # Health/stats page
+    dataplane: 5555  # Dataplane API (for controller communication)
+
   # Number of HAProxy replicas
   replicaCount: 2
 
@@ -573,27 +605,29 @@ haproxy:
     tag: "3.2"
 
   # HAProxy service configuration
+  # Service exposes HAProxy container ports externally
+  # targetPort references are defined in template using named ports
   service:
     type: NodePort
     annotations: {}
     http:
       port: 80
-      targetPort: 8080
+      # targetPort: http (set in template)
       nodePort: 30080
     https:
       port: 443
-      targetPort: 8443
+      # targetPort: https (set in template)
       nodePort: 30443
     stats:
       port: 8404
-      targetPort: 8404
+      # targetPort: stats (set in template)
       nodePort: 30404
 
   # Dataplane API sidecar configuration
   dataplane:
     service:
       type: ClusterIP
-      port: 5555
+      # port references haproxy.ports.dataplane (set in template)
     credentials:
       # These are referenced by credentialsSecretRef in controller.config
       # The secret is created by the chart's credentials template
@@ -608,6 +642,63 @@ haproxy:
     requests:
       cpu: 100m
       memory: 128Mi
+
+  # Priority class for pod scheduling
+  # Used to mark critical workloads for preferential scheduling and preemption
+  # Common values:
+  #   - system-cluster-critical: Highest priority for cluster infrastructure
+  #   - system-node-critical: High priority for node management components
+  #   - "" (empty): Default priority (recommended for most deployments)
+  # Requires priority class to be pre-created in the cluster
+  priorityClassName: ""
+
+  # Topology spread constraints for high availability
+  # Controls pod distribution across topology domains (zones, nodes, etc.)
+  # Default: [] (empty, user opt-in)
+  # Example for zone spreading:
+  #   - maxSkew: 1
+  #     topologyKey: topology.kubernetes.io/zone
+  #     whenUnsatisfiable: DoNotSchedule
+  #     labelSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/name: haproxy-template-ic
+  #         app.kubernetes.io/component: loadbalancer
+  topologySpreadConstraints: []
+
+  # Pod security context for HAProxy deployment
+  # Complies with Pod Security Standards (PSS) Restricted profile
+  # HAProxy runs as user 99 (haproxy user in the container image)
+  # NO NET_BIND_SERVICE capability required - HAProxy binds to unprivileged ports (8080, 8443, 8404)
+  # Kubernetes Service handles mapping to privileged ports (80, 443)
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 99      # haproxy user
+    runAsGroup: 99
+    fsGroup: 99
+    seccompProfile:
+      type: RuntimeDefault
+
+  # HAProxy container security context
+  # No readOnlyRootFilesystem - HAProxy needs writable /etc/haproxy for runtime updates
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    runAsNonRoot: true
+    runAsUser: 99
+
+  # Dataplane API sidecar container security context
+  # Uses readOnlyRootFilesystem with volume mounts for writable directories:
+  # - /tmp for SPOE (Stream Processing Offload Engine) configuration
+  # - /var/lib/dataplaneapi for transactions and backups
+  # - /etc/haproxy for HAProxy config (shared with HAProxy container)
+  dataplaneSidecarSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 99
 
   # Initial HAProxy configuration
   # This provides a minimal working config until the controller deploys the full config
@@ -634,7 +725,88 @@ haproxy:
     backend default_backend
         http-request return status 404
 
-# NetworkPolicy configuration
+  # NetworkPolicy configuration for HAProxy loadbalancer pods
+  # This controls network access to/from HAProxy pods that handle incoming traffic
+  #
+  # !!! warning "CNI Plugin Requirement"
+  #     NetworkPolicies require a CNI plugin that supports NetworkPolicy enforcement
+  #     (e.g., Calico, Cilium, Weave Net). Clusters without a compatible CNI plugin
+  #     will ignore NetworkPolicy resources. kind clusters use kindnet by default,
+  #     which does NOT support NetworkPolicy. To test NetworkPolicies with kind,
+  #     install Calico or Cilium.
+  #
+  # !!! warning "Deny-All Prevention"
+  #     Setting allowExternal: false with empty allowedSources will cause
+  #     Helm installation to fail with a validation error. This prevents
+  #     accidental creation of a deny-all policy that blocks all traffic.
+  #     Either set allowExternal: true OR provide allowedSources.
+  networkPolicy:
+    # Enable NetworkPolicy for HAProxy loadbalancer pods
+    # Disabled by default to match common ingress controller practice
+    # Enable in production to restrict network access
+    enabled: false
+
+    # Allow external traffic (from any source including internet)
+    # true: Allow traffic from any source (required for public-facing ingress with NodePort/LoadBalancer)
+    # false: Only allow from specific sources defined in allowedSources
+    #
+    # When true, the NetworkPolicy omits the 'from' clause for HTTP/HTTPS ingress rules,
+    # which is the standard Kubernetes pattern for allowing traffic from any source.
+    allowExternal: true
+
+    # When allowExternal: false, define allowed traffic sources
+    # REQUIRED if allowExternal is false - empty list will cause Helm validation error
+    #
+    # Example - allow only from specific namespaces:
+    # allowedSources:
+    #   - namespaceSelector:
+    #       matchLabels:
+    #         kubernetes.io/metadata.name: frontend
+    #     podSelector:
+    #       matchLabels:
+    #         app: nginx
+    #
+    # Example - allow from any pod in specific namespaces:
+    # allowedSources:
+    #   - namespaceSelector:
+    #       matchLabels:
+    #         environment: production
+    #
+    # Example - allow from specific IP ranges:
+    # allowedSources:
+    #   - ipBlock:
+    #       cidr: 10.0.0.0/8
+    #       except:
+    #         - 10.1.0.0/16
+    allowedSources: []
+
+    # Additional custom ingress rules
+    # These are added to the NetworkPolicy as-is
+    # Use this for advanced scenarios not covered by the default rules
+    # Example:
+    # extraIngress:
+    #   - from:
+    #       - ipBlock:
+    #           cidr: 192.168.1.0/24
+    #     ports:
+    #       - port: 8080
+    extraIngress: []
+
+    # Additional custom egress rules
+    # Default egress rules allow DNS and backend service connections
+    # Use this to add additional egress restrictions
+    # Example:
+    # extraEgress:
+    #   - to:
+    #       - namespaceSelector:
+    #           matchLabels:
+    #             name: external-api
+    #     ports:
+    #       - port: 443
+    extraEgress: []
+
+# NetworkPolicy configuration for controller pods
+# This controls network access to/from the controller that manages HAProxy configurations
 networkPolicy:
   enabled: true
 
@@ -662,19 +834,20 @@ networkPolicy:
       # Pod selector for HAProxy pods
       podSelector:
         matchLabels:
-          app: haproxy
-          component: loadbalancer
+          app.kubernetes.io/component: loadbalancer
+          # app.kubernetes.io/name and app.kubernetes.io/instance are set dynamically by template
       # Namespace selector - empty {} means all namespaces
       namespaceSelector: { }
-      ports:
-        - port: 5555  # Dataplane API
-          protocol: TCP
-        - port: 8404  # Health/stats
-          protocol: TCP
+      # Ports are defined in haproxy.ports (referenced in template)
 
     # Additional custom egress rules
-    additionalRules: [ ]
-    # Example:
+    additionalRules:
+      # Allow HAProxy (load balancer) to connect to any backend service in the cluster
+      # This is required for HAProxy to proxy traffic and perform health checks
+      - to:
+          - namespaceSelector: {}  # All namespaces
+          - podSelector: {}        # All pods
+    # Example of additional custom rule:
     # - to:
     #     - namespaceSelector:
     #         matchLabels:
@@ -702,9 +875,7 @@ networkPolicy:
       #   matchLabels:
       #     name: monitoring
       #     kubernetes.io/metadata.name: monitoring
-      ports:
-        - port: 9090  # Metrics endpoint
-          protocol: TCP
+      # Port is defined in controller.ports.metrics (referenced in template)
 
     # Allow health checks from load balancers/ingress
     healthChecks:
@@ -712,9 +883,7 @@ networkPolicy:
       # Allow from anywhere for health checks
       from:
         - podSelector: { }
-      ports:
-        - port: 8080  # Healthz
-          protocol: TCP
+      # Port is defined in controller.ports.healthz (referenced in template)
 
     # Allow controller to access HAProxy Dataplane API
     # IMPORTANT: This is required for the controller to sync configurations
@@ -723,9 +892,7 @@ networkPolicy:
       # Allow from controller pods in the same namespace
       from:
         - podSelector: { }
-      ports:
-        - port: 5555  # Dataplane API
-          protocol: TCP
+      # Port is defined in haproxy.ports.dataplane (referenced in template)
 
     # Allow Kubernetes API server to call webhook
     # IMPORTANT: Enable this when webhook is enabled with NetworkPolicy

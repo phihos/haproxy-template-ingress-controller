@@ -95,7 +95,10 @@ func TestPathResolver_GetPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolver.GetPath(tt.filename, tt.args...)
+			// GetPath expects all arguments in a single variadic call
+			args := []interface{}{tt.filename}
+			args = append(args, tt.args...)
+			got, err := resolver.GetPath(args...)
 
 			if tt.wantErr {
 				require.Error(t, err)

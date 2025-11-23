@@ -341,11 +341,11 @@ assert_rate_limited() {
 
     # Get HAProxy service ClusterIP to test from within cluster
     local haproxy_ip
-    haproxy_ip=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic get svc haproxy-production -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+    haproxy_ip=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic get svc haproxy-template-ic-haproxy -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
 
     if [[ -z "$haproxy_ip" ]]; then
-        warn "Could not get HAProxy ClusterIP, falling back to NodePort test"
-        haproxy_ip="localhost:${NODEPORT}"
+        warn "Could not get HAProxy ClusterIP, using service DNS name"
+        haproxy_ip="haproxy-template-ic-haproxy.haproxy-template-ic.svc"
     fi
 
     # Send significantly more requests to ensure rate limiting triggers reliably
@@ -356,19 +356,52 @@ assert_rate_limited() {
     # This prevents SNAT issues that occur when testing from host via NodePort
     local pod_name="rate-limit-test-$$"
 
+    debug "  Creating test pod: $pod_name"
+    debug "  Target: $haproxy_ip, Requests: $request_count"
+
     # Create pod with parallel requests to trigger rate limiting quickly
     # Use xargs with -P to run multiple curl commands in parallel
-    kubectl --context "kind-${CLUSTER_NAME}" run "$pod_name" \
+    local create_output
+    if ! create_output=$(kubectl --context "kind-${CLUSTER_NAME}" run "$pod_name" \
         --image=alpine/curl \
         --restart=Never \
-        --command -- sh -c 'seq 1 $4 | xargs -I{} -P10 sh -c "curl -s -o /dev/null -w \"%{http_code}\n\" -H \"Host: $2\" \"http://$1$3\""' -- "$haproxy_ip" "$host" "$path" "$request_count" >/dev/null 2>&1
+        --command -- sh -c 'seq 1 $4 | xargs -I{} -P10 sh -c "curl -s -o /dev/null -w \"%{http_code}\n\" -H \"Host: $2\" \"http://$1$3\""' -- "$haproxy_ip" "$host" "$path" "$request_count" 2>&1); then
+        err "$description - Failed to create test pod"
+        debug "  Error: $create_output"
+        return 1
+    fi
 
     # Wait for pod to complete (skip Ready check as pod may complete before becoming Ready)
-    kubectl --context "kind-${CLUSTER_NAME}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$pod_name" --timeout=15s >/dev/null 2>&1
+    local wait_output
+    if ! wait_output=$(kubectl --context "kind-${CLUSTER_NAME}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$pod_name" --timeout=15s 2>&1); then
+        err "$description - Test pod did not complete successfully"
+        debug "  Wait error: $wait_output"
+
+        # Show pod status for debugging
+        local pod_status
+        pod_status=$(kubectl --context "kind-${CLUSTER_NAME}" get pod "$pod_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "not found")
+        debug "  Pod status: $pod_status"
+
+        # Try to get logs anyway for debugging
+        local pod_logs
+        pod_logs=$(kubectl --context "kind-${CLUSTER_NAME}" logs "$pod_name" 2>&1 || echo "")
+        if [[ -n "$pod_logs" ]]; then
+            debug "  Pod logs: $pod_logs"
+        fi
+
+        # Clean up pod
+        kubectl --context "kind-${CLUSTER_NAME}" delete pod "$pod_name" >/dev/null 2>&1
+        return 1
+    fi
 
     # Get logs
     local output
-    output=$(kubectl --context "kind-${CLUSTER_NAME}" logs "$pod_name" 2>/dev/null)
+    if ! output=$(kubectl --context "kind-${CLUSTER_NAME}" logs "$pod_name" 2>&1); then
+        err "$description - Failed to get test pod logs"
+        debug "  Logs error: $output"
+        kubectl --context "kind-${CLUSTER_NAME}" delete pod "$pod_name" >/dev/null 2>&1
+        return 1
+    fi
 
     # Clean up pod
     kubectl --context "kind-${CLUSTER_NAME}" delete pod "$pod_name" >/dev/null 2>&1
@@ -470,12 +503,12 @@ wait_for_services_ready() {
     # Step 1: Wait for HAProxy pods to be ready
     log INFO "Checking HAProxy pod readiness..."
     if ! kubectl -n haproxy-template-ic wait --for=condition=ready pod \
-        -l app=haproxy --timeout=120s >/dev/null 2>&1; then
+        -l app.kubernetes.io/component=loadbalancer --timeout=120s >/dev/null 2>&1; then
         echo
         err "HAProxy pods are not ready after 120s"
         echo
         echo "HAProxy pod status:"
-        kubectl -n haproxy-template-ic get pods -l app=haproxy
+        kubectl -n haproxy-template-ic get pods -l app.kubernetes.io/component=loadbalancer
         echo
         echo "Recent pod events:"
         kubectl -n haproxy-template-ic get events --sort-by='.lastTimestamp' | tail -10
@@ -608,7 +641,7 @@ wait_for_services_ready() {
                 # Also verify the configuration actually contains backends
                 # Use // "" to convert null to empty string before grep
                 local backend_count=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
-                    jq -r '.items[0].spec.content // ""' | grep -c "^backend.*echo" 2>/dev/null || echo 0)
+                    jq -r '.items[0].spec.content // ""' | grep -c "^backend.*echo" 2>/dev/null)
 
                 debug "Configuration has $backend_count echo backends"
 
@@ -644,7 +677,7 @@ wait_for_services_ready() {
         echo
         echo "Backend count in HAProxyCfg:"
         kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
-            jq -r '.items[0].spec.content' | grep "^backend" | wc -l || echo "  0"
+            jq -r '.items[0].spec.content' | grep -c "^backend" 2>/dev/null || echo "  0"
         echo
         echo "Controller logs (last 30 lines):"
         kubectl -n haproxy-template-ic logs -l app.kubernetes.io/name=haproxy-template-ic --tail=30 2>/dev/null || echo "  (no logs available)"
@@ -698,7 +731,7 @@ wait_for_services_ready() {
         echo
         echo "Diagnostics:"
         echo "  HAProxy pods:"
-        kubectl -n haproxy-template-ic get pods -l app=haproxy
+        kubectl -n haproxy-template-ic get pods -l app.kubernetes.io/component=loadbalancer
         echo
         echo "  Echo pods:"
         kubectl -n echo get pods
@@ -707,10 +740,10 @@ wait_for_services_ready() {
         kubectl -n echo get endpoints
         echo
         echo "  HAProxy logs (last 20 lines):"
-        kubectl -n haproxy-template-ic logs -l app=haproxy --tail=20 -c haproxy 2>/dev/null || echo "  (no logs available)"
+        kubectl -n haproxy-template-ic logs -l app.kubernetes.io/component=loadbalancer --tail=20 -c haproxy 2>/dev/null || echo "  (no logs available)"
         echo
         echo "  Controller logs (last 20 lines):"
-        kubectl -n haproxy-template-ic logs -l app=haproxy-template-ic --tail=20 2>/dev/null || echo "  (no logs available)"
+        kubectl -n haproxy-template-ic logs deployment/haproxy-template-ic --tail=20 2>/dev/null || echo "  (no logs available)"
         echo
         exit 1
     fi
@@ -1198,11 +1231,11 @@ test_ingress_scale_slots() {
     # Verify server slots in HAProxy config
     # This is a capacity planning feature - verify it's configured correctly
     local haproxy_pod
-    haproxy_pod=$(kubectl --context "kind-${CLUSTER_NAME}" -n echo get pods -l app=haproxy -o name 2>/dev/null | head -n1)
+    haproxy_pod=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic get pods -l app.kubernetes.io/component=loadbalancer -o name 2>/dev/null | head -n1)
 
     if [[ -n "$haproxy_pod" ]]; then
         local backend_config
-        backend_config=$(kubectl --context "kind-${CLUSTER_NAME}" -n echo exec "$haproxy_pod" -- cat /etc/haproxy/haproxy.cfg 2>/dev/null | grep -A 20 "backend.*echo-scale-slots")
+        backend_config=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic exec "$haproxy_pod" -c haproxy -- cat /etc/haproxy/haproxy.cfg 2>/dev/null | grep -A 20 "backend.*echo-scale-slots")
 
         if echo "$backend_config" | grep -q "server-template\|scale-server-slots"; then
             ok "Server slot pre-allocation configured in HAProxy"

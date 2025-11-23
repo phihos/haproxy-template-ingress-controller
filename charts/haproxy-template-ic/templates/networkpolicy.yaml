@@ -57,10 +57,10 @@ spec:
             {{- toYaml .Values.networkPolicy.egress.haproxyPods.namespaceSelector | nindent 12 }}
           {{- end }}
       ports:
-        {{- range .Values.networkPolicy.egress.haproxyPods.ports }}
-        - port: {{ .port }}
-          protocol: {{ .protocol }}
-        {{- end }}
+        - port: {{ .Values.haproxy.ports.dataplane }}
+          protocol: TCP
+        - port: {{ .Values.haproxy.ports.stats }}
+          protocol: TCP
     {{- end }}
 
     {{- with .Values.networkPolicy.egress.additionalRules }}
@@ -75,10 +75,8 @@ spec:
     - from:
         {{- toYaml .Values.networkPolicy.ingress.healthChecks.from | nindent 8 }}
       ports:
-        {{- range .Values.networkPolicy.ingress.healthChecks.ports }}
-        - port: {{ .port }}
-          protocol: {{ .protocol }}
-        {{- end }}
+        - port: {{ .Values.controller.ports.healthz }}
+          protocol: TCP
     {{- end }}
 
     {{- if .Values.networkPolicy.ingress.dataplaneApi.enabled }}
@@ -86,10 +84,8 @@ spec:
     - from:
         {{- toYaml .Values.networkPolicy.ingress.dataplaneApi.from | nindent 8 }}
       ports:
-        {{- range .Values.networkPolicy.ingress.dataplaneApi.ports }}
-        - port: {{ .port }}
-          protocol: {{ .protocol }}
-        {{- end }}
+        - port: {{ .Values.haproxy.ports.dataplane }}
+          protocol: TCP
     {{- end }}
 
     {{- if .Values.networkPolicy.ingress.monitoring.enabled }}
@@ -102,10 +98,8 @@ spec:
             {{- toYaml .Values.networkPolicy.ingress.monitoring.namespaceSelector | nindent 12 }}
           {{- end }}
       ports:
-        {{- range .Values.networkPolicy.ingress.monitoring.ports }}
-        - port: {{ .port }}
-          protocol: {{ .protocol }}
-        {{- end }}
+        - port: {{ .Values.controller.ports.metrics }}
+          protocol: TCP
     {{- end }}
 
     {{- if and .Values.webhook.enabled .Values.networkPolicy.ingress.webhook.enabled }}
@@ -113,7 +107,7 @@ spec:
     - from:
         {{- toYaml .Values.networkPolicy.ingress.webhook.from | nindent 8 }}
       ports:
-        - port: {{ .Values.webhook.port }}
+        - port: {{ .Values.controller.ports.webhook }}
           protocol: TCP
     {{- end }}
 

@@ -745,13 +745,15 @@ func clearValidationDirectories(paths ValidationPaths) error {
 
 // resolveAuxiliaryFilePath determines the full path for an auxiliary file.
 // It handles three cases:
-// - Absolute paths: used as-is.
+// - Absolute paths: Extract filename and use fallback directory (for validation with temp directories).
 // - Relative paths with subdirectories (e.g., "maps/hosts.map"): resolved relative to config directory.
 // - Simple filenames: written to the specified fallback directory.
 func resolveAuxiliaryFilePath(filePath, configDir, fallbackDir string) string {
 	if filepath.IsAbs(filePath) {
-		// Absolute path - use as is
-		return filePath
+		// Absolute path - extract filename and use fallback directory
+		// This allows validation to work with temp directories instead of production paths
+		// Example: /etc/haproxy/ssl/cert.pem → <tmpdir>/ssl/cert.pem
+		return filepath.Join(fallbackDir, filepath.Base(filePath))
 	}
 
 	if strings.Contains(filePath, string(filepath.Separator)) {

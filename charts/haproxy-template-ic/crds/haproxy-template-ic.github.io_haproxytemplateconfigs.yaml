@@ -207,11 +207,11 @@ spec:
                 additionalProperties:
                   description: "GeneralFile defines a general file generated from
                     a template.\n\nThe filename is derived from the map key in the
-                    configuration.\nThe full path is constructed using the get_path
-                    filter in templates:\n\n\tExample: \"503.http\" | get_path(\"file\")
-                    returns /etc/haproxy/general/503.http\n\nIMPORTANT: This is a
-                    Kubernetes CRD type. When modifying this struct, you must also
-                    update:\n  - The internal config type: pkg/core/config/types.go
+                    configuration.\nThe full path is constructed using the pathResolver.GetPath()
+                    method in templates:\n\n\tExample: pathResolver.GetPath(\"503.http\",
+                    \"file\") returns /etc/haproxy/general/503.http\n\nIMPORTANT:
+                    This is a Kubernetes CRD type. When modifying this struct, you
+                    must also update:\n  - The internal config type: pkg/core/config/types.go
                     (GeneralFile)\n  - The conversion logic: pkg/controller/conversion/converter.go
                     (ConvertSpec function - files section)"
                   properties:

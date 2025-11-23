@@ -18,7 +18,7 @@ templateSnippets:
   # Uses crt-list for certificate management with per-certificate OCSP configuration
   util-ssl-bind-options:
     template: >-
-      {{- " " -}}ssl crt-list {{ "certificate-list.txt" | get_path("crt-list") }} alpn h2,http/1.1
+      {{- " " -}}ssl crt-list {{ pathResolver.GetPath("certificate-list.txt", "crt-list") }} alpn h2,http/1.1
 
   # Feature initialization - must run early to initialize SSL infrastructure
   # Resource libraries (gateway.yaml, haproxytech.yaml, ingress.yaml) register SSL features here
@@ -56,7 +56,7 @@ templateSnippets:
       {#- Generate entries for each registered TLS certificate #}
       {%- for tls_cert in global_features.tls_certificates | default([]) %}
         {%- set cert_filename = tls_cert.secret_namespace ~ "_" ~ tls_cert.secret_name ~ ".pem" %}
-        {%- set cert_path = "" | get_path("cert") ~ "/" ~ cert_filename %}
+        {%- set cert_path = pathResolver.GetPath("", "cert") ~ "/" ~ cert_filename %}
         {%- set ssl_options = "[ocsp-update on]" %}
         {%- set sni_list = tls_cert.sni_patterns | join(" ") %}
         {%- set line = cert_path ~ " " ~ ssl_options ~ " " ~ sni_list %}
@@ -64,7 +64,7 @@ templateSnippets:
       {%- endfor %}
 
       {#- Default certificate (no SNI filter = matches everything not matched above) #}
-      {%- set default_line = "" | get_path("cert") ~ "/default.pem [ocsp-update on]" %}
+      {%- set default_line = pathResolver.GetPath("", "cert") ~ "/default.pem [ocsp-update on]" %}
       {%- set ns.crtlist_lines = ns.crtlist_lines.append(default_line) %}
 
       {#- Register the crt-list file with file_registry #}

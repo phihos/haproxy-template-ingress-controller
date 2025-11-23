@@ -147,7 +147,7 @@ func setupValidation(logger *slog.Logger) (*v1alpha1.HAProxyTemplateConfigSpec, 
 	}
 
 	// Create template engine with custom filters
-	engine, err := createTemplateEngine(configSpec, validationPaths, logger)
+	engine, err := createTemplateEngine(configSpec, logger)
 	if err != nil {
 		cleanupFunc()
 		return nil, nil, dataplane.ValidationPaths{}, nil, err
@@ -320,7 +320,7 @@ func loadConfigFromFile(filePath string) (*v1alpha1.HAProxyTemplateConfigSpec, e
 }
 
 // createTemplateEngine creates and compiles the template engine from config spec with custom filters.
-func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, validationPaths dataplane.ValidationPaths, logger *slog.Logger) (*templating.TemplateEngine, error) {
+func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, logger *slog.Logger) (*templating.TemplateEngine, error) {
 	// Extract all template sources
 	templates := make(map[string]string)
 
@@ -347,17 +347,9 @@ func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, valida
 		templates[name] = cert.Template
 	}
 
-	// Create path resolver for get_path filter
-	pathResolver := &templating.PathResolver{
-		MapsDir:    validationPaths.MapsDir,
-		SSLDir:     validationPaths.SSLCertsDir,
-		CRTListDir: validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
-		GeneralDir: validationPaths.GeneralStorageDir,
-	}
-
 	// Register custom filters
+	// Note: pathResolver is now passed via rendering context by TestRunner
 	filters := map[string]templating.FilterFunc{
-		"get_path":   pathResolver.GetPath,
 		"glob_match": templating.GlobMatch,
 		"b64decode":  templating.B64Decode,
 	}

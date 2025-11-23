@@ -37,6 +37,7 @@ import (
 //	  "template_snippets": ["snippet1", "snippet2", ...]  // Sorted by priority
 //	  "config": Config,  // Controller configuration (e.g., config.debug.headers.enabled)
 //	  "file_registry": FileRegistry,  // For dynamic auxiliary file registration
+//	  "pathResolver": PathResolver,  // For resolving file paths (e.g., {{ pathResolver.GetPath("cert.pem", "cert") }})
 //	}
 //
 // Templates can access resources:
@@ -70,6 +71,10 @@ import (
 //	{%- set ca_content = secret.data["ca.crt"] | b64decode %}
 //	{%- set ca_path = file_registry.Register("cert", "ca.pem", ca_content) %}
 //	server backend:443 ssl ca-file {{ ca_path }} verify required
+//
+// And resolve static file paths:
+//
+//	use_backend {{ backend_name }} if { req.hdr(host) -f {{ pathResolver.GetPath("host.map", "map") }} }
 func (c *Component) buildRenderingContext() (map[string]interface{}, *FileRegistry) {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
@@ -115,6 +120,7 @@ func (c *Component) buildRenderingContext() (map[string]interface{}, *FileRegist
 		"controller":        controller,
 		"template_snippets": snippetNames,
 		"file_registry":     fileRegistry,
+		"pathResolver":      c.pathResolver,
 	}
 
 	// Merge extraContext variables into top-level context

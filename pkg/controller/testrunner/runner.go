@@ -216,7 +216,7 @@ func New(
 // createWorkerEngine creates a template engine with per-test PathResolver for isolated validation.
 // Each engine instance clones gonja's builtin filters to avoid global state conflicts during
 // concurrent test execution. This allows true parallel execution across multiple workers.
-func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templating.TemplateEngine, error) {
+func (r *Runner) createWorkerEngine() (*templating.TemplateEngine, error) {
 	// Extract all template sources (same as in validate.go)
 	templates := make(map[string]string)
 
@@ -243,17 +243,9 @@ func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templ
 		templates[name] = cert.Template
 	}
 
-	// Create path resolver with test-specific paths
-	pathResolver := &templating.PathResolver{
-		MapsDir:    testPaths.MapsDir,
-		SSLDir:     testPaths.SSLCertsDir,
-		CRTListDir: testPaths.SSLCertsDir, // CRT-list files stored in SSL directory
-		GeneralDir: testPaths.GeneralStorageDir,
-	}
-
-	// Register custom filters with test-specific paths
+	// Register custom filters
+	// Note: pathResolver is created in buildRenderingContext() and passed via rendering context
 	filters := map[string]templating.FilterFunc{
-		"get_path":   pathResolver.GetPath,
 		"glob_match": templating.GlobMatch,
 		"b64decode":  templating.B64Decode,
 	}
@@ -469,7 +461,7 @@ func (r *Runner) testWorker(ctx context.Context, workerID int, tests <-chan test
 
 			// Create unique template engine for this specific test
 			engineCreateStart := time.Now()
-			testEngine, err := r.createWorkerEngine(testPaths)
+			testEngine, err := r.createWorkerEngine()
 			engineCreateDuration := time.Since(engineCreateStart)
 
 			if err != nil {
@@ -704,7 +696,7 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 // buildRenderingContext builds the template rendering context using fixture stores.
 //
 // This mirrors DryRunValidator.buildRenderingContext and Renderer.buildRenderingContext.
-// The context includes resources (fixture stores), template snippets, and controller configuration.
+// The context includes resources (fixture stores), template snippets, file_registry, pathResolver, and controller configuration.
 func (r *Runner) buildRenderingContext(stores map[string]types.Store, validationPaths dataplane.ValidationPaths) map[string]interface{} {
 	// Create resources map with wrapped stores (excluding haproxy-pods)
 	resources := make(map[string]interface{})
@@ -752,6 +744,7 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 		"controller":        controller,
 		"template_snippets": snippetNames,
 		"file_registry":     fileRegistry,
+		"pathResolver":      pathResolver,
 	}
 
 	// Merge extraContext variables into top-level context

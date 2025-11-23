@@ -187,3 +187,12 @@ Uses explicit tag from values (independent versioning from controller)
 {{- define "haproxy-template-ic.haproxy.image" -}}
 {{- printf "%s:%s" .Values.haproxy.image.repository .Values.haproxy.image.tag -}}
 {{- end -}}
+
+{{/*
+Component labels
+Generates app.kubernetes.io/component label for a given component name
+Usage: {{ include "haproxy-template-ic.componentLabels" "loadbalancer" }}
+*/}}
+{{- define "haproxy-template-ic.componentLabels" -}}
+app.kubernetes.io/component: {{ . }}
+{{- end -}}

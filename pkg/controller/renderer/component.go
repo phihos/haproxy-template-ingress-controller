@@ -113,8 +113,8 @@ func New(
 	}
 
 	// Register custom filters
+	// Note: pathResolver is now passed via rendering context, not as a filter
 	filters := map[string]templating.FilterFunc{
-		"get_path":   pathResolver.GetPath,
 		"glob_match": templating.GlobMatch,
 		"b64decode":  templating.B64Decode,
 	}

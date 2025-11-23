@@ -43,14 +43,14 @@ templateSnippets:
       http-request set-var(txn.base) base
       http-request set-var(txn.path) path
       http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
-      http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
-      http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ "host.map" | get_path("map") }},'') if !{ var(txn.host_match) -m found }
+      http-request set-var(txn.host_match) var(txn.host),map({{ pathResolver.GetPath("host.map", "map") }})
+      http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ pathResolver.GetPath("host.map", "map") }},'') if !{ var(txn.host_match) -m found }
 
       # Path matching order: Exact > Regex > Prefix-exact > Prefix
-      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
-      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ "path-regex.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
-      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
-      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ pathResolver.GetPath("path-exact.map", "map") }})
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ pathResolver.GetPath("path-regex.map", "map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ pathResolver.GetPath("path-prefix-exact.map", "map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ pathResolver.GetPath("path-prefix.map", "map") }}) if !{ var(txn.path_match) -m found }
 
       # Parse qualifier from path match (field 1 = qualifier type)
       # Empty string if no path match - falls through gracefully
@@ -73,7 +73,7 @@ templateSnippets:
       http-request set-var(txn.random_weight) rand(),mod(txn.total_weight) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
       http-request set-var(txn.route_key) var(txn.path_match),field(3,:) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
       http-request set-var(txn.lookup_key) var(txn.random_weight),concat(:,txn.route_key,) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
-      http-request set-var(txn.backend_name) var(txn.lookup_key),map({{ "weighted-multi-backend.map" | get_path("map") }}) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
+      http-request set-var(txn.backend_name) var(txn.lookup_key),map({{ pathResolver.GetPath("weighted-multi-backend.map", "map") }}) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
 
       # BACKEND qualifier: direct routing
       # Format: BACKEND:<backend_name>
@@ -167,7 +167,7 @@ maps:
       # base/path-exact.map
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
       # It should be used with the equality string matcher. Example:
-      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
+      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ pathResolver.GetPath("path-exact.map", "map") }})
       {#- Resource libraries populate this map via map-path-exact-* snippets #}
       {%- from "util-macros" import include_matching -%}
       {{- include_matching("map-path-exact-*") -}}
@@ -185,7 +185,7 @@ maps:
       # base/path-prefix.map
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
       # It should be used with the prefix string matcher. Example:
-      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
+      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ pathResolver.GetPath("path-prefix.map", "map") }})
       {#- Resource libraries populate this map via map-path-prefix-* snippets #}
       {%- from "util-macros" import include_matching -%}
       {{- include_matching("map-path-prefix-*") -}}
@@ -195,7 +195,7 @@ maps:
       # base/path-regex.map
       # This map is used to match the host header (without ":port") concatenated with the requested path (without query params) to an HAProxy backend defined in haproxy.cfg.
       # It should be used with the regex string matcher. Example:
-      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ "path-regex.map" | get_path("map") }})
+      #   http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ pathResolver.GetPath("path-regex.map", "map") }})
       {#- Resource libraries populate this map via map-path-regex-* snippets #}
       {%- from "util-macros" import include_matching -%}
       {{- include_matching("map-path-regex-*") -}}
@@ -310,13 +310,13 @@ haproxyConfig:
         timeout connect 5000
         timeout client 50000
         timeout server 50000
-        errorfile 400 {{ "400.http" | get_path("file") }}
-        errorfile 403 {{ "403.http" | get_path("file") }}
-        errorfile 408 {{ "408.http" | get_path("file") }}
-        errorfile 500 {{ "500.http" | get_path("file") }}
-        errorfile 502 {{ "502.http" | get_path("file") }}
-        errorfile 503 {{ "503.http" | get_path("file") }}
-        errorfile 504 {{ "504.http" | get_path("file") }}
+        errorfile 400 {{ pathResolver.GetPath("400.http", "file") }}
+        errorfile 403 {{ pathResolver.GetPath("403.http", "file") }}
+        errorfile 408 {{ pathResolver.GetPath("408.http", "file") }}
+        errorfile 500 {{ pathResolver.GetPath("500.http", "file") }}
+        errorfile 502 {{ pathResolver.GetPath("502.http", "file") }}
+        errorfile 503 {{ pathResolver.GetPath("503.http", "file") }}
+        errorfile 504 {{ pathResolver.GetPath("504.http", "file") }}
 
     {#- Include global top-level snippets (e.g., userlist sections) #}
     {% include "global-top" %}

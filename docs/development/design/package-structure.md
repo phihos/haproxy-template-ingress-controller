@@ -267,7 +267,7 @@ Both watchers use the event-driven architecture: changes publish events to Event
   - Wraps Gonja v2 for Jinja2-compatible template syntax
   - Provides TemplateEngine with Render(templateName, context) API
   - Custom error types for compilation, rendering, and template-not-found scenarios
-  - Future: Custom filters (b64decode, get_path) will be integrated into higher-level controller rendering components
+  - Custom filters (b64decode) and context methods (pathResolver) are integrated in controller rendering components
 
 **Development Tools:**
 

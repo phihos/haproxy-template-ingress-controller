@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -602,6 +603,7 @@ type reconciliationComponents struct {
 	deploymentScheduler *deployer.DeploymentScheduler
 	driftMonitor        *deployer.DriftPreventionMonitor
 	configPublisher     *ctrlconfigpublisher.Component
+	validationCleanup   func() // Cleanup function for validation temp directories
 }
 
 // leaderOnlyComponents holds components that only the leader should run.
@@ -639,12 +641,11 @@ func createReconciliationComponents(
 		return nil, fmt.Errorf("failed to create renderer: %w", err)
 	}
 
-	// Create HAProxy Validator
-	validationPaths := dataplane.ValidationPaths{
-		MapsDir:           cfg.Dataplane.MapsDir,
-		SSLCertsDir:       cfg.Dataplane.SSLCertsDir,
-		GeneralStorageDir: cfg.Dataplane.GeneralStorageDir,
-		ConfigFile:        cfg.Dataplane.ConfigFile,
+	// Create HAProxy Validator with temp directories
+	// Controller container has readOnlyRootFilesystem: true, so validation must use temp directories
+	validationPaths, validationCleanup, err := createValidationPaths()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create validation paths: %w", err)
 	}
 	haproxyValidatorComponent := validator.NewHAProxyValidator(bus, logger, validationPaths)
 
@@ -689,6 +690,7 @@ func createReconciliationComponents(
 		deploymentScheduler: deploymentSchedulerComponent,
 		driftMonitor:        driftMonitorComponent,
 		configPublisher:     configPublisherComponent,
+		validationCleanup:   validationCleanup,
 	}, nil
 }
 
@@ -868,17 +870,9 @@ func setupWebhook(
 		templates[name] = certDef.Template
 	}
 
-	// Create path resolver for get_path filter
-	pathResolver := &templating.PathResolver{
-		MapsDir:    cfg.Dataplane.MapsDir,
-		SSLDir:     cfg.Dataplane.SSLCertsDir,
-		CRTListDir: cfg.Dataplane.SSLCertsDir, // CRT-list files stored in SSL directory
-		GeneralDir: cfg.Dataplane.GeneralStorageDir,
-	}
-
 	// Register custom filters
+	// Note: pathResolver is created in DryRunValidator and passed via rendering context
 	filters := map[string]templating.FilterFunc{
-		"get_path":   pathResolver.GetPath,
 		"glob_match": templating.GlobMatch,
 		"b64decode":  templating.B64Decode,
 	}
@@ -973,6 +967,11 @@ func setupReconciliation(
 	components, err := createReconciliationComponents(cfg, k8sClient, resourceWatcher, bus, logger)
 	if err != nil {
 		return nil, err
+	}
+
+	// Cleanup validation temp directories when iteration ends
+	if components.validationCleanup != nil {
+		defer components.validationCleanup()
 	}
 
 	// Start all-replica components in background
@@ -1397,4 +1396,41 @@ func parseWebhookCertSecret(resource *unstructured.Unstructured) (*WebhookCertif
 		KeyPEM:  keyPEM,
 		Version: resource.GetResourceVersion(),
 	}, nil
+}
+
+// createValidationPaths creates temporary directories for HAProxy configuration validation.
+// Returns ValidationPaths pointing to temp directories and a cleanup function.
+// The controller container has readOnlyRootFilesystem: true, so validation must use temp directories.
+func createValidationPaths() (dataplane.ValidationPaths, func(), error) {
+	// Create base temp directory for this validation session
+	tempDir, err := os.MkdirTemp("", "haproxy-validate-*")
+	if err != nil {
+		return dataplane.ValidationPaths{}, nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	// Create validation paths using temp directory structure
+	paths := dataplane.ValidationPaths{
+		MapsDir:           filepath.Join(tempDir, "maps"),
+		SSLCertsDir:       filepath.Join(tempDir, "ssl"),
+		GeneralStorageDir: filepath.Join(tempDir, "files"),
+		ConfigFile:        filepath.Join(tempDir, "haproxy.cfg"),
+	}
+
+	// Create subdirectories (validator expects these to exist)
+	for _, dir := range []string{paths.MapsDir, paths.SSLCertsDir, paths.GeneralStorageDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			os.RemoveAll(tempDir) // Cleanup on error
+			return dataplane.ValidationPaths{}, nil, fmt.Errorf("failed to create validation directory %s: %w", dir, err)
+		}
+	}
+
+	cleanup := func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			slog.Warn("failed to cleanup validation temp directory",
+				"path", tempDir,
+				"error", err)
+		}
+	}
+
+	return paths, cleanup, nil
 }

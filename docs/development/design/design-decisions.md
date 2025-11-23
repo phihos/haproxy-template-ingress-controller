@@ -97,7 +97,7 @@ This fix resolves issues where valid HAProxy configurations were rejected during
 - **Jinja2 Compatibility**: Aims for maximum compatibility with Python's Jinja2 engine
 - **Familiarity**: Jinja2 syntax is well-known in operations community
 - **Features**: Full feature set including filters, macros, template inheritance, control flow
-- **Extensibility**: Easy to add custom filters (b64decode, get_path, etc.)
+- **Extensibility**: Easy to add custom filters (b64decode, etc.) and context methods (pathResolver, etc.)
 - **Pure Go**: No external dependencies, requires Go 1.21+
 
 ##### Kubernetes Client Architecture

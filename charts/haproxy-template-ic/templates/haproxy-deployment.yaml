@@ -17,13 +17,26 @@ spec:
     metadata:
       labels:
         {{- include "haproxy-template-ic.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: loadbalancer
-        app: haproxy
-        component: loadbalancer
+        {{- include "haproxy-template-ic.componentLabels" "loadbalancer" | nindent 8 }}
     spec:
+      {{- with .Values.haproxy.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.haproxy.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.haproxy.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         # HAProxy container
         - name: haproxy
+          {{- with .Values.haproxy.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           image: {{ include "haproxy-template-ic.haproxy.image" . }}
           imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
           command: ["/bin/sh", "-c"]
@@ -40,13 +53,13 @@ spec:
               exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.haproxy.ports.http }}
               protocol: TCP
             - name: https
-              containerPort: 8443
+              containerPort: {{ .Values.haproxy.ports.https }}
               protocol: TCP
             - name: stats
-              containerPort: 8404
+              containerPort: {{ .Values.haproxy.ports.stats }}
               protocol: TCP
           volumeMounts:
             - name: config
@@ -56,13 +69,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8404
+              port: stats
             initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /healthz
-              port: 8404
+              port: stats
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:
@@ -70,6 +83,10 @@ spec:
 
         # Dataplane API sidecar
         - name: dataplane
+          {{- with .Values.haproxy.dataplaneSidecarSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           image: {{ include "haproxy-template-ic.haproxy.image" . }}
           imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
           command: ["/bin/sh", "-c"]
@@ -82,9 +99,9 @@ spec:
               done
 
               # Create required directories
+              # Note: Directories owned by user 99 via pod fsGroup, no chown needed
               mkdir -p /var/lib/dataplaneapi/transactions /var/lib/dataplaneapi/backups
               mkdir -p /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/general
-              chown -R haproxy:haproxy /var/lib/dataplaneapi /etc/haproxy
 
               # Create Dataplane API config
               cat > /etc/haproxy/dataplaneapi.yaml <<'EOF'
@@ -92,7 +109,7 @@ spec:
               name: haproxy-dataplaneapi
               dataplaneapi:
                 host: 0.0.0.0
-                port: 5555
+                port: {{ .Values.haproxy.ports.dataplane }}
                 user:
                   - name: {{ .Values.haproxy.dataplane.credentials.username }}
                     password: {{ .Values.haproxy.dataplane.credentials.password }}
@@ -127,27 +144,31 @@ spec:
               exec dataplaneapi -f /etc/haproxy/dataplaneapi.yaml
           ports:
             - name: dataplane
-              containerPort: 5555
+              containerPort: {{ .Values.haproxy.ports.dataplane }}
               protocol: TCP
           volumeMounts:
             - name: haproxy-runtime
               mountPath: /etc/haproxy
+            - name: dataplane-data
+              mountPath: /var/lib/dataplaneapi
+            - name: dataplane-tmp
+              mountPath: /tmp
           livenessProbe:
             httpGet:
               path: /v3/info
-              port: 5555
+              port: dataplane
               httpHeaders:
                 - name: Authorization
-                  value: "Basic YWRtaW46YWRtaW5wYXNz"  # admin:adminpass
+                  value: "Basic {{ printf "%s:%s" .Values.haproxy.dataplane.credentials.username .Values.haproxy.dataplane.credentials.password | b64enc }}"
             initialDelaySeconds: 15
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /v3/info
-              port: 5555
+              port: dataplane
               httpHeaders:
                 - name: Authorization
-                  value: "Basic YWRtaW46YWRtaW5wYXNz"  # admin:adminpass
+                  value: "Basic {{ printf "%s:%s" .Values.haproxy.dataplane.credentials.username .Values.haproxy.dataplane.credentials.password | b64enc }}"
             initialDelaySeconds: 10
             periodSeconds: 5
 
@@ -156,5 +177,9 @@ spec:
           configMap:
             name: {{ include "haproxy-template-ic.fullname" . }}-haproxy-config
         - name: haproxy-runtime
+          emptyDir: {}
+        - name: dataplane-data
+          emptyDir: {}
+        - name: dataplane-tmp
           emptyDir: {}
 {{- end }}
