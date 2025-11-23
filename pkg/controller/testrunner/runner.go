@@ -207,9 +207,9 @@ func New(
 	}
 }
 
-// createWorkerEngine creates a template engine with test-specific path filters.
+// createWorkerEngine creates a template engine with test-specific path resolver.
 //
-// Each test needs its own engine because the `get_path` filter must resolve
+// Each test needs its own engine because the `pathResolver.GetPath()` method must resolve
 // to test-specific directories. This ensures HAProxy can find auxiliary files
 // in the correct test subdirectories.
 //

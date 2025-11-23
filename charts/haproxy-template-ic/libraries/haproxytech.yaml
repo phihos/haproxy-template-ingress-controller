@@ -218,25 +218,15 @@ templateSnippets:
           {%- endif %}
           {%- if allowlist and ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-access-control (allowlist for {{ ingress_key }})
-            {%- for ip in allowlist.split(",") %}
-              {%- set ip = ip | strip %}
-              {%- if ip %}
-                {%- set acl_name = "allowlist_" ~ ip.replace(".", "_", -1).replace("/", "_", -1) %}
-      acl {{ acl_name }} src {{ ip }}
-              {%- endif %}
-            {%- endfor %}
-      http-request deny if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}{% for ip in allowlist.split(",") %}{% set ip = ip | strip %}{% if ip %} !allowlist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
+            {%- set acl_name = "haproxytech_allowlist_" ~ ingress.metadata.namespace ~ "_" ~ ingress.metadata.name %}
+      acl {{ acl_name }} src{% for ip in allowlist.split(",") %}{% set ip = ip | strip %}{% if ip %} {{ ip }}{% endif %}{% endfor %}
+      http-request deny if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %} !{{ acl_name }}
           {%- endif %}
           {%- if denylist and ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-access-control (denylist for {{ ingress_key }})
-            {%- for ip in denylist.split(",") %}
-              {%- set ip = ip | strip %}
-              {%- if ip %}
-                {%- set acl_name = "denylist_" ~ ip.replace(".", "_", -1).replace("/", "_", -1) %}
-      acl {{ acl_name }} src {{ ip }}
-              {%- endif %}
-            {%- endfor %}
-      http-request deny if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}{% for ip in denylist.split(",") %}{% set ip = ip | strip %}{% if ip %}{% if not loop.first %} or{% endif %} denylist_{{ ip.replace(".", "_", -1).replace("/", "_", -1) }}{% endif %}{% endfor %}
+            {%- set acl_name = "haproxytech_denylist_" ~ ingress.metadata.namespace ~ "_" ~ ingress.metadata.name %}
+      acl {{ acl_name }} src{% for ip in denylist.split(",") %}{% set ip = ip | strip %}{% if ip %} {{ ip }}{% endif %}{% endfor %}
+      http-request deny if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %} {{ acl_name }}
           {%- endif %}
         {%- endif %}
       {%- endfor -%}
@@ -2188,13 +2178,13 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "acl allowlist_192_168_1_0_24 src 192.168.1.0/24"
-        description: Must generate ACL for CIDR
+        pattern: "acl haproxytech_allowlist_default_allowlist-ingress src 192\\.168\\.1\\.0/24 10\\.0\\.0\\.1"
+        description: Must generate single ACL with both CIDR and IP
 
       - type: contains
         target: haproxy.cfg
-        pattern: "acl allowlist_10_0_0_1 src 10.0.0.1"
-        description: Must generate ACL for single IP
+        pattern: "http-request deny if \\{ var\\(txn\\.host\\) -m str allowlist\\.example\\.com \\} !haproxytech_allowlist_default_allowlist-ingress"
+        description: Must generate deny rule for non-allowlisted IPs
 
   test-cors-enabled:
     description: CORS configuration with multiple headers
@@ -2644,18 +2634,13 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "acl denylist_192_168_1_100 src 192.168.1.100"
-        description: Must generate ACL for first IP
+        pattern: "acl haproxytech_denylist_default_denylist-ingress src 192\\.168\\.1\\.100 192\\.168\\.1\\.101"
+        description: Must generate single ACL with both IPs
 
       - type: contains
         target: haproxy.cfg
-        pattern: "acl denylist_192_168_1_101 src 192.168.1.101"
-        description: Must generate ACL for second IP
-
-      - type: contains
-        target: haproxy.cfg
-        pattern: "http-request deny if denylist_192_168_1_100 or denylist_192_168_1_101"
-        description: Must generate combined deny rule
+        pattern: "http-request deny if \\{ var\\(txn\\.host\\) -m str denylist\\.example\\.com \\} haproxytech_denylist_default_denylist-ingress"
+        description: Must generate deny rule with host condition and single ACL
 
   test-request-redirect:
     description: Request redirection with custom code

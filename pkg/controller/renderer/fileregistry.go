@@ -39,7 +39,7 @@ type registeredFile struct {
 
 // NewFileRegistry creates a new FileRegistry with the given path resolver.
 // The path resolver is used to compute full paths for registered files,
-// ensuring they match the paths used by get_path filter.
+// ensuring they match the paths used by pathResolver.GetPath() method.
 func NewFileRegistry(pathResolver *templating.PathResolver) *FileRegistry {
 	return &FileRegistry{
 		registered:   make(map[string]registeredFile),
@@ -94,7 +94,7 @@ func (r *FileRegistry) Register(args ...interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("file_registry.Register: invalid file type %q, must be \"cert\", \"map\", \"file\", or \"crt-list\"", fileType)
 	}
 
-	// Compute predicted path using path resolver (same logic as get_path filter)
+	// Compute predicted path using path resolver (same logic as pathResolver.GetPath() method)
 	pathInterface, err := r.pathResolver.GetPath(filename, fileType)
 	if err != nil {
 		return nil, fmt.Errorf("file_registry.Register: failed to compute path: %w", err)

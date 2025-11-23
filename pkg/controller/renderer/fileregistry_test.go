@@ -302,7 +302,7 @@ func TestFileRegistry_GetFiles_MultipleCerts(t *testing.T) {
 
 func TestFileRegistry_PathResolutionMatchesGetPath(t *testing.T) {
 	// This test verifies that FileRegistry.Register() uses the same path resolution
-	// logic as the get_path filter, ensuring consistency
+	// logic as the pathResolver.GetPath() method, ensuring consistency
 
 	pathResolver := &templating.PathResolver{
 		MapsDir:    "/etc/haproxy/maps",
@@ -326,7 +326,7 @@ func TestFileRegistry_PathResolutionMatchesGetPath(t *testing.T) {
 			registryPath, err := registry.Register(tt.fileType, tt.filename, "content")
 			require.NoError(t, err)
 
-			// Get path from path resolver directly (same logic as get_path filter)
+			// Get path from path resolver directly (same logic as pathResolver.GetPath() method)
 			resolverPath, err := pathResolver.GetPath(tt.filename, tt.fileType)
 			require.NoError(t, err)
 

@@ -644,12 +644,12 @@ func TestBuildRenderingContext(t *testing.T) {
 }
 
 // TestPathResolverInitialization tests that the PathResolver is correctly initialized
-// with all required directory paths for the get_path template filter.
+// with all required directory paths for the pathResolver.GetPath() method.
 func TestPathResolverInitialization(t *testing.T) {
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	// Create a config with templates that use get_path filter for crt-list
+	// Create a config with templates that use pathResolver.GetPath() method for crt-list
 	cfg := &config.Config{
 		HAProxyConfig: config.HAProxyConfig{
 			Template: `global
@@ -657,7 +657,7 @@ func TestPathResolverInitialization(t *testing.T) {
 
 frontend test
     bind *:80
-    bind *:443 ssl crt-list {{ "certificate-list.txt" | get_path("crt-list") }}
+    bind *:443 ssl crt-list {{ pathResolver.GetPath("certificate-list.txt", "crt-list") }}
 `,
 		},
 		Dataplane: config.DataplaneConfig{
@@ -707,12 +707,12 @@ frontend test
 Done:
 	require.NotNil(t, renderedEvent)
 
-	// CRITICAL: Verify that get_path("crt-list") returns the full path, not just the filename
+	// CRITICAL: Verify that pathResolver.GetPath("crt-list") returns the full path, not just the filename
 	// This is the TDD test that will initially FAIL because CRTListDir is not set
 	assert.Contains(t, renderedEvent.HAProxyConfig, "crt-list /etc/haproxy/ssl/certificate-list.txt",
-		"get_path('crt-list') should return full path with directory prefix")
+		"pathResolver.GetPath('certificate-list.txt', 'crt-list') should return full path with directory prefix")
 
 	// Ensure it doesn't contain just the filename (which is what happens when CRTListDir is empty)
 	assert.NotContains(t, renderedEvent.HAProxyConfig, "crt-list certificate-list.txt",
-		"get_path('crt-list') should not return just the filename without directory")
+		"pathResolver.GetPath() should not return just the filename without directory")
 }

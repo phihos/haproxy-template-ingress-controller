@@ -104,7 +104,7 @@ func New(
 	// Extract post-processor configurations from config
 	postProcessorConfigs := extractPostProcessorConfigs(config)
 
-	// Create path resolver for get_path filter
+	// Create path resolver for pathResolver.GetPath() method
 	pathResolver := &templating.PathResolver{
 		MapsDir:    config.Dataplane.MapsDir,
 		SSLDir:     config.Dataplane.SSLCertsDir,

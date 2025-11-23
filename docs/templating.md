@@ -38,7 +38,7 @@ haproxy_config:
     frontend http
         bind *:80
         # Use map files for routing
-        use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+        use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 
     {% for ingress in resources.ingresses.List() %}
     backend {{ ingress.metadata.name }}
@@ -189,7 +189,7 @@ Templates use Gonja v2, which provides Jinja2-like syntax for Go. The syntax is 
 ```jinja2
 {% if ingress.spec.tls %}
   {% set cert_name = ingress.metadata.name ~ ".pem" %}
-  bind *:443 ssl crt {{ cert_name | get_path("cert") }}
+  bind *:443 ssl crt {{ pathResolver.GetPath(cert_name, "cert") }}
 {% else %}
   bind *:80
 {% endif %}
@@ -1112,7 +1112,7 @@ haproxy_config:
     frontend http
         bind *:80
         # Use map for host-based routing
-        use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+        use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 
     {% for ingress in resources.ingresses.List() %}
     backend backend_{{ ingress.metadata.name }}
@@ -1152,10 +1152,10 @@ haproxy_config:
 
         # Normalize host header
         http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
-        http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
+        http-request set-var(txn.host_match) var(txn.host),map({{ pathResolver.GetPath("host.map", "map") }})
 
         # Path-based routing with prefix matching
-        http-request set-var(txn.backend) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
+        http-request set-var(txn.backend) var(txn.host_match),concat(,txn.path,),map_beg({{ pathResolver.GetPath("path-prefix.map", "map") }})
 
         use_backend %[var(txn.backend)]
         default_backend default_backend
@@ -1231,7 +1231,7 @@ haproxy_config:
 
     frontend http
         bind *:80
-        use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+        use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 
     {% for ingress in resources.ingresses.List() %}
     {% for rule in (ingress.spec.rules | default([])) %}

@@ -406,16 +406,16 @@ haproxy_config:
         timeout connect 5s
         timeout client 30s
         timeout server 30s
-        errorfile 404 {{ "404.http" | get_path("file") }}
-        errorfile 503 {{ "503.http" | get_path("file") }}
+        errorfile 404 {{ pathResolver.GetPath("404.http", "file") }}
+        errorfile 503 {{ pathResolver.GetPath("503.http", "file") }}
 
     frontend http
         bind :80
-        use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+        use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 
     frontend https
-        bind :443 ssl crt {{ "example.com.pem" | get_path("cert") }}
-        use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+        bind :443 ssl crt {{ pathResolver.GetPath("example.com.pem", "cert") }}
+        use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 
     {% for ingress in ingresses %}
     backend {{ ingress.metadata.name }}-backend

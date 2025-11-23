@@ -378,25 +378,25 @@ func TestNewWithFilters_GetPathFilter(t *testing.T) {
 	}{
 		{
 			name:     "map file path",
-			template: `{{ "host.map" | get_path("map") }}`,
+			template: `{{ pathResolver.GetPath("host.map", "map") }}`,
 			context:  map[string]interface{}{},
 			want:     "/etc/haproxy/maps/host.map",
 		},
 		{
 			name:     "general file path",
-			template: `{{ "504.http" | get_path("file") }}`,
+			template: `{{ pathResolver.GetPath("504.http", "file") }}`,
 			context:  map[string]interface{}{},
 			want:     "/etc/haproxy/general/504.http",
 		},
 		{
 			name:     "SSL certificate path",
-			template: `{{ "example.com.pem" | get_path("cert") }}`,
+			template: `{{ pathResolver.GetPath("example.com.pem", "cert") }}`,
 			context:  map[string]interface{}{},
 			want:     "/etc/haproxy/ssl/example.com.pem",
 		},
 		{
 			name:     "map file from variable",
-			template: `{{ filename | get_path("map") }}`,
+			template: `{{ pathResolver.GetPath(filename, "map") }}`,
 			context: map[string]interface{}{
 				"filename": "backend.map",
 			},
@@ -404,7 +404,7 @@ func TestNewWithFilters_GetPathFilter(t *testing.T) {
 		},
 		{
 			name:     "dynamic file type",
-			template: `{{ filename | get_path(filetype) }}`,
+			template: `{{ pathResolver.GetPath(filename, filetype) }}`,
 			context: map[string]interface{}{
 				"filename": "error.http",
 				"filetype": "file",
@@ -413,14 +413,14 @@ func TestNewWithFilters_GetPathFilter(t *testing.T) {
 		},
 		{
 			name:      "missing file type argument",
-			template:  `{{ "test.map" | get_path }}`,
+			template:  `{{ pathResolver.GetPath("test.map") }}`,
 			context:   map[string]interface{}{},
 			wantErr:   true,
-			errString: "file type argument required",
+			errString: "GetPath requires 2 arguments",
 		},
 		{
 			name:      "invalid file type",
-			template:  `{{ "test.txt" | get_path("invalid") }}`,
+			template:  `{{ pathResolver.GetPath("test.txt", "invalid") }}`,
 			context:   map[string]interface{}{},
 			wantErr:   true,
 			errString: "invalid file type",
