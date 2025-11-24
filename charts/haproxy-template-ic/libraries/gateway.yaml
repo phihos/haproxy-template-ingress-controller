@@ -22,6 +22,13 @@
 # - GRPCRoute method-based routing not fully implemented (partial support)
 
 watchedResources:
+  gateways:
+    apiVersion: gateway.networking.k8s.io/v1
+    resources: gateways
+    indexBy: ["metadata.namespace", "metadata.name"]
+    enableValidationWebhook: false
+    # Watch Gateway resources for TLS configuration
+
   httproutes:
     apiVersion: gateway.networking.k8s.io/v1
     resources: httproutes
@@ -119,6 +126,74 @@ templateSnippets:
         {%- set global_features.ssl_passthrough_backends =
             global_features.ssl_passthrough_backends + ssl_passthrough_gateway_analysis.backends %}
       {%- endif %}
+
+  # Register Gateway TLS Terminate mode certificates with SSL infrastructure
+  features-gateway-tls:
+    priority: 100
+    template: |
+      {#- Register TLS certificates from Gateway listeners with TLS mode "Terminate" #}
+      {#- Dynamically generates certificate files using file_registry.Register() #}
+      {#- Gateway API TLS configuration structure:
+          Gateway.spec.listeners[]:
+            - name: https
+              protocol: HTTPS  # or GRPC
+              port: 443
+              hostname: example.com  # optional, can be wildcard
+              tls:
+                mode: Terminate  # we only handle Terminate here, not Passthrough
+                certificateRefs:
+                  - kind: Secret
+                    name: example-tls
+                    namespace: default  # optional, defaults to Gateway namespace
+      #}
+      {%- set ns = namespace(registered_secrets=[]) %}
+      {%- for gateway in resources.gateways.List() %}
+        {%- if gateway.spec and gateway.spec.listeners %}
+          {%- for listener in gateway.spec.listeners %}
+            {#- Only process listeners with TLS Terminate mode #}
+            {%- if listener.tls and listener.tls.mode == "Terminate" %}
+              {%- if listener.tls.certificateRefs %}
+                {%- for certRef in listener.tls.certificateRefs %}
+                  {#- Determine secret namespace (defaults to Gateway namespace) #}
+                  {%- set cert_namespace = certRef.namespace | default(gateway.metadata.namespace) %}
+                  {%- set cert_name = certRef.name %}
+                  {#- Only process Secret references (skip other kinds) #}
+                  {%- if not certRef.kind or certRef.kind == "Secret" %}
+                    {#- Unique key for this secret #}
+                    {%- set secret_key = cert_namespace ~ "/" ~ cert_name %}
+                    {%- if secret_key not in ns.registered_secrets %}
+                      {%- set ns.registered_secrets = ns.registered_secrets.append(secret_key) %}
+
+                      {#- Fetch Secret and extract cert+key #}
+                      {%- set secret = resources.secrets.GetSingle(cert_namespace, cert_name) %}
+                      {%- if secret and secret.data and secret.data["tls.crt"] and secret.data["tls.key"] %}
+                        {#- Combine cert and key into single PEM (HAProxy format) #}
+                        {%- set combined_pem = secret.data["tls.crt"] | b64decode ~ "\n" ~ secret.data["tls.key"] | b64decode %}
+
+                        {#- Register certificate file dynamically using file_registry #}
+                        {%- set cert_filename = cert_namespace ~ "_" ~ cert_name ~ ".pem" %}
+                        {%- set _ = file_registry.Register("cert", cert_filename, combined_pem) %}
+
+                        {#- Register with SSL infrastructure for crt-list generation #}
+                        {%- set sni_patterns = [] %}
+                        {%- if listener.hostname %}
+                          {%- set sni_patterns = sni_patterns.append(listener.hostname) %}
+                        {%- endif %}
+                        {%- set tls_cert = {
+                          "secret_namespace": cert_namespace,
+                          "secret_name": cert_name,
+                          "sni_patterns": sni_patterns
+                        } %}
+                        {%- set global_features.tls_certificates = global_features.tls_certificates.append(tls_cert) %}
+                      {%- endif %}
+                    {%- endif %}
+                  {%- endif %}
+                {%- endfor %}
+              {%- endif %}
+            {%- endif %}
+          {%- endfor %}
+        {%- endif %}
+      {%- endfor %}
 
   # Route analysis system - collects and analyzes all routes for conflicts
   util-analyze-routes:
@@ -222,7 +297,7 @@ templateSnippets:
           {%- set ns_groups.data = ns_groups.data.update({path_key: current_list}) %}
         {%- endfor %}
         {#- Check for conflicts and mark routes needing VAR qualifier #}
-        {%- for path_key in ns_groups.data.keys() | list %}
+        {%- for path_key in ns_groups.data.keys() | list | sort %}
           {%- set routes = ns_groups.data[path_key] %}
           {#- DEBUG CONFLICT: path_key={{ path_key }} routes_count={{ routes | length }} -#}
           {#- Check if routes in this group have different matchers #}
@@ -297,7 +372,7 @@ templateSnippets:
           {%- for route in ns_updated.routes %}
             {%- set ns_ids.route_ids = ns_ids.route_ids.append(route.route_id) %}
           {%- endfor %}
-          {%- set conflict_group = ns_ids.route_ids | join("__") %}
+          {%- set conflict_group = (ns_ids.route_ids | sort) | join("__") %}
           {#- Add conflict_group to each route #}
           {%- set ns_final = namespace(routes=[]) %}
           {%- for route in ns_updated.routes %}
@@ -312,8 +387,9 @@ templateSnippets:
         {%- set path_groups = ns_groups.data %}
 
         {#- Rebuild all_routes from updated path_groups #}
+        {#- IMPORTANT: Sort path_keys for deterministic iteration order #}
         {%- set ns_all = namespace(routes=[]) %}
-        {%- for path_key in path_groups %}
+        {%- for path_key in path_groups.keys() | list | sort %}
           {%- for route in path_groups[path_key] %}
             {%- set ns_all.routes = ns_all.routes.append(route) %}
           {%- endfor %}
@@ -541,7 +617,7 @@ templateSnippets:
       # {{ route_type }}: {{ route.metadata.namespace }}/{{ route.metadata.name }} ({{ hostnames | length }} hosts)
       {% for hostname in hostnames %}
       {{ hostname }} {{ hostname }}
-      {%- endfor %}
+      {% endfor %}
       {%- endif %}
       {%- endfor %}
       {%- endmacro -%}
@@ -1083,6 +1159,7 @@ templateSnippets:
         {%- endfor %}
       {%- endfor -%}
       {%- endif -%}
+
 validationTests:
   test-httproute-duplicate-backend-different-ports:
     description: HTTPRoute with multiple rules to same service but different ports (tests deduplication)
@@ -1744,6 +1821,137 @@ validationTests:
         target: haproxy.cfg
         pattern: "http-request set-var\\(req\\.gw_rule_id\\) str\\(default_method-route_1\\) if !\\{ var\\(req\\.gw_rule_id\\) -m found \\} \\{ var\\(req\\.gw_route_id\\) -m str \"default_method-route_0__default_method-route_1\" \\} \\{ method POST \\}"
         description: Must generate req.gw_rule_id for POST method
+
+  test-httproute-multi-hostname-map-newlines:
+    description: HTTPRoute with 3 hostnames must generate separate map file lines
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: app
+            namespace: default
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: app-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: app
+          endpoints:
+            - addresses: ["10.0.0.1"]
+              targetRef:
+                name: app-pod-1
+          ports:
+            - port: 8080
+      httproutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: multi-host
+            namespace: default
+          spec:
+            parentRefs:
+              - name: gateway
+                namespace: default
+            hostnames:
+              - one.example.com
+              - two.example.com
+              - three.example.com
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                backendRefs:
+                  - name: app
+                    port: 80
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: not_contains
+        target: map:host.map
+        pattern: "one\\.example\\.com one\\.example\\.comtwo\\.example\\.com"
+        description: Host map must NOT concatenate hostnames without newlines (bug detection)
+
+      - type: match_count
+        target: map:host.map
+        pattern: "(?m)^.*\\.example\\.com .*\\.example\\.com$"
+        expected: "3"
+        description: Host map must have exactly 3 separate lines for hostnames
+
+  test-grpcroute-multi-hostname-map-newlines:
+    description: GRPCRoute with 3 hostnames must generate separate map file lines
+    fixtures:
+      services:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: grpc-app
+            namespace: default
+          spec:
+            ports:
+              - name: grpc
+                port: 9090
+                targetPort: 9090
+      endpoints:
+        - apiVersion: discovery.k8s.io/v1
+          kind: EndpointSlice
+          metadata:
+            name: grpc-app-abc
+            namespace: default
+            labels:
+              kubernetes.io/service-name: grpc-app
+          endpoints:
+            - addresses: ["10.0.0.3"]
+              targetRef:
+                name: grpc-app-pod-1
+          ports:
+            - port: 9090
+      grpcroutes:
+        - apiVersion: gateway.networking.k8s.io/v1
+          kind: GRPCRoute
+          metadata:
+            name: multi-host-grpc
+            namespace: default
+          spec:
+            parentRefs:
+              - name: gateway
+                namespace: default
+            hostnames:
+              - one.example.com
+              - two.example.com
+              - three.example.com
+            rules:
+              - matches:
+                  - method:
+                      type: Exact
+                      service: com.example.Service
+                      method: TestMethod
+                backendRefs:
+                  - name: grpc-app
+                    port: 9090
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy configuration must be syntactically valid
+
+      - type: not_contains
+        target: map:host.map
+        pattern: "one\\.example\\.com one\\.example\\.comtwo\\.example\\.com"
+        description: Host map must NOT concatenate hostnames without newlines (bug detection)
+
+      - type: match_count
+        target: map:host.map
+        pattern: "(?m)^.*\\.example\\.com .*\\.example\\.com$"
+        expected: "3"
+        description: Host map must have exactly 3 separate lines for hostnames
 
   test-httproute-header-exact:
     description: HTTPRoute with exact header matching

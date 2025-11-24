@@ -296,7 +296,7 @@ func (c *Component) renderWithOverlayStores(overlayStores map[string]types.Store
 // buildRenderingContext builds the template rendering context using overlay stores.
 //
 // This mirrors renderer.Component.buildRenderingContext and TestRunner.buildRenderingContext.
-// The context includes resources (overlay stores), template snippets, and controller configuration.
+// The context includes resources (overlay stores), template snippets, pathResolver, and controller configuration.
 func (c *Component) buildRenderingContext(stores map[string]types.Store) map[string]interface{} {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
@@ -312,10 +312,19 @@ func (c *Component) buildRenderingContext(stores map[string]types.Store) map[str
 	// Build template snippets list
 	snippetNames := c.sortSnippetsByPriority()
 
+	// Create pathResolver from validation paths
+	pathResolver := &templating.PathResolver{
+		MapsDir:    c.validationPaths.MapsDir,
+		SSLDir:     c.validationPaths.SSLCertsDir,
+		CRTListDir: c.validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
+		GeneralDir: c.validationPaths.GeneralStorageDir,
+	}
+
 	// Build final context
 	return map[string]interface{}{
 		"resources":         resources,
 		"template_snippets": snippetNames,
+		"pathResolver":      pathResolver,
 		"config":            c.config,
 	}
 }

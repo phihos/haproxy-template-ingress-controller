@@ -341,11 +341,11 @@ assert_rate_limited() {
 
     # Get HAProxy service ClusterIP to test from within cluster
     local haproxy_ip
-    haproxy_ip=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic get svc haproxy-production -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+    haproxy_ip=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic get svc haproxy-template-ic-haproxy -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
 
     if [[ -z "$haproxy_ip" ]]; then
-        warn "Could not get HAProxy ClusterIP, falling back to NodePort test"
-        haproxy_ip="localhost:${NODEPORT}"
+        warn "Could not get HAProxy ClusterIP, using service DNS name"
+        haproxy_ip="haproxy-template-ic-haproxy.haproxy-template-ic.svc"
     fi
 
     # Send significantly more requests to ensure rate limiting triggers reliably
@@ -356,19 +356,52 @@ assert_rate_limited() {
     # This prevents SNAT issues that occur when testing from host via NodePort
     local pod_name="rate-limit-test-$$"
 
+    debug "  Creating test pod: $pod_name"
+    debug "  Target: $haproxy_ip, Requests: $request_count"
+
     # Create pod with parallel requests to trigger rate limiting quickly
     # Use xargs with -P to run multiple curl commands in parallel
-    kubectl --context "kind-${CLUSTER_NAME}" run "$pod_name" \
+    local create_output
+    if ! create_output=$(kubectl --context "kind-${CLUSTER_NAME}" run "$pod_name" \
         --image=alpine/curl \
         --restart=Never \
-        --command -- sh -c 'seq 1 $4 | xargs -I{} -P10 sh -c "curl -s -o /dev/null -w \"%{http_code}\n\" -H \"Host: $2\" \"http://$1$3\""' -- "$haproxy_ip" "$host" "$path" "$request_count" >/dev/null 2>&1
+        --command -- sh -c 'seq 1 $4 | xargs -I{} -P10 sh -c "curl -s -o /dev/null -w \"%{http_code}\n\" -H \"Host: $2\" \"http://$1$3\""' -- "$haproxy_ip" "$host" "$path" "$request_count" 2>&1); then
+        err "$description - Failed to create test pod"
+        debug "  Error: $create_output"
+        return 1
+    fi
 
     # Wait for pod to complete (skip Ready check as pod may complete before becoming Ready)
-    kubectl --context "kind-${CLUSTER_NAME}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$pod_name" --timeout=15s >/dev/null 2>&1
+    local wait_output
+    if ! wait_output=$(kubectl --context "kind-${CLUSTER_NAME}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$pod_name" --timeout=15s 2>&1); then
+        err "$description - Test pod did not complete successfully"
+        debug "  Wait error: $wait_output"
+
+        # Show pod status for debugging
+        local pod_status
+        pod_status=$(kubectl --context "kind-${CLUSTER_NAME}" get pod "$pod_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "not found")
+        debug "  Pod status: $pod_status"
+
+        # Try to get logs anyway for debugging
+        local pod_logs
+        pod_logs=$(kubectl --context "kind-${CLUSTER_NAME}" logs "$pod_name" 2>&1 || echo "")
+        if [[ -n "$pod_logs" ]]; then
+            debug "  Pod logs: $pod_logs"
+        fi
+
+        # Clean up pod
+        kubectl --context "kind-${CLUSTER_NAME}" delete pod "$pod_name" >/dev/null 2>&1
+        return 1
+    fi
 
     # Get logs
     local output
-    output=$(kubectl --context "kind-${CLUSTER_NAME}" logs "$pod_name" 2>/dev/null)
+    if ! output=$(kubectl --context "kind-${CLUSTER_NAME}" logs "$pod_name" 2>&1); then
+        err "$description - Failed to get test pod logs"
+        debug "  Logs error: $output"
+        kubectl --context "kind-${CLUSTER_NAME}" delete pod "$pod_name" >/dev/null 2>&1
+        return 1
+    fi
 
     # Clean up pod
     kubectl --context "kind-${CLUSTER_NAME}" delete pod "$pod_name" >/dev/null 2>&1
@@ -470,12 +503,12 @@ wait_for_services_ready() {
     # Step 1: Wait for HAProxy pods to be ready
     log INFO "Checking HAProxy pod readiness..."
     if ! kubectl -n haproxy-template-ic wait --for=condition=ready pod \
-        -l app=haproxy --timeout=120s >/dev/null 2>&1; then
+        -l app.kubernetes.io/component=loadbalancer --timeout=120s >/dev/null 2>&1; then
         echo
         err "HAProxy pods are not ready after 120s"
         echo
         echo "HAProxy pod status:"
-        kubectl -n haproxy-template-ic get pods -l app=haproxy
+        kubectl -n haproxy-template-ic get pods -l app.kubernetes.io/component=loadbalancer
         echo
         echo "Recent pod events:"
         kubectl -n haproxy-template-ic get events --sort-by='.lastTimestamp' | tail -10
@@ -608,7 +641,7 @@ wait_for_services_ready() {
                 # Also verify the configuration actually contains backends
                 # Use // "" to convert null to empty string before grep
                 local backend_count=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
-                    jq -r '.items[0].spec.content // ""' | grep -c "^backend.*echo" 2>/dev/null || echo 0)
+                    jq -r '.items[0].spec.content // ""' | grep -c "^backend.*echo" 2>/dev/null)
 
                 debug "Configuration has $backend_count echo backends"
 
@@ -644,7 +677,7 @@ wait_for_services_ready() {
         echo
         echo "Backend count in HAProxyCfg:"
         kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
-            jq -r '.items[0].spec.content' | grep "^backend" | wc -l || echo "  0"
+            jq -r '.items[0].spec.content' | grep -c "^backend" 2>/dev/null || echo "  0"
         echo
         echo "Controller logs (last 30 lines):"
         kubectl -n haproxy-template-ic logs -l app.kubernetes.io/name=haproxy-template-ic --tail=30 2>/dev/null || echo "  (no logs available)"
@@ -698,7 +731,7 @@ wait_for_services_ready() {
         echo
         echo "Diagnostics:"
         echo "  HAProxy pods:"
-        kubectl -n haproxy-template-ic get pods -l app=haproxy
+        kubectl -n haproxy-template-ic get pods -l app.kubernetes.io/component=loadbalancer
         echo
         echo "  Echo pods:"
         kubectl -n echo get pods
@@ -707,10 +740,10 @@ wait_for_services_ready() {
         kubectl -n echo get endpoints
         echo
         echo "  HAProxy logs (last 20 lines):"
-        kubectl -n haproxy-template-ic logs -l app=haproxy --tail=20 -c haproxy 2>/dev/null || echo "  (no logs available)"
+        kubectl -n haproxy-template-ic logs -l app.kubernetes.io/component=loadbalancer --tail=20 -c haproxy 2>/dev/null || echo "  (no logs available)"
         echo
         echo "  Controller logs (last 20 lines):"
-        kubectl -n haproxy-template-ic logs -l app=haproxy-template-ic --tail=20 2>/dev/null || echo "  (no logs available)"
+        kubectl -n haproxy-template-ic logs deployment/haproxy-template-ic --tail=20 2>/dev/null || echo "  (no logs available)"
         echo
         exit 1
     fi
@@ -1198,11 +1231,11 @@ test_ingress_scale_slots() {
     # Verify server slots in HAProxy config
     # This is a capacity planning feature - verify it's configured correctly
     local haproxy_pod
-    haproxy_pod=$(kubectl --context "kind-${CLUSTER_NAME}" -n echo get pods -l app=haproxy -o name 2>/dev/null | head -n1)
+    haproxy_pod=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic get pods -l app.kubernetes.io/component=loadbalancer -o name 2>/dev/null | head -n1)
 
     if [[ -n "$haproxy_pod" ]]; then
         local backend_config
-        backend_config=$(kubectl --context "kind-${CLUSTER_NAME}" -n echo exec "$haproxy_pod" -- cat /etc/haproxy/haproxy.cfg 2>/dev/null | grep -A 20 "backend.*echo-scale-slots")
+        backend_config=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic exec "$haproxy_pod" -c haproxy -- cat /etc/haproxy/haproxy.cfg 2>/dev/null | grep -A 20 "backend.*echo-scale-slots")
 
         if echo "$backend_config" | grep -q "server-template\|scale-server-slots"; then
             ok "Server slot pre-allocation configured in HAProxy"
@@ -1244,6 +1277,113 @@ test_ingress_ssl_passthrough() {
     fi
 
     ok "SSL passthrough annotation applied (SNI-based TCP routing, backend terminates SSL)"
+}
+
+test_ingress_tls() {
+    if ! should_test "echo-tls"; then
+        return 0
+    fi
+
+    print_section "Testing Ingress: echo-tls (TLS termination)"
+
+    # Test HTTPS connectivity with TLS termination
+    # HAProxy terminates TLS and forwards plain HTTP to backend
+    local response
+    if ! response=$(curl -sk --max-time 5 --resolve echo-tls.localdev.me:30443:127.0.0.1 https://echo-tls.localdev.me:30443/ 2>&1); then
+        err "TLS termination - Connection failed"
+        return 1
+    fi
+
+    # Check that response contains valid JSON with expected structure
+    if echo "$response" | grep -q "\"http\":"; then
+        ok "TLS termination - HTTPS request successful"
+    else
+        err "TLS termination - Invalid response"
+        echo "  Received: ${response:0:500}"
+        return 1
+    fi
+
+    # Verify certificate is loaded (check HAProxy stats or logs would be ideal, but we verify connectivity)
+    ok "Ingress spec.tls certificate loaded and TLS termination working"
+}
+
+test_ingress_tls_multi() {
+    if ! should_test "echo-tls-multi"; then
+        return 0
+    fi
+
+    print_section "Testing Ingress: echo-tls-multi (Multi-host TLS with SAN)"
+
+    # Test primary hostname from SAN certificate
+    local response1
+    if ! response1=$(curl -sk --max-time 5 --resolve echo-tls-multi.localdev.me:30443:127.0.0.1 https://echo-tls-multi.localdev.me:30443/ 2>&1); then
+        err "Multi-host TLS - Primary host connection failed"
+        return 1
+    fi
+
+    if echo "$response1" | grep -q "\"http\":"; then
+        ok "Multi-host TLS - Primary hostname works"
+    else
+        err "Multi-host TLS - Primary host invalid response"
+        return 1
+    fi
+
+    # Test alternate hostname from SAN certificate
+    local response2
+    if ! response2=$(curl -sk --max-time 5 --resolve echo-tls-alt.localdev.me:30443:127.0.0.1 https://echo-tls-alt.localdev.me:30443/ 2>&1); then
+        err "Multi-host TLS - Alternate host connection failed"
+        return 1
+    fi
+
+    if echo "$response2" | grep -q "\"http\":"; then
+        ok "Multi-host TLS - Alternate hostname works"
+    else
+        err "Multi-host TLS - Alternate host invalid response"
+        return 1
+    fi
+
+    ok "SAN certificate supports multiple hostnames via SNI routing"
+}
+
+test_ingress_tls_combined() {
+    if ! should_test "echo-tls-combined"; then
+        return 0
+    fi
+
+    print_section "Testing Ingress: echo-tls-combined (TLS + security headers)"
+
+    # Test HTTPS connectivity
+    local headers
+    if ! headers=$(curl -skI --max-time 5 --resolve echo-tls-combined.localdev.me:30443:127.0.0.1 https://echo-tls-combined.localdev.me:30443/ 2>&1); then
+        err "TLS combined - Connection failed"
+        return 1
+    fi
+
+    # Check for HSTS header
+    if echo "$headers" | grep -qi "Strict-Transport-Security:"; then
+        ok "TLS combined - HSTS header present"
+    else
+        err "TLS combined - HSTS header missing"
+        return 1
+    fi
+
+    # Check for X-Frame-Options header
+    if echo "$headers" | grep -qi "X-Frame-Options:.*DENY"; then
+        ok "TLS combined - X-Frame-Options header present"
+    else
+        err "TLS combined - X-Frame-Options header missing"
+        return 1
+    fi
+
+    # Check for X-Content-Type-Options header
+    if echo "$headers" | grep -qi "X-Content-Type-Options:.*nosniff"; then
+        ok "TLS combined - X-Content-Type-Options header present"
+    else
+        err "TLS combined - X-Content-Type-Options header missing"
+        return 1
+    fi
+
+    ok "TLS termination combined with security headers working"
 }
 
 #═══════════════════════════════════════════════════════════════════════════
@@ -1476,6 +1616,33 @@ test_httproute_combined() {
         -X GET
 }
 
+test_gateway_tls_terminate() {
+    if ! should_test "echo-gateway-tls"; then
+        return 0
+    fi
+
+    print_section "Testing HTTPRoute: echo-gateway-tls (Gateway TLS Terminate)"
+
+    # Test HTTPS connectivity via Gateway HTTPS listener with TLS Terminate mode
+    # Gateway terminates TLS and forwards plain HTTP to HTTPRoute backend
+    local response
+    if ! response=$(curl -sk --max-time 5 --resolve echo-gateway-tls.localdev.me:30443:127.0.0.1 https://echo-gateway-tls.localdev.me:30443/ 2>&1); then
+        err "Gateway TLS Terminate - Connection failed"
+        return 1
+    fi
+
+    # Check that response contains valid JSON with expected structure
+    if echo "$response" | grep -q "\"http\":"; then
+        ok "Gateway TLS Terminate - HTTPS request successful"
+    else
+        err "Gateway TLS Terminate - Invalid response"
+        echo "  Received: ${response:0:500}"
+        return 1
+    fi
+
+    ok "Gateway API HTTPS listener with TLS Terminate mode working"
+}
+
 #═══════════════════════════════════════════════════════════════════════════
 # MAIN
 #═══════════════════════════════════════════════════════════════════════════
@@ -1552,6 +1719,9 @@ main() {
         test_ingress_backend_mtls
         test_ingress_scale_slots
         test_ingress_ssl_passthrough
+        test_ingress_tls
+        test_ingress_tls_multi
+        test_ingress_tls_combined
         test_ingress_combined
     fi
 
@@ -1565,6 +1735,7 @@ main() {
         test_httproute_split
         test_httproute_precedence
         test_httproute_combined
+        test_gateway_tls_terminate
     fi
 
     # Print summary

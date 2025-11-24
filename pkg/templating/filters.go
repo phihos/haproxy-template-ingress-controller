@@ -21,8 +21,8 @@ import (
 )
 
 // PathResolver resolves auxiliary file names to absolute paths based on file type.
-// This is used by the get_path filter to automatically construct absolute paths
-// for HAProxy auxiliary files (maps, SSL certificates, general files).
+// This is used via the GetPath method in templates to automatically construct absolute paths
+// for HAProxy auxiliary files (maps, SSL certificates, crt-list files, general files).
 type PathResolver struct {
 	// MapsDir is the absolute path to the HAProxy maps directory.
 	// Default: /etc/haproxy/maps
@@ -32,58 +32,66 @@ type PathResolver struct {
 	// Default: /etc/haproxy/ssl
 	SSLDir string
 
+	// CRTListDir is the absolute path to the HAProxy crt-list files directory.
+	// Default: /etc/haproxy/ssl (same as SSL certificates)
+	CRTListDir string
+
 	// GeneralDir is the absolute path to the HAProxy general files directory.
 	// Default: /etc/haproxy/general
 	GeneralDir string
 }
 
-// GetPath is a template filter that resolves a filename to its absolute path
-// based on the file type.
+// GetPath resolves a filename to its absolute path based on the file type.
 //
-// Usage in templates:
+// This method is called from templates via the pathResolver context variable:
 //
-//	{{ "host.map" | get_path("map") }}        → /etc/haproxy/maps/host.map
-//	{{ "504.http" | get_path("file") }}       → /etc/haproxy/general/504.http
-//	{{ "cert.pem" | get_path("cert") }}       → /etc/haproxy/ssl/cert.pem
-//	{{ "" | get_path("cert") }}               → /etc/haproxy/ssl (directory only)
+//	{{ pathResolver.GetPath("host.map", "map") }}              → /etc/haproxy/maps/host.map
+//	{{ pathResolver.GetPath("504.http", "file") }}             → /etc/haproxy/general/504.http
+//	{{ pathResolver.GetPath("cert.pem", "cert") }}             → /etc/haproxy/ssl/cert.pem
+//	{{ pathResolver.GetPath("certificate-list.txt", "crt-list") }} → /etc/haproxy/ssl/certificate-list.txt
+//	{{ pathResolver.GetPath("", "cert") }}                     → /etc/haproxy/ssl (directory only)
 //
 // Parameters:
-//   - filename: The base filename (without directory path), or empty string for directory only
-//   - args: Single argument specifying file type: "map", "file", or "cert"
+//   - args[0]: filename (string) - The base filename (without directory path), or empty string for directory only
+//   - args[1]: fileType (string) - File type: "map", "file", "cert", or "crt-list"
 //
 // Returns:
 //   - Absolute path to the file, or base directory if filename is empty
-//   - Error if filename is not a string, file type is missing/invalid, or path construction fails
-func (pr *PathResolver) GetPath(filename interface{}, args ...interface{}) (interface{}, error) {
+//   - Error if argument count is wrong, arguments are not strings, file type is invalid, or path construction fails
+//
+// Note: The pathResolver must be added to the rendering context for templates to access this method.
+// Different PathResolver instances can be used for production paths vs validation paths.
+func (pr *PathResolver) GetPath(args ...interface{}) (interface{}, error) {
+	// Validate argument count
+	if len(args) != 2 {
+		return nil, fmt.Errorf("GetPath requires 2 arguments (filename, fileType), got %d", len(args))
+	}
+
 	// Validate filename is a string
-	filenameStr, ok := filename.(string)
+	filenameStr, ok := args[0].(string)
 	if !ok {
-		return nil, fmt.Errorf("get_path: filename must be a string, got %T", filename)
+		return nil, fmt.Errorf("GetPath: filename must be a string, got %T", args[0])
 	}
 
-	// Validate file type argument is provided
-	if len(args) == 0 {
-		return nil, fmt.Errorf("get_path: file type argument required (\"map\", \"file\", or \"cert\")")
-	}
-
-	// Extract and validate file type
-	fileTypeInterface := args[0]
-	fileType, ok := fileTypeInterface.(string)
+	// Validate and extract file type
+	fileTypeStr, ok := args[1].(string)
 	if !ok {
-		return nil, fmt.Errorf("get_path: file type must be a string, got %T", fileTypeInterface)
+		return nil, fmt.Errorf("GetPath: file type must be a string, got %T", args[1])
 	}
 
 	// Resolve path based on file type
 	var basePath string
-	switch fileType {
+	switch fileTypeStr {
 	case "map":
 		basePath = pr.MapsDir
 	case "file":
 		basePath = pr.GeneralDir
 	case "cert":
 		basePath = pr.SSLDir
+	case "crt-list":
+		basePath = pr.CRTListDir
 	default:
-		return nil, fmt.Errorf("get_path: invalid file type %q, must be \"map\", \"file\", or \"cert\"", fileType)
+		return nil, fmt.Errorf("GetPath: invalid file type %q, must be \"map\", \"file\", \"cert\", or \"crt-list\"", fileTypeStr)
 	}
 
 	// If filename is empty, return just the base directory

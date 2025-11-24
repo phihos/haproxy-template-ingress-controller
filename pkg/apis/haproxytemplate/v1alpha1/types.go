@@ -455,9 +455,9 @@ type MapFile struct {
 // GeneralFile defines a general file generated from a template.
 //
 // The filename is derived from the map key in the configuration.
-// The full path is constructed using the get_path filter in templates:
+// The full path is constructed using the pathResolver.GetPath() method in templates:
 //
-//	Example: "503.http" | get_path("file") returns /etc/haproxy/general/503.http
+//	Example: pathResolver.GetPath("503.http", "file") returns /etc/haproxy/general/503.http
 //
 // IMPORTANT: This is a Kubernetes CRD type. When modifying this struct, you must also update:
 //   - The internal config type: pkg/core/config/types.go (GeneralFile)

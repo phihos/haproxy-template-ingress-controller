@@ -15,22 +15,74 @@ watchedResources:
 
 templateSnippets:
   # SSL bind options utility - used by both HTTPS frontend and SSL passthrough
+  # Uses crt-list for certificate management with per-certificate OCSP configuration
   util-ssl-bind-options:
     template: >-
-      {{- " " -}}ssl crt {{ "" | get_path("cert") }}/ alpn h2,http/1.1
+      {{- " " -}}ssl crt-list {{ pathResolver.GetPath("certificate-list.txt", "crt-list") }} alpn h2,http/1.1
 
-  # Feature initialization - must run early to initialize global_features.ssl_passthrough_backends
-  # Resource libraries (gateway.yaml, haproxytech.yaml) register passthrough backends here
+  # Feature initialization - must run early to initialize SSL infrastructure
+  # Resource libraries (gateway.yaml, haproxytech.yaml, ingress.yaml) register SSL features here
   features-ssl-initialization:
     priority: 50
     template: |
-      {#- SSL passthrough infrastructure initialization #}
-      {#- Initialize ssl_passthrough_backends array for resource libraries to register backends #}
+      {#- SSL infrastructure initialization #}
+      {#- Initialize data structures for resource libraries to register SSL features #}
       {#- This runs early (priority 50) so other features-* snippets can append to it #}
       {#- Only initialize if not already defined (idempotent) #}
+
+      {#- SSL passthrough backends array #}
       {%- if global_features.ssl_passthrough_backends is not defined %}
         {%- set global_features.ssl_passthrough_backends = [] %}
       {%- endif %}
+
+      {#- TLS certificates array - each entry: {secret_namespace, secret_name, sni_patterns[]} #}
+      {#- Resource libraries register TLS secrets here with their SNI patterns #}
+      {%- if global_features.tls_certificates is not defined %}
+        {%- set global_features.tls_certificates = [] %}
+      {%- endif %}
+
+  # Generate CRT-list file from registered TLS certificates
+  # Runs after TLS certificates are registered (priority 100) by resource libraries
+  features-ssl-crtlist:
+    priority: 150
+    template: |
+      {#- Generate crt-list file dynamically from registered TLS certificates #}
+      {#- This file is used by HAProxy's ssl crt-list directive for certificate selection #}
+      {#- Format: <cert-path> [ssl-options] [sni-filter ...] #}
+      {#- See: https://www.haproxy.com/documentation/haproxy-configuration-manual/latest/#5.1-crt-list #}
+
+      {%- set ns = namespace(crtlist_lines=[]) %}
+
+      {#- Generate entries for each registered TLS certificate #}
+      {%- for tls_cert in global_features.tls_certificates | default([]) %}
+        {%- set cert_filename = tls_cert.secret_namespace ~ "_" ~ tls_cert.secret_name ~ ".pem" %}
+        {#- Paths in crt-list are relative to crt-base, so just use filename #}
+        {%- set ssl_options = "[ocsp-update on]" %}
+        {%- set sni_list = tls_cert.sni_patterns | join(" ") %}
+        {%- set line = cert_filename ~ " " ~ ssl_options ~ " " ~ sni_list %}
+        {%- set ns.crtlist_lines = ns.crtlist_lines.append(line) %}
+      {%- endfor %}
+
+      {#- Default certificate (no SNI filter = matches everything not matched above) #}
+      {#- Paths in crt-list are relative to crt-base, so just use filename #}
+      {%- set default_line = "default.pem [ocsp-update on]" %}
+      {%- set ns.crtlist_lines = ns.crtlist_lines.append(default_line) %}
+
+      {#- Register the crt-list file with file_registry #}
+      {#- Add trailing newline to satisfy HAProxy's parser #}
+      {%- set crtlist_content = ns.crtlist_lines | join("\n") ~ "\n" %}
+      {%- set _ = file_registry.Register("crt-list", "certificate-list.txt", crtlist_content) %}
+
+  # Global OCSP configuration - enables automatic OCSP stapling for all SSL certificates
+  global-ssl-ocsp-config:
+    template: |
+      {#- Global OCSP Update Configuration #}
+      {#- Enables automatic fetching and caching of OCSP responses for certificate validation #}
+      {#- See: https://www.haproxy.com/documentation/haproxy-configuration-manual/latest/#3.1-ocsp-update.mode #}
+      # ssl/global-ssl-ocsp-config
+      ocsp-update.mode on
+      ocsp-update.mindelay 300
+      ocsp-update.maxdelay 3600
 
   # SSL passthrough TCP frontend (conditional - only when backends registered)
   frontends-ssl-tcp:
@@ -68,7 +120,7 @@ templateSnippets:
 
       backend ssl-loopback
           mode tcp
-          server loopback unix@/var/run/ssl-frontend.sock send-proxy-v2
+          server loopback unix@/etc/haproxy/ssl-frontend.sock send-proxy-v2
 
       {%- endif %}
 
@@ -80,7 +132,7 @@ templateSnippets:
       frontend https
           mode http
           {%- if global_features.ssl_passthrough_backends | length > 0 %}
-          bind unix@/var/run/ssl-frontend.sock{% include "util-ssl-bind-options" %} accept-proxy
+          bind unix@/etc/haproxy/ssl-frontend.sock mode 660{% include "util-ssl-bind-options" %} accept-proxy
           {%- else %}
           bind *:{{ httpsPort | default(8443) | int }}{% include "util-ssl-bind-options" %}
           {%- endif %}
@@ -97,7 +149,22 @@ templateSnippets:
           default_backend default_backend
 
 # SSL certificate files
+#
+# NOTE: Dynamic TLS certificate file generation
+# ============================================
+# TLS certificates are automatically generated using file_registry.Register() by resource
+# libraries (ingress.yaml, gateway.yaml) when processing Ingress spec.tls and Gateway TLS
+# configurations. No pre-declaration is needed - any TLS Secret referenced in these resources
+# will be automatically converted to a certificate file.
+#
+# The crt-list file below references these certificates using the naming pattern:
+#   {namespace}_{secretname}.pem
+#
+# Only the default certificate (fallback for SNI mismatch) needs to be defined here.
+# All other certificates are registered dynamically at template rendering time.
+
 sslCertificates:
+  # Default SSL certificate (fallback for SNI mismatch)
   default.pem:
     template: |
       {#- Default SSL certificate for HTTPS frontend #}
@@ -107,7 +174,10 @@ sslCertificates:
       {%- set cert_name = default_ssl_cert_name | default("default-ssl-cert") %}
       {%- set secret = resources.secrets.GetSingle(cert_namespace, cert_name) %}
       {%- if not secret %}
-      {{- fail("SSL certificate Secret not found: " ~ cert_namespace ~ "/" ~ cert_name ~ ". Create a TLS Secret or configure default_ssl_cert_name/default_ssl_cert_namespace.") -}}
+      {{- fail("TLS Secret not found: " ~ cert_namespace ~ "/" ~ cert_name ~ ". Ensure the Secret exists and is watched.") -}}
+      {%- endif %}
+      {%- if not secret.data or not secret.data["tls.crt"] or not secret.data["tls.key"] %}
+      {{- fail("Invalid TLS Secret " ~ cert_namespace ~ "/" ~ cert_name ~ ": missing tls.crt or tls.key fields. Ensure the Secret is of type kubernetes.io/tls.") -}}
       {%- endif %}
       {{- secret.data["tls.crt"] | b64decode -}}
       {{- secret.data["tls.key"] | b64decode -}}
@@ -166,3 +236,25 @@ validationTests:
         target: haproxy.cfg
         pattern: "alpn h2,http/1.1"
         description: HTTPS frontend must enable ALPN negotiation
+
+  test-ssl-crtlist-basic:
+    description: Verify crt-list file is generated with OCSP configuration
+    fixtures: {}  # Uses _global fixtures
+    assertions:
+      - type: haproxy_valid
+        description: HAProxy config must be valid
+
+      - type: contains
+        target: haproxy.cfg
+        pattern: "ssl crt-list .*/certificate-list\\.txt"
+        description: HTTPS frontend must use crt-list for certificate loading
+
+      - type: contains
+        target: crt-list:certificate-list.txt
+        pattern: "default\\.pem \\[ocsp-update on\\]"
+        description: CRT-list must include default certificate with OCSP enabled
+
+      - type: not_contains
+        target: crt-list:certificate-list.txt
+        pattern: "^\\s*$"
+        description: CRT-list must not contain empty lines

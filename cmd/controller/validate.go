@@ -141,13 +141,14 @@ func setupValidation(logger *slog.Logger) (*v1alpha1.HAProxyTemplateConfigSpec, 
 	}
 
 	// Setup validation paths in temp directory
-	validationPaths, cleanupFunc, err := setupValidationPaths()
+	// Pass configSpec so setupValidationPaths can derive subdirectory names from dataplane configuration
+	validationPaths, cleanupFunc, err := setupValidationPaths(configSpec)
 	if err != nil {
 		return nil, nil, dataplane.ValidationPaths{}, nil, err
 	}
 
 	// Create template engine with custom filters
-	engine, err := createTemplateEngine(configSpec, validationPaths, logger)
+	engine, err := createTemplateEngine(configSpec, logger)
 	if err != nil {
 		cleanupFunc()
 		return nil, nil, dataplane.ValidationPaths{}, nil, err
@@ -320,7 +321,7 @@ func loadConfigFromFile(filePath string) (*v1alpha1.HAProxyTemplateConfigSpec, e
 }
 
 // createTemplateEngine creates and compiles the template engine from config spec with custom filters.
-func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, validationPaths dataplane.ValidationPaths, logger *slog.Logger) (*templating.TemplateEngine, error) {
+func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, logger *slog.Logger) (*templating.TemplateEngine, error) {
 	// Extract all template sources
 	templates := make(map[string]string)
 
@@ -347,16 +348,9 @@ func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, valida
 		templates[name] = cert.Template
 	}
 
-	// Create path resolver for get_path filter
-	pathResolver := &templating.PathResolver{
-		MapsDir:    validationPaths.MapsDir,
-		SSLDir:     validationPaths.SSLCertsDir,
-		GeneralDir: validationPaths.GeneralStorageDir,
-	}
-
 	// Register custom filters
+	// Note: pathResolver is now passed via rendering context by TestRunner
 	filters := map[string]templating.FilterFunc{
-		"get_path":   pathResolver.GetPath,
 		"glob_match": templating.GlobMatch,
 		"b64decode":  templating.B64Decode,
 	}
@@ -383,19 +377,30 @@ func createTemplateEngine(configSpec *v1alpha1.HAProxyTemplateConfigSpec, valida
 
 // setupValidationPaths creates temporary directories for HAProxy validation.
 // Returns the validation paths and a cleanup function.
-func setupValidationPaths() (dataplane.ValidationPaths, func(), error) {
+// IMPORTANT: Subdirectory names are derived from the HAProxyTemplateConfig's dataplane configuration
+// to ensure consistency between production and validation environments.
+func setupValidationPaths(configSpec *v1alpha1.HAProxyTemplateConfigSpec) (dataplane.ValidationPaths, func(), error) {
 	// Create temporary directory
 	tempDir, err := os.MkdirTemp("", "haproxy-validate-*")
 	if err != nil {
 		return dataplane.ValidationPaths{}, nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
-	// Create subdirectories for auxiliary files
-	mapsDir := filepath.Join(tempDir, "maps")
-	sslDir := filepath.Join(tempDir, "ssl")
-	filesDir := filepath.Join(tempDir, "files")
+	// Convert CRD spec to internal config format to get dataplane configuration with defaults applied
+	cfg, err := conversion.ConvertSpec(configSpec)
+	if err != nil {
+		os.RemoveAll(tempDir)
+		return dataplane.ValidationPaths{}, nil, fmt.Errorf("failed to convert config spec: %w", err)
+	}
 
-	for _, dir := range []string{mapsDir, sslDir, filesDir} {
+	// Derive subdirectory names from configured dataplane paths using filepath.Base()
+	// This extracts the final directory name (e.g., "/etc/haproxy/maps" → "maps")
+	// and maintains consistency with production while using relative paths for validation
+	mapsDir := filepath.Join(tempDir, filepath.Base(cfg.Dataplane.MapsDir))
+	certsDir := filepath.Join(tempDir, filepath.Base(cfg.Dataplane.SSLCertsDir))
+	generalDir := filepath.Join(tempDir, filepath.Base(cfg.Dataplane.GeneralStorageDir))
+
+	for _, dir := range []string{mapsDir, certsDir, generalDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			os.RemoveAll(tempDir)
 			return dataplane.ValidationPaths{}, nil, fmt.Errorf("failed to create directory: %w", err)
@@ -404,8 +409,8 @@ func setupValidationPaths() (dataplane.ValidationPaths, func(), error) {
 
 	validationPaths := dataplane.ValidationPaths{
 		MapsDir:           mapsDir,
-		SSLCertsDir:       sslDir,
-		GeneralStorageDir: filesDir,
+		SSLCertsDir:       certsDir,
+		GeneralStorageDir: generalDir,
 		ConfigFile:        filepath.Join(tempDir, "haproxy.cfg"),
 	}
 

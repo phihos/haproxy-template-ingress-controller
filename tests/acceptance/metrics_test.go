@@ -141,7 +141,7 @@ func TestMetrics(t *testing.T) {
 			// Create Deployment
 			deployment := NewControllerDeployment(
 				namespace,
-				ControllerConfigMapName,
+				ControllerCRDName,
 				ControllerSecretName,
 				ControllerServiceAccountName,
 				DebugPort,

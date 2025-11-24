@@ -31,7 +31,7 @@ type FileRegistry struct {
 
 // registeredFile tracks a dynamically-registered file.
 type registeredFile struct {
-	Type     string // "cert", "map", or "file"
+	Type     string // "cert", "map", "file", or "crt-list"
 	Filename string // Base filename
 	Content  string // File content
 	Path     string // Predicted full path
@@ -39,7 +39,7 @@ type registeredFile struct {
 
 // NewFileRegistry creates a new FileRegistry with the given path resolver.
 // The path resolver is used to compute full paths for registered files,
-// ensuring they match the paths used by get_path filter.
+// ensuring they match the paths used by pathResolver.GetPath() method.
 func NewFileRegistry(pathResolver *templating.PathResolver) *FileRegistry {
 	return &FileRegistry{
 		registered:   make(map[string]registeredFile),
@@ -51,8 +51,8 @@ func NewFileRegistry(pathResolver *templating.PathResolver) *FileRegistry {
 // This method is called from templates as file_registry.Register(type, filename, content).
 //
 // Parameters:
-//   - fileType: "cert", "map", or "file"
-//   - filename: Base filename (e.g., "ca.pem", "domains.map")
+//   - fileType: "cert", "map", "file", or "crt-list"
+//   - filename: Base filename (e.g., "ca.pem", "domains.map", "certificate-list.txt")
 //   - content: File content as a string
 //
 // Returns:
@@ -88,13 +88,13 @@ func (r *FileRegistry) Register(args ...interface{}) (interface{}, error) {
 
 	// Validate file type
 	switch fileType {
-	case "cert", "map", "file":
+	case "cert", "map", "file", "crt-list":
 		// Valid types
 	default:
-		return nil, fmt.Errorf("file_registry.Register: invalid file type %q, must be \"cert\", \"map\", or \"file\"", fileType)
+		return nil, fmt.Errorf("file_registry.Register: invalid file type %q, must be \"cert\", \"map\", \"file\", or \"crt-list\"", fileType)
 	}
 
-	// Compute predicted path using path resolver (same logic as get_path filter)
+	// Compute predicted path using path resolver (same logic as pathResolver.GetPath() method)
 	pathInterface, err := r.pathResolver.GetPath(filename, fileType)
 	if err != nil {
 		return nil, fmt.Errorf("file_registry.Register: failed to compute path: %w", err)
@@ -155,6 +155,12 @@ func (r *FileRegistry) GetFiles() *dataplane.AuxiliaryFiles {
 
 		case "map":
 			files.MapFiles = append(files.MapFiles, auxiliaryfiles.MapFile{
+				Path:    reg.Path,
+				Content: reg.Content,
+			})
+
+		case "crt-list":
+			files.CRTListFiles = append(files.CRTListFiles, auxiliaryfiles.CRTListFile{
 				Path:    reg.Path,
 				Content: reg.Content,
 			})

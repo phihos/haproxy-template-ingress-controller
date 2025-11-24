@@ -26,6 +26,7 @@ func TestPathResolver_GetPath(t *testing.T) {
 	resolver := &PathResolver{
 		MapsDir:    "/etc/haproxy/maps",
 		SSLDir:     "/etc/haproxy/ssl",
+		CRTListDir: "/etc/haproxy/ssl", // CRT-list files stored in SSL directory
 		GeneralDir: "/etc/haproxy/general",
 	}
 
@@ -53,6 +54,12 @@ func TestPathResolver_GetPath(t *testing.T) {
 			filename: "cert.pem",
 			args:     []interface{}{"cert"},
 			want:     "/etc/haproxy/ssl/cert.pem",
+		},
+		{
+			name:     "crt-list file",
+			filename: "certificate-list.txt",
+			args:     []interface{}{"crt-list"},
+			want:     "/etc/haproxy/ssl/certificate-list.txt",
 		},
 		{
 			name:     "empty filename returns directory",
@@ -88,7 +95,10 @@ func TestPathResolver_GetPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolver.GetPath(tt.filename, tt.args...)
+			// GetPath expects all arguments in a single variadic call
+			args := []interface{}{tt.filename}
+			args = append(args, tt.args...)
+			got, err := resolver.GetPath(args...)
 
 			if tt.wantErr {
 				require.Error(t, err)

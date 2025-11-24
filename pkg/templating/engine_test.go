@@ -378,25 +378,25 @@ func TestNewWithFilters_GetPathFilter(t *testing.T) {
 	}{
 		{
 			name:     "map file path",
-			template: `{{ "host.map" | get_path("map") }}`,
+			template: `{{ pathResolver.GetPath("host.map", "map") }}`,
 			context:  map[string]interface{}{},
 			want:     "/etc/haproxy/maps/host.map",
 		},
 		{
 			name:     "general file path",
-			template: `{{ "504.http" | get_path("file") }}`,
+			template: `{{ pathResolver.GetPath("504.http", "file") }}`,
 			context:  map[string]interface{}{},
 			want:     "/etc/haproxy/general/504.http",
 		},
 		{
 			name:     "SSL certificate path",
-			template: `{{ "example.com.pem" | get_path("cert") }}`,
+			template: `{{ pathResolver.GetPath("example.com.pem", "cert") }}`,
 			context:  map[string]interface{}{},
 			want:     "/etc/haproxy/ssl/example.com.pem",
 		},
 		{
 			name:     "map file from variable",
-			template: `{{ filename | get_path("map") }}`,
+			template: `{{ pathResolver.GetPath(filename, "map") }}`,
 			context: map[string]interface{}{
 				"filename": "backend.map",
 			},
@@ -404,7 +404,7 @@ func TestNewWithFilters_GetPathFilter(t *testing.T) {
 		},
 		{
 			name:     "dynamic file type",
-			template: `{{ filename | get_path(filetype) }}`,
+			template: `{{ pathResolver.GetPath(filename, filetype) }}`,
 			context: map[string]interface{}{
 				"filename": "error.http",
 				"filetype": "file",
@@ -413,14 +413,14 @@ func TestNewWithFilters_GetPathFilter(t *testing.T) {
 		},
 		{
 			name:      "missing file type argument",
-			template:  `{{ "test.map" | get_path }}`,
+			template:  `{{ pathResolver.GetPath("test.map") }}`,
 			context:   map[string]interface{}{},
 			wantErr:   true,
-			errString: "file type argument required",
+			errString: "GetPath requires 2 arguments",
 		},
 		{
 			name:      "invalid file type",
-			template:  `{{ "test.txt" | get_path("invalid") }}`,
+			template:  `{{ pathResolver.GetPath("test.txt", "invalid") }}`,
 			context:   map[string]interface{}{},
 			wantErr:   true,
 			errString: "invalid file type",
@@ -434,21 +434,26 @@ func TestNewWithFilters_GetPathFilter(t *testing.T) {
 		GeneralDir: "/etc/haproxy/general",
 	}
 
-	// Register custom filter
-	filters := map[string]FilterFunc{
-		"get_path": pathResolver.GetPath,
-	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			templates := map[string]string{
 				"test": tt.template,
 			}
 
-			engine, err := New(EngineTypeGonja, templates, filters, nil, nil)
+			// Add pathResolver to context instead of as filter
+			context := map[string]interface{}{
+				"pathResolver": pathResolver,
+			}
+			if tt.context != nil {
+				for k, v := range tt.context {
+					context[k] = v
+				}
+			}
+
+			engine, err := New(EngineTypeGonja, templates, nil, nil, nil)
 			require.NoError(t, err)
 
-			output, err := engine.Render("test", tt.context)
+			output, err := engine.Render("test", context)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -472,18 +477,16 @@ func TestNewWithFilters_CustomPathsConfiguration(t *testing.T) {
 		GeneralDir: "/custom/files",
 	}
 
-	filters := map[string]FilterFunc{
-		"get_path": pathResolver.GetPath,
-	}
-
 	templates := map[string]string{
-		"test": `{{ "test.map" | get_path("map") }}`,
+		"test": `{{ pathResolver.GetPath("test.map", "map") }}`,
 	}
 
-	engine, err := New(EngineTypeGonja, templates, filters, nil, nil)
+	engine, err := New(EngineTypeGonja, templates, nil, nil, nil)
 	require.NoError(t, err)
 
-	output, err := engine.Render("test", nil)
+	output, err := engine.Render("test", map[string]interface{}{
+		"pathResolver": pathResolver,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, "/custom/maps/test.map", output)
 }
@@ -506,19 +509,19 @@ func TestNewWithFilters_MultipleFilters(t *testing.T) {
 	}
 
 	filters := map[string]FilterFunc{
-		"get_path":  pathResolver.GetPath,
 		"uppercase": uppercaseFilter,
 	}
 
 	templates := map[string]string{
-		"test": `{{ filename | uppercase | get_path("map") }}`,
+		"test": `{{ pathResolver.GetPath(filename | uppercase, "map") }}`,
 	}
 
 	engine, err := New(EngineTypeGonja, templates, filters, nil, nil)
 	require.NoError(t, err)
 
 	output, err := engine.Render("test", map[string]interface{}{
-		"filename": "host.map",
+		"filename":     "host.map",
+		"pathResolver": pathResolver,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "/etc/haproxy/maps/HOST.MAP", output)

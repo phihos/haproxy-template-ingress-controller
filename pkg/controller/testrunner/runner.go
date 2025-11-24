@@ -35,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -206,16 +207,16 @@ func New(
 	}
 }
 
-// createWorkerEngine creates a template engine with test-specific path filters.
+// createWorkerEngine creates a template engine with test-specific path resolver.
 //
-// Each test needs its own engine because the `get_path` filter must resolve
+// Each test needs its own engine because the `pathResolver.GetPath()` method must resolve
 // to test-specific directories. This ensures HAProxy can find auxiliary files
 // in the correct test subdirectories.
 //
 // createWorkerEngine creates a template engine with per-test PathResolver for isolated validation.
 // Each engine instance clones gonja's builtin filters to avoid global state conflicts during
 // concurrent test execution. This allows true parallel execution across multiple workers.
-func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templating.TemplateEngine, error) {
+func (r *Runner) createWorkerEngine() (*templating.TemplateEngine, error) {
 	// Extract all template sources (same as in validate.go)
 	templates := make(map[string]string)
 
@@ -242,16 +243,9 @@ func (r *Runner) createWorkerEngine(testPaths dataplane.ValidationPaths) (*templ
 		templates[name] = cert.Template
 	}
 
-	// Create path resolver with test-specific paths
-	pathResolver := &templating.PathResolver{
-		MapsDir:    testPaths.MapsDir,
-		SSLDir:     testPaths.SSLCertsDir,
-		GeneralDir: testPaths.GeneralStorageDir,
-	}
-
-	// Register custom filters with test-specific paths
+	// Register custom filters
+	// Note: pathResolver is created in buildRenderingContext() and passed via rendering context
 	filters := map[string]templating.FilterFunc{
-		"get_path":   pathResolver.GetPath,
 		"glob_match": templating.GlobMatch,
 		"b64decode":  templating.B64Decode,
 	}
@@ -304,12 +298,16 @@ func (r *Runner) createTestPaths(workerID, testNum int) (dataplane.ValidationPat
 	testDir := filepath.Join(baseTempDir, fmt.Sprintf("worker-%d", workerID), fmt.Sprintf("test-%d", testNum))
 
 	// Create subdirectories for auxiliary files
-	mapsDir := filepath.Join(testDir, "maps")
-	sslDir := filepath.Join(testDir, "ssl")
-	filesDir := filepath.Join(testDir, "files")
+	// IMPORTANT: Subdirectory names are derived from configured dataplane paths
+	// using filepath.Base() to ensure consistency between production and validation.
+	// HAProxy requires absolute paths to locate files, so we create absolute paths
+	// within the isolated test directory (e.g., /tmp/haproxy-validate-12345/worker-0/test-1/maps).
+	mapsDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.MapsDir))
+	certsDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.SSLCertsDir))
+	generalDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.GeneralStorageDir))
 
 	// Create all directories
-	for _, dir := range []string{mapsDir, sslDir, filesDir} {
+	for _, dir := range []string{mapsDir, certsDir, generalDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return dataplane.ValidationPaths{}, fmt.Errorf("failed to create test directory %s: %w", dir, err)
 		}
@@ -317,8 +315,8 @@ func (r *Runner) createTestPaths(workerID, testNum int) (dataplane.ValidationPat
 
 	return dataplane.ValidationPaths{
 		MapsDir:           mapsDir,
-		SSLCertsDir:       sslDir,
-		GeneralStorageDir: filesDir,
+		SSLCertsDir:       certsDir,
+		GeneralStorageDir: generalDir,
 		ConfigFile:        filepath.Join(testDir, "haproxy.cfg"),
 	}, nil
 }
@@ -467,7 +465,7 @@ func (r *Runner) testWorker(ctx context.Context, workerID int, tests <-chan test
 
 			// Create unique template engine for this specific test
 			engineCreateStart := time.Now()
-			testEngine, err := r.createWorkerEngine(testPaths)
+			testEngine, err := r.createWorkerEngine()
 			engineCreateDuration := time.Since(engineCreateStart)
 
 			if err != nil {
@@ -688,8 +686,8 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 	auxiliaryFiles := renderer.MergeAuxiliaryFiles(staticFiles, dynamicFiles)
 
 	// Debug logging
-	staticCount := len(staticFiles.MapFiles) + len(staticFiles.GeneralFiles) + len(staticFiles.SSLCertificates)
-	dynamicCount := len(dynamicFiles.MapFiles) + len(dynamicFiles.GeneralFiles) + len(dynamicFiles.SSLCertificates)
+	staticCount := len(staticFiles.MapFiles) + len(staticFiles.GeneralFiles) + len(staticFiles.SSLCertificates) + len(staticFiles.CRTListFiles)
+	dynamicCount := len(dynamicFiles.MapFiles) + len(dynamicFiles.GeneralFiles) + len(dynamicFiles.SSLCertificates) + len(dynamicFiles.CRTListFiles)
 	if dynamicCount > 0 {
 		r.logger.Debug("Merged auxiliary files",
 			"static_count", staticCount,
@@ -702,7 +700,7 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 // buildRenderingContext builds the template rendering context using fixture stores.
 //
 // This mirrors DryRunValidator.buildRenderingContext and Renderer.buildRenderingContext.
-// The context includes resources (fixture stores), template snippets, and controller configuration.
+// The context includes resources (fixture stores), template snippets, file_registry, pathResolver, and controller configuration.
 func (r *Runner) buildRenderingContext(stores map[string]types.Store, validationPaths dataplane.ValidationPaths) map[string]interface{} {
 	// Create resources map with wrapped stores (excluding haproxy-pods)
 	resources := make(map[string]interface{})
@@ -739,6 +737,7 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 	pathResolver := &templating.PathResolver{
 		MapsDir:    validationPaths.MapsDir,
 		SSLDir:     validationPaths.SSLCertsDir,
+		CRTListDir: validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
 		GeneralDir: validationPaths.GeneralStorageDir,
 	}
 	fileRegistry := renderer.NewFileRegistry(pathResolver)
@@ -749,6 +748,8 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 		"controller":        controller,
 		"template_snippets": snippetNames,
 		"file_registry":     fileRegistry,
+		"pathResolver":      pathResolver,
+		"dataplane":         r.config.Dataplane, // Add dataplane config for absolute path access
 	}
 
 	// Merge extraContext variables into top-level context
@@ -757,21 +758,38 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 	return context
 }
 
-// sortSnippetsByPriority sorts template snippet names alphabetically.
+// sortSnippetsByPriority sorts template snippets by their priority field (ascending),
+// with alphabetical ordering as a tiebreaker for snippets with the same priority.
+// Snippets without an explicit priority (priority == 0) default to 500.
 func (r *Runner) sortSnippetsByPriority() []string {
-	// Extract snippet names
-	names := make([]string, 0, len(r.config.TemplateSnippets))
-	for name := range r.config.TemplateSnippets {
-		names = append(names, name)
+	// Create slice of snippet names with their priorities
+	type snippetWithPriority struct {
+		name     string
+		priority int
 	}
 
-	// Sort alphabetically (simple bubble sort)
-	for i := 0; i < len(names)-1; i++ {
-		for j := 0; j < len(names)-i-1; j++ {
-			if names[j] > names[j+1] {
-				names[j], names[j+1] = names[j+1], names[j]
-			}
+	snippets := make([]snippetWithPriority, 0, len(r.config.TemplateSnippets))
+	for name, snippet := range r.config.TemplateSnippets {
+		// Default priority is 500 if not specified (priority == 0)
+		priority := snippet.Priority
+		if priority == 0 {
+			priority = 500
 		}
+		snippets = append(snippets, snippetWithPriority{name, priority})
+	}
+
+	// Sort by priority (ascending), then alphabetically for same priority
+	sort.Slice(snippets, func(i, j int) bool {
+		if snippets[i].priority != snippets[j].priority {
+			return snippets[i].priority < snippets[j].priority
+		}
+		return snippets[i].name < snippets[j].name
+	})
+
+	// Extract sorted names
+	names := make([]string, len(snippets))
+	for i, s := range snippets {
+		names[i] = s.name
 	}
 
 	return names

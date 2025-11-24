@@ -374,24 +374,22 @@ func startEarlyInfrastructureServers(
 ) {
 	logger.Info("Starting infrastructure servers (early initialization)")
 
-	// Start debug HTTP server if port is configured
-	if debugPort > 0 {
-		// Use shared introspection registry from setup
-		// Variables will be registered later by setupInfrastructureServers
-		debugServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), setup.IntrospectionRegistry)
-		go func() {
-			if err := debugServer.Start(ctx); err != nil {
-				logger.Error("debug server failed", "error", err, "port", debugPort)
-			}
-		}()
-		logger.Info("Debug HTTP server started (early)",
-			"port", debugPort,
-			"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
-			"access_method", "kubectl port-forward",
-			"note", "variables will be registered after config loads")
-	} else {
-		logger.Debug("Debug HTTP server disabled (port=0)")
-	}
+	// Start introspection HTTP server (always enabled for health checks)
+	// Provides /healthz endpoint for Kubernetes probes and /debug/* endpoints for debugging
+	// Use shared introspection registry from setup
+	// Variables will be registered later by setupInfrastructureServers
+	introspectionServer := introspection.NewServer(fmt.Sprintf(":%d", debugPort), setup.IntrospectionRegistry)
+	go func() {
+		if err := introspectionServer.Start(ctx); err != nil {
+			logger.Error("introspection server failed", "error", err, "port", debugPort)
+		}
+	}()
+	logger.Info("Introspection HTTP server started (early)",
+		"port", debugPort,
+		"bind_address", fmt.Sprintf("0.0.0.0:%d", debugPort),
+		"access_method", "kubectl port-forward",
+		"endpoints", "/healthz, /debug/vars, /debug/pprof",
+		"note", "variables will be registered after config loads")
 
 	// Start metrics HTTP server with default port
 	// We use a default because config hasn't been loaded yet
@@ -640,13 +638,8 @@ func createReconciliationComponents(
 	}
 
 	// Create HAProxy Validator
-	validationPaths := dataplane.ValidationPaths{
-		MapsDir:           cfg.Dataplane.MapsDir,
-		SSLCertsDir:       cfg.Dataplane.SSLCertsDir,
-		GeneralStorageDir: cfg.Dataplane.GeneralStorageDir,
-		ConfigFile:        cfg.Dataplane.ConfigFile,
-	}
-	haproxyValidatorComponent := validator.NewHAProxyValidator(bus, logger, validationPaths)
+	// Validation paths are now created per-render by the Renderer component for parallel validation support
+	haproxyValidatorComponent := validator.NewHAProxyValidator(bus, logger)
 
 	// Create Executor
 	executorComponent := executor.New(bus, logger)
@@ -868,16 +861,9 @@ func setupWebhook(
 		templates[name] = certDef.Template
 	}
 
-	// Create path resolver for get_path filter
-	pathResolver := &templating.PathResolver{
-		MapsDir:    cfg.Dataplane.MapsDir,
-		SSLDir:     cfg.Dataplane.SSLCertsDir,
-		GeneralDir: cfg.Dataplane.GeneralStorageDir,
-	}
-
 	// Register custom filters
+	// Note: pathResolver is created in DryRunValidator and passed via rendering context
 	filters := map[string]templating.FilterFunc{
-		"get_path":   pathResolver.GetPath,
 		"glob_match": templating.GlobMatch,
 		"b64decode":  templating.B64Decode,
 	}

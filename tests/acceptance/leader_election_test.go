@@ -134,7 +134,7 @@ func TestLeaderElection_TwoReplicas(t *testing.T) {
 			// Create Deployment with 2 replicas
 			deployment := NewControllerDeployment(
 				namespace,
-				ControllerConfigMapName,
+				ControllerCRDName,
 				ControllerSecretName,
 				ControllerServiceAccountName,
 				DebugPort,
@@ -525,7 +525,7 @@ func TestLeaderElection_Failover(t *testing.T) {
 
 			deployment := NewControllerDeployment(
 				namespace,
-				ControllerConfigMapName,
+				ControllerCRDName,
 				ControllerSecretName,
 				ControllerServiceAccountName,
 				DebugPort,
@@ -809,7 +809,7 @@ watched_resources:
 			// Create Deployment with 1 replica
 			deployment := NewControllerDeployment(
 				namespace,
-				ControllerConfigMapName,
+				ControllerCRDName,
 				ControllerSecretName,
 				ControllerServiceAccountName,
 				DebugPort,

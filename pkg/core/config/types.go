@@ -70,6 +70,11 @@ type Config struct {
 	// These generate SSL certificate files for HAProxy.
 	SSLCertificates map[string]SSLCertificate `yaml:"ssl_certificates"`
 
+	// CRTLists maps crt-list file names to their template definitions.
+	//
+	// These generate crt-list files for SSL certificate lists with per-certificate options.
+	CRTLists map[string]CRTListFile `yaml:"crt_lists"`
+
 	// HAProxyConfig contains the main HAProxy configuration template.
 	HAProxyConfig HAProxyConfig `yaml:"haproxy_config"`
 
@@ -133,10 +138,14 @@ type PodSelector struct {
 // ControllerConfig contains controller-level configuration.
 type ControllerConfig struct {
 	// HealthzPort is the port for health check endpoints.
+	// A value of 0 means "uninitialized" and will be replaced with the default.
+	// This is a production port and MUST NOT remain 0 after defaults are applied.
 	// Default: 8080
 	HealthzPort int `yaml:"healthz_port"`
 
 	// MetricsPort is the port for Prometheus metrics.
+	// A value of 0 means "uninitialized" and will be replaced with the default.
+	// This is a production port and MUST NOT remain 0 after defaults are applied.
 	// Default: 9090
 	MetricsPort int `yaml:"metrics_port"`
 
@@ -187,6 +196,8 @@ type LoggingConfig struct {
 // DataplaneConfig configures the Dataplane API for production HAProxy instances.
 type DataplaneConfig struct {
 	// Port is the Dataplane API port for production HAProxy pods.
+	// A value of 0 means "uninitialized" and will be replaced with the default.
+	// This is a production port and MUST NOT remain 0 after defaults are applied.
 	// Default: 5555
 	Port int `yaml:"port"`
 
@@ -299,6 +310,20 @@ type GeneralFile struct {
 // SSLCertificate is an SSL certificate file template.
 type SSLCertificate struct {
 	// Template is the template content that generates the certificate file.
+	Template string `yaml:"template"`
+
+	// PostProcessing defines optional post-processors to apply after rendering.
+	// Post-processors are applied in order to transform the rendered output.
+	PostProcessing []PostProcessorConfig `yaml:"post_processing,omitempty"`
+}
+
+// CRTListFile is a crt-list file template.
+//
+// CRT-list files contain entries that map SSL certificates to specific SNI patterns
+// with per-certificate options. This enables advanced SSL certificate management with
+// features like SNI routing, OCSP stapling, and per-certificate TLS settings.
+type CRTListFile struct {
+	// Template is the template content that generates the crt-list file.
 	Template string `yaml:"template"`
 
 	// PostProcessing defines optional post-processors to apply after rendering.

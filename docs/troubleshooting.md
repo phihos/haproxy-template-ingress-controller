@@ -209,7 +209,7 @@ unable to load file '/etc/haproxy/maps/host.map'
 
 **Solution:**
 - Ensure map files are defined in `maps` section
-- Use `get_path` filter correctly: `{{ "host.map" | get_path("map") }}`
+- Use `pathResolver.GetPath()` method correctly: `{{ pathResolver.GetPath("host.map", "map") }}`
 - Check paths match dataplane configuration
 
 **3. Invalid server addresses:**
@@ -626,7 +626,7 @@ kubectl exec $HAPROXY_POD -c haproxy -- \
 
 **Solution:**
 - Use absolute paths: `/etc/haproxy/ssl/cert.pem`
-- Use `get_path` filter: `{{ "cert.pem" | get_path("cert") }}`
+- Use `pathResolver.GetPath()` method: `{{ pathResolver.GetPath("cert.pem", "cert") }}`
 - Verify path matches `dataplane.sslCertsDir`
 
 ## Performance Issues

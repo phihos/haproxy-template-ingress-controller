@@ -25,14 +25,14 @@ templateSnippets:
       http-request set-var(txn.base) base
       http-request set-var(txn.path) path
       http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
-      http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
-      http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ "host.map" | get_path("map") }},'') if !{ var(txn.host_match) -m found }
+      http-request set-var(txn.host_match) var(txn.host),map({{ pathResolver.GetPath("host.map", "map") }})
+      http-request set-var(txn.host_match) var(txn.host),regsub(^[^.]*,,),map({{ pathResolver.GetPath("host.map", "map") }},'') if !{ var(txn.host_match) -m found }
 
       # Path matching order: Exact > Prefix-exact > Prefix > Regex
-      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-exact.map" | get_path("map") }})
-      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ "path-prefix-exact.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
-      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
-      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ "path-regex.map" | get_path("map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ pathResolver.GetPath("path-exact.map", "map") }})
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map({{ pathResolver.GetPath("path-prefix-exact.map", "map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_beg({{ pathResolver.GetPath("path-prefix.map", "map") }}) if !{ var(txn.path_match) -m found }
+      http-request set-var(txn.path_match) var(txn.host_match),concat(,txn.path,),map_reg({{ pathResolver.GetPath("path-regex.map", "map") }}) if !{ var(txn.path_match) -m found }
 
       # Parse qualifier from path match (field 1 = qualifier type)
       # Empty string if no path match - falls through gracefully
@@ -46,7 +46,7 @@ templateSnippets:
       http-request set-var(txn.random_weight) rand(),mod(txn.total_weight) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
       http-request set-var(txn.route_key) var(txn.path_match),field(3,:) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
       http-request set-var(txn.lookup_key) var(txn.random_weight),concat(:,txn.route_key,) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
-      http-request set-var(txn.backend_name) var(txn.lookup_key),map({{ "weighted-multi-backend.map" | get_path("map") }}) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
+      http-request set-var(txn.backend_name) var(txn.lookup_key),map({{ pathResolver.GetPath("weighted-multi-backend.map", "map") }}) if { var(txn.path_match_qualifier) -m str MULTIBACKEND }
 
       # BACKEND qualifier: direct routing
       # Format: BACKEND:<backend_name>

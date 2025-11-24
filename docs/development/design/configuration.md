@@ -307,13 +307,13 @@ haproxy_config:
       timeout connect 5000
       timeout client 50000
       timeout server 50000
-      errorfile 400 {{ "400.http" | get_path("file") }}
-      errorfile 403 {{ "403.http" | get_path("file") }}
-      errorfile 408 {{ "408.http" | get_path("file") }}
-      errorfile 500 {{ "500.http" | get_path("file") }}
-      errorfile 502 {{ "502.http" | get_path("file") }}
-      errorfile 503 {{ "503.http" | get_path("file") }}
-      errorfile 504 {{ "504.http" | get_path("file") }}
+      errorfile 400 {{ pathResolver.GetPath("400.http", "file") }}
+      errorfile 403 {{ pathResolver.GetPath("403.http", "file") }}
+      errorfile 408 {{ pathResolver.GetPath("408.http", "file") }}
+      errorfile 500 {{ pathResolver.GetPath("500.http", "file") }}
+      errorfile 502 {{ pathResolver.GetPath("502.http", "file") }}
+      errorfile 503 {{ pathResolver.GetPath("503.http", "file") }}
+      errorfile 504 {{ pathResolver.GetPath("504.http", "file") }}
 
     frontend status
       bind *:8404

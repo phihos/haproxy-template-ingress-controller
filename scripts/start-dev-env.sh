@@ -15,6 +15,7 @@ ECHO_APP_NAME="echo-server"
 ECHO_IMAGE="ealen/echo-server:latest"
 LOCAL_IMAGE="haproxy-template-ic:dev"
 HELM_RELEASE_NAME="haproxy-template-ic"
+HAPROXY_VERSION="${HAPROXY_VERSION:-3.2}"
 TIMEOUT="180"
 SKIP_BUILD=false
 SKIP_ECHO=false
@@ -115,6 +116,10 @@ OPTIONS:
     --verbose               Enable debug output
     --help, -h              Show this help
 
+ENVIRONMENT VARIABLES:
+    HAPROXY_VERSION         HAProxy version for production pods (default: 3.2)
+                            Supported: 3.0, 3.1, 3.2, 3.3-dev
+
 EXAMPLES:
     $0                      # Start dev environment with defaults
     $0 up --skip-build      # Start without rebuilding image
@@ -128,6 +133,7 @@ EXAMPLES:
     $0 port-forward         # Setup port forwarding for testing
     $0 down                 # Delete cluster
     $0 restart --verbose    # Restart with debug output
+    HAPROXY_VERSION=3.0 $0  # Use HAProxy 3.0 instead of default 3.2
 
 EOF
 }
@@ -629,6 +635,7 @@ deploy_controller() {
         "--namespace" "${CTRL_NAMESPACE}"
         "--values" "${ASSETS_DIR}/dev-values.yaml"
         "--set" "image.tag=${IMAGE_TAG}"
+        "--set" "haproxy.image.tag=${HAPROXY_VERSION}"
         # Note: --wait is removed because readiness probes are disabled in dev mode
         # We use kubectl rollout status instead to wait for pods
         "--timeout" "${TIMEOUT}s"
@@ -665,23 +672,20 @@ deploy_controller() {
 }
 
 deploy_haproxy() {
-    print_section "🔧 Deploying HAProxy Production Instances"
+    print_section "🔧 Verifying HAProxy Deployment"
 
-    log INFO "Deploying HAProxy production deployment with Dataplane API sidecars..."
-    retry_with_backoff 3 2 kubectl apply -f "${ASSETS_DIR}/haproxy-production.yaml" || {
-        err "Failed to deploy HAProxy production instances"
-        return 1
-    }
+    # HAProxy is now deployed via Helm chart alongside controller
+    # Nothing to deploy here - already handled by deploy_controller()
 
-    log INFO "Waiting for HAProxy production deployment to become ready..."
-    if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/haproxy-production --timeout="${TIMEOUT}s"; then
-        warn "HAProxy production deployment rollout did not complete in ${TIMEOUT}s."
-        echo "  - Check HAProxy deployment status: kubectl -n ${CTRL_NAMESPACE} describe deploy/haproxy-production"
-        echo "  - Check HAProxy pod logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/haproxy-production -c haproxy"
-        echo "  - Check dataplane logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/haproxy-production -c dataplane"
+    log INFO "Waiting for HAProxy deployment to become ready (version ${HAPROXY_VERSION})..."
+    if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/${HELM_RELEASE_NAME}-haproxy --timeout="${TIMEOUT}s"; then
+        warn "HAProxy deployment rollout did not complete in ${TIMEOUT}s."
+        echo "  - Check HAProxy deployment: kubectl -n ${CTRL_NAMESPACE} describe deploy/${HELM_RELEASE_NAME}-haproxy"
+        echo "  - Check HAProxy pod logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/${HELM_RELEASE_NAME}-haproxy -c haproxy"
+        echo "  - Check dataplane logs: kubectl -n ${CTRL_NAMESPACE} logs deploy/${HELM_RELEASE_NAME}-haproxy -c dataplane"
         return 1
     fi
-    ok "HAProxy production deployment is ready."
+    ok "HAProxy deployment is ready."
 }
 
 deploy_ingressclass() {

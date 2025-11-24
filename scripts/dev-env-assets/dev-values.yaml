@@ -20,11 +20,24 @@ controller:
       extraContext:
         debug: true  # Enable introspection headers for development
 
-# HAProxy Service - expose externally via LoadBalancer for dev/testing
-haproxyService:
-  type: LoadBalancer
-  # kind cluster maps LoadBalancer services to localhost
-  # This makes HAProxy accessible at http://localhost and https://localhost
+# HAProxy Service - expose externally via NodePort for dev/testing
+haproxy:
+  service:
+    type: NodePort
+    # Explicit NodePorts must be set to match kind extraPortMappings
+    http:
+      nodePort: 30080
+    https:
+      nodePort: 30443
+    stats:
+      nodePort: 30404
+  # kind cluster maps NodePort services to localhost via extraPortMappings
+  # This makes HAProxy accessible at http://localhost:30080 and https://localhost:30443
+
+  # Enable network policies in dev with permissive settings
+  networkPolicy:
+    enabled: true
+    allowExternal: true  # Allow NodePort access from host
 
 # Resource limits for development (allow more flexibility)
 resources:
@@ -39,40 +52,8 @@ resources:
 autoscaling:
   enabled: false
 
-# Keep network policy but allow permissive access for dev
 networkPolicy:
   enabled: true
-  egress:
-    allowDNS: true
-    kubernetesApi:
-      - cidr: 0.0.0.0/0  # Permissive for development
-        ports:
-          - port: 443
-            protocol: TCP
-          - port: 6443
-            protocol: TCP
-    haproxyPods:
-      enabled: true
-      podSelector:
-        matchLabels:
-          app: haproxy
-          component: loadbalancer
-      namespaceSelector: {}
-      ports:
-        - port: 5555
-          protocol: TCP
-        - port: 8404
-          protocol: TCP
-  ingress:
-    healthChecks:
-      enabled: true
-      from:
-        - podSelector: {}
-      ports:
-        - port: 8080
-          protocol: TCP
-    monitoring:
-      enabled: false
 
 # Development-specific pod labels for easier identification
 podLabels:

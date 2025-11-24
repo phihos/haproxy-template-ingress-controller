@@ -27,6 +27,11 @@ func ValidateStructure(cfg *Config) error {
 		return fmt.Errorf("logging: %w", err)
 	}
 
+	// Validate Dataplane config
+	if err := validateDataplaneConfig(&cfg.Dataplane); err != nil {
+		return fmt.Errorf("dataplane: %w", err)
+	}
+
 	// Validate WatchedResources
 	if err := validateWatchedResources(cfg.WatchedResources); err != nil {
 		return fmt.Errorf("watched_resources: %w", err)
@@ -79,6 +84,33 @@ func validateControllerConfig(oc *ControllerConfig) error {
 func validateLoggingConfig(lc *LoggingConfig) error {
 	if lc.Verbose < 0 || lc.Verbose > 2 {
 		return fmt.Errorf("verbose must be 0 (WARNING), 1 (INFO), or 2 (DEBUG), got %d", lc.Verbose)
+	}
+
+	return nil
+}
+
+// validateDataplaneConfig validates the dataplane configuration.
+// This validation is called AFTER setDefaults(), so production ports must be 1-65535.
+// A value of 0 indicates defaults were not applied properly.
+func validateDataplaneConfig(dc *DataplaneConfig) error {
+	// Port validation - must not be 0 after defaults
+	// See pkg/core/config/defaults.go for port handling strategy
+	if dc.Port < 1 || dc.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535 (got %d, expected default %d)", dc.Port, DefaultDataplanePort)
+	}
+
+	// Path validations - must not be empty after defaults
+	if dc.MapsDir == "" {
+		return fmt.Errorf("maps_dir cannot be empty (expected default %q)", DefaultDataplaneMapsDir)
+	}
+	if dc.SSLCertsDir == "" {
+		return fmt.Errorf("ssl_certs_dir cannot be empty (expected default %q)", DefaultDataplaneSSLCertsDir)
+	}
+	if dc.GeneralStorageDir == "" {
+		return fmt.Errorf("general_storage_dir cannot be empty (expected default %q)", DefaultDataplaneGeneralStorageDir)
+	}
+	if dc.ConfigFile == "" {
+		return fmt.Errorf("config_file cannot be empty (expected default %q)", DefaultDataplaneConfigFile)
 	}
 
 	return nil

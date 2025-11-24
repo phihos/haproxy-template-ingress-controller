@@ -170,3 +170,29 @@ Uses mustMergeOverwrite for deep merging of all nested structures
 {{- /* Return merged config as YAML */ -}}
 {{- $merged | toYaml }}
 {{- end }}
+
+{{/*
+Controller image
+Defaults to Chart.AppVersion if tag is empty
+*/}}
+{{- define "haproxy-template-ic.controller.image" -}}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.image.repository $tag -}}
+{{- end -}}
+
+{{/*
+HAProxy image
+Uses explicit tag from values (independent versioning from controller)
+*/}}
+{{- define "haproxy-template-ic.haproxy.image" -}}
+{{- printf "%s:%s" .Values.haproxy.image.repository .Values.haproxy.image.tag -}}
+{{- end -}}
+
+{{/*
+Component labels
+Generates app.kubernetes.io/component label for a given component name
+Usage: {{ include "haproxy-template-ic.componentLabels" "loadbalancer" }}
+*/}}
+{{- define "haproxy-template-ic.componentLabels" -}}
+app.kubernetes.io/component: {{ . }}
+{{- end -}}

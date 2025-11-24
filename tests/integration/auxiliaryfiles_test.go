@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
+	"haproxy-template-ic/pkg/dataplane/client"
 )
 
 // TestGeneralFiles tests Create, Update, and Delete operations for general files
@@ -245,15 +246,15 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify certificate exists
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
-				assert.Contains(t, certs, "example.com.pem", "certificate should exist")
+				assert.Contains(t, certs, client.SanitizeSSLCertName("example.com.pem"), "certificate should exist")
 
 				// Verify GetSSLCertificateContent returns fingerprint (or placeholder if API doesn't support it)
-				fingerprint, err := client.GetSSLCertificateContent(ctx, "example.com.pem")
+				fingerprint, err := dataplaneClient.GetSSLCertificateContent(ctx, "example.com.pem")
 				require.NoError(t, err)
 				assert.NotEmpty(t, fingerprint, "fingerprint should not be empty")
 				// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
@@ -285,18 +286,18 @@ func TestSSLCertificates(t *testing.T) {
 				}
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify all certificates exist
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
 				assert.Len(t, certs, 2, "should have 2 certificates")
-				assert.Contains(t, certs, "example.com.pem")
-				assert.Contains(t, certs, "test.com.pem")
+				assert.Contains(t, certs, client.SanitizeSSLCertName("example.com.pem"))
+				assert.Contains(t, certs, client.SanitizeSSLCertName("test.com.pem"))
 
 				// Verify each certificate returns a fingerprint (or placeholder if API doesn't support it)
 				for _, certName := range []string{"example.com.pem", "test.com.pem"} {
-					fingerprint, err := client.GetSSLCertificateContent(ctx, certName)
+					fingerprint, err := dataplaneClient.GetSSLCertificateContent(ctx, certName)
 					require.NoError(t, err)
 					assert.NotEmpty(t, fingerprint, "fingerprint for %s should not be empty", certName)
 					// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
@@ -319,15 +320,15 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify certificate still exists
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
-				assert.Contains(t, certs, "example.com.pem", "certificate should still exist")
+				assert.Contains(t, certs, client.SanitizeSSLCertName("example.com.pem"), "certificate should still exist")
 
 				// Verify GetSSLCertificateContent returns fingerprint (or placeholder if API doesn't support it)
-				fingerprint, err := client.GetSSLCertificateContent(ctx, "example.com.pem")
+				fingerprint, err := dataplaneClient.GetSSLCertificateContent(ctx, "example.com.pem")
 				require.NoError(t, err)
 				assert.NotEmpty(t, fingerprint, "fingerprint should not be empty")
 				// Fingerprint is either a SHA256 hash or "__NO_FINGERPRINT__" placeholder
@@ -348,12 +349,12 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify certificate no longer exists
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
-				assert.NotContains(t, certs, "example.com.pem", "certificate should be deleted")
+				assert.NotContains(t, certs, client.SanitizeSSLCertName("example.com.pem"), "certificate should be deleted")
 			},
 		},
 		{
@@ -382,15 +383,15 @@ func TestSSLCertificates(t *testing.T) {
 				require.NoError(t, err)
 			},
 			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
-				client := TestDataplaneClient(env)
+				dataplaneClient := TestDataplaneClient(env)
 
 				// Verify only one certificate remains
-				certs, err := client.GetAllSSLCertificates(ctx)
+				certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 				require.NoError(t, err)
 				assert.Len(t, certs, 1, "should have 1 certificate remaining")
-				assert.Contains(t, certs, "test.com.pem", "test.com.pem should still exist")
-				assert.NotContains(t, certs, "example.com.pem", "example.com.pem should be deleted")
-				assert.NotContains(t, certs, "updated.com.pem", "updated.com.pem should be deleted")
+				assert.Contains(t, certs, client.SanitizeSSLCertName("test.com.pem"), "test.com.pem should still exist")
+				assert.NotContains(t, certs, client.SanitizeSSLCertName("example.com.pem"), "example.com.pem should be deleted")
+				assert.NotContains(t, certs, client.SanitizeSSLCertName("updated.com.pem"), "updated.com.pem should be deleted")
 			},
 		},
 	}
@@ -421,13 +422,13 @@ func TestSSLCertificates(t *testing.T) {
 func TestSSLCertificatesCompareAndSync(t *testing.T) {
 	env := fixenv.New(t)
 	ctx := context.Background()
-	client := TestDataplaneClient(env)
+	dataplaneClient := TestDataplaneClient(env)
 
 	// Clean up any existing certificates
-	certs, err := client.GetAllSSLCertificates(ctx)
+	certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 	require.NoError(t, err)
 	for _, cert := range certs {
-		_ = client.DeleteSSLCertificate(ctx, cert)
+		_ = dataplaneClient.DeleteSSLCertificate(ctx, cert)
 	}
 
 	// Test: Compare empty state to desired certificates (should show all creates)
@@ -437,7 +438,7 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
 		}
 
-		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, dataplaneClient, desired)
 		require.NoError(t, err)
 
 		assert.Len(t, diff.ToCreate, 2, "should have 2 certificates to create")
@@ -452,18 +453,18 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
 		}
 
-		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, dataplaneClient, desired)
 		require.NoError(t, err)
 
-		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, dataplaneClient, diff)
 		require.NoError(t, err)
 
 		// Verify certificates were created
-		certs, err := client.GetAllSSLCertificates(ctx)
+		certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 		require.NoError(t, err)
 		assert.Len(t, certs, 2)
-		assert.Contains(t, certs, "example.com.pem")
-		assert.Contains(t, certs, "test.com.pem")
+		assert.Contains(t, certs, client.SanitizeSSLCertName("example.com.pem"))
+		assert.Contains(t, certs, client.SanitizeSSLCertName("test.com.pem"))
 	})
 
 	// Test: Compare with certificates already present
@@ -476,7 +477,7 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},       // Same content
 		}
 
-		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, dataplaneClient, desired)
 		require.NoError(t, err)
 
 		// Verify total operations match expected (either fingerprint-based or CREATE-first)
@@ -492,18 +493,18 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
 		}
 
-		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, dataplaneClient, desired)
 		require.NoError(t, err)
 
-		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, dataplaneClient, diff)
 		require.NoError(t, err)
 
 		// Verify certificates still exist
-		certs, err := client.GetAllSSLCertificates(ctx)
+		certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 		require.NoError(t, err)
 		assert.Len(t, certs, 2)
-		assert.Contains(t, certs, "example.com.pem")
-		assert.Contains(t, certs, "test.com.pem")
+		assert.Contains(t, certs, client.SanitizeSSLCertName("example.com.pem"))
+		assert.Contains(t, certs, client.SanitizeSSLCertName("test.com.pem"))
 	})
 
 	// Test: Compare with one certificate removed
@@ -513,12 +514,12 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 			// example.com.pem is not in desired, so it should be deleted
 		}
 
-		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, dataplaneClient, desired)
 		require.NoError(t, err)
 
 		// At least one DELETE operation (example.com.pem should be deleted)
 		assert.Len(t, diff.ToDelete, 1, "should have 1 certificate to delete")
-		assert.Equal(t, "example.com.pem", diff.ToDelete[0])
+		assert.Equal(t, client.SanitizeSSLCertName("example.com.pem"), diff.ToDelete[0])
 
 		// Remaining certificate may be CREATE (no fingerprints) or no-op (with fingerprints)
 		totalOps := len(diff.ToCreate) + len(diff.ToUpdate)
@@ -531,18 +532,18 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
 		}
 
-		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, dataplaneClient, desired)
 		require.NoError(t, err)
 
-		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, dataplaneClient, diff)
 		require.NoError(t, err)
 
 		// Verify certificate was deleted
-		certs, err := client.GetAllSSLCertificates(ctx)
+		certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 		require.NoError(t, err)
 		assert.Len(t, certs, 1)
-		assert.Contains(t, certs, "test.com.pem")
-		assert.NotContains(t, certs, "example.com.pem")
+		assert.Contains(t, certs, client.SanitizeSSLCertName("test.com.pem"))
+		assert.NotContains(t, certs, client.SanitizeSSLCertName("example.com.pem"))
 	})
 
 	// Test: Idempotency - running sync again with same desired state
@@ -551,7 +552,7 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 			{Path: "test.com.pem", Content: LoadTestFileContent(t, "ssl-certs/test.com.pem")},
 		}
 
-		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, dataplaneClient, desired)
 		require.NoError(t, err)
 
 		// Verify no DELETE operations (content hasn't been removed)
@@ -562,7 +563,7 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 		assert.LessOrEqual(t, totalOps, 1, "should have at most 1 operation")
 
 		// Verify syncing again doesn't fail (idempotent via CREATE→UPDATE fallback)
-		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, dataplaneClient, diff)
 		require.NoError(t, err, "sync should be idempotent")
 	})
 
@@ -570,10 +571,10 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 	// This specifically tests the bug that was fixed where non-existent certs were marked for UPDATE
 	t.Run("non-existent-cert-creates-not-updates", func(t *testing.T) {
 		// Clean up all certificates
-		certs, err := client.GetAllSSLCertificates(ctx)
+		certs, err := dataplaneClient.GetAllSSLCertificates(ctx)
 		require.NoError(t, err)
 		for _, cert := range certs {
-			_ = client.DeleteSSLCertificate(ctx, cert)
+			_ = dataplaneClient.DeleteSSLCertificate(ctx, cert)
 		}
 
 		// Request a certificate that doesn't exist
@@ -581,7 +582,7 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 			{Path: "new-cert.pem", Content: LoadTestFileContent(t, "ssl-certs/example.com.pem")},
 		}
 
-		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, client, desired)
+		diff, err := auxiliaryfiles.CompareSSLCertificates(ctx, dataplaneClient, desired)
 		require.NoError(t, err)
 
 		// CRITICAL: Should be marked for CREATE, not UPDATE
@@ -590,13 +591,13 @@ func TestSSLCertificatesCompareAndSync(t *testing.T) {
 		assert.Len(t, diff.ToDelete, 0, "should have 0 certificates to delete")
 
 		// Verify sync succeeds (would fail with old bug when trying to UPDATE non-existent cert)
-		err = auxiliaryfiles.SyncSSLCertificates(ctx, client, diff)
+		err = auxiliaryfiles.SyncSSLCertificates(ctx, dataplaneClient, diff)
 		require.NoError(t, err, "sync should succeed when creating new certificate")
 
 		// Verify certificate was actually created
-		certs, err = client.GetAllSSLCertificates(ctx)
+		certs, err = dataplaneClient.GetAllSSLCertificates(ctx)
 		require.NoError(t, err)
-		assert.Contains(t, certs, "new-cert.pem", "certificate should exist after sync")
+		assert.Contains(t, certs, client.SanitizeSSLCertName("new-cert.pem"), "certificate should exist after sync")
 	})
 }
 
@@ -742,4 +743,389 @@ func LoadTestFileContent(t *testing.T, relativePath string) string {
 	content, err := os.ReadFile(fullPath)
 	require.NoError(t, err, "failed to read test file %s", relativePath)
 	return string(content)
+}
+// TestCRTLists tests Create, Update, and Delete operations for CRT-list files
+func TestCRTLists(t *testing.T) {
+	testCases := []struct {
+		name      string
+		setup     func(t *testing.T, ctx context.Context, env fixenv.Env)
+		operation func(t *testing.T, ctx context.Context, env fixenv.Env)
+		verify    func(t *testing.T, ctx context.Context, env fixenv.Env)
+	}{
+		{
+			name: "create-single-crtlist",
+			setup: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				// Ensure no crt-list files exist
+				client := TestDataplaneClient(env)
+				crtlists, err := client.GetAllCRTListFiles(ctx)
+				require.NoError(t, err)
+				for _, crtlist := range crtlists {
+					_ = client.DeleteCRTListFile(ctx, crtlist)
+				}
+			},
+			operation: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+				content := LoadTestFileContent(t, "crt-lists/basic-crt-list.txt")
+				err := client.CreateCRTListFile(ctx, "crt-list.txt", content)
+				require.NoError(t, err)
+			},
+			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+
+				// Verify file exists
+				crtlists, err := client.GetAllCRTListFiles(ctx)
+				require.NoError(t, err)
+				assert.Contains(t, crtlists, "crt-list.txt", "crt-list file should exist")
+
+				// Verify content
+				content, err := client.GetCRTListFileContent(ctx, "crt-list.txt")
+				require.NoError(t, err)
+				expectedContent := LoadTestFileContent(t, "crt-lists/basic-crt-list.txt")
+				assert.Equal(t, expectedContent, content, "content should match")
+			},
+		},
+		{
+			name: "create-multiple-crtlists",
+			setup: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				// Ensure no crt-list files exist
+				client := TestDataplaneClient(env)
+				crtlists, err := client.GetAllCRTListFiles(ctx)
+				require.NoError(t, err)
+				for _, crtlist := range crtlists {
+					_ = client.DeleteCRTListFile(ctx, crtlist)
+				}
+			},
+			operation: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+
+				files := map[string]string{
+					"crt-list.txt":         "crt-lists/basic-crt-list.txt",
+					"crt-list-options.txt": "crt-lists/crt-list-with-options.txt",
+					"single-cert.txt":      "crt-lists/crt-list-single-cert.txt",
+				}
+
+				for filename, testdataPath := range files {
+					content := LoadTestFileContent(t, testdataPath)
+					err := client.CreateCRTListFile(ctx, filename, content)
+					require.NoError(t, err)
+				}
+			},
+			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+
+				// Verify all files exist
+				crtlists, err := client.GetAllCRTListFiles(ctx)
+				require.NoError(t, err)
+				assert.Len(t, crtlists, 3, "should have 3 crt-list files")
+				assert.Contains(t, crtlists, "crt-list.txt")
+				assert.Contains(t, crtlists, "crt-list-options.txt")
+				assert.Contains(t, crtlists, "single-cert.txt")
+
+				// Verify each file's content
+				for filename, testdataPath := range map[string]string{
+					"crt-list.txt":         "crt-lists/basic-crt-list.txt",
+					"crt-list-options.txt": "crt-lists/crt-list-with-options.txt",
+					"single-cert.txt":      "crt-lists/crt-list-single-cert.txt",
+				} {
+					content, err := client.GetCRTListFileContent(ctx, filename)
+					require.NoError(t, err)
+					expectedContent := LoadTestFileContent(t, testdataPath)
+					assert.Equal(t, expectedContent, content, "content for %s should match", filename)
+				}
+			},
+		},
+		{
+			name: "update-crtlist-content",
+			setup: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				// Create initial file
+				client := TestDataplaneClient(env)
+				content := LoadTestFileContent(t, "crt-lists/basic-crt-list.txt")
+				err := client.CreateCRTListFile(ctx, "crt-list.txt", content)
+				require.NoError(t, err)
+			},
+			operation: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+				newContent := LoadTestFileContent(t, "crt-lists/crt-list-updated.txt")
+				err := client.UpdateCRTListFile(ctx, "crt-list.txt", newContent)
+				require.NoError(t, err)
+			},
+			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+
+				// Verify file still exists
+				crtlists, err := client.GetAllCRTListFiles(ctx)
+				require.NoError(t, err)
+				assert.Contains(t, crtlists, "crt-list.txt", "crt-list file should still exist")
+
+				// Verify content was updated
+				content, err := client.GetCRTListFileContent(ctx, "crt-list.txt")
+				require.NoError(t, err)
+				expectedContent := LoadTestFileContent(t, "crt-lists/crt-list-updated.txt")
+				assert.Equal(t, expectedContent, content, "content should be updated")
+			},
+		},
+		{
+			name: "delete-single-crtlist",
+			setup: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				// Create file to delete
+				client := TestDataplaneClient(env)
+				content := LoadTestFileContent(t, "crt-lists/basic-crt-list.txt")
+				err := client.CreateCRTListFile(ctx, "crt-list.txt", content)
+				require.NoError(t, err)
+			},
+			operation: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+				err := client.DeleteCRTListFile(ctx, "crt-list.txt")
+				require.NoError(t, err)
+			},
+			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+
+				// Verify file no longer exists
+				crtlists, err := client.GetAllCRTListFiles(ctx)
+				require.NoError(t, err)
+				assert.NotContains(t, crtlists, "crt-list.txt", "crt-list file should be deleted")
+			},
+		},
+		{
+			name: "delete-multiple-crtlists",
+			setup: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				// Create multiple files
+				client := TestDataplaneClient(env)
+				files := map[string]string{
+					"crt-list.txt":         "crt-lists/basic-crt-list.txt",
+					"crt-list-options.txt": "crt-lists/crt-list-with-options.txt",
+					"single-cert.txt":      "crt-lists/crt-list-single-cert.txt",
+				}
+
+				for filename, testdataPath := range files {
+					content := LoadTestFileContent(t, testdataPath)
+					err := client.CreateCRTListFile(ctx, filename, content)
+					require.NoError(t, err)
+				}
+			},
+			operation: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+				// Delete two of the three files
+				err := client.DeleteCRTListFile(ctx, "crt-list.txt")
+				require.NoError(t, err)
+				err = client.DeleteCRTListFile(ctx, "single-cert.txt")
+				require.NoError(t, err)
+			},
+			verify: func(t *testing.T, ctx context.Context, env fixenv.Env) {
+				client := TestDataplaneClient(env)
+
+				// Verify only one file remains
+				crtlists, err := client.GetAllCRTListFiles(ctx)
+				require.NoError(t, err)
+				assert.Len(t, crtlists, 1, "should have 1 crt-list file remaining")
+				assert.Contains(t, crtlists, "crt-list-options.txt", "crt-list-options.txt should still exist")
+				assert.NotContains(t, crtlists, "crt-list.txt", "crt-list.txt should be deleted")
+				assert.NotContains(t, crtlists, "single-cert.txt", "single-cert.txt should be deleted")
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := fixenv.New(t)
+			ctx := context.Background()
+
+			// Setup
+			if tc.setup != nil {
+				tc.setup(t, ctx, env)
+			}
+
+			// Operation
+			tc.operation(t, ctx, env)
+
+			// Verify
+			tc.verify(t, ctx, env)
+		})
+	}
+}
+
+// TestCRTListsCompareAndSync tests the Compare and Sync workflow for CRT-lists
+// through sequential phases that build upon each other.
+func TestCRTListsCompareAndSync(t *testing.T) {
+	env := fixenv.New(t)
+	ctx := context.Background()
+	client := TestDataplaneClient(env)
+
+	// Clean up any existing crt-list files
+	crtlists, err := client.GetAllCRTListFiles(ctx)
+	require.NoError(t, err)
+	for _, crtlist := range crtlists {
+		_ = client.DeleteCRTListFile(ctx, crtlist)
+	}
+
+	// Test: Compare empty state to desired crt-lists (should show all creates)
+	t.Run("compare-empty-to-desired", func(t *testing.T) {
+		desired := []auxiliaryfiles.CRTListFile{
+			{Path: "example.com.txt", Content: LoadTestFileContent(t, "crt-lists/basic-crt-list.txt")},
+			{Path: "test.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-single-cert.txt")},
+		}
+
+		diff, err := auxiliaryfiles.CompareCRTLists(ctx, client, desired)
+		require.NoError(t, err)
+
+		assert.Len(t, diff.ToCreate, 2, "should have 2 crt-lists to create")
+		assert.Len(t, diff.ToUpdate, 0, "should have 0 crt-lists to update")
+		assert.Len(t, diff.ToDelete, 0, "should have 0 crt-lists to delete")
+	})
+
+	// Test: Sync creates crt-lists
+	t.Run("sync-create-crtlists", func(t *testing.T) {
+		desired := []auxiliaryfiles.CRTListFile{
+			{Path: "example.com.txt", Content: LoadTestFileContent(t, "crt-lists/basic-crt-list.txt")},
+			{Path: "test.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-single-cert.txt")},
+		}
+
+		diff, err := auxiliaryfiles.CompareCRTLists(ctx, client, desired)
+		require.NoError(t, err)
+
+		err = auxiliaryfiles.SyncCRTLists(ctx, client, diff)
+		require.NoError(t, err)
+
+		// Verify crt-lists were created
+		crtlists, err := client.GetAllCRTListFiles(ctx)
+		require.NoError(t, err)
+		assert.Len(t, crtlists, 2)
+		assert.Contains(t, crtlists, "example.com.txt")
+		assert.Contains(t, crtlists, "test.com.txt")
+	})
+
+	// Test: Compare with crt-lists already present
+	// CRT-lists use direct content comparison, so changes are accurately detected
+	t.Run("compare-with-existing-crtlists", func(t *testing.T) {
+		desired := []auxiliaryfiles.CRTListFile{
+			{Path: "example.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-updated.txt")}, // Changed content
+			{Path: "test.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-single-cert.txt")}, // Same content
+		}
+
+		diff, err := auxiliaryfiles.CompareCRTLists(ctx, client, desired)
+		require.NoError(t, err)
+
+		// Should detect the change via content comparison
+		assert.Len(t, diff.ToCreate, 0, "should have 0 crt-lists to create")
+		assert.Len(t, diff.ToUpdate, 1, "should have 1 crt-list to update")
+		assert.Len(t, diff.ToDelete, 0, "should have 0 crt-lists to delete")
+		assert.Equal(t, "example.com.txt", diff.ToUpdate[0].Path)
+	})
+
+	// Test: Sync updates crt-lists
+	t.Run("sync-update-crtlists", func(t *testing.T) {
+		desired := []auxiliaryfiles.CRTListFile{
+			{Path: "example.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-updated.txt")},
+			{Path: "test.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-single-cert.txt")},
+		}
+
+		diff, err := auxiliaryfiles.CompareCRTLists(ctx, client, desired)
+		require.NoError(t, err)
+
+		err = auxiliaryfiles.SyncCRTLists(ctx, client, diff)
+		require.NoError(t, err)
+
+		// Verify crt-lists still exist
+		crtlists, err := client.GetAllCRTListFiles(ctx)
+		require.NoError(t, err)
+		assert.Len(t, crtlists, 2)
+		assert.Contains(t, crtlists, "example.com.txt")
+		assert.Contains(t, crtlists, "test.com.txt")
+
+		// Verify content was updated
+		content, err := client.GetCRTListFileContent(ctx, "example.com.txt")
+		require.NoError(t, err)
+		assert.Equal(t, LoadTestFileContent(t, "crt-lists/crt-list-updated.txt"), content)
+	})
+
+	// Test: Compare with one crt-list removed
+	t.Run("compare-with-delete", func(t *testing.T) {
+		desired := []auxiliaryfiles.CRTListFile{
+			{Path: "test.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-single-cert.txt")},
+			// example.com.crtlist is not in desired, so it should be deleted
+		}
+
+		diff, err := auxiliaryfiles.CompareCRTLists(ctx, client, desired)
+		require.NoError(t, err)
+
+		assert.Len(t, diff.ToCreate, 0, "should have 0 crt-lists to create")
+		assert.Len(t, diff.ToUpdate, 0, "should have 0 crt-lists to update")
+		assert.Len(t, diff.ToDelete, 1, "should have 1 crt-list to delete")
+		assert.Equal(t, "example.com.txt", diff.ToDelete[0])
+	})
+
+	// Test: Sync deletes crt-lists
+	t.Run("sync-delete-crtlists", func(t *testing.T) {
+		desired := []auxiliaryfiles.CRTListFile{
+			{Path: "test.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-single-cert.txt")},
+		}
+
+		diff, err := auxiliaryfiles.CompareCRTLists(ctx, client, desired)
+		require.NoError(t, err)
+
+		err = auxiliaryfiles.SyncCRTLists(ctx, client, diff)
+		require.NoError(t, err)
+
+		// Verify crt-list was deleted
+		crtlists, err := client.GetAllCRTListFiles(ctx)
+		require.NoError(t, err)
+		assert.Len(t, crtlists, 1)
+		assert.Contains(t, crtlists, "test.com.txt")
+		assert.NotContains(t, crtlists, "example.com.txt")
+	})
+
+	// Test: Idempotency - running sync again with same desired state
+	t.Run("sync-idempotent", func(t *testing.T) {
+		desired := []auxiliaryfiles.CRTListFile{
+			{Path: "test.com.txt", Content: LoadTestFileContent(t, "crt-lists/crt-list-single-cert.txt")},
+		}
+
+		diff, err := auxiliaryfiles.CompareCRTLists(ctx, client, desired)
+		require.NoError(t, err)
+
+		// Verify no operations needed
+		assert.Len(t, diff.ToCreate, 0, "should have 0 crt-lists to create")
+		assert.Len(t, diff.ToUpdate, 0, "should have 0 crt-lists to update")
+		assert.Len(t, diff.ToDelete, 0, "should have 0 crt-lists to delete")
+
+		// Verify syncing again doesn't fail (idempotent)
+		err = auxiliaryfiles.SyncCRTLists(ctx, client, diff)
+		require.NoError(t, err, "sync should be idempotent")
+	})
+
+	// Test: Regression - crt-list doesn't exist should CREATE, not UPDATE
+	t.Run("non-existent-crtlist-creates-not-updates", func(t *testing.T) {
+		// Clean up all crt-lists
+		crtlists, err := client.GetAllCRTListFiles(ctx)
+		require.NoError(t, err)
+		for _, crtlist := range crtlists {
+			_ = client.DeleteCRTListFile(ctx, crtlist)
+		}
+
+		// Request a crt-list that doesn't exist
+		desired := []auxiliaryfiles.CRTListFile{
+			{Path: "new-list.txt", Content: LoadTestFileContent(t, "crt-lists/basic-crt-list.txt")},
+		}
+
+		diff, err := auxiliaryfiles.CompareCRTLists(ctx, client, desired)
+		require.NoError(t, err)
+
+		// CRITICAL: Should be marked for CREATE, not UPDATE
+		assert.Len(t, diff.ToCreate, 1, "non-existent crt-list should be marked for CREATE")
+		assert.Len(t, diff.ToUpdate, 0, "non-existent crt-list should NOT be marked for UPDATE")
+		assert.Len(t, diff.ToDelete, 0, "should have 0 crt-lists to delete")
+
+		// Verify sync succeeds
+		err = auxiliaryfiles.SyncCRTLists(ctx, client, diff)
+		require.NoError(t, err, "sync should succeed when creating new crt-list")
+
+		// Verify crt-list was actually created
+		crtlists, err = client.GetAllCRTListFiles(ctx)
+		require.NoError(t, err)
+		assert.Contains(t, crtlists, "new-list.txt", "crt-list should exist after sync")
+	})
 }

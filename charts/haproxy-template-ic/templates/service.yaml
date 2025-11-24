@@ -8,11 +8,11 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - port: {{ .Values.service.healthzPort }}
+    - port: {{ .Values.controller.ports.healthz }}
       targetPort: healthz
       protocol: TCP
       name: healthz
-    - port: {{ .Values.service.metricsPort }}
+    - port: {{ .Values.controller.ports.metrics }}
       targetPort: metrics
       protocol: TCP
       name: metrics

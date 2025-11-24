@@ -48,10 +48,9 @@ const (
 // The component caches the last validation result to support state replay during
 // leadership transitions (when new leader-only components start subscribing).
 type HAProxyValidatorComponent struct {
-	eventBus        *busevents.EventBus
-	eventChan       <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
-	logger          *slog.Logger
-	validationPaths dataplane.ValidationPaths
+	eventBus  *busevents.EventBus
+	eventChan <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
+	logger    *slog.Logger
 
 	// State protected by mutex (for leadership transition replay)
 	mu                       sync.RWMutex
@@ -63,27 +62,27 @@ type HAProxyValidatorComponent struct {
 
 // NewHAProxyValidator creates a new HAProxy validator component.
 //
+// The validator extracts validation paths from TemplateRenderedEvent, which are created
+// per-render by the Renderer component for isolated validation.
+//
 // Parameters:
 //   - eventBus: The EventBus for subscribing to events and publishing results
 //   - logger: Structured logger for component logging
-//   - validationPaths: Filesystem paths for HAProxy validation (must match Dataplane API config)
 //
 // Returns:
 //   - A new HAProxyValidatorComponent instance ready to be started
 func NewHAProxyValidator(
 	eventBus *busevents.EventBus,
 	logger *slog.Logger,
-	validationPaths dataplane.ValidationPaths,
 ) *HAProxyValidatorComponent {
 	// Subscribe to EventBus during construction (before EventBus.Start())
 	// This ensures proper startup synchronization without timing-based sleeps
 	eventChan := eventBus.Subscribe(EventBufferSize)
 
 	return &HAProxyValidatorComponent{
-		eventBus:        eventBus,
-		eventChan:       eventChan,
-		logger:          logger,
-		validationPaths: validationPaths,
+		eventBus:  eventBus,
+		eventChan: eventChan,
+		logger:    logger,
 	}
 }
 
@@ -135,7 +134,7 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 	startTime := time.Now()
 
 	v.logger.Info("HAProxy configuration validation started",
-		"config_bytes", event.ConfigBytes,
+		"validation_config_bytes", event.ValidationConfigBytes,
 		"auxiliary_files", event.AuxiliaryFileCount)
 
 	// Publish validation started event
@@ -152,8 +151,20 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 		return
 	}
 
-	// Validate configuration using dataplane package
-	err := dataplane.ValidateConfiguration(event.HAProxyConfig, auxiliaryFiles, v.validationPaths)
+	// Extract validation paths from event
+	// Type-assert from interface{} to *dataplane.ValidationPaths
+	validationPaths, ok := event.ValidationPaths.(*dataplane.ValidationPaths)
+	if !ok {
+		v.publishValidationFailure(
+			[]string{"failed to extract validation paths from event"},
+			time.Since(startTime).Milliseconds(),
+		)
+		return
+	}
+
+	// Validate configuration using validation config and paths from event
+	// Use ValidationHAProxyConfig (rendered with temp paths) instead of HAProxyConfig (production paths)
+	err := dataplane.ValidateConfiguration(event.ValidationHAProxyConfig, auxiliaryFiles, *validationPaths)
 	if err != nil {
 		// Simplify error message for user-facing output
 		// Keep full error in logs for debugging

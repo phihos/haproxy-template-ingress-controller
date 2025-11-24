@@ -38,7 +38,7 @@ haproxy_config:
     frontend http
         bind *:80
         # Use map files for routing
-        use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+        use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 
     {% for ingress in resources.ingresses.List() %}
     backend {{ ingress.metadata.name }}
@@ -189,7 +189,7 @@ Templates use Gonja v2, which provides Jinja2-like syntax for Go. The syntax is 
 ```jinja2
 {% if ingress.spec.tls %}
   {% set cert_name = ingress.metadata.name ~ ".pem" %}
-  bind *:443 ssl crt {{ cert_name | get_path("cert") }}
+  bind *:443 ssl crt {{ pathResolver.GetPath(cert_name, "cert") }}
 {% else %}
   bind *:80
 {% endif %}
@@ -235,33 +235,35 @@ Filters transform values in templates using the pipe (`|`) operator.
 {%- endfilter %}
 ```
 
-**Custom filter - get_path:**
+**Context method - pathResolver.GetPath():**
 
-The `get_path` filter resolves filenames to absolute paths based on file type. This simplifies template writing by automatically constructing correct absolute paths for HAProxy auxiliary files.
+The `pathResolver.GetPath()` method resolves filenames to absolute paths based on file type. This simplifies template writing by automatically constructing correct absolute paths for HAProxy auxiliary files.
+
+The `pathResolver` is a context variable that provides path resolution based on the controller's dataplane configuration.
 
 ```jinja2
 {# Map files - resolve to maps directory #}
-use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 {# Output: use_backend %[req.hdr(host),lower,map(/etc/haproxy/maps/host.map)] #}
 
 {# General files - resolve to general directory #}
-errorfile 504 {{ "504.http" | get_path("file") }}
+errorfile 504 {{ pathResolver.GetPath("504.http", "file") }}
 {# Output: errorfile 504 /etc/haproxy/general/504.http #}
 
 {# SSL certificates - resolve to SSL directory #}
-bind *:443 ssl crt {{ "example.com.pem" | get_path("cert") }}
+bind *:443 ssl crt {{ pathResolver.GetPath("example.com.pem", "cert") }}
 {# Output: bind *:443 ssl crt /etc/haproxy/ssl/example.com.pem #}
 
 {# Use with variables #}
 {% set cert_name = ingress.metadata.name ~ ".pem" %}
-bind *:443 ssl crt {{ cert_name | get_path("cert") }}
+bind *:443 ssl crt {{ pathResolver.GetPath(cert_name, "cert") }}
 ```
 
 **Arguments:**
 - **filename** (required): The base filename without directory path
-- **type** (required): File type - `"map"`, `"file"`, or `"cert"`
+- **type** (required): File type - `"map"`, `"file"`, `"cert"`, or `"crt-list"`
 
-The filter uses the paths configured in `dataplane.maps_dir`, `dataplane.ssl_certs_dir`, and `dataplane.general_storage_dir` from your controller configuration.
+The method uses the paths configured in `dataplane.maps_dir`, `dataplane.ssl_certs_dir`, and `dataplane.general_storage_dir` from your controller configuration.
 
 **Custom filter - glob_match:**
 
@@ -1110,7 +1112,7 @@ haproxy_config:
     frontend http
         bind *:80
         # Use map for host-based routing
-        use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+        use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 
     {% for ingress in resources.ingresses.List() %}
     backend backend_{{ ingress.metadata.name }}
@@ -1150,10 +1152,10 @@ haproxy_config:
 
         # Normalize host header
         http-request set-var(txn.host) req.hdr(Host),field(1,:),lower
-        http-request set-var(txn.host_match) var(txn.host),map({{ "host.map" | get_path("map") }})
+        http-request set-var(txn.host_match) var(txn.host),map({{ pathResolver.GetPath("host.map", "map") }})
 
         # Path-based routing with prefix matching
-        http-request set-var(txn.backend) var(txn.host_match),concat(,txn.path,),map_beg({{ "path-prefix.map" | get_path("map") }})
+        http-request set-var(txn.backend) var(txn.host_match),concat(,txn.path,),map_beg({{ pathResolver.GetPath("path-prefix.map", "map") }})
 
         use_backend %[var(txn.backend)]
         default_backend default_backend
@@ -1229,7 +1231,7 @@ haproxy_config:
 
     frontend http
         bind *:80
-        use_backend %[req.hdr(host),lower,map({{ "host.map" | get_path("map") }})]
+        use_backend %[req.hdr(host),lower,map({{ pathResolver.GetPath("host.map", "map") }})]
 
     {% for ingress in resources.ingresses.List() %}
     {% for rule in (ingress.spec.rules | default([])) %}

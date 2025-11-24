@@ -27,7 +27,7 @@ func LoadConfig(configYAML string) (*Config, error) {
 		return nil, err
 	}
 
-	setDefaults(cfg)
+	SetDefaults(cfg)
 
 	return cfg, nil
 }

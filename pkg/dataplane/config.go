@@ -48,6 +48,9 @@ type AuxiliaryFiles struct {
 
 	// MapFiles contains map files for backend routing and other map-based features
 	MapFiles []auxiliaryfiles.MapFile
+
+	// CRTListFiles contains crt-list files for SSL certificate lists with per-certificate options
+	CRTListFiles []auxiliaryfiles.CRTListFile
 }
 
 // SyncOptions configures synchronization behavior.

@@ -17,6 +17,7 @@ The HAProxy Template Ingress Controller:
 - Kubernetes 1.19+
 - Helm 3.0+
 - HAProxy pods with Dataplane API sidecars (deployed separately)
+- **HAProxy 3.0 or newer** (template libraries require HAProxy 3.0+ for SSL/TLS features)
 
 ## Installation
 
@@ -56,7 +57,7 @@ helm install my-controller ./charts/haproxy-template-ic \
 | `ingressClass.name` | IngressClass name | `haproxy` |
 | `gatewayClass.enabled` | Create GatewayClass resource | `true` |
 | `gatewayClass.name` | GatewayClass name | `haproxy` |
-| `controller.debugPort` | Debug HTTP server port (0=disabled) | `0` |
+| `controller.debugPort` | Introspection HTTP server port (provides /healthz and /debug/*) | `8080` |
 | `controller.config.pod_selector` | Labels to match HAProxy pods | `{app: haproxy, component: loadbalancer}` |
 | `controller.config.logging.verbose` | Log level (0=WARN, 1=INFO, 2=DEBUG) | `1` |
 | `credentials.dataplane.username` | Dataplane API username | `admin` |
@@ -1083,28 +1084,34 @@ This adds HAProxy + Dataplane sidecars to the controller pod for config validati
 
 ## Debugging
 
-### Enable Debug HTTP Server
+### Introspection HTTP Server
 
-The controller provides a debug HTTP server that exposes internal state via `/debug/vars` and Go profiling via `/debug/pprof`. This is disabled by default for security.
+The controller provides an introspection HTTP server that exposes:
+- `/healthz` - Health check endpoint used by Kubernetes liveness and readiness probes
+- `/debug/vars` - Internal state and runtime variables
+- `/debug/pprof` - Go profiling endpoints
 
-Enable debug server:
+This server is always enabled (defaults to port 8080) to support health checks. You can customize the port:
 
 ```yaml
 controller:
-  debugPort: 6060
+  debugPort: 8080  # Default port
 ```
 
-Access debug endpoints via port-forward:
+Access introspection endpoints via port-forward:
 
 ```bash
-# Forward debug port from controller pod
-kubectl port-forward deployment/my-controller 6060:6060
+# Forward introspection port from controller pod
+kubectl port-forward deployment/my-controller 8080:8080
+
+# Check health status
+curl http://localhost:8080/healthz
 
 # List all available debug variables
-curl http://localhost:6060/debug/vars
+curl http://localhost:8080/debug/vars
 
 # Get current controller configuration
-curl http://localhost:6060/debug/vars/config
+curl http://localhost:8080/debug/vars/config
 
 # Get rendered HAProxy configuration
 curl http://localhost:6060/debug/vars/rendered

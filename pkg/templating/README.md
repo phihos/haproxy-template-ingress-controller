@@ -461,18 +461,18 @@ Decodes base64-encoded strings. Essential for accessing Kubernetes Secret data, 
 password: {{ secret.data.password | b64decode }}
 ```
 
-**get_path** - File path resolution:
+**pathResolver.GetPath()** - File path resolution (context method):
 
 ```go
-// Usage: {{ filename | get_path("type") }}
+// Usage: {{ pathResolver.GetPath(filename, "type") }}
 func (pr *PathResolver) GetPath(filename interface{}, args ...interface{}) (interface{}, error)
 ```
 
-Resolves filenames to absolute paths based on file type (`"map"`, `"file"`, or `"cert"`). Used for HAProxy auxiliary file references.
+Resolves filenames to absolute paths based on file type (`"map"`, `"file"`, `"cert"`, or `"crt-list"`). The `pathResolver` is provided in the template rendering context. Used for HAProxy auxiliary file references.
 
 **Example:**
 ```jinja2
-use_backend %[req.hdr(host),map({{ "host.map" | get_path("map") }})]
+use_backend %[req.hdr(host),map({{ pathResolver.GetPath("host.map", "map") }})]
 {# Output: use_backend %[req.hdr(host),map(/etc/haproxy/maps/host.map)] #}
 ```
 

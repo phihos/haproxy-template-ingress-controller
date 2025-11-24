@@ -29,6 +29,13 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "haproxy-template-ic.serviceAccountName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -45,10 +52,10 @@ spec:
           args: ["run"]
           ports:
             - name: healthz
-              containerPort: {{ .Values.service.healthzPort }}
+              containerPort: {{ .Values.controller.ports.healthz }}
               protocol: TCP
             - name: metrics
-              containerPort: {{ .Values.service.metricsPort }}
+              containerPort: {{ .Values.controller.ports.metrics }}
               protocol: TCP
             {{- if gt (.Values.controller.debugPort | int) 0 }}
             - name: debug
@@ -57,7 +64,7 @@ spec:
             {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: webhook
-              containerPort: {{ .Values.webhook.port }}
+              containerPort: {{ .Values.controller.ports.webhook }}
               protocol: TCP
             {{- end }}
           env:
@@ -75,13 +82,11 @@ spec:
               value: {{ include "haproxy-template-ic.fullname" . }}-credentials
             - name: WEBHOOK_SERVICE_NAME
               value: {{ include "haproxy-template-ic.fullname" . }}-webhook
-            {{- if gt (.Values.controller.debugPort | int) 0 }}
             - name: DEBUG_PORT
               value: {{ .Values.controller.debugPort | quote }}
-            {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: WEBHOOK_PORT
-              value: {{ .Values.webhook.port | quote }}
+              value: {{ .Values.controller.ports.webhook | quote }}
             - name: WEBHOOK_CERT_SECRET_NAME
               value: {{ .Values.webhook.secretName | default (printf "%s-webhook-cert" (include "haproxy-template-ic.fullname" .)) | quote }}
             {{- end }}
@@ -97,18 +102,22 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if .Values.webhook.enabled }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.webhook.enabled }}
             - name: webhook-certs
               mountPath: /etc/webhook/certs
               readOnly: true
-          {{- end }}
-      {{- if .Values.webhook.enabled }}
+            {{- end }}
       volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.webhook.enabled }}
         - name: webhook-certs
           secret:
             secretName: {{ include "haproxy-template-ic.fullname" . }}-webhook-cert
-      {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

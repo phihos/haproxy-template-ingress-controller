@@ -186,7 +186,7 @@ maps:
       {% endfor %}
 ```
 
-Reference in config: `{{ "host.map" | get_path("map") }}`
+Reference in config: `{{ pathResolver.GetPath("host.map", "map") }}`
 
 ### files
 
@@ -201,7 +201,7 @@ files:
       <html><body><h1>503</h1></body></html>
 ```
 
-Reference in config: `errorfile 503 {{ "error_503" | get_path("file") }}`
+Reference in config: `errorfile 503 {{ pathResolver.GetPath("error_503", "file") }}`
 
 ### sslCertificates
 
@@ -216,7 +216,7 @@ sslCertificates:
       {{ secret.data['tls.key'] | b64decode }}
 ```
 
-Reference in config: `bind :443 ssl crt {{ "example-com" | get_path("cert") }}`
+Reference in config: `bind :443 ssl crt {{ pathResolver.GetPath("example-com", "cert") }}`
 
 ### haproxyConfig (required)
 
@@ -235,7 +235,7 @@ haproxyConfig:
 
     frontend http
         bind *:80
-        use_backend %[req.hdr(host),map({{ "host.map" | get_path("map") }})]
+        use_backend %[req.hdr(host),map({{ pathResolver.GetPath("host.map", "map") }})]
 ```
 
 See [Templating Guide](./templating.md) for syntax and filters.

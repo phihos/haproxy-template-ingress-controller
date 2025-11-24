@@ -147,7 +147,7 @@ func createInvalidTestConfig() *coreconfig.Config {
 
 // createValidTestConfig creates a valid config.
 func createValidTestConfig() *coreconfig.Config {
-	return &coreconfig.Config{
+	cfg := &coreconfig.Config{
 		PodSelector: coreconfig.PodSelector{
 			MatchLabels: map[string]string{
 				"app": "haproxy",
@@ -176,6 +176,11 @@ func createValidTestConfig() *coreconfig.Config {
 			Template: "frontend http\n  bind *:80\n",
 		},
 	}
+
+	// Apply defaults before validation
+	coreconfig.SetDefaults(cfg)
+
+	return cfg
 }
 
 // collectValidationResponses collects and maps responses by validator name.
