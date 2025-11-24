@@ -403,6 +403,7 @@ func NewHAProxyTemplateConfig(namespace, name, secretName string, leaderElection
 				Verbose: 2, // DEBUG level for tests
 			},
 			Dataplane: haproxyv1alpha1.DataplaneConfig{
+				Port:              5555, // Default Dataplane API port
 				MapsDir:           "/tmp/haproxy-validation/maps",
 				SSLCertsDir:       "/tmp/haproxy-validation/ssl",
 				GeneralStorageDir: "/tmp/haproxy-validation/general",
