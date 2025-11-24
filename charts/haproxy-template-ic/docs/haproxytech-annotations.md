@@ -797,7 +797,7 @@ frontend ssl-tcp
 # HTTPS frontend on unix socket (for SSL termination)
 frontend ssl-https
     mode http
-    bind unix@/var/run/ssl-frontend.sock accept-proxy
+    bind unix@/etc/haproxy/ssl-frontend.sock mode 660 accept-proxy
     # Standard HTTP routing logic applies here
 
 # SSL passthrough backend (TCP mode)
@@ -809,7 +809,7 @@ backend ssl-passthrough-default-ssl-passthrough-ingress
 # Loopback backend for SSL termination
 backend ssl-loopback
     mode tcp
-    server loopback unix@/var/run/ssl-frontend.sock send-proxy-v2
+    server loopback unix@/etc/haproxy/ssl-frontend.sock send-proxy-v2
 ```
 
 **Implementation Notes**:

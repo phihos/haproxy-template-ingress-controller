@@ -3827,7 +3827,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "server loopback unix@/var/run/ssl-frontend\\.sock send-proxy-v2"
+        pattern: "server loopback unix@/etc/haproxy/ssl-frontend\\.sock send-proxy-v2"
         description: Loopback must use unix socket with PROXY protocol v2
 
       - type: contains
@@ -3837,7 +3837,7 @@ validationTests:
 
       - type: contains
         target: haproxy.cfg
-        pattern: "bind unix@/var/run/ssl-frontend\\.sock user haproxy mode 660 ssl crt-list .*certificate-list\\.txt alpn h2,http/1\\.1 accept-proxy"
+        pattern: "bind unix@/etc/haproxy/ssl-frontend\\.sock mode 660 ssl crt-list .*certificate-list\\.txt alpn h2,http/1\\.1 accept-proxy"
         description: HTTPS frontend must terminate SSL and accept PROXY protocol
 
   test-ssl-passthrough-no-annotation:
