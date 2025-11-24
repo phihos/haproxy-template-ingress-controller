@@ -44,7 +44,7 @@ spec:
             - |
               # Create required directories
               mkdir -p /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors /etc/haproxy/general
-              chown -R haproxy:haproxy /etc/haproxy
+              chown -R haproxy:haproxy /etc/haproxy || true
 
               # Copy initial config
               cp /config/haproxy.cfg /etc/haproxy/haproxy.cfg
