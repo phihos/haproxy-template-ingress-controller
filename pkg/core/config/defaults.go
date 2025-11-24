@@ -54,7 +54,7 @@ const (
 	DefaultLeaderElectionRetryPeriod = 2 * time.Second
 )
 
-// setDefaults applies default values to unset configuration fields.
+// SetDefaults applies default values to unset configuration fields.
 // This modifies the config in-place and should be called after parsing
 // the configuration and before validation.
 //
@@ -66,7 +66,7 @@ const (
 //
 // Most callers should use LoadConfig() instead. This function is primarily
 // useful for testing default application independently from YAML parsing.
-func setDefaults(cfg *Config) {
+func SetDefaults(cfg *Config) {
 	// Controller defaults
 	// Note: These ports should never remain 0 after defaults are applied
 	if cfg.Controller.HealthzPort == 0 {

@@ -13,7 +13,7 @@ func TestSetDefaults_AllUnset(t *testing.T) {
 		},
 	}
 
-	setDefaults(cfg)
+	SetDefaults(cfg)
 
 	// Controller defaults
 	assert.Equal(t, DefaultHealthzPort, cfg.Controller.HealthzPort)
@@ -34,7 +34,7 @@ func TestSetDefaults_AllSet(t *testing.T) {
 		},
 	}
 
-	setDefaults(cfg)
+	SetDefaults(cfg)
 
 	// Verify existing values are not overwritten
 	assert.Equal(t, 8081, cfg.Controller.HealthzPort)
@@ -53,7 +53,7 @@ func TestSetDefaults_PartiallySet(t *testing.T) {
 		},
 	}
 
-	setDefaults(cfg)
+	SetDefaults(cfg)
 
 	// Set values should remain
 	assert.Equal(t, 8081, cfg.Controller.HealthzPort)
@@ -68,7 +68,7 @@ func TestSetDefaults_OperatorConfig(t *testing.T) {
 		Controller: ControllerConfig{},
 	}
 
-	setDefaults(cfg)
+	SetDefaults(cfg)
 
 	assert.Equal(t, DefaultHealthzPort, cfg.Controller.HealthzPort)
 	assert.Equal(t, DefaultMetricsPort, cfg.Controller.MetricsPort)
@@ -81,7 +81,7 @@ func TestSetDefaults_LoggingConfig(t *testing.T) {
 		Logging: LoggingConfig{},
 	}
 
-	setDefaults(cfg)
+	SetDefaults(cfg)
 
 	// Zero value should remain (it is valid)
 	assert.Equal(t, 0, cfg.Logging.Verbose)
@@ -120,7 +120,7 @@ haproxy_config:
 	assert.Equal(t, 0, cfg.Controller.HealthzPort)
 	assert.Equal(t, 0, cfg.Controller.MetricsPort)
 
-	setDefaults(cfg)
+	SetDefaults(cfg)
 
 	// After SetDefaults, ports should have default values
 	assert.Equal(t, DefaultHealthzPort, cfg.Controller.HealthzPort)
@@ -137,11 +137,11 @@ func TestSetDefaults_Idempotent(t *testing.T) {
 	}
 
 	// Apply defaults twice
-	setDefaults(cfg)
+	SetDefaults(cfg)
 	firstHealthz := cfg.Controller.HealthzPort
 	firstMetrics := cfg.Controller.MetricsPort
 
-	setDefaults(cfg)
+	SetDefaults(cfg)
 	secondHealthz := cfg.Controller.HealthzPort
 	secondMetrics := cfg.Controller.MetricsPort
 

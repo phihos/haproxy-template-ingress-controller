@@ -120,7 +120,7 @@ templateSnippets:
 
       backend ssl-loopback
           mode tcp
-          server loopback unix@/etc/haproxy/ssl-frontend.sock send-proxy-v2
+          server loopback unix@/var/run/ssl-frontend.sock send-proxy-v2
 
       {%- endif %}
 
@@ -132,7 +132,7 @@ templateSnippets:
       frontend https
           mode http
           {%- if global_features.ssl_passthrough_backends | length > 0 %}
-          bind unix@/etc/haproxy/ssl-frontend.sock mode 660{% include "util-ssl-bind-options" %} accept-proxy
+          bind unix@/var/run/ssl-frontend.sock user haproxy mode 660{% include "util-ssl-bind-options" %} accept-proxy
           {%- else %}
           bind *:{{ httpsPort | default(8443) | int }}{% include "util-ssl-bind-options" %}
           {%- endif %}
