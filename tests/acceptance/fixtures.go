@@ -598,7 +598,7 @@ func NewClusterRoleBinding(name, clusterRoleName, serviceAccountName, serviceAcc
 }
 
 // NewControllerDeployment creates a controller deployment.
-func NewControllerDeployment(namespace, configMapName, secretName, serviceAccountName string, debugPort int32, replicas int32) *appsv1.Deployment {
+func NewControllerDeployment(namespace, crdName, secretName, serviceAccountName string, debugPort int32, replicas int32) *appsv1.Deployment {
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -629,8 +629,8 @@ func NewControllerDeployment(namespace, configMapName, secretName, serviceAccoun
 							Image: "haproxy-template-ic:test",
 							Env: []corev1.EnvVar{
 								{
-									Name:  "CONFIGMAP_NAME",
-									Value: configMapName,
+									Name:  "CRD_NAME",
+									Value: crdName,
 								},
 								{
 									Name:  "SECRET_NAME",
@@ -669,6 +669,11 @@ func NewControllerDeployment(namespace, configMapName, secretName, serviceAccoun
 								{
 									Name:          "debug",
 									ContainerPort: debugPort,
+									Protocol:      corev1.ProtocolTCP,
+								},
+								{
+									Name:          "metrics",
+									ContainerPort: MetricsPort,
 									Protocol:      corev1.ProtocolTCP,
 								},
 								{

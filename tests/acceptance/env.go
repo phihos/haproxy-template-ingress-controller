@@ -44,8 +44,8 @@ const (
 	// ControllerDeploymentName is the name of the controller deployment.
 	ControllerDeploymentName = "haproxy-template-ic"
 
-	// ControllerConfigMapName is the name of the controller configuration ConfigMap.
-	ControllerConfigMapName = "haproxy-config"
+	// ControllerCRDName is the name of the HAProxyTemplateConfig CRD.
+	ControllerCRDName = "haproxy-config"
 
 	// ControllerSecretName is the name of the controller credentials Secret.
 	//nolint:gosec // G101: This is a Kubernetes Secret name, not actual credentials

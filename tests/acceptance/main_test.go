@@ -98,7 +98,7 @@ func TestMain(m *testing.M) {
 			// Install HAProxyTemplateConfig CRD
 			fmt.Println("DEBUG: Installing HAProxyTemplateConfig CRD...")
 			crdPath := "../../charts/haproxy-template-ic/crds/haproxy-template-ic.github.io_haproxytemplateconfigs.yaml"
-			cmd = exec.CommandContext(ctx, "kubectl", "apply", "-f", crdPath)
+			cmd = exec.CommandContext(ctx, "kubectl", "apply", "--kubeconfig", kubeconfigPath, "-f", crdPath)
 			if output, err := cmd.CombinedOutput(); err != nil {
 				return ctx, fmt.Errorf("failed to install HAProxyTemplateConfig CRD: %w\nOutput: %s", err, string(output))
 			}
