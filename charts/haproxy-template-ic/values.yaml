@@ -55,10 +55,11 @@ controller:
   # This is the name of the HAProxyTemplateConfig custom resource
   crdName: haproxy-template-ic-config
 
-  # Debug HTTP server port (0 to disable)
-  # Exposes /debug/vars and /debug/pprof endpoints for introspection
-  # Access via: kubectl port-forward pod/controller-xxx 6060:6060
-  debugPort: 0
+  # Introspection HTTP server port
+  # Provides /healthz, /debug/vars, and /debug/pprof endpoints
+  # Health checks use this port (see controller.ports.healthz)
+  # Access via: kubectl port-forward pod/controller-xxx 8080:8080
+  debugPort: 8080
 
   # Controller container ports
   # These are the ports the controller container listens on
@@ -209,7 +210,8 @@ controller:
         retryPeriod: 2s
 
     dataplane:
-      # port: References haproxy.ports.dataplane (set in template)
+      # Port is defined in haproxy.ports.dataplane and referenced here
+      port: 5555  # Must match haproxy.ports.dataplane value
       # Minimum time between consecutive deployments (rate limiting)
       # Prevents rapid-fire deployments from hammering HAProxy instances
       # Default: 2s

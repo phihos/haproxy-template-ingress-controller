@@ -532,11 +532,24 @@ func (e *ReconciliationFailedEvent) Timestamp() time.Time { return e.timestamp }
 
 // TemplateRenderedEvent is published when template rendering completes successfully.
 //
-// This event carries the rendered HAProxy configuration and all auxiliary files.
-// for the next phase (validation/deployment).
+// This event carries two versions of the rendered HAProxy configuration:
+// - Production version with absolute paths for deployment to HAProxy pods
+// - Validation version with temp directory paths for controller validation
+//
+// Both configurations are rendered from the same templates but with different PathResolver instances.
 type TemplateRenderedEvent struct {
-	// HAProxyConfig is the rendered main HAProxy configuration.
+	// HAProxyConfig is the rendered main HAProxy configuration for production deployment.
+	// Contains absolute paths like /etc/haproxy/maps/host.map for HAProxy pods.
 	HAProxyConfig string
+
+	// ValidationHAProxyConfig is the rendered configuration for controller validation.
+	// Contains temp directory paths matching ValidationPaths for isolated validation.
+	ValidationHAProxyConfig string
+
+	// ValidationPaths specifies temp directories where auxiliary files should be written for validation.
+	// Type: interface{} to avoid circular dependencies with pkg/dataplane.
+	// Consumers should type-assert to dataplane.ValidationPaths.
+	ValidationPaths interface{}
 
 	// AuxiliaryFiles contains all rendered auxiliary files (maps, certificates, general files).
 	// Type: interface{} to avoid circular dependencies with pkg/dataplane.
@@ -544,26 +557,38 @@ type TemplateRenderedEvent struct {
 	AuxiliaryFiles interface{}
 
 	// Metrics for observability
-	ConfigBytes        int   // Size of HAProxyConfig
-	AuxiliaryFileCount int   // Number of auxiliary files
-	DurationMs         int64 // Rendering duration
+	ConfigBytes           int   // Size of HAProxyConfig (production)
+	ValidationConfigBytes int   // Size of ValidationHAProxyConfig
+	AuxiliaryFileCount    int   // Number of auxiliary files
+	DurationMs            int64 // Total rendering duration (both configs)
 
 	timestamp time.Time
 }
 
 // NewTemplateRenderedEvent creates a new TemplateRenderedEvent.
-// Performs defensive copy of the haproxyConfig string.
-func NewTemplateRenderedEvent(haproxyConfig string, auxiliaryFiles interface{}, auxFileCount int, durationMs int64) *TemplateRenderedEvent {
-	// Calculate config size
+// Performs defensive copy of the haproxyConfig strings.
+func NewTemplateRenderedEvent(
+	haproxyConfig string,
+	validationHAProxyConfig string,
+	validationPaths interface{},
+	auxiliaryFiles interface{},
+	auxFileCount int,
+	durationMs int64,
+) *TemplateRenderedEvent {
+	// Calculate config sizes
 	configBytes := len(haproxyConfig)
+	validationConfigBytes := len(validationHAProxyConfig)
 
 	return &TemplateRenderedEvent{
-		HAProxyConfig:      haproxyConfig,
-		AuxiliaryFiles:     auxiliaryFiles,
-		ConfigBytes:        configBytes,
-		AuxiliaryFileCount: auxFileCount,
-		DurationMs:         durationMs,
-		timestamp:          time.Now(),
+		HAProxyConfig:           haproxyConfig,
+		ValidationHAProxyConfig: validationHAProxyConfig,
+		ValidationPaths:         validationPaths,
+		AuxiliaryFiles:          auxiliaryFiles,
+		ConfigBytes:             configBytes,
+		ValidationConfigBytes:   validationConfigBytes,
+		AuxiliaryFileCount:      auxFileCount,
+		DurationMs:              durationMs,
+		timestamp:               time.Now(),
 	}
 }
 

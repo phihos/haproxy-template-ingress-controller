@@ -28,6 +28,7 @@ import (
 	"haproxy-template-ic/pkg/core/config"
 	busevents "haproxy-template-ic/pkg/events"
 	"haproxy-template-ic/pkg/k8s/types"
+	"haproxy-template-ic/pkg/templating"
 )
 
 // mockStore implements types.Store for testing.
@@ -612,7 +613,13 @@ func TestBuildRenderingContext(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build context
-	ctx, fileRegistry := renderer.buildRenderingContext()
+	pathResolver := &templating.PathResolver{
+		MapsDir:    "/etc/haproxy/maps",
+		SSLDir:     "/etc/haproxy/ssl",
+		CRTListDir: "/etc/haproxy/ssl",
+		GeneralDir: "/etc/haproxy/general",
+	}
+	ctx, fileRegistry := renderer.buildRenderingContext(pathResolver)
 
 	// Verify file registry was created
 	require.NotNil(t, fileRegistry)

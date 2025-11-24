@@ -18,6 +18,13 @@ func TestValidateStructure_Success(t *testing.T) {
 		Logging: LoggingConfig{
 			Verbose: 1,
 		},
+		Dataplane: DataplaneConfig{
+			Port:              5555,
+			MapsDir:           "/etc/haproxy/maps",
+			SSLCertsDir:       "/etc/haproxy/certs",
+			GeneralStorageDir: "/etc/haproxy/general",
+			ConfigFile:        "/etc/haproxy/haproxy.cfg",
+		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
@@ -217,6 +224,13 @@ func TestValidateWatchedResources_Empty(t *testing.T) {
 			HealthzPort: 8080,
 			MetricsPort: 9090,
 		},
+		Dataplane: DataplaneConfig{
+			Port:              5555,
+			MapsDir:           "/etc/haproxy/maps",
+			SSLCertsDir:       "/etc/haproxy/certs",
+			GeneralStorageDir: "/etc/haproxy/general",
+			ConfigFile:        "/etc/haproxy/haproxy.cfg",
+		},
 		WatchedResources: map[string]WatchedResource{},
 		HAProxyConfig: HAProxyConfig{
 			Template: "global",
@@ -236,6 +250,13 @@ func TestValidateWatchedResource_MissingAPIVersion(t *testing.T) {
 		Controller: ControllerConfig{
 			HealthzPort: 8080,
 			MetricsPort: 9090,
+		},
+		Dataplane: DataplaneConfig{
+			Port:              5555,
+			MapsDir:           "/etc/haproxy/maps",
+			SSLCertsDir:       "/etc/haproxy/certs",
+			GeneralStorageDir: "/etc/haproxy/general",
+			ConfigFile:        "/etc/haproxy/haproxy.cfg",
 		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
@@ -263,6 +284,13 @@ func TestValidateWatchedResource_MissingKind(t *testing.T) {
 			HealthzPort: 8080,
 			MetricsPort: 9090,
 		},
+		Dataplane: DataplaneConfig{
+			Port:              5555,
+			MapsDir:           "/etc/haproxy/maps",
+			SSLCertsDir:       "/etc/haproxy/certs",
+			GeneralStorageDir: "/etc/haproxy/general",
+			ConfigFile:        "/etc/haproxy/haproxy.cfg",
+		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
@@ -288,6 +316,13 @@ func TestValidateWatchedResource_EmptyIndexBy(t *testing.T) {
 		Controller: ControllerConfig{
 			HealthzPort: 8080,
 			MetricsPort: 9090,
+		},
+		Dataplane: DataplaneConfig{
+			Port:              5555,
+			MapsDir:           "/etc/haproxy/maps",
+			SSLCertsDir:       "/etc/haproxy/certs",
+			GeneralStorageDir: "/etc/haproxy/general",
+			ConfigFile:        "/etc/haproxy/haproxy.cfg",
 		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
@@ -315,6 +350,13 @@ func TestValidateWatchedResource_EmptyIndexByElement(t *testing.T) {
 			HealthzPort: 8080,
 			MetricsPort: 9090,
 		},
+		Dataplane: DataplaneConfig{
+			Port:              5555,
+			MapsDir:           "/etc/haproxy/maps",
+			SSLCertsDir:       "/etc/haproxy/certs",
+			GeneralStorageDir: "/etc/haproxy/general",
+			ConfigFile:        "/etc/haproxy/haproxy.cfg",
+		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
 				APIVersion: "networking.k8s.io/v1",
@@ -340,6 +382,13 @@ func TestValidateHAProxyConfig_EmptyTemplate(t *testing.T) {
 		Controller: ControllerConfig{
 			HealthzPort: 8080,
 			MetricsPort: 9090,
+		},
+		Dataplane: DataplaneConfig{
+			Port:              5555,
+			MapsDir:           "/etc/haproxy/maps",
+			SSLCertsDir:       "/etc/haproxy/certs",
+			GeneralStorageDir: "/etc/haproxy/general",
+			ConfigFile:        "/etc/haproxy/haproxy.cfg",
 		},
 		WatchedResources: map[string]WatchedResource{
 			"ingresses": {
@@ -403,6 +452,131 @@ func TestValidateCredentials_MissingFields(t *testing.T) {
 			err := ValidateCredentials(tt.creds)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errField)
+		})
+	}
+}
+
+func TestValidateDataplaneConfig_InvalidPort(t *testing.T) {
+	tests := []struct {
+		name string
+		port int
+	}{
+		{"zero", 0},
+		{"negative", -1},
+		{"too large", 65536},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				PodSelector: PodSelector{
+					MatchLabels: map[string]string{"app": "haproxy"},
+				},
+				Controller: ControllerConfig{
+					HealthzPort: 8080,
+					MetricsPort: 9090,
+				},
+				Dataplane: DataplaneConfig{
+					Port:              tt.port,
+					MapsDir:           "/etc/haproxy/maps",
+					SSLCertsDir:       "/etc/haproxy/certs",
+					GeneralStorageDir: "/etc/haproxy/general",
+					ConfigFile:        "/etc/haproxy/haproxy.cfg",
+				},
+				WatchedResources: map[string]WatchedResource{
+					"ingresses": {
+						APIVersion: "networking.k8s.io/v1",
+						Resources:  "ingresses",
+						IndexBy:    []string{"metadata.namespace"},
+					},
+				},
+				HAProxyConfig: HAProxyConfig{
+					Template: "global",
+				},
+			}
+
+			err := ValidateStructure(cfg)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "port must be between 1 and 65535")
+		})
+	}
+}
+
+func TestValidateDataplaneConfig_EmptyPaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		mapsDir   string
+		sslDir    string
+		genDir    string
+		cfgFile   string
+		errSubstr string
+	}{
+		{
+			name:      "empty maps_dir",
+			mapsDir:   "",
+			sslDir:    "/etc/haproxy/certs",
+			genDir:    "/etc/haproxy/general",
+			cfgFile:   "/etc/haproxy/haproxy.cfg",
+			errSubstr: "maps_dir cannot be empty",
+		},
+		{
+			name:      "empty ssl_certs_dir",
+			mapsDir:   "/etc/haproxy/maps",
+			sslDir:    "",
+			genDir:    "/etc/haproxy/general",
+			cfgFile:   "/etc/haproxy/haproxy.cfg",
+			errSubstr: "ssl_certs_dir cannot be empty",
+		},
+		{
+			name:      "empty general_storage_dir",
+			mapsDir:   "/etc/haproxy/maps",
+			sslDir:    "/etc/haproxy/certs",
+			genDir:    "",
+			cfgFile:   "/etc/haproxy/haproxy.cfg",
+			errSubstr: "general_storage_dir cannot be empty",
+		},
+		{
+			name:      "empty config_file",
+			mapsDir:   "/etc/haproxy/maps",
+			sslDir:    "/etc/haproxy/certs",
+			genDir:    "/etc/haproxy/general",
+			cfgFile:   "",
+			errSubstr: "config_file cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				PodSelector: PodSelector{
+					MatchLabels: map[string]string{"app": "haproxy"},
+				},
+				Controller: ControllerConfig{
+					HealthzPort: 8080,
+					MetricsPort: 9090,
+				},
+				Dataplane: DataplaneConfig{
+					Port:              5555,
+					MapsDir:           tt.mapsDir,
+					SSLCertsDir:       tt.sslDir,
+					GeneralStorageDir: tt.genDir,
+					ConfigFile:        tt.cfgFile,
+				},
+				WatchedResources: map[string]WatchedResource{
+					"ingresses": {
+						APIVersion: "networking.k8s.io/v1",
+						Resources:  "ingresses",
+						IndexBy:    []string{"metadata.namespace"},
+					},
+				},
+				HAProxyConfig: HAProxyConfig{
+					Template: "global",
+				},
+			}
+
+			err := ValidateStructure(cfg)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errSubstr)
 		})
 	}
 }

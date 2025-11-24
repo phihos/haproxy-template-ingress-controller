@@ -56,15 +56,16 @@ templateSnippets:
       {#- Generate entries for each registered TLS certificate #}
       {%- for tls_cert in global_features.tls_certificates | default([]) %}
         {%- set cert_filename = tls_cert.secret_namespace ~ "_" ~ tls_cert.secret_name ~ ".pem" %}
-        {%- set cert_path = pathResolver.GetPath("", "cert") ~ "/" ~ cert_filename %}
+        {#- Paths in crt-list are relative to crt-base, so just use filename #}
         {%- set ssl_options = "[ocsp-update on]" %}
         {%- set sni_list = tls_cert.sni_patterns | join(" ") %}
-        {%- set line = cert_path ~ " " ~ ssl_options ~ " " ~ sni_list %}
+        {%- set line = cert_filename ~ " " ~ ssl_options ~ " " ~ sni_list %}
         {%- set ns.crtlist_lines = ns.crtlist_lines.append(line) %}
       {%- endfor %}
 
       {#- Default certificate (no SNI filter = matches everything not matched above) #}
-      {%- set default_line = pathResolver.GetPath("", "cert") ~ "/default.pem [ocsp-update on]" %}
+      {#- Paths in crt-list are relative to crt-base, so just use filename #}
+      {%- set default_line = "default.pem [ocsp-update on]" %}
       {%- set ns.crtlist_lines = ns.crtlist_lines.append(default_line) %}
 
       {#- Register the crt-list file with file_registry #}
@@ -119,7 +120,7 @@ templateSnippets:
 
       backend ssl-loopback
           mode tcp
-          server loopback unix@/var/run/ssl-frontend.sock send-proxy-v2
+          server loopback unix@/etc/haproxy/ssl-frontend.sock send-proxy-v2
 
       {%- endif %}
 
@@ -131,7 +132,7 @@ templateSnippets:
       frontend https
           mode http
           {%- if global_features.ssl_passthrough_backends | length > 0 %}
-          bind unix@/var/run/ssl-frontend.sock user haproxy mode 660{% include "util-ssl-bind-options" %} accept-proxy
+          bind unix@/etc/haproxy/ssl-frontend.sock mode 660{% include "util-ssl-bind-options" %} accept-proxy
           {%- else %}
           bind *:{{ httpsPort | default(8443) | int }}{% include "util-ssl-bind-options" %}
           {%- endif %}

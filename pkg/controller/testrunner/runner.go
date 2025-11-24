@@ -298,12 +298,16 @@ func (r *Runner) createTestPaths(workerID, testNum int) (dataplane.ValidationPat
 	testDir := filepath.Join(baseTempDir, fmt.Sprintf("worker-%d", workerID), fmt.Sprintf("test-%d", testNum))
 
 	// Create subdirectories for auxiliary files
-	mapsDir := filepath.Join(testDir, "maps")
-	sslDir := filepath.Join(testDir, "ssl")
-	filesDir := filepath.Join(testDir, "files")
+	// IMPORTANT: Subdirectory names are derived from configured dataplane paths
+	// using filepath.Base() to ensure consistency between production and validation.
+	// HAProxy requires absolute paths to locate files, so we create absolute paths
+	// within the isolated test directory (e.g., /tmp/haproxy-validate-12345/worker-0/test-1/maps).
+	mapsDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.MapsDir))
+	certsDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.SSLCertsDir))
+	generalDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.GeneralStorageDir))
 
 	// Create all directories
-	for _, dir := range []string{mapsDir, sslDir, filesDir} {
+	for _, dir := range []string{mapsDir, certsDir, generalDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return dataplane.ValidationPaths{}, fmt.Errorf("failed to create test directory %s: %w", dir, err)
 		}
@@ -311,8 +315,8 @@ func (r *Runner) createTestPaths(workerID, testNum int) (dataplane.ValidationPat
 
 	return dataplane.ValidationPaths{
 		MapsDir:           mapsDir,
-		SSLCertsDir:       sslDir,
-		GeneralStorageDir: filesDir,
+		SSLCertsDir:       certsDir,
+		GeneralStorageDir: generalDir,
 		ConfigFile:        filepath.Join(testDir, "haproxy.cfg"),
 	}, nil
 }
@@ -745,6 +749,7 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 		"template_snippets": snippetNames,
 		"file_registry":     fileRegistry,
 		"pathResolver":      pathResolver,
+		"dataplane":         r.config.Dataplane, // Add dataplane config for absolute path access
 	}
 
 	// Merge extraContext variables into top-level context

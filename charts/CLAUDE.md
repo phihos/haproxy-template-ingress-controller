@@ -121,6 +121,85 @@ Resource-specific libraries (ingress.yaml, gateway.yaml, haproxytech.yaml) are r
 
 **Why This Matters**: This separation allows Gateway API and Ingress resources to coexist without base.yaml needing to know which resource type it's processing. Resource-specific logic stays in resource-specific libraries.
 
+## HAProxy File Path Requirements
+
+**CRITICAL**: HAProxy **requires absolute paths** to locate auxiliary files (maps, error pages, SSL certificates).
+
+### The Problem with Relative Paths
+
+HAProxy does **NOT** work with relative file paths. When HAProxy validates or loads a configuration file, it resolves paths relative to its **working directory**, not relative to the configuration file location.
+
+**Example of what DOESN'T work:**
+```haproxy
+errorfile 400 general/400.http          # WRONG - HAProxy can't find this
+use_backend %[path,map(maps/path.map)]   # WRONG - HAProxy can't find this
+```
+
+When HAProxy runs `haproxy -c -f /tmp/haproxy.cfg`, it looks for `general/400.http` relative to its current working directory (likely `/`), not relative to `/tmp/`.
+
+### The Correct Approach: Absolute Paths
+
+HAProxy requires absolute paths:
+
+**Production (in HAProxy Dataplane pods):**
+```haproxy
+errorfile 400 /etc/haproxy/general/400.http       # CORRECT
+use_backend %[path,map(/etc/haproxy/maps/path.map)]  # CORRECT
+```
+
+**Validation (in controller temp directories):**
+```haproxy
+errorfile 400 /tmp/haproxy-validate-12345/general/400.http    # CORRECT
+use_backend %[path,map(/tmp/haproxy-validate-12345/maps/path.map)]  # CORRECT
+```
+
+### Dual-PathResolver Pattern
+
+The codebase implements a dual-PathResolver pattern to handle both production and validation:
+
+**Production PathResolver** (Renderer component):
+- Created once during component initialization
+- Uses production paths: `/etc/haproxy/maps`, `/etc/haproxy/certs`, `/etc/haproxy/general`
+- Files exist in HAProxy Dataplane containers
+- See: `pkg/controller/renderer/component.go:113`
+
+**Validation PathResolver** (Testrunner):
+- Created per-test during validation
+- Uses temp paths: `/tmp/haproxy-validate-12345/maps`, `/tmp/haproxy-validate-12345/certs`
+- Files written to controller container's temp directories
+- Isolated per test for parallel execution
+- See: `pkg/controller/testrunner/runner.go:736`
+
+### Why This Separation Matters
+
+The controller container has `readOnlyRootFilesystem: true` for security. It cannot write to `/etc/haproxy/` during validation. Therefore:
+
+1. **Production rendering** uses `/etc/haproxy/` paths (for deployment to HAProxy pods)
+2. **Validation rendering** uses `/tmp/haproxy-validate-*/` paths (for controller validation)
+
+Both use **absolute paths** because HAProxy requires them.
+
+### Template Implementation
+
+Templates use `pathResolver.GetPath()` to generate absolute paths:
+
+```gonja
+{#- Template example -#}
+errorfile 400 {{ pathResolver.GetPath("400.http", "file") }}
+
+{#- Production output: -#}
+errorfile 400 /etc/haproxy/general/400.http
+
+{#- Validation output: -#}
+errorfile 400 /tmp/haproxy-validate-12345/general/400.http
+```
+
+The PathResolver is passed via rendering context and resolves names to absolute paths based on the configured directories.
+
+### Common Pitfall
+
+**DO NOT** assume HAProxy works like most other tools that resolve paths relative to the config file location. This assumption has caused bugs multiple times. Always use absolute paths through PathResolver.
+
 ## Development Workflow
 
 ### Testing Library Changes

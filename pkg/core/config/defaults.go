@@ -29,7 +29,8 @@ const (
 	DefaultDataplaneMapsDir = "/etc/haproxy/maps"
 
 	// DefaultDataplaneSSLCertsDir is the default directory for SSL certificates.
-	DefaultDataplaneSSLCertsDir = "/etc/haproxy/ssl"
+	// This matches the values.yaml default and HAProxy container directory structure.
+	DefaultDataplaneSSLCertsDir = "/etc/haproxy/certs"
 
 	// DefaultDataplaneGeneralStorageDir is the default directory for general files.
 	DefaultDataplaneGeneralStorageDir = "/etc/haproxy/general"
@@ -57,10 +58,17 @@ const (
 // This modifies the config in-place and should be called after parsing
 // the configuration and before validation.
 //
+// Port Handling Strategy:
+//   - A value of 0 for production ports (healthz, metrics, dataplane) means "uninitialized"
+//     and will be replaced with the default value
+//   - Debug ports may intentionally be 0 to indicate "disabled" (see cmd/controller/main.go)
+//   - After defaults are applied, production ports MUST NOT be 0 (validation will catch this)
+//
 // Most callers should use LoadConfig() instead. This function is primarily
 // useful for testing default application independently from YAML parsing.
 func setDefaults(cfg *Config) {
 	// Controller defaults
+	// Note: These ports should never remain 0 after defaults are applied
 	if cfg.Controller.HealthzPort == 0 {
 		cfg.Controller.HealthzPort = DefaultHealthzPort
 	}
@@ -87,11 +95,12 @@ func setDefaults(cfg *Config) {
 	// Note: Verbose level 0 is valid (WARNING), so we don't set a default
 
 	// Dataplane defaults
+	// Note: This port should never remain 0 after defaults are applied
 	if cfg.Dataplane.Port == 0 {
 		cfg.Dataplane.Port = DefaultDataplanePort
 	}
 
-	// Apply dataplane defaults
+	// Apply dataplane path defaults
 	if cfg.Dataplane.MapsDir == "" {
 		cfg.Dataplane.MapsDir = DefaultDataplaneMapsDir
 	}

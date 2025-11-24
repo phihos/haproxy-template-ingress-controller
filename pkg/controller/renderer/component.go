@@ -24,6 +24,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -47,6 +49,10 @@ const (
 // using the template engine and resource stores, and publishes the results
 // via TemplateRenderedEvent or TemplateRenderFailedEvent.
 //
+// The component renders configurations twice per reconciliation:
+// 1. Production version with absolute paths for HAProxy pods (/etc/haproxy/*)
+// 2. Validation version with temp directory paths for controller validation
+//
 // The component caches the last rendered output to support state replay during
 // leadership transitions (when new leader-only components start subscribing).
 type Component struct {
@@ -55,13 +61,14 @@ type Component struct {
 	engine          *templating.TemplateEngine
 	config          *config.Config
 	stores          map[string]types.Store
-	haproxyPodStore types.Store              // HAProxy controller pods store for pod-maxconn calculations
-	pathResolver    *templating.PathResolver // For FileRegistry to compute auxiliary file paths
+	haproxyPodStore types.Store // HAProxy controller pods store for pod-maxconn calculations
 	logger          *slog.Logger
 
 	// State protected by mutex (for leadership transition replay)
 	mu                   sync.RWMutex
 	lastHAProxyConfig    string
+	lastValidationConfig string
+	lastValidationPaths  interface{} // dataplane.ValidationPaths
 	lastAuxiliaryFiles   *dataplane.AuxiliaryFiles
 	lastAuxFileCount     int
 	lastRenderDurationMs int64
@@ -104,14 +111,6 @@ func New(
 	// Extract post-processor configurations from config
 	postProcessorConfigs := extractPostProcessorConfigs(config)
 
-	// Create path resolver for pathResolver.GetPath() method
-	pathResolver := &templating.PathResolver{
-		MapsDir:    config.Dataplane.MapsDir,
-		SSLDir:     config.Dataplane.SSLCertsDir,
-		CRTListDir: config.Dataplane.SSLCertsDir,
-		GeneralDir: config.Dataplane.GeneralStorageDir,
-	}
-
 	// Register custom filters
 	// Note: pathResolver is now passed via rendering context, not as a filter
 	filters := map[string]templating.FilterFunc{
@@ -141,7 +140,6 @@ func New(
 		config:          config,
 		stores:          stores,
 		haproxyPodStore: haproxyPodStore,
-		pathResolver:    pathResolver,
 		logger:          logger,
 	}, nil
 }
@@ -189,70 +187,158 @@ func (c *Component) handleEvent(event busevents.Event) {
 	}
 }
 
+// validationEnvironment holds temporary paths for validation rendering.
+type validationEnvironment struct {
+	tmpDir     string
+	mapsDir    string
+	sslDir     string
+	generalDir string
+	configFile string
+}
+
+// setupValidationEnvironment creates temporary validation directories.
+func (c *Component) setupValidationEnvironment() (*validationEnvironment, func(), error) {
+	tmpDir, err := os.MkdirTemp("", "haproxy-validate-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	env := &validationEnvironment{
+		tmpDir:     tmpDir,
+		mapsDir:    filepath.Join(tmpDir, "maps"),
+		sslDir:     filepath.Join(tmpDir, "certs"),
+		generalDir: filepath.Join(tmpDir, "general"),
+		configFile: filepath.Join(tmpDir, "haproxy.cfg"),
+	}
+
+	for _, dir := range []string{env.mapsDir, env.sslDir, env.generalDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, nil, fmt.Errorf("failed to create validation directory %s: %w", dir, err)
+		}
+	}
+
+	cleanup := func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			c.logger.Warn("failed to clean up validation temp directory",
+				"path", tmpDir, "error", err)
+		}
+	}
+
+	return env, cleanup, nil
+}
+
+// createPathResolvers creates production and validation path resolvers.
+func (c *Component) createPathResolvers(env *validationEnvironment) (production, validation *templating.PathResolver) {
+	production = &templating.PathResolver{
+		MapsDir:    c.config.Dataplane.MapsDir,
+		SSLDir:     c.config.Dataplane.SSLCertsDir,
+		CRTListDir: c.config.Dataplane.SSLCertsDir,
+		GeneralDir: c.config.Dataplane.GeneralStorageDir,
+	}
+
+	validation = &templating.PathResolver{
+		MapsDir:    env.mapsDir,
+		SSLDir:     env.sslDir,
+		CRTListDir: env.sslDir,
+		GeneralDir: env.generalDir,
+	}
+
+	return production, validation
+}
+
 // handleReconciliationTriggered renders all templates when reconciliation is triggered.
+// Renders configuration twice: once for production deployment, once for validation.
 func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTriggeredEvent) {
 	startTime := time.Now()
-
 	c.logger.Info("Template rendering triggered", "reason", event.Reason)
 
-	// Build rendering context from all resource stores (includes FileRegistry)
-	c.logger.Info("building rendering context")
-	context, fileRegistry := c.buildRenderingContext()
+	// Setup validation environment
+	validationEnv, cleanup, err := c.setupValidationEnvironment()
+	if err != nil {
+		c.publishRenderFailure("validation-setup", err)
+		return
+	}
+	defer cleanup()
 
-	// Render main HAProxy configuration
-	c.logger.Info("rendering main template")
-	haproxyConfig, err := c.engine.Render("haproxy.cfg", context)
+	// Create path resolvers
+	productionPathResolver, validationPathResolver := c.createPathResolvers(validationEnv)
+
+	// RENDER 1: Production configuration (for deployment)
+	c.logger.Info("rendering production configuration")
+	productionContext, productionFileRegistry := c.buildRenderingContext(productionPathResolver)
+
+	productionHAProxyConfig, err := c.engine.Render("haproxy.cfg", productionContext)
 	if err != nil {
 		c.publishRenderFailure("haproxy.cfg", err)
 		return
 	}
 
-	// Render all pre-declared auxiliary files
-	staticFiles, err := c.renderAuxiliaryFiles(context)
+	productionStaticFiles, err := c.renderAuxiliaryFiles(productionContext)
 	if err != nil {
 		// Error already published by renderAuxiliaryFiles
 		return
 	}
 
-	// Extract dynamic files registered during template rendering
-	dynamicFiles := fileRegistry.GetFiles()
+	productionDynamicFiles := productionFileRegistry.GetFiles()
+	productionAuxiliaryFiles := MergeAuxiliaryFiles(productionStaticFiles, productionDynamicFiles)
 
-	// Merge static (pre-declared) and dynamic (registered) files
-	auxiliaryFiles := MergeAuxiliaryFiles(staticFiles, dynamicFiles)
+	// RENDER 2: Validation configuration (for controller validation)
+	c.logger.Info("rendering validation configuration")
+	validationContext, validationFileRegistry := c.buildRenderingContext(validationPathResolver)
 
-	// Log counts
-	staticCount := len(staticFiles.MapFiles) + len(staticFiles.GeneralFiles) + len(staticFiles.SSLCertificates)
-	dynamicCount := len(dynamicFiles.MapFiles) + len(dynamicFiles.GeneralFiles) + len(dynamicFiles.SSLCertificates)
-	if dynamicCount > 0 {
-		c.logger.Info("merged auxiliary files",
-			"static_count", staticCount,
-			"dynamic_count", dynamicCount)
+	validationHAProxyConfig, err := c.engine.Render("haproxy.cfg", validationContext)
+	if err != nil {
+		c.publishRenderFailure("haproxy.cfg-validation", err)
+		return
+	}
+
+	validationStaticFiles, err := c.renderAuxiliaryFiles(validationContext)
+	if err != nil {
+		// Error already published by renderAuxiliaryFiles
+		return
+	}
+
+	validationDynamicFiles := validationFileRegistry.GetFiles()
+	_ = MergeAuxiliaryFiles(validationStaticFiles, validationDynamicFiles) // Not needed for event, only production files are deployed
+
+	// Create ValidationPaths struct for HAProxyValidator
+	validationPaths := &dataplane.ValidationPaths{
+		MapsDir:           validationEnv.mapsDir,
+		SSLCertsDir:       validationEnv.sslDir,
+		GeneralStorageDir: validationEnv.generalDir,
+		ConfigFile:        validationEnv.configFile,
 	}
 
 	// Calculate metrics
 	durationMs := time.Since(startTime).Milliseconds()
-	auxFileCount := len(auxiliaryFiles.MapFiles) +
-		len(auxiliaryFiles.GeneralFiles) +
-		len(auxiliaryFiles.SSLCertificates)
+	auxFileCount := len(productionAuxiliaryFiles.MapFiles) +
+		len(productionAuxiliaryFiles.GeneralFiles) +
+		len(productionAuxiliaryFiles.SSLCertificates)
 
 	c.logger.Info("Template rendering completed",
-		"config_bytes", len(haproxyConfig),
+		"production_config_bytes", len(productionHAProxyConfig),
+		"validation_config_bytes", len(validationHAProxyConfig),
 		"auxiliary_files", auxFileCount,
 		"duration_ms", durationMs)
 
 	// Cache rendered output for leadership transition replay
 	c.mu.Lock()
-	c.lastHAProxyConfig = haproxyConfig
-	c.lastAuxiliaryFiles = auxiliaryFiles
+	c.lastHAProxyConfig = productionHAProxyConfig
+	c.lastValidationConfig = validationHAProxyConfig
+	c.lastValidationPaths = validationPaths
+	c.lastAuxiliaryFiles = productionAuxiliaryFiles
 	c.lastAuxFileCount = auxFileCount
 	c.lastRenderDurationMs = durationMs
 	c.hasRenderedConfig = true
 	c.mu.Unlock()
 
-	// Publish success event with rendered content
+	// Publish success event with both rendered configs
 	c.eventBus.Publish(events.NewTemplateRenderedEvent(
-		haproxyConfig,
-		auxiliaryFiles,
+		productionHAProxyConfig,
+		validationHAProxyConfig,
+		validationPaths,
+		productionAuxiliaryFiles,
 		auxFileCount,
 		durationMs,
 	))
@@ -269,6 +355,8 @@ func (c *Component) handleBecameLeader(_ *events.BecameLeaderEvent) {
 	c.mu.RLock()
 	hasState := c.hasRenderedConfig
 	haproxyConfig := c.lastHAProxyConfig
+	validationConfig := c.lastValidationConfig
+	validationPaths := c.lastValidationPaths
 	auxiliaryFiles := c.lastAuxiliaryFiles
 	auxFileCount := c.lastAuxFileCount
 	durationMs := c.lastRenderDurationMs
@@ -280,12 +368,15 @@ func (c *Component) handleBecameLeader(_ *events.BecameLeaderEvent) {
 	}
 
 	c.logger.Info("became leader, re-publishing last rendered config for DeploymentScheduler",
-		"config_bytes", len(haproxyConfig),
+		"production_config_bytes", len(haproxyConfig),
+		"validation_config_bytes", len(validationConfig),
 		"auxiliary_files", auxFileCount)
 
 	// Re-publish the last rendered event to ensure new leader-only components receive it
 	c.eventBus.Publish(events.NewTemplateRenderedEvent(
 		haproxyConfig,
+		validationConfig,
+		validationPaths,
 		auxiliaryFiles,
 		auxFileCount,
 		durationMs,

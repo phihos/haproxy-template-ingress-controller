@@ -31,13 +31,10 @@ Configuration:
   ConfigMap: {{ .Values.controller.configmapName }}
   Secret: {{ include "haproxy-template-ic.fullname" . }}-credentials
 
-{{- if gt (.Values.controller.debugPort | int) 0 }}
-
-Debug Endpoint:
-  The debug server is running on port {{ .Values.controller.debugPort }}
+Introspection Endpoint:
+  Health checks and debugging are available on port {{ .Values.controller.debugPort }}
   Access via: kubectl port-forward -n {{ .Release.Namespace }} pod/<controller-pod> {{ .Values.controller.debugPort }}:{{ .Values.controller.debugPort }}
-  Endpoints: /debug/vars, /debug/pprof
-{{- end }}
+  Endpoints: /healthz, /debug/vars, /debug/pprof
 
 Metrics Endpoint:
   Prometheus metrics are available on port {{ .Values.controller.config.controller.metricsPort }}

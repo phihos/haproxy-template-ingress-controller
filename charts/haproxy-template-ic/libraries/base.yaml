@@ -293,11 +293,9 @@ haproxyConfig:
   template: |
     global
         log stdout len 4096 local0 info
-        user haproxy
-        group haproxy
         daemon
         ca-base /etc/ssl/certs
-        crt-base /etc/haproxy/ssl
+        crt-base {{ pathResolver.SSLDir }}
         tune.ssl.default-dh-param 2048
 
     defaults

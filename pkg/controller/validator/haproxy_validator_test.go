@@ -27,22 +27,9 @@ import (
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/controller/renderer"
 	"haproxy-template-ic/pkg/core/config"
-	"haproxy-template-ic/pkg/dataplane"
 	busevents "haproxy-template-ic/pkg/events"
 	"haproxy-template-ic/pkg/k8s/types"
 )
-
-// testValidationPaths returns validation paths for testing using temporary directories.
-func testValidationPaths(t *testing.T) dataplane.ValidationPaths {
-	t.Helper()
-	tmpDir := t.TempDir()
-	return dataplane.ValidationPaths{
-		MapsDir:           tmpDir + "/maps",
-		SSLCertsDir:       tmpDir + "/certs",
-		GeneralStorageDir: tmpDir + "/general",
-		ConfigFile:        tmpDir + "/haproxy.cfg",
-	}
-}
 
 // mockStore implements types.Store for testing.
 type mockStore struct {
@@ -114,7 +101,7 @@ backend servers
 	require.NoError(t, err)
 
 	// Create validator
-	validatorComponent := NewHAProxyValidator(bus, logger, testValidationPaths(t))
+	validatorComponent := NewHAProxyValidator(bus, logger)
 
 	// Subscribe to events
 	eventChan := bus.Subscribe(50)
@@ -201,7 +188,7 @@ backend servers
 	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
-	validatorComponent := NewHAProxyValidator(bus, logger, testValidationPaths(t))
+	validatorComponent := NewHAProxyValidator(bus, logger)
 
 	eventChan := bus.Subscribe(50)
 	bus.Start()
@@ -284,7 +271,7 @@ backend servers
 	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
-	validatorComponent := NewHAProxyValidator(bus, logger, testValidationPaths(t))
+	validatorComponent := NewHAProxyValidator(bus, logger)
 
 	eventChan := bus.Subscribe(50)
 	bus.Start()
@@ -360,7 +347,7 @@ backend servers
 	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
 	require.NoError(t, err)
 
-	validatorComponent := NewHAProxyValidator(bus, logger, testValidationPaths(t))
+	validatorComponent := NewHAProxyValidator(bus, logger)
 
 	eventChan := bus.Subscribe(50)
 	bus.Start()
@@ -425,7 +412,7 @@ func TestValidator_ContextCancellation(t *testing.T) {
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	validatorComponent := NewHAProxyValidator(bus, logger, testValidationPaths(t))
+	validatorComponent := NewHAProxyValidator(bus, logger)
 
 	bus.Start()
 

@@ -138,10 +138,14 @@ type PodSelector struct {
 // ControllerConfig contains controller-level configuration.
 type ControllerConfig struct {
 	// HealthzPort is the port for health check endpoints.
+	// A value of 0 means "uninitialized" and will be replaced with the default.
+	// This is a production port and MUST NOT remain 0 after defaults are applied.
 	// Default: 8080
 	HealthzPort int `yaml:"healthz_port"`
 
 	// MetricsPort is the port for Prometheus metrics.
+	// A value of 0 means "uninitialized" and will be replaced with the default.
+	// This is a production port and MUST NOT remain 0 after defaults are applied.
 	// Default: 9090
 	MetricsPort int `yaml:"metrics_port"`
 
@@ -192,6 +196,8 @@ type LoggingConfig struct {
 // DataplaneConfig configures the Dataplane API for production HAProxy instances.
 type DataplaneConfig struct {
 	// Port is the Dataplane API port for production HAProxy pods.
+	// A value of 0 means "uninitialized" and will be replaced with the default.
+	// This is a production port and MUST NOT remain 0 after defaults are applied.
 	// Default: 5555
 	Port int `yaml:"port"`
 

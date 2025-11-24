@@ -137,14 +137,15 @@ templateSnippets:
           - haproxy.org/cors-max-age: Preflight cache duration, seconds (optional, default: 0)
 
         Generated HAProxy Config:
-          http-request capture req.hdr(Origin) len 128
-          http-response set-header Access-Control-Allow-Origin ...
-          http-response set-header Access-Control-Allow-Methods ...
-          http-response set-header Access-Control-Allow-Headers ...
-          http-response set-header Access-Control-Allow-Credentials ...
-          http-response set-header Access-Control-Max-Age ...
+          http-request capture req.hdr(Origin) len 128 if { var(txn.host) -m str <host> }
+          http-response set-header Access-Control-Allow-Origin "..." if { var(txn.host) -m str <host> }
+          http-response set-header Access-Control-Allow-Methods "..." if { var(txn.host) -m str <host> }
+          http-response set-header Access-Control-Allow-Headers "..." if { var(txn.host) -m str <host> }
+          http-response set-header Access-Control-Allow-Credentials "true" if { var(txn.host) -m str <host> }
+          http-response set-header Access-Control-Max-Age "..." if { var(txn.host) -m str <host> }
 
         Note: When cors-allow-credentials is true, cors-allow-origin cannot be "*"
+        Note: CORS headers are scoped to hosts defined in the ingress to prevent cross-ingress leakage
       -#}
       {%- set ns = namespace(processed_ingresses="") %}
       {%- for ingress in resources.ingresses.List() %}
@@ -161,18 +162,29 @@ templateSnippets:
             {%- if cors_credentials == "true" and cors_origin == "*" %}
               {{- fail("CORS configuration error on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "': cors-allow-credentials cannot be 'true' when cors-allow-origin is '*'. Specify an explicit origin.") -}}
             {%- endif %}
+            {#- Extract all hosts from ingress rules -#}
+            {%- set ns_hosts = namespace(hosts=[]) %}
+            {%- if ingress.spec.rules %}
+              {%- for rule in ingress.spec.rules %}
+                {%- if rule.host %}
+                  {%- set ns_hosts.hosts = ns_hosts.hosts.append(rule.host) %}
+                {%- endif %}
+              {%- endfor %}
+            {%- endif %}
+            {%- if ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-cors (for {{ ingress_key }})
-      http-request capture req.hdr(Origin) len 128
-      http-response set-header Access-Control-Allow-Origin "{{ cors_origin }}"
-      http-response set-header Access-Control-Allow-Methods "{{ cors_methods }}"
-            {%- if cors_headers %}
-      http-response set-header Access-Control-Allow-Headers "{{ cors_headers }}"
-            {%- endif %}
-            {%- if cors_credentials == "true" %}
-      http-response set-header Access-Control-Allow-Credentials "true"
-            {%- endif %}
-            {%- if cors_max_age != "0" %}
-      http-response set-header Access-Control-Max-Age "{{ cors_max_age }}"
+      http-request capture req.hdr(Origin) len 128 if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+      http-response set-header Access-Control-Allow-Origin "{{ cors_origin }}" if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+      http-response set-header Access-Control-Allow-Methods "{{ cors_methods }}" if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+              {%- if cors_headers %}
+      http-response set-header Access-Control-Allow-Headers "{{ cors_headers }}" if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+              {%- endif %}
+              {%- if cors_credentials == "true" %}
+      http-response set-header Access-Control-Allow-Credentials "true" if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+              {%- endif %}
+              {%- if cors_max_age != "0" %}
+      http-response set-header Access-Control-Max-Age "{{ cors_max_age }}" if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+              {%- endif %}
             {%- endif %}
           {%- endif %}
         {%- endif %}
@@ -247,10 +259,11 @@ templateSnippets:
           request-capture-len: Integer (e.g., "256")
 
         Generated HAProxy Config:
-          http-request set-src hdr(<header-name>)
+          http-request set-src hdr(<header-name>) if { var(txn.host) -m str <host> }
           capture request header <expression> len <length>
 
         Note: src-ip-header useful when behind proxies/CDNs
+        Note: src-ip-header is scoped to hosts defined in the ingress to prevent affecting ACLs for other ingresses
       -#}
       {%- set ns = namespace(processed_ingresses="") %}
       {%- for ingress in resources.ingresses.List() %}
@@ -261,8 +274,19 @@ templateSnippets:
           {%- set request_capture = ingress.metadata.annotations["haproxy.org/request-capture"] | default("") %}
           {%- set capture_len = ingress.metadata.annotations["haproxy.org/request-capture-len"] | default("128") %}
           {%- if src_ip_header %}
+            {#- Extract all hosts from ingress rules -#}
+            {%- set ns_hosts = namespace(hosts=[]) %}
+            {%- if ingress.spec.rules %}
+              {%- for rule in ingress.spec.rules %}
+                {%- if rule.host %}
+                  {%- set ns_hosts.hosts = ns_hosts.hosts.append(rule.host) %}
+                {%- endif %}
+              {%- endfor %}
+            {%- endif %}
+            {%- if ns_hosts.hosts | length > 0 %}
       # haproxytech/frontend-filters-haproxytech-logging (src-ip-header for {{ ingress_key }})
-      http-request set-src hdr({{ src_ip_header }})
+      http-request set-src hdr({{ src_ip_header }}) if {%+ for host in ns_hosts.hosts %}{ var(txn.host) -m str {{ host }} }{% if not loop.last %} or {% endif %}{% endfor %}
+            {%- endif %}
           {%- endif %}
           {%- if request_capture %}
       # haproxytech/frontend-filters-haproxytech-logging (request-capture for {{ ingress_key }})
@@ -293,7 +317,8 @@ templateSnippets:
         Note: forwarded-for adds X-Forwarded-For header with client IP
         Note: set-host modifies Host header after backend selection
       -#}
-      {%- set ns = namespace(processed_ingresses="") %}
+      {#- Check if any ingress has forwarded-for enabled (frontend-level directive, output once) -#}
+      {%- set ns = namespace(forwardfor_enabled=false, processed_ingresses="") %}
       {%- for ingress in resources.ingresses.List() %}
         {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
         {%- if ("|" ~ ingress_key ~ "|") not in ns.processed_ingresses %}
@@ -304,9 +329,58 @@ templateSnippets:
               {{- fail("Invalid value '" ~ forwarded_for ~ "' for annotation 'haproxy.org/forwarded-for' on Ingress '" ~ ingress.metadata.namespace ~ "/" ~ ingress.metadata.name ~ "'. Valid values: 'true', 'false'") -}}
             {%- endif %}
             {%- if forwarded_for == "true" %}
+              {%- set ns.forwardfor_enabled = true %}
+            {%- endif %}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor %}
+      {%- if ns.forwardfor_enabled %}
       # haproxytech/frontend-filters-haproxytech-basic-headers (forwarded-for)
       option forwardfor
-            {%- endif %}
+      {%- endif -%}
+  frontend-filters-haproxytech-timeouts:
+    priority: 150
+    template: |
+      {#-
+        HAProxy Frontend Timeout Configuration (Ingress Only)
+        Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#timeout-check
+
+        Annotations:
+          - haproxy.org/timeout-client: "<duration>" (optional, default: HAProxy global/frontend default)
+          - haproxy.org/timeout-http-request: "<duration>" (optional, default: HAProxy global/frontend default)
+          - haproxy.org/timeout-http-keep-alive: "<duration>" (optional, default: HAProxy global/frontend default)
+
+        Duration Format:
+          HAProxy duration format: integer with optional unit suffix
+          - Units: us (microseconds), ms (milliseconds), s (seconds), m (minutes), h (hours), d (days)
+          - Examples: "5s", "100ms", "1m", "2h", "30s"
+          - Default unit if none specified: milliseconds
+
+        Generated HAProxy Config:
+          timeout client <duration>
+          timeout http-request <duration>
+          timeout http-keep-alive <duration>
+
+        Note: These timeouts MUST be in frontend context per HAProxy specification
+        Note: Backend timeouts (server, connect, queue, tunnel, check) are in backend-directives-haproxytech-timeouts
+      -#}
+      {%- set ns = namespace(processed_ingresses="") %}
+      {%- for ingress in resources.ingresses.List() %}
+        {%- set ingress_key = ingress.metadata.namespace ~ "/" ~ ingress.metadata.name %}
+        {%- if ("|" ~ ingress_key ~ "|") not in ns.processed_ingresses %}
+          {%- set ns.processed_ingresses = ns.processed_ingresses ~ "|" ~ ingress_key ~ "|" %}
+          {%- set timeout_client = ingress.metadata.annotations["haproxy.org/timeout-client"] | default("") %}
+          {%- set timeout_http_request = ingress.metadata.annotations["haproxy.org/timeout-http-request"] | default("") %}
+          {%- set timeout_http_keep_alive = ingress.metadata.annotations["haproxy.org/timeout-http-keep-alive"] | default("") %}
+          {%- if timeout_client %}
+      # haproxytech/frontend-filters-haproxytech-timeouts
+      timeout client {{ timeout_client }}
+          {%- endif %}
+          {%- if timeout_http_request %}
+      timeout http-request {{ timeout_http_request }}
+          {%- endif %}
+          {%- if timeout_http_keep_alive %}
+      timeout http-keep-alive {{ timeout_http_keep_alive }}
           {%- endif %}
         {%- endif %}
       {%- endfor -%}
@@ -716,8 +790,10 @@ templateSnippets:
         {%- if " " in path_rewrite %}
           {#- Two parameters: regex and replacement -#}
           {%- set parts = path_rewrite.split(" ") %}
+          {%- set regex = parts[0] %}
+          {%- set replacement = parts[1:] | join(" ") %}
       # haproxytech/backend-directives-haproxytech-path-rewrite
-      http-request replace-path {{parts[0]}} {{parts[1]}}
+      http-request replace-path {{regex}} {{replacement}}
         {%- else %}
           {#- Single parameter: match all paths -#}
       # haproxytech/backend-directives-haproxytech-path-rewrite
@@ -741,11 +817,12 @@ templateSnippets:
         Format:
           Each line contains: HeaderName HeaderValue
           Values are automatically quoted for HAProxy
+          Header values can contain spaces (e.g., "Custom Value With Spaces")
 
         Example:
           haproxy.org/request-set-header: |
             X-Forwarded-Proto https
-            X-Custom-Header custom-value
+            X-Custom-Header value with spaces
 
         Generated HAProxy Config:
           http-request set-header HeaderName "HeaderValue"
@@ -763,7 +840,7 @@ templateSnippets:
           {%- if line and " " in line %}
             {%- set all_parts = line.split(" ") %}
             {%- set header_name = all_parts[0] %}
-            {%- set header_value = all_parts[1] %}
+            {%- set header_value = all_parts[1:] | join(" ") %}
       http-request set-header {{header_name}} "{{header_value}}"
           {%- endif %}
         {%- endfor %}
@@ -775,7 +852,7 @@ templateSnippets:
           {%- if line and " " in line %}
             {%- set all_parts = line.split(" ") %}
             {%- set header_name = all_parts[0] %}
-            {%- set header_value = all_parts[1] %}
+            {%- set header_value = all_parts[1:] | join(" ") %}
       http-response set-header {{header_name}} "{{header_value}}"
           {%- endif %}
         {%- endfor %}
@@ -937,16 +1014,13 @@ templateSnippets:
     priority: 100
     template: |
       {#-
-        HAProxy Timeout Configuration (Ingress Only)
+        HAProxy Backend Timeout Configuration (Ingress Only)
 
         Documentation: https://www.haproxy.com/documentation/kubernetes-ingress/community/configuration-reference/ingress/#timeout-check
 
         Annotations:
           - haproxy.org/timeout-server: "<duration>" (optional, default: HAProxy global/backend default)
-          - haproxy.org/timeout-client: "<duration>" (optional, default: HAProxy global/frontend default)
           - haproxy.org/timeout-connect: "<duration>" (optional, default: HAProxy global/backend default)
-          - haproxy.org/timeout-http-request: "<duration>" (optional, default: HAProxy global/frontend default)
-          - haproxy.org/timeout-http-keep-alive: "<duration>" (optional, default: HAProxy global/frontend default)
           - haproxy.org/timeout-queue: "<duration>" (optional, default: HAProxy global/backend default)
           - haproxy.org/timeout-tunnel: "<duration>" (optional, default: HAProxy global/backend default)
           - haproxy.org/timeout-check: "<duration>" (optional, default: HAProxy global/backend default)
@@ -959,23 +1033,18 @@ templateSnippets:
 
         Generated HAProxy Config:
           timeout server <duration>
-          timeout client <duration>
           timeout connect <duration>
-          timeout http-request <duration>
-          timeout http-keep-alive <duration>
           timeout queue <duration>
           timeout tunnel <duration>
           timeout check <duration>
 
-        Note: Backend directives apply to backend sections, frontend directives apply to frontend
+        Note: These timeouts MUST be in backend context per HAProxy specification
+        Note: Frontend timeouts (client, http-request, http-keep-alive) are in frontend-filters-haproxytech-timeouts
         Note: This snippet requires 'ingress' variable in context (only set by Ingress backend generation)
       -#}
       {%- if ingress is defined %}
       {%- set timeout_server = ingress.metadata.annotations["haproxy.org/timeout-server"] | default("") %}
-      {%- set timeout_client = ingress.metadata.annotations["haproxy.org/timeout-client"] | default("") %}
       {%- set timeout_connect = ingress.metadata.annotations["haproxy.org/timeout-connect"] | default("") %}
-      {%- set timeout_http_request = ingress.metadata.annotations["haproxy.org/timeout-http-request"] | default("") %}
-      {%- set timeout_http_keep_alive = ingress.metadata.annotations["haproxy.org/timeout-http-keep-alive"] | default("") %}
       {%- set timeout_queue = ingress.metadata.annotations["haproxy.org/timeout-queue"] | default("") %}
       {%- set timeout_tunnel = ingress.metadata.annotations["haproxy.org/timeout-tunnel"] | default("") %}
       {%- set timeout_check = ingress.metadata.annotations["haproxy.org/timeout-check"] | default("") %}
@@ -983,17 +1052,8 @@ templateSnippets:
       # haproxytech/backend-directives-haproxytech-timeouts
       timeout server {{ timeout_server }}
       {%- endif %}
-      {%- if timeout_client %}
-      timeout client {{ timeout_client }}
-      {%- endif %}
       {%- if timeout_connect %}
       timeout connect {{ timeout_connect }}
-      {%- endif %}
-      {%- if timeout_http_request %}
-      timeout http-request {{ timeout_http_request }}
-      {%- endif %}
-      {%- if timeout_http_keep_alive %}
-      timeout http-keep-alive {{ timeout_http_keep_alive }}
       {%- endif %}
       {%- if timeout_queue %}
       timeout queue {{ timeout_queue }}
@@ -1113,7 +1173,7 @@ templateSnippets:
           Purpose:
             TCP backends for SSL passthrough - forward encrypted traffic directly to pods.
             No SSL termination occurs in HAProxy.
-            Reuses cached analysis from features-haproxytech-ssl-passthrough.
+            Reuses cached analysis from features-haproxytech-ssl-passthrough via compute_once.
 
           Annotations:
             - haproxy.org/ssl-passthrough: "true" (enables passthrough for this ingress)
@@ -1122,8 +1182,10 @@ templateSnippets:
             backend ssl-passthrough-<namespace>-<name>
               mode tcp
               server SRV_1 <pod-ip>:<pod-port> check
+
+          Note: Uses same compute_once block as features-haproxytech-ssl-passthrough (executes only once)
       -#}
-      {#- Reuse cached analysis from features phase via compute_once #}
+      {#- Reuse cached analysis from features phase via compute_once (body executes only once across both snippets) #}
       {%- set ssl_passthrough_analysis = namespace(backends=[]) %}
       {%- compute_once ssl_passthrough_analysis %}
         {%- set ns = namespace(seen="") %}
