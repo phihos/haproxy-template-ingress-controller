@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -14,8 +17,14 @@ import (
 // GetAllGeneralFiles retrieves all general file paths from the storage.
 // Note: This returns only file paths, not the file contents.
 // Use GetGeneralFileContent to retrieve the actual file contents.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) GetAllGeneralFiles(ctx context.Context) ([]string, error) {
-	resp, err := c.client.GetAllStorageGeneralFiles(ctx)
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) { return c.GetAllStorageGeneralFiles(ctx) },
+		V31: func(c *v31.Client) (*http.Response, error) { return c.GetAllStorageGeneralFiles(ctx) },
+		V30: func(c *v30.Client) (*http.Response, error) { return c.GetAllStorageGeneralFiles(ctx) },
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all general files: %w", err)
 	}
@@ -54,8 +63,14 @@ func (c *DataplaneClient) GetAllGeneralFiles(ctx context.Context) ([]string, err
 
 // GetGeneralFileContent retrieves the content of a specific general file by path.
 // The API returns the raw file content as application/octet-stream.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) GetGeneralFileContent(ctx context.Context, path string) (string, error) {
-	resp, err := c.client.GetOneStorageGeneralFile(ctx, path)
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) { return c.GetOneStorageGeneralFile(ctx, path) },
+		V31: func(c *v31.Client) (*http.Response, error) { return c.GetOneStorageGeneralFile(ctx, path) },
+		V30: func(c *v30.Client) (*http.Response, error) { return c.GetOneStorageGeneralFile(ctx, path) },
+	})
+
 	if err != nil {
 		return "", fmt.Errorf("failed to get general file '%s': %w", path, err)
 	}
@@ -80,6 +95,7 @@ func (c *DataplaneClient) GetGeneralFileContent(ctx context.Context, path string
 }
 
 // CreateGeneralFile creates a new general file using multipart form-data.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) CreateGeneralFile(ctx context.Context, path, content string) error {
 	// Create multipart form-data
 	body := &bytes.Buffer{}
@@ -110,7 +126,19 @@ func (c *DataplaneClient) CreateGeneralFile(ctx context.Context, path, content s
 
 	// Send request
 	contentType := writer.FormDataContentType()
-	resp, err := c.client.CreateStorageGeneralFileWithBody(ctx, contentType, body)
+
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.CreateStorageGeneralFileWithBody(ctx, contentType, body)
+		},
+		V31: func(c *v31.Client) (*http.Response, error) {
+			return c.CreateStorageGeneralFileWithBody(ctx, contentType, body)
+		},
+		V30: func(c *v30.Client) (*http.Response, error) {
+			return c.CreateStorageGeneralFileWithBody(ctx, contentType, body)
+		},
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to create general file '%s': %w", path, err)
 	}
@@ -131,6 +159,7 @@ func (c *DataplaneClient) CreateGeneralFile(ctx context.Context, path, content s
 }
 
 // UpdateGeneralFile updates an existing general file using multipart form-data.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) UpdateGeneralFile(ctx context.Context, path, content string) error {
 	// Create multipart form-data
 	body := &bytes.Buffer{}
@@ -156,7 +185,19 @@ func (c *DataplaneClient) UpdateGeneralFile(ctx context.Context, path, content s
 
 	// Send request (no params needed, nil for params)
 	contentType := writer.FormDataContentType()
-	resp, err := c.client.ReplaceStorageGeneralFileWithBody(ctx, path, nil, contentType, body)
+
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.ReplaceStorageGeneralFileWithBody(ctx, path, nil, contentType, body)
+		},
+		V31: func(c *v31.Client) (*http.Response, error) {
+			return c.ReplaceStorageGeneralFileWithBody(ctx, path, nil, contentType, body)
+		},
+		V30: func(c *v30.Client) (*http.Response, error) {
+			return c.ReplaceStorageGeneralFileWithBody(ctx, path, nil, contentType, body)
+		},
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to update general file '%s': %w", path, err)
 	}
@@ -177,8 +218,14 @@ func (c *DataplaneClient) UpdateGeneralFile(ctx context.Context, path, content s
 }
 
 // DeleteGeneralFile deletes a general file by path.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) DeleteGeneralFile(ctx context.Context, path string) error {
-	resp, err := c.client.DeleteStorageGeneralFile(ctx, path)
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) { return c.DeleteStorageGeneralFile(ctx, path) },
+		V31: func(c *v31.Client) (*http.Response, error) { return c.DeleteStorageGeneralFile(ctx, path) },
+		V30: func(c *v30.Client) (*http.Response, error) { return c.DeleteStorageGeneralFile(ctx, path) },
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to delete general file '%s': %w", path, err)
 	}

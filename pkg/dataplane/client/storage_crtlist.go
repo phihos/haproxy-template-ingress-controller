@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"haproxy-template-ic/pkg/generated/dataplaneapi"
+	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
 )
 
 // sanitizeCRTListName sanitizes a crt-list file name for HAProxy Data Plane API storage.
@@ -62,8 +62,17 @@ func unsanitizeCRTListName(name string) string {
 // GetAllCRTListFiles retrieves all crt-list file names from the storage.
 // Note: This returns only crt-list file names, not the file contents.
 // Use GetCRTListFileContent to retrieve the actual file contents.
+// CRT-list storage is only available in HAProxy DataPlane API v3.2+.
 func (c *DataplaneClient) GetAllCRTListFiles(ctx context.Context) ([]string, error) {
-	resp, err := c.client.GetAllStorageSSLCrtListFiles(ctx)
+	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) { return c.GetAllStorageSSLCrtListFiles(ctx) },
+	}, func(caps Capabilities) error {
+		if !caps.SupportsCrtList {
+			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
+		}
+		return nil
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all crt-list files: %w", err)
 	}
@@ -100,11 +109,20 @@ func (c *DataplaneClient) GetAllCRTListFiles(ctx context.Context) ([]string, err
 // GetCRTListFileContent retrieves the content of a specific crt-list file by name.
 // The name parameter can use dots (e.g., "example.com.crtlist"), which will be sanitized
 // automatically before calling the API.
+// CRT-list storage is only available in HAProxy DataPlane API v3.2+.
 func (c *DataplaneClient) GetCRTListFileContent(ctx context.Context, name string) (string, error) {
 	// Sanitize the name for the API (e.g., "example.com.crtlist" -> "example_com.crtlist")
 	sanitizedName := sanitizeCRTListName(name)
 
-	resp, err := c.client.GetOneStorageSSLCrtListFile(ctx, sanitizedName)
+	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) { return c.GetOneStorageSSLCrtListFile(ctx, sanitizedName) },
+	}, func(caps Capabilities) error {
+		if !caps.SupportsCrtList {
+			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
+		}
+		return nil
+	})
+
 	if err != nil {
 		return "", fmt.Errorf("failed to get crt-list file '%s': %w", name, err)
 	}
@@ -132,7 +150,13 @@ func (c *DataplaneClient) GetCRTListFileContent(ctx context.Context, name string
 // CreateCRTListFile creates a new crt-list file using multipart form-data.
 // The name parameter can use dots (e.g., "example.com.crtlist"), which will be sanitized
 // automatically before calling the API.
+// CRT-list storage is only available in HAProxy DataPlane API v3.2+.
 func (c *DataplaneClient) CreateCRTListFile(ctx context.Context, name, content string) error {
+	// Check if crt-list is supported
+	if !c.clientset.Capabilities().SupportsCrtList {
+		return fmt.Errorf("crt-list storage is not supported by DataPlane API version %s (requires v3.2+)", c.clientset.DetectedVersion())
+	}
+
 	// Sanitize the name for the API (e.g., "example.com.crtlist" -> "example_com.crtlist")
 	sanitizedName := sanitizeCRTListName(name)
 
@@ -160,7 +184,18 @@ func (c *DataplaneClient) CreateCRTListFile(ctx context.Context, name, content s
 
 	// Send request
 	contentType := writer.FormDataContentType()
-	resp, err := c.client.CreateStorageSSLCrtListFileWithBody(ctx, &dataplaneapi.CreateStorageSSLCrtListFileParams{}, contentType, body)
+
+	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.CreateStorageSSLCrtListFileWithBody(ctx, &v32.CreateStorageSSLCrtListFileParams{}, contentType, body)
+		},
+	}, func(caps Capabilities) error {
+		if !caps.SupportsCrtList {
+			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
+		}
+		return nil
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to create crt-list file '%s': %w", name, err)
 	}
@@ -184,6 +219,7 @@ func (c *DataplaneClient) CreateCRTListFile(ctx context.Context, name, content s
 // while CREATE operations accept multipart/form-data.
 // The name parameter can use dots (e.g., "example.com.crtlist"), which will be sanitized
 // automatically before calling the API.
+// CRT-list storage is only available in HAProxy DataPlane API v3.2+.
 func (c *DataplaneClient) UpdateCRTListFile(ctx context.Context, name, content string) error {
 	// Sanitize the name for the API (e.g., "example.com.crtlist" -> "example_com.crtlist")
 	sanitizedName := sanitizeCRTListName(name)
@@ -191,7 +227,17 @@ func (c *DataplaneClient) UpdateCRTListFile(ctx context.Context, name, content s
 	// Use text/plain content-type for UPDATE (API v3 requirement)
 	body := bytes.NewReader([]byte(content))
 
-	resp, err := c.client.ReplaceStorageSSLCrtListFileWithBody(ctx, sanitizedName, &dataplaneapi.ReplaceStorageSSLCrtListFileParams{}, "text/plain", body)
+	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.ReplaceStorageSSLCrtListFileWithBody(ctx, sanitizedName, &v32.ReplaceStorageSSLCrtListFileParams{}, "text/plain", body)
+		},
+	}, func(caps Capabilities) error {
+		if !caps.SupportsCrtList {
+			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
+		}
+		return nil
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to update crt-list file '%s': %w", name, err)
 	}
@@ -214,11 +260,22 @@ func (c *DataplaneClient) UpdateCRTListFile(ctx context.Context, name, content s
 // DeleteCRTListFile deletes a crt-list file by name.
 // The name parameter can use dots (e.g., "example.com.crtlist"), which will be sanitized
 // automatically before calling the API.
+// CRT-list storage is only available in HAProxy DataPlane API v3.2+.
 func (c *DataplaneClient) DeleteCRTListFile(ctx context.Context, name string) error {
 	// Sanitize the name for the API (e.g., "example.com.crtlist" -> "example_com.crtlist")
 	sanitizedName := sanitizeCRTListName(name)
 
-	resp, err := c.client.DeleteStorageSSLCrtListFile(ctx, sanitizedName, &dataplaneapi.DeleteStorageSSLCrtListFileParams{})
+	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.DeleteStorageSSLCrtListFile(ctx, sanitizedName, &v32.DeleteStorageSSLCrtListFileParams{})
+		},
+	}, func(caps Capabilities) error {
+		if !caps.SupportsCrtList {
+			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
+		}
+		return nil
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to delete crt-list file '%s': %w", name, err)
 	}

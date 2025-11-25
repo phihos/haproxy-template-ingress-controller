@@ -206,7 +206,7 @@ func NewClient(ctx context.Context, endpoint *Endpoint) (*Client, error) {
 	logger := slog.Default().With("pod", endpoint.PodName)
 
 	// Create dataplane client
-	c, err := client.NewFromEndpoint(client.Endpoint{
+	c, err := client.NewFromEndpoint(ctx, client.Endpoint{
 		URL:      endpoint.URL,
 		Username: endpoint.Username,
 		Password: endpoint.Password,

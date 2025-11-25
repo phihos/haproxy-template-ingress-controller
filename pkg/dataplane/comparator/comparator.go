@@ -194,7 +194,7 @@ func (c *Comparator) Compare(current, desired *parser.StructuredConfig) (*Config
 	//
 	// Example for Frontends:
 	//   if !frontend1.Equal(*frontend2) {
-	//       operations = append(operations, sections.NewUpdateFrontendOperation(frontend2))
+	//       operations = append(operations, sections.NewFrontendUpdate(frontend2))
 	//   }
 	//
 	// Sections to implement:
@@ -255,7 +255,7 @@ func (c *Comparator) compareBackends(current, desired *parser.StructuredConfig, 
 	// Find deleted backends
 	for name, backend := range currentBackends {
 		if _, exists := desiredBackends[name]; !exists {
-			operations = append(operations, sections.NewDeleteBackendOperation(backend))
+			operations = append(operations, sections.NewBackendDelete(backend))
 			summary.BackendsDeleted = append(summary.BackendsDeleted, name)
 		}
 	}
@@ -276,7 +276,7 @@ func (c *Comparator) compareAddedBackends(desiredBackends, currentBackends map[s
 		if _, exists := currentBackends[name]; exists {
 			continue
 		}
-		operations = append(operations, sections.NewCreateBackendOperation(backend))
+		operations = append(operations, sections.NewBackendCreate(backend))
 		summary.BackendsAdded = append(summary.BackendsAdded, name)
 
 		// Also create servers for this new backend
@@ -369,7 +369,7 @@ func (c *Comparator) compareModifiedBackends(desiredBackends, currentBackends ma
 
 		// Compare backend attributes (excluding servers, ACLs, and rules which we already compared)
 		if !backendsEqualWithoutNestedCollections(currentBackend, desiredBackend) {
-			operations = append(operations, sections.NewUpdateBackendOperation(desiredBackend))
+			operations = append(operations, sections.NewBackendUpdate(desiredBackend))
 			backendModified = true
 		}
 
@@ -411,7 +411,7 @@ func (c *Comparator) compareAddedServers(backendName string, currentServers, des
 	for name := range desiredServers {
 		if _, exists := currentServers[name]; !exists {
 			server := desiredServers[name]
-			operations = append(operations, sections.NewCreateServerOperation(backendName, &server))
+			operations = append(operations, sections.NewServerCreate(backendName, &server))
 			if summary.ServersAdded[backendName] == nil {
 				summary.ServersAdded[backendName] = []string{}
 			}
@@ -429,7 +429,7 @@ func (c *Comparator) compareDeletedServers(backendName string, currentServers, d
 	for name := range currentServers {
 		if _, exists := desiredServers[name]; !exists {
 			server := currentServers[name]
-			operations = append(operations, sections.NewDeleteServerOperation(backendName, &server))
+			operations = append(operations, sections.NewServerDelete(backendName, &server))
 			if summary.ServersDeleted[backendName] == nil {
 				summary.ServersDeleted[backendName] = []string{}
 			}
@@ -455,7 +455,7 @@ func (c *Comparator) compareModifiedServers(backendName string, currentServers, 
 		// For now, we check if anything changed - future implementation
 		// will do fine-grained attribute comparison
 		if !serversEqual(&currentServer, &desiredServer) {
-			operations = append(operations, sections.NewUpdateServerOperation(backendName, &desiredServer))
+			operations = append(operations, sections.NewServerUpdate(backendName, &desiredServer))
 			if summary.ServersModified[backendName] == nil {
 				summary.ServersModified[backendName] = []string{}
 			}
@@ -572,7 +572,7 @@ func (c *Comparator) compareFrontends(current, desired *parser.StructuredConfig,
 	// Find deleted frontends
 	for name, frontend := range currentFrontends {
 		if _, exists := desiredFrontends[name]; !exists {
-			operations = append(operations, sections.NewDeleteFrontendOperation(frontend))
+			operations = append(operations, sections.NewFrontendDelete(frontend))
 			summary.FrontendsDeleted = append(summary.FrontendsDeleted, name)
 		}
 	}
@@ -593,7 +593,7 @@ func (c *Comparator) compareAddedFrontends(desiredFrontends, currentFrontends ma
 		if _, exists := currentFrontends[name]; exists {
 			continue
 		}
-		operations = append(operations, sections.NewCreateFrontendOperation(frontend))
+		operations = append(operations, sections.NewFrontendCreate(frontend))
 		summary.FrontendsAdded = append(summary.FrontendsAdded, name)
 
 		// Also create operations for nested elements in this new frontend
@@ -692,7 +692,7 @@ func (c *Comparator) compareModifiedFrontends(desiredFrontends, currentFrontends
 		// Compare frontend attributes (excluding ACLs, rules, and binds which we already compared)
 		// Create copies to compare without nested collections
 		if !frontendsEqualWithoutNestedCollections(currentFrontend, desiredFrontend) {
-			operations = append(operations, sections.NewUpdateFrontendOperation(desiredFrontend))
+			operations = append(operations, sections.NewFrontendUpdate(desiredFrontend))
 			frontendModified = true
 		}
 
@@ -718,7 +718,7 @@ func (c *Comparator) compareGlobal(current, desired *parser.StructuredConfig, su
 	// Compare using built-in Equal() method
 	// This automatically compares all global attributes (log settings, stats socket, maxconn, etc.)
 	if !current.Global.Equal(*desired.Global) {
-		operations = append(operations, sections.NewUpdateGlobalOperation(desired.Global))
+		operations = append(operations, sections.NewGlobalUpdate(desired.Global))
 		summary.GlobalChanged = true
 	}
 
@@ -748,7 +748,7 @@ func (c *Comparator) compareDefaults(current, desired *parser.StructuredConfig, 
 	// Find added defaults sections
 	for name, defaults := range desiredDefaults {
 		if _, exists := currentDefaults[name]; !exists {
-			operations = append(operations, sections.NewCreateDefaultsOperation(defaults))
+			operations = append(operations, sections.NewDefaultsCreate(defaults))
 			summary.DefaultsChanged = true
 		}
 	}
@@ -756,7 +756,7 @@ func (c *Comparator) compareDefaults(current, desired *parser.StructuredConfig, 
 	// Find deleted defaults sections
 	for name, defaults := range currentDefaults {
 		if _, exists := desiredDefaults[name]; !exists {
-			operations = append(operations, sections.NewDeleteDefaultsOperation(defaults))
+			operations = append(operations, sections.NewDefaultsDelete(defaults))
 			summary.DefaultsChanged = true
 		}
 	}
@@ -767,7 +767,7 @@ func (c *Comparator) compareDefaults(current, desired *parser.StructuredConfig, 
 			// Compare using built-in Equal() method
 			// This automatically compares all defaults attributes (mode, timeouts, options, etc.)
 			if !currentDefaults.Equal(*desiredDefaults) {
-				operations = append(operations, sections.NewUpdateDefaultsOperation(desiredDefaults))
+				operations = append(operations, sections.NewDefaultsUpdate(desiredDefaults))
 				summary.DefaultsChanged = true
 			}
 		}
@@ -821,9 +821,9 @@ func (c *Comparator) compareAddedACLs(parentType, parentName string, desiredACLM
 		if _, exists := currentACLMap[name]; !exists {
 			acl := desiredACLs[idx]
 			if parentType == parentTypeFrontend {
-				operations = append(operations, sections.NewCreateACLFrontendOperation(parentName, acl, idx))
+				operations = append(operations, sections.NewACLFrontendCreate(parentName, acl, idx))
 			} else {
-				operations = append(operations, sections.NewCreateACLBackendOperation(parentName, acl, idx))
+				operations = append(operations, sections.NewACLBackendCreate(parentName, acl, idx))
 			}
 		}
 	}
@@ -839,9 +839,9 @@ func (c *Comparator) compareDeletedACLs(parentType, parentName string, currentAC
 		if _, exists := desiredACLMap[name]; !exists {
 			acl := currentACLs[idx]
 			if parentType == parentTypeFrontend {
-				operations = append(operations, sections.NewDeleteACLFrontendOperation(parentName, acl, idx))
+				operations = append(operations, sections.NewACLFrontendDelete(parentName, acl, idx))
 			} else {
-				operations = append(operations, sections.NewDeleteACLBackendOperation(parentName, acl, idx))
+				operations = append(operations, sections.NewACLBackendDelete(parentName, acl, idx))
 			}
 		}
 	}
@@ -861,9 +861,9 @@ func (c *Comparator) compareModifiedACLs(parentType, parentName string, desiredA
 			// Compare using built-in Equal() method
 			if !currentACL.Equal(*desiredACL) {
 				if parentType == parentTypeFrontend {
-					operations = append(operations, sections.NewUpdateACLFrontendOperation(parentName, desiredACL, desiredIdx))
+					operations = append(operations, sections.NewACLFrontendUpdate(parentName, desiredACL, desiredIdx))
 				} else {
-					operations = append(operations, sections.NewUpdateACLBackendOperation(parentName, desiredACL, desiredIdx))
+					operations = append(operations, sections.NewACLBackendUpdate(parentName, desiredACL, desiredIdx))
 				}
 			}
 		}
@@ -904,24 +904,24 @@ func (c *Comparator) compareHTTPRequestRules(parentType, parentName string, curr
 
 func (c *Comparator) createHTTPRequestRuleOperation(parentType, parentName string, rule *models.HTTPRequestRule, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewCreateHTTPRequestRuleFrontendOperation(parentName, rule, index)}
+		return []Operation{sections.NewHTTPRequestRuleFrontendCreate(parentName, rule, index)}
 	}
-	return []Operation{sections.NewCreateHTTPRequestRuleBackendOperation(parentName, rule, index)}
+	return []Operation{sections.NewHTTPRequestRuleBackendCreate(parentName, rule, index)}
 }
 
 func (c *Comparator) deleteHTTPRequestRuleOperation(parentType, parentName string, rule *models.HTTPRequestRule, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewDeleteHTTPRequestRuleFrontendOperation(parentName, rule, index)}
+		return []Operation{sections.NewHTTPRequestRuleFrontendDelete(parentName, rule, index)}
 	}
-	return []Operation{sections.NewDeleteHTTPRequestRuleBackendOperation(parentName, rule, index)}
+	return []Operation{sections.NewHTTPRequestRuleBackendDelete(parentName, rule, index)}
 }
 
 func (c *Comparator) updateHTTPRequestRuleOperation(parentType, parentName string, currentRule, desiredRule *models.HTTPRequestRule, index int) []Operation {
 	if !currentRule.Equal(*desiredRule) {
 		if parentType == parentTypeFrontend {
-			return []Operation{sections.NewUpdateHTTPRequestRuleFrontendOperation(parentName, desiredRule, index)}
+			return []Operation{sections.NewHTTPRequestRuleFrontendUpdate(parentName, desiredRule, index)}
 		}
-		return []Operation{sections.NewUpdateHTTPRequestRuleBackendOperation(parentName, desiredRule, index)}
+		return []Operation{sections.NewHTTPRequestRuleBackendUpdate(parentName, desiredRule, index)}
 	}
 	return nil
 }
@@ -958,24 +958,24 @@ func (c *Comparator) compareHTTPResponseRules(parentType, parentName string, cur
 
 func (c *Comparator) createHTTPResponseRuleOperation(parentType, parentName string, rule *models.HTTPResponseRule, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewCreateHTTPResponseRuleFrontendOperation(parentName, rule, index)}
+		return []Operation{sections.NewHTTPResponseRuleFrontendCreate(parentName, rule, index)}
 	}
-	return []Operation{sections.NewCreateHTTPResponseRuleBackendOperation(parentName, rule, index)}
+	return []Operation{sections.NewHTTPResponseRuleBackendCreate(parentName, rule, index)}
 }
 
 func (c *Comparator) deleteHTTPResponseRuleOperation(parentType, parentName string, rule *models.HTTPResponseRule, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewDeleteHTTPResponseRuleFrontendOperation(parentName, rule, index)}
+		return []Operation{sections.NewHTTPResponseRuleFrontendDelete(parentName, rule, index)}
 	}
-	return []Operation{sections.NewDeleteHTTPResponseRuleBackendOperation(parentName, rule, index)}
+	return []Operation{sections.NewHTTPResponseRuleBackendDelete(parentName, rule, index)}
 }
 
 func (c *Comparator) updateHTTPResponseRuleOperation(parentType, parentName string, currentRule, desiredRule *models.HTTPResponseRule, index int) []Operation {
 	if !currentRule.Equal(*desiredRule) {
 		if parentType == parentTypeFrontend {
-			return []Operation{sections.NewUpdateHTTPResponseRuleFrontendOperation(parentName, desiredRule, index)}
+			return []Operation{sections.NewHTTPResponseRuleFrontendUpdate(parentName, desiredRule, index)}
 		}
-		return []Operation{sections.NewUpdateHTTPResponseRuleBackendOperation(parentName, desiredRule, index)}
+		return []Operation{sections.NewHTTPResponseRuleBackendUpdate(parentName, desiredRule, index)}
 	}
 	return nil
 }
@@ -1012,24 +1012,24 @@ func (c *Comparator) compareTCPRequestRules(parentType, parentName string, curre
 
 func (c *Comparator) createTCPRequestRuleOperation(parentType, parentName string, rule *models.TCPRequestRule, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewCreateTCPRequestRuleFrontendOperation(parentName, rule, index)}
+		return []Operation{sections.NewTCPRequestRuleFrontendCreate(parentName, rule, index)}
 	}
-	return []Operation{sections.NewCreateTCPRequestRuleBackendOperation(parentName, rule, index)}
+	return []Operation{sections.NewTCPRequestRuleBackendCreate(parentName, rule, index)}
 }
 
 func (c *Comparator) deleteTCPRequestRuleOperation(parentType, parentName string, rule *models.TCPRequestRule, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewDeleteTCPRequestRuleFrontendOperation(parentName, rule, index)}
+		return []Operation{sections.NewTCPRequestRuleFrontendDelete(parentName, rule, index)}
 	}
-	return []Operation{sections.NewDeleteTCPRequestRuleBackendOperation(parentName, rule, index)}
+	return []Operation{sections.NewTCPRequestRuleBackendDelete(parentName, rule, index)}
 }
 
 func (c *Comparator) updateTCPRequestRuleOperation(parentType, parentName string, currentRule, desiredRule *models.TCPRequestRule, index int) []Operation {
 	if !currentRule.Equal(*desiredRule) {
 		if parentType == parentTypeFrontend {
-			return []Operation{sections.NewUpdateTCPRequestRuleFrontendOperation(parentName, desiredRule, index)}
+			return []Operation{sections.NewTCPRequestRuleFrontendUpdate(parentName, desiredRule, index)}
 		}
-		return []Operation{sections.NewUpdateTCPRequestRuleBackendOperation(parentName, desiredRule, index)}
+		return []Operation{sections.NewTCPRequestRuleBackendUpdate(parentName, desiredRule, index)}
 	}
 	return nil
 }
@@ -1052,18 +1052,18 @@ func (c *Comparator) compareTCPResponseRules(parentName string, currentRules, de
 		if !hasCurrentRule && hasDesiredRule {
 			// Rule added at this position
 			rule := desiredRules[i]
-			operations = append(operations, sections.NewCreateTCPResponseRuleBackendOperation(parentName, rule, i))
+			operations = append(operations, sections.NewTCPResponseRuleBackendCreate(parentName, rule, i))
 		} else if hasCurrentRule && !hasDesiredRule {
 			// Rule removed at this position
 			rule := currentRules[i]
-			operations = append(operations, sections.NewDeleteTCPResponseRuleBackendOperation(parentName, rule, i))
+			operations = append(operations, sections.NewTCPResponseRuleBackendDelete(parentName, rule, i))
 		} else if hasCurrentRule && hasDesiredRule {
 			// Both exist - check if modified
 			currentRule := currentRules[i]
 			desiredRule := desiredRules[i]
 
 			if !currentRule.Equal(*desiredRule) {
-				operations = append(operations, sections.NewUpdateTCPResponseRuleBackendOperation(parentName, desiredRule, i))
+				operations = append(operations, sections.NewTCPResponseRuleBackendUpdate(parentName, desiredRule, i))
 			}
 		}
 	}
@@ -1103,24 +1103,24 @@ func (c *Comparator) compareLogTargets(parentType, parentName string, currentLog
 
 func (c *Comparator) createLogTargetOperation(parentType, parentName string, logTarget *models.LogTarget, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewCreateLogTargetFrontendOperation(parentName, logTarget, index)}
+		return []Operation{sections.NewLogTargetFrontendCreate(parentName, logTarget, index)}
 	}
-	return []Operation{sections.NewCreateLogTargetBackendOperation(parentName, logTarget, index)}
+	return []Operation{sections.NewLogTargetBackendCreate(parentName, logTarget, index)}
 }
 
 func (c *Comparator) deleteLogTargetOperation(parentType, parentName string, logTarget *models.LogTarget, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewDeleteLogTargetFrontendOperation(parentName, logTarget, index)}
+		return []Operation{sections.NewLogTargetFrontendDelete(parentName, logTarget, index)}
 	}
-	return []Operation{sections.NewDeleteLogTargetBackendOperation(parentName, logTarget, index)}
+	return []Operation{sections.NewLogTargetBackendDelete(parentName, logTarget, index)}
 }
 
 func (c *Comparator) updateLogTargetOperation(parentType, parentName string, currentLog, desiredLog *models.LogTarget, index int) []Operation {
 	if !currentLog.Equal(*desiredLog) {
 		if parentType == parentTypeFrontend {
-			return []Operation{sections.NewUpdateLogTargetFrontendOperation(parentName, desiredLog, index)}
+			return []Operation{sections.NewLogTargetFrontendUpdate(parentName, desiredLog, index)}
 		}
-		return []Operation{sections.NewUpdateLogTargetBackendOperation(parentName, desiredLog, index)}
+		return []Operation{sections.NewLogTargetBackendUpdate(parentName, desiredLog, index)}
 	}
 	return nil
 }
@@ -1145,18 +1145,18 @@ func (c *Comparator) compareStickRules(backendName string, currentRules, desired
 		if !hasCurrentRule && hasDesiredRule {
 			// Stick rule added at this position
 			rule := desiredRules[i]
-			operations = append(operations, sections.NewCreateStickRuleBackendOperation(backendName, rule, i))
+			operations = append(operations, sections.NewStickRuleBackendCreate(backendName, rule, i))
 		} else if hasCurrentRule && !hasDesiredRule {
 			// Stick rule removed at this position
 			rule := currentRules[i]
-			operations = append(operations, sections.NewDeleteStickRuleBackendOperation(backendName, rule, i))
+			operations = append(operations, sections.NewStickRuleBackendDelete(backendName, rule, i))
 		} else if hasCurrentRule && hasDesiredRule {
 			// Both exist - check if modified
 			currentRule := currentRules[i]
 			desiredRule := desiredRules[i]
 
 			if !currentRule.Equal(*desiredRule) {
-				operations = append(operations, sections.NewUpdateStickRuleBackendOperation(backendName, desiredRule, i))
+				operations = append(operations, sections.NewStickRuleBackendUpdate(backendName, desiredRule, i))
 			}
 		}
 	}
@@ -1184,18 +1184,18 @@ func (c *Comparator) compareHTTPAfterResponseRules(backendName string, currentRu
 		if !hasCurrentRule && hasDesiredRule {
 			// Rule added at this position
 			rule := desiredRules[i]
-			operations = append(operations, sections.NewCreateHTTPAfterResponseRuleBackendOperation(backendName, rule, i))
+			operations = append(operations, sections.NewHTTPAfterResponseRuleBackendCreate(backendName, rule, i))
 		} else if hasCurrentRule && !hasDesiredRule {
 			// Rule removed at this position
 			rule := currentRules[i]
-			operations = append(operations, sections.NewDeleteHTTPAfterResponseRuleBackendOperation(backendName, rule, i))
+			operations = append(operations, sections.NewHTTPAfterResponseRuleBackendDelete(backendName, rule, i))
 		} else if hasCurrentRule && hasDesiredRule {
 			// Both exist - check if modified
 			currentRule := currentRules[i]
 			desiredRule := desiredRules[i]
 
 			if !currentRule.Equal(*desiredRule) {
-				operations = append(operations, sections.NewUpdateHTTPAfterResponseRuleBackendOperation(backendName, desiredRule, i))
+				operations = append(operations, sections.NewHTTPAfterResponseRuleBackendUpdate(backendName, desiredRule, i))
 			}
 		}
 	}
@@ -1221,18 +1221,18 @@ func (c *Comparator) compareBackendSwitchingRules(frontendName string, currentRu
 		if !hasCurrentRule && hasDesiredRule {
 			// Rule added at this position
 			rule := desiredRules[i]
-			operations = append(operations, sections.NewCreateBackendSwitchingRuleFrontendOperation(frontendName, rule, i))
+			operations = append(operations, sections.NewBackendSwitchingRuleFrontendCreate(frontendName, rule, i))
 		} else if hasCurrentRule && !hasDesiredRule {
 			// Rule removed at this position
 			rule := currentRules[i]
-			operations = append(operations, sections.NewDeleteBackendSwitchingRuleFrontendOperation(frontendName, rule, i))
+			operations = append(operations, sections.NewBackendSwitchingRuleFrontendDelete(frontendName, rule, i))
 		} else if hasCurrentRule && hasDesiredRule {
 			// Both exist - check if modified
 			currentRule := currentRules[i]
 			desiredRule := desiredRules[i]
 
 			if !currentRule.Equal(*desiredRule) {
-				operations = append(operations, sections.NewUpdateBackendSwitchingRuleFrontendOperation(frontendName, desiredRule, i))
+				operations = append(operations, sections.NewBackendSwitchingRuleFrontendUpdate(frontendName, desiredRule, i))
 			}
 		}
 	}
@@ -1258,18 +1258,18 @@ func (c *Comparator) compareServerSwitchingRules(backendName string, currentRule
 		if !hasCurrentRule && hasDesiredRule {
 			// Rule added at this position
 			rule := desiredRules[i]
-			operations = append(operations, sections.NewCreateServerSwitchingRuleBackendOperation(backendName, rule, i))
+			operations = append(operations, sections.NewServerSwitchingRuleBackendCreate(backendName, rule, i))
 		} else if hasCurrentRule && !hasDesiredRule {
 			// Rule removed at this position
 			rule := currentRules[i]
-			operations = append(operations, sections.NewDeleteServerSwitchingRuleBackendOperation(backendName, rule, i))
+			operations = append(operations, sections.NewServerSwitchingRuleBackendDelete(backendName, rule, i))
 		} else if hasCurrentRule && hasDesiredRule {
 			// Both exist - check if modified
 			currentRule := currentRules[i]
 			desiredRule := desiredRules[i]
 
 			if !currentRule.Equal(*desiredRule) {
-				operations = append(operations, sections.NewUpdateServerSwitchingRuleBackendOperation(backendName, desiredRule, i))
+				operations = append(operations, sections.NewServerSwitchingRuleBackendUpdate(backendName, desiredRule, i))
 			}
 		}
 	}
@@ -1288,7 +1288,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 			bind := desiredBinds[name]
 			// Convert models.Bind to dataplaneapi.Bind
 			apiBind := transform.ToAPIBind(&bind)
-			operations = append(operations, sections.NewCreateBindFrontendOperation(frontendName, name, apiBind))
+			operations = append(operations, sections.NewBindFrontendCreate(frontendName, name, apiBind))
 		}
 	}
 
@@ -1298,7 +1298,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 			bind := currentBinds[name]
 			// Convert models.Bind to dataplaneapi.Bind
 			apiBind := transform.ToAPIBind(&bind)
-			operations = append(operations, sections.NewDeleteBindFrontendOperation(frontendName, name, apiBind))
+			operations = append(operations, sections.NewBindFrontendDelete(frontendName, name, apiBind))
 		}
 	}
 
@@ -1313,7 +1313,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 		if !currentBind.Equal(desiredBind) {
 			// Convert models.Bind to dataplaneapi.Bind
 			apiBind := transform.ToAPIBind(&desiredBind)
-			operations = append(operations, sections.NewUpdateBindFrontendOperation(frontendName, name, apiBind))
+			operations = append(operations, sections.NewBindFrontendUpdate(frontendName, name, apiBind))
 		}
 	}
 
@@ -1352,24 +1352,24 @@ func (c *Comparator) compareFilters(parentType, parentName string, currentFilter
 
 func (c *Comparator) createFilterOperation(parentType, parentName string, filter *models.Filter, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewCreateFilterFrontendOperation(parentName, filter, index)}
+		return []Operation{sections.NewFilterFrontendCreate(parentName, filter, index)}
 	}
-	return []Operation{sections.NewCreateFilterBackendOperation(parentName, filter, index)}
+	return []Operation{sections.NewFilterBackendCreate(parentName, filter, index)}
 }
 
 func (c *Comparator) deleteFilterOperation(parentType, parentName string, filter *models.Filter, index int) []Operation {
 	if parentType == parentTypeFrontend {
-		return []Operation{sections.NewDeleteFilterFrontendOperation(parentName, filter, index)}
+		return []Operation{sections.NewFilterFrontendDelete(parentName, filter, index)}
 	}
-	return []Operation{sections.NewDeleteFilterBackendOperation(parentName, filter, index)}
+	return []Operation{sections.NewFilterBackendDelete(parentName, filter, index)}
 }
 
 func (c *Comparator) updateFilterOperation(parentType, parentName string, currentFilter, desiredFilter *models.Filter, index int) []Operation {
 	if !currentFilter.Equal(*desiredFilter) {
 		if parentType == parentTypeFrontend {
-			return []Operation{sections.NewUpdateFilterFrontendOperation(parentName, desiredFilter, index)}
+			return []Operation{sections.NewFilterFrontendUpdate(parentName, desiredFilter, index)}
 		}
-		return []Operation{sections.NewUpdateFilterBackendOperation(parentName, desiredFilter, index)}
+		return []Operation{sections.NewFilterBackendUpdate(parentName, desiredFilter, index)}
 	}
 	return nil
 }
@@ -1392,18 +1392,18 @@ func (c *Comparator) compareHTTPChecks(backendName string, currentChecks, desire
 		if !hasCurrentCheck && hasDesiredCheck {
 			// Check added at this position
 			check := desiredChecks[i]
-			operations = append(operations, sections.NewCreateHTTPCheckBackendOperation(backendName, check, i))
+			operations = append(operations, sections.NewHTTPCheckBackendCreate(backendName, check, i))
 		} else if hasCurrentCheck && !hasDesiredCheck {
 			// Check removed at this position
 			check := currentChecks[i]
-			operations = append(operations, sections.NewDeleteHTTPCheckBackendOperation(backendName, check, i))
+			operations = append(operations, sections.NewHTTPCheckBackendDelete(backendName, check, i))
 		} else if hasCurrentCheck && hasDesiredCheck {
 			// Both exist - check if modified
 			currentCheck := currentChecks[i]
 			desiredCheck := desiredChecks[i]
 
 			if !currentCheck.Equal(*desiredCheck) {
-				operations = append(operations, sections.NewUpdateHTTPCheckBackendOperation(backendName, desiredCheck, i))
+				operations = append(operations, sections.NewHTTPCheckBackendUpdate(backendName, desiredCheck, i))
 			}
 		}
 	}
@@ -1429,18 +1429,18 @@ func (c *Comparator) compareTCPChecks(backendName string, currentChecks, desired
 		if !hasCurrentCheck && hasDesiredCheck {
 			// Check added at this position
 			check := desiredChecks[i]
-			operations = append(operations, sections.NewCreateTCPCheckBackendOperation(backendName, check, i))
+			operations = append(operations, sections.NewTCPCheckBackendCreate(backendName, check, i))
 		} else if hasCurrentCheck && !hasDesiredCheck {
 			// Check removed at this position
 			check := currentChecks[i]
-			operations = append(operations, sections.NewDeleteTCPCheckBackendOperation(backendName, check, i))
+			operations = append(operations, sections.NewTCPCheckBackendDelete(backendName, check, i))
 		} else if hasCurrentCheck && hasDesiredCheck {
 			// Both exist - check if modified
 			currentCheck := currentChecks[i]
 			desiredCheck := desiredChecks[i]
 
 			if !currentCheck.Equal(*desiredCheck) {
-				operations = append(operations, sections.NewUpdateTCPCheckBackendOperation(backendName, desiredCheck, i))
+				operations = append(operations, sections.NewTCPCheckBackendUpdate(backendName, desiredCheck, i))
 			}
 		}
 	}
@@ -1466,18 +1466,18 @@ func (c *Comparator) compareCaptures(frontendName string, currentCaptures, desir
 		if !hasCurrentCapture && hasDesiredCapture {
 			// Capture added at this position
 			capture := desiredCaptures[i]
-			operations = append(operations, sections.NewCreateCaptureFrontendOperation(frontendName, capture, i))
+			operations = append(operations, sections.NewCaptureFrontendCreate(frontendName, capture, i))
 		} else if hasCurrentCapture && !hasDesiredCapture {
 			// Capture removed at this position
 			capture := currentCaptures[i]
-			operations = append(operations, sections.NewDeleteCaptureFrontendOperation(frontendName, capture, i))
+			operations = append(operations, sections.NewCaptureFrontendDelete(frontendName, capture, i))
 		} else if hasCurrentCapture && hasDesiredCapture {
 			// Both exist - check if modified
 			currentCapture := currentCaptures[i]
 			desiredCapture := desiredCaptures[i]
 
 			if !currentCapture.Equal(*desiredCapture) {
-				operations = append(operations, sections.NewUpdateCaptureFrontendOperation(frontendName, desiredCapture, i))
+				operations = append(operations, sections.NewCaptureFrontendUpdate(frontendName, desiredCapture, i))
 			}
 		}
 	}
@@ -1497,7 +1497,7 @@ func (c *Comparator) compareServerTemplates(backendName string, currentBackend, 
 	for prefix := range desiredTemplates {
 		if _, exists := currentTemplates[prefix]; !exists {
 			template := desiredTemplates[prefix]
-			operations = append(operations, sections.NewCreateServerTemplateOperation(backendName, &template))
+			operations = append(operations, sections.NewServerTemplateCreate(backendName, &template))
 		}
 	}
 
@@ -1505,7 +1505,7 @@ func (c *Comparator) compareServerTemplates(backendName string, currentBackend, 
 	for prefix := range currentTemplates {
 		if _, exists := desiredTemplates[prefix]; !exists {
 			template := currentTemplates[prefix]
-			operations = append(operations, sections.NewDeleteServerTemplateOperation(backendName, &template))
+			operations = append(operations, sections.NewServerTemplateDelete(backendName, &template))
 		}
 	}
 
@@ -1518,7 +1518,7 @@ func (c *Comparator) compareServerTemplates(backendName string, currentBackend, 
 		desiredTemplate := desiredTemplates[prefix]
 		// Compare server template attributes using Equal() method
 		if !serverTemplatesEqual(&currentTemplate, &desiredTemplate) {
-			operations = append(operations, sections.NewUpdateServerTemplateOperation(backendName, &desiredTemplate))
+			operations = append(operations, sections.NewServerTemplateUpdate(backendName, &desiredTemplate))
 		}
 	}
 
@@ -1556,14 +1556,14 @@ func (c *Comparator) compareHTTPErrors(current, desired *parser.StructuredConfig
 	// Find added http-errors sections
 	for name, httpError := range desiredMap {
 		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateHTTPErrorsOperation(httpError))
+			operations = append(operations, sections.NewHTTPErrorsSectionCreate(httpError))
 		}
 	}
 
 	// Find deleted http-errors sections
 	for name, httpError := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteHTTPErrorsOperation(httpError))
+			operations = append(operations, sections.NewHTTPErrorsSectionDelete(httpError))
 		}
 	}
 
@@ -1572,7 +1572,7 @@ func (c *Comparator) compareHTTPErrors(current, desired *parser.StructuredConfig
 		if currentHTTPError, exists := currentMap[name]; exists {
 			// Compare http-errors sections using Equal() method
 			if !httpErrorsEqual(currentHTTPError, desiredHTTPError) {
-				operations = append(operations, sections.NewUpdateHTTPErrorsOperation(desiredHTTPError))
+				operations = append(operations, sections.NewHTTPErrorsSectionUpdate(desiredHTTPError))
 			}
 		}
 	}
@@ -1612,7 +1612,7 @@ func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig)
 			continue
 		}
 
-		operations = append(operations, sections.NewCreateResolverOperation(resolver))
+		operations = append(operations, sections.NewResolverCreate(resolver))
 
 		// Also create nameserver entries for this new resolver section
 		// Compare against an empty resolver section to get all nameserver create operations
@@ -1628,7 +1628,7 @@ func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig)
 	// Find deleted resolver sections
 	for name, resolver := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteResolverOperation(resolver))
+			operations = append(operations, sections.NewResolverDelete(resolver))
 		}
 	}
 
@@ -1643,7 +1643,7 @@ func (c *Comparator) compareResolvers(current, desired *parser.StructuredConfig)
 
 			// Compare resolver section attributes (excluding nameserver entries which we already compared)
 			if !resolversEqualWithoutNameservers(currentResolver, desiredResolver) {
-				operations = append(operations, sections.NewUpdateResolverOperation(desiredResolver))
+				operations = append(operations, sections.NewResolverUpdate(desiredResolver))
 			}
 		}
 	}
@@ -1672,13 +1672,13 @@ func (c *Comparator) compareNameservers(resolverSection string, currentResolver,
 		currentResolver.Nameservers,
 		desiredResolver.Nameservers,
 		func(entry *models.Nameserver) Operation {
-			return sections.NewCreateNameserverOperation(resolverSection, entry)
+			return sections.NewNameserverCreate(resolverSection, entry)
 		},
 		func(entry *models.Nameserver) Operation {
-			return sections.NewDeleteNameserverOperation(resolverSection, entry)
+			return sections.NewNameserverDelete(resolverSection, entry)
 		},
 		func(entry *models.Nameserver) Operation {
-			return sections.NewUpdateNameserverOperation(resolverSection, entry)
+			return sections.NewNameserverUpdate(resolverSection, entry)
 		},
 		nameserversEqual,
 	)
@@ -1717,7 +1717,7 @@ func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) [
 			continue
 		}
 
-		operations = append(operations, sections.NewCreateMailersOperation(mailers))
+		operations = append(operations, sections.NewMailersSectionCreate(mailers))
 
 		// Also create mailer entries for this new mailers section
 		// Compare against an empty mailers section to get all mailer entry create operations
@@ -1733,7 +1733,7 @@ func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) [
 	// Find deleted mailers sections
 	for name, mailers := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteMailersOperation(mailers))
+			operations = append(operations, sections.NewMailersSectionDelete(mailers))
 		}
 	}
 
@@ -1748,7 +1748,7 @@ func (c *Comparator) compareMailers(current, desired *parser.StructuredConfig) [
 
 			// Compare mailers section attributes (excluding mailer entries which we already compared)
 			if !mailersEqualWithoutMailerEntries(currentMailers, desiredMailers) {
-				operations = append(operations, sections.NewUpdateMailersOperation(desiredMailers))
+				operations = append(operations, sections.NewMailersSectionUpdate(desiredMailers))
 			}
 		}
 	}
@@ -1777,13 +1777,13 @@ func (c *Comparator) compareMailerEntries(mailersSection string, currentMailers,
 		currentMailers.MailerEntries,
 		desiredMailers.MailerEntries,
 		func(entry *models.MailerEntry) Operation {
-			return sections.NewCreateMailerEntryOperation(mailersSection, entry)
+			return sections.NewMailerEntryCreate(mailersSection, entry)
 		},
 		func(entry *models.MailerEntry) Operation {
-			return sections.NewDeleteMailerEntryOperation(mailersSection, entry)
+			return sections.NewMailerEntryDelete(mailersSection, entry)
 		},
 		func(entry *models.MailerEntry) Operation {
-			return sections.NewUpdateMailerEntryOperation(mailersSection, entry)
+			return sections.NewMailerEntryUpdate(mailersSection, entry)
 		},
 		mailerEntriesEqual,
 	)
@@ -1822,7 +1822,7 @@ func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []O
 			continue
 		}
 
-		operations = append(operations, sections.NewCreatePeerOperation(peer))
+		operations = append(operations, sections.NewPeerSectionCreate(peer))
 
 		// Also create peer entries for this new peers section
 		// Compare against an empty peers section to get all peer entry create operations
@@ -1838,7 +1838,7 @@ func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []O
 	// Find deleted peer sections
 	for name, peer := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeletePeerOperation(peer))
+			operations = append(operations, sections.NewPeerSectionDelete(peer))
 		}
 	}
 
@@ -1853,7 +1853,7 @@ func (c *Comparator) comparePeers(current, desired *parser.StructuredConfig) []O
 
 			// Compare peers section attributes (excluding peer entries which we already compared)
 			if !peersEqualWithoutPeerEntries(currentPeer, desiredPeer) {
-				operations = append(operations, sections.NewUpdatePeerOperation(desiredPeer))
+				operations = append(operations, sections.NewPeerSectionUpdate(desiredPeer))
 			}
 		}
 	}
@@ -1882,13 +1882,13 @@ func (c *Comparator) comparePeerEntries(peersSection string, currentPeer, desire
 		currentPeer.PeerEntries,
 		desiredPeer.PeerEntries,
 		func(entry *models.PeerEntry) Operation {
-			return sections.NewCreatePeerEntryOperation(peersSection, entry)
+			return sections.NewPeerEntryCreate(peersSection, entry)
 		},
 		func(entry *models.PeerEntry) Operation {
-			return sections.NewDeletePeerEntryOperation(peersSection, entry)
+			return sections.NewPeerEntryDelete(peersSection, entry)
 		},
 		func(entry *models.PeerEntry) Operation {
-			return sections.NewUpdatePeerEntryOperation(peersSection, entry)
+			return sections.NewPeerEntryUpdate(peersSection, entry)
 		},
 		peerEntriesEqual,
 	)
@@ -1924,14 +1924,14 @@ func (c *Comparator) compareCaches(current, desired *parser.StructuredConfig) []
 	// Find added cache sections
 	for name, cache := range desiredMap {
 		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateCacheOperation(cache))
+			operations = append(operations, sections.NewCacheCreate(cache))
 		}
 	}
 
 	// Find deleted cache sections
 	for name, cache := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteCacheOperation(cache))
+			operations = append(operations, sections.NewCacheDelete(cache))
 		}
 	}
 
@@ -1939,7 +1939,7 @@ func (c *Comparator) compareCaches(current, desired *parser.StructuredConfig) []
 	for name, desiredCache := range desiredMap {
 		if currentCache, exists := currentMap[name]; exists {
 			if !cacheEqual(currentCache, desiredCache) {
-				operations = append(operations, sections.NewUpdateCacheOperation(desiredCache))
+				operations = append(operations, sections.NewCacheUpdate(desiredCache))
 			}
 		}
 	}
@@ -1977,14 +1977,14 @@ func (c *Comparator) compareRings(current, desired *parser.StructuredConfig) []O
 	// Find added ring sections
 	for name, ring := range desiredMap {
 		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateRingOperation(ring))
+			operations = append(operations, sections.NewRingCreate(ring))
 		}
 	}
 
 	// Find deleted ring sections
 	for name, ring := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteRingOperation(ring))
+			operations = append(operations, sections.NewRingDelete(ring))
 		}
 	}
 
@@ -1992,7 +1992,7 @@ func (c *Comparator) compareRings(current, desired *parser.StructuredConfig) []O
 	for name, desiredRing := range desiredMap {
 		if currentRing, exists := currentMap[name]; exists {
 			if !ringEqual(currentRing, desiredRing) {
-				operations = append(operations, sections.NewUpdateRingOperation(desiredRing))
+				operations = append(operations, sections.NewRingUpdate(desiredRing))
 			}
 		}
 	}
@@ -2035,11 +2035,11 @@ func (c *Comparator) findAddedUserlists(desired, current map[string]*models.User
 	var operations []Operation
 	for name, userlist := range desired {
 		if _, exists := current[name]; !exists {
-			operations = append(operations, sections.NewCreateUserlistOperation(userlist))
+			operations = append(operations, sections.NewUserlistCreate(userlist))
 			// Explicitly create each user (Dataplane API may not persist users from request body)
 			for _, user := range userlist.Users {
 				userCopy := user
-				operations = append(operations, sections.NewCreateUserOperation(name, &userCopy))
+				operations = append(operations, sections.NewUserCreate(name, &userCopy))
 			}
 		}
 	}
@@ -2051,7 +2051,7 @@ func findDeletedUserlists(current, desired map[string]*models.Userlist) []Operat
 	var operations []Operation
 	for name, userlist := range current {
 		if _, exists := desired[name]; !exists {
-			operations = append(operations, sections.NewDeleteUserlistOperation(userlist))
+			operations = append(operations, sections.NewUserlistDelete(userlist))
 		}
 	}
 	return operations
@@ -2069,8 +2069,8 @@ func (c *Comparator) findModifiedUserlists(current, desired map[string]*models.U
 		if userlistMetadataChanged(currentUserlist, desiredUserlist) {
 			// Recreate entire userlist if metadata changed
 			operations = append(operations,
-				sections.NewDeleteUserlistOperation(currentUserlist),
-				sections.NewCreateUserlistOperation(desiredUserlist))
+				sections.NewUserlistDelete(currentUserlist),
+				sections.NewUserlistCreate(desiredUserlist))
 		} else {
 			// Compare users for fine-grained operations
 			userOps := c.compareUserlistUsers(name, currentUserlist, desiredUserlist)
@@ -2124,7 +2124,7 @@ func (c *Comparator) compareUserlistUsers(userlistName string, current, desired 
 	for username, user := range desiredUsers {
 		if _, exists := currentUsers[username]; !exists {
 			userCopy := user
-			operations = append(operations, sections.NewCreateUserOperation(userlistName, &userCopy))
+			operations = append(operations, sections.NewUserCreate(userlistName, &userCopy))
 		}
 	}
 
@@ -2132,7 +2132,7 @@ func (c *Comparator) compareUserlistUsers(userlistName string, current, desired 
 	for username, user := range currentUsers {
 		if _, exists := desiredUsers[username]; !exists {
 			userCopy := user
-			operations = append(operations, sections.NewDeleteUserOperation(userlistName, &userCopy))
+			operations = append(operations, sections.NewUserDelete(userlistName, &userCopy))
 		}
 	}
 
@@ -2146,7 +2146,7 @@ func (c *Comparator) compareUserlistUsers(userlistName string, current, desired 
 		// Compare user attributes (password, groups, etc.)
 		if !currentUser.Equal(desiredUser) {
 			userCopy := desiredUser
-			operations = append(operations, sections.NewReplaceUserOperation(userlistName, &userCopy))
+			operations = append(operations, sections.NewUserUpdate(userlistName, &userCopy))
 		}
 	}
 
@@ -2178,14 +2178,14 @@ func (c *Comparator) comparePrograms(current, desired *parser.StructuredConfig) 
 	// Find added program sections
 	for name, program := range desiredMap {
 		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateProgramOperation(program))
+			operations = append(operations, sections.NewProgramCreate(program))
 		}
 	}
 
 	// Find deleted program sections
 	for name, program := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteProgramOperation(program))
+			operations = append(operations, sections.NewProgramDelete(program))
 		}
 	}
 
@@ -2193,7 +2193,7 @@ func (c *Comparator) comparePrograms(current, desired *parser.StructuredConfig) 
 	for name, desiredProgram := range desiredMap {
 		if currentProgram, exists := currentMap[name]; exists {
 			if !programEqual(currentProgram, desiredProgram) {
-				operations = append(operations, sections.NewUpdateProgramOperation(desiredProgram))
+				operations = append(operations, sections.NewProgramUpdate(desiredProgram))
 			}
 		}
 	}
@@ -2231,14 +2231,14 @@ func (c *Comparator) compareLogForwards(current, desired *parser.StructuredConfi
 	// Find added log-forward sections
 	for name, logForward := range desiredMap {
 		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateLogForwardOperation(logForward))
+			operations = append(operations, sections.NewLogForwardCreate(logForward))
 		}
 	}
 
 	// Find deleted log-forward sections
 	for name, logForward := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteLogForwardOperation(logForward))
+			operations = append(operations, sections.NewLogForwardDelete(logForward))
 		}
 	}
 
@@ -2246,7 +2246,7 @@ func (c *Comparator) compareLogForwards(current, desired *parser.StructuredConfi
 	for name, desiredLogForward := range desiredMap {
 		if currentLogForward, exists := currentMap[name]; exists {
 			if !logForwardEqual(currentLogForward, desiredLogForward) {
-				operations = append(operations, sections.NewUpdateLogForwardOperation(desiredLogForward))
+				operations = append(operations, sections.NewLogForwardUpdate(desiredLogForward))
 			}
 		}
 	}
@@ -2284,14 +2284,14 @@ func (c *Comparator) compareFCGIApps(current, desired *parser.StructuredConfig) 
 	// Find added fcgi-app sections
 	for name, fcgiApp := range desiredMap {
 		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateFCGIAppOperation(fcgiApp))
+			operations = append(operations, sections.NewFCGIAppCreate(fcgiApp))
 		}
 	}
 
 	// Find deleted fcgi-app sections
 	for name, fcgiApp := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteFCGIAppOperation(fcgiApp))
+			operations = append(operations, sections.NewFCGIAppDelete(fcgiApp))
 		}
 	}
 
@@ -2299,7 +2299,7 @@ func (c *Comparator) compareFCGIApps(current, desired *parser.StructuredConfig) 
 	for name, desiredFCGIApp := range desiredMap {
 		if currentFCGIApp, exists := currentMap[name]; exists {
 			if !fcgiAppEqual(currentFCGIApp, desiredFCGIApp) {
-				operations = append(operations, sections.NewUpdateFCGIAppOperation(desiredFCGIApp))
+				operations = append(operations, sections.NewFCGIAppUpdate(desiredFCGIApp))
 			}
 		}
 	}
@@ -2337,14 +2337,14 @@ func (c *Comparator) compareCrtStores(current, desired *parser.StructuredConfig)
 	// Find added crt-store sections
 	for name, crtStore := range desiredMap {
 		if _, exists := currentMap[name]; !exists {
-			operations = append(operations, sections.NewCreateCrtStoreOperation(crtStore))
+			operations = append(operations, sections.NewCrtStoreCreate(crtStore))
 		}
 	}
 
 	// Find deleted crt-store sections
 	for name, crtStore := range currentMap {
 		if _, exists := desiredMap[name]; !exists {
-			operations = append(operations, sections.NewDeleteCrtStoreOperation(crtStore))
+			operations = append(operations, sections.NewCrtStoreDelete(crtStore))
 		}
 	}
 
@@ -2352,7 +2352,7 @@ func (c *Comparator) compareCrtStores(current, desired *parser.StructuredConfig)
 	for name, desiredCrtStore := range desiredMap {
 		if currentCrtStore, exists := currentMap[name]; exists {
 			if !crtStoreEqual(currentCrtStore, desiredCrtStore) {
-				operations = append(operations, sections.NewUpdateCrtStoreOperation(desiredCrtStore))
+				operations = append(operations, sections.NewCrtStoreUpdate(desiredCrtStore))
 			}
 		}
 	}

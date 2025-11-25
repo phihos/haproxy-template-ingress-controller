@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 
-	"haproxy-template-ic/pkg/generated/dataplaneapi"
+	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
 )
 
 // Transaction represents an HAProxy Dataplane API transaction.
@@ -48,6 +51,7 @@ type TransactionResponse struct {
 // The version parameter enables optimistic locking - if another process has
 // modified the configuration since you fetched the version, transaction creation
 // will fail with a 409 Conflict error.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 //
 // Example:
 //
@@ -63,11 +67,18 @@ type TransactionResponse struct {
 //
 //	err = tx.Commit(context.Background())
 func (c *DataplaneClient) CreateTransaction(ctx context.Context, version int64) (*Transaction, error) {
-	params := &dataplaneapi.StartTransactionParams{
-		Version: int(version),
-	}
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.StartTransaction(ctx, &v32.StartTransactionParams{Version: int(version)})
+		},
+		V31: func(c *v31.Client) (*http.Response, error) {
+			return c.StartTransaction(ctx, &v31.StartTransactionParams{Version: int(version)})
+		},
+		V30: func(c *v30.Client) (*http.Response, error) {
+			return c.StartTransaction(ctx, &v30.StartTransactionParams{Version: int(version)})
+		},
+	})
 
-	resp, err := c.client.StartTransaction(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
 	}
@@ -161,11 +172,19 @@ func (tx *Transaction) Commit(ctx context.Context) (*CommitResult, error) {
 
 	// Perform actual commit
 	forceReload := false
-	params := &dataplaneapi.CommitTransactionParams{
-		ForceReload: &forceReload,
-	}
 
-	resp, err := tx.client.client.CommitTransaction(ctx, tx.ID, params)
+	resp, err := tx.client.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.CommitTransaction(ctx, tx.ID, &v32.CommitTransactionParams{ForceReload: &forceReload})
+		},
+		V31: func(c *v31.Client) (*http.Response, error) {
+			return c.CommitTransaction(ctx, tx.ID, &v31.CommitTransactionParams{ForceReload: &forceReload})
+		},
+		V30: func(c *v30.Client) (*http.Response, error) {
+			return c.CommitTransaction(ctx, tx.ID, &v30.CommitTransactionParams{ForceReload: &forceReload})
+		},
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
@@ -241,7 +260,12 @@ func (tx *Transaction) Abort(ctx context.Context) error {
 	}
 
 	// Perform actual abort
-	resp, err := tx.client.client.DeleteTransaction(ctx, tx.ID)
+	resp, err := tx.client.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+		V31: func(c *v31.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+		V30: func(c *v30.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to abort transaction: %w", err)
 	}

@@ -201,7 +201,7 @@ verify: ## Verify dependencies
 
 ## Code generation
 
-generate: generate-crds generate-deepcopy generate-clientset ## Run all code generation
+generate: generate-crds generate-deepcopy generate-clientset generate-dataplaneapi-all ## Run all code generation
 
 generate-crds: ## Generate CRD manifests from Go types
 	@echo "Generating CRD manifests..."
@@ -221,6 +221,30 @@ generate-clientset: ## Generate Kubernetes clientset, informers, and listers
 	@echo "Generating Kubernetes clientset, informers, and listers..."
 	./hack/update-codegen.sh
 	@echo "✓ Clientset, informers, and listers generated"
+
+generate-dataplaneapi-v30: ## Generate HAProxy DataPlane API v3.0 client
+	@echo "Generating DataPlane API v3.0 client (models + client)..."
+	@mkdir -p pkg/generated/dataplaneapi/v30
+	$(OAPI_CODEGEN) -config hack/oapi-codegen-v30.yaml \
+		pkg/generated/dataplaneapi/v30/spec.json
+	@echo "✓ DataPlane API v3.0 client generated"
+
+generate-dataplaneapi-v31: ## Generate HAProxy DataPlane API v3.1 client
+	@echo "Generating DataPlane API v3.1 client (models + client)..."
+	@mkdir -p pkg/generated/dataplaneapi/v31
+	$(OAPI_CODEGEN) -config hack/oapi-codegen-v31.yaml \
+		pkg/generated/dataplaneapi/v31/spec.json
+	@echo "✓ DataPlane API v3.1 client generated"
+
+generate-dataplaneapi-v32: ## Generate HAProxy DataPlane API v3.2 client
+	@echo "Generating DataPlane API v3.2 client (models + client)..."
+	@mkdir -p pkg/generated/dataplaneapi/v32
+	$(OAPI_CODEGEN) -config hack/oapi-codegen-v32.yaml \
+		pkg/generated/dataplaneapi/v32/spec.json
+	@echo "✓ DataPlane API v3.2 client generated"
+
+generate-dataplaneapi-all: generate-dataplaneapi-v30 generate-dataplaneapi-v31 generate-dataplaneapi-v32 ## Generate all HAProxy DataPlane API versions
+	@echo "✓ All DataPlane API clients generated"
 
 ## Cleanup
 

@@ -105,6 +105,186 @@ Some changes can be applied without HAProxy reload:
 
 The comparator detects which type of changes occurred and optimizes deployment strategy.
 
+## Multi-Version API Support
+
+The client supports HAProxy DataPlane API versions v3.0, v3.1, and v3.2 simultaneously through runtime version detection and a centralized dispatcher pattern.
+
+### Version Detection
+
+The client automatically detects the API version on initialization:
+
+```go
+client, err := client.New(ctx, &client.Config{
+    BaseURL:  "http://haproxy:5555",
+    Username: "admin",
+    Password: "password",
+})
+// Client detects version by calling /v3/info endpoint
+// Detected version: "v3.2.6 87ad0bcf"
+```
+
+### Capability Matrix
+
+Different API versions support different features. The client provides capability detection:
+
+| Feature | v3.0 | v3.1 | v3.2 | Capability Flag |
+|---------|------|------|------|-----------------|
+| **Storage** |
+| General files | ✅ | ✅ | ✅ | `SupportsGeneralStorage` |
+| Map files | ❌ | ✅ | ✅ | `SupportsMapStorage` |
+| SSL certificates | ✅ | ✅ | ✅ | _(always available)_ |
+| CRT-list files | ❌ | ❌ | ✅ | `SupportsCrtList` |
+| **Protocol Support** |
+| HTTP/2 | ✅ | ✅ | ✅ | `SupportsHTTP2` |
+| QUIC/HTTP3 | ❌ | ❌ | ✅ | `SupportsQUIC` |
+| **Configuration** |
+| Advanced ACLs | ❌ | ✅ | ✅ | `SupportsAdvancedACLs` |
+| Runtime maps | ✅ | ✅ | ✅ | `SupportsRuntimeMaps` |
+| Runtime servers | ✅ | ✅ | ✅ | `SupportsRuntimeServers` |
+
+**Usage:**
+
+```go
+if client.Clientset().Capabilities().SupportsCrtList {
+    // Use crt-list storage (v3.2+ only)
+    err := client.CreateCRTListFile(ctx, "example.crtlist", content)
+}
+```
+
+### Dispatcher Pattern
+
+All client methods use a centralized dispatcher to route calls to the appropriate version-specific client. This eliminates repetitive switch-case logic across 26+ methods.
+
+**Architecture:**
+
+```
+┌─────────────────────┐
+│  Public Methods     │  GetAllMapFiles(), CreateSSLCertificate(), etc.
+│  (26 methods)       │
+└──────────┬──────────┘
+           │ All delegate to
+           ▼
+┌─────────────────────┐
+│  Dispatcher         │  Dispatch() or DispatchWithCapability()
+│  (Single point)     │
+└──────────┬──────────┘
+           │ Routes based on detected version
+           ▼
+┌─────────────────────┐
+│  Version Clients    │  v30.Client, v31.Client, v32.Client
+│  (Generated code)   │
+└─────────────────────┘
+```
+
+**Basic dispatch (all versions):**
+
+```go
+func (c *DataplaneClient) GetAllMapFiles(ctx context.Context) ([]string, error) {
+    resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+        V32: func(c *v32.Client) (*http.Response, error) { return c.GetAllStorageMapFiles(ctx) },
+        V31: func(c *v31.Client) (*http.Response, error) { return c.GetAllStorageMapFiles(ctx) },
+        V30: func(c *v30.Client) (*http.Response, error) { return c.GetAllStorageMapFiles(ctx) },
+    })
+
+    if err != nil {
+        return nil, fmt.Errorf("failed to get all map files: %w", err)
+    }
+    defer resp.Body.Close()
+
+    // ... process response
+}
+```
+
+**Dispatch with capability check (version-specific features):**
+
+```go
+func (c *DataplaneClient) GetAllCRTListFiles(ctx context.Context) ([]string, error) {
+    resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
+        V32: func(c *v32.Client) (*http.Response, error) {
+            return c.GetAllStorageSSLCrtListFiles(ctx)
+        },
+        // V31 and V30 omitted - not supported
+    }, func(caps Capabilities) error {
+        if !caps.SupportsCrtList {
+            return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
+        }
+        return nil
+    })
+
+    if err != nil {
+        return nil, fmt.Errorf("failed to get all crt-list files: %w", err)
+    }
+    defer resp.Body.Close()
+
+    // ... process response
+}
+```
+
+**Generic dispatch (non-HTTP return types):**
+
+```go
+version, err := DispatchGeneric[int64](ctx, c.Clientset(), CallFunc[int64]{
+    V32: func(c *v32.Client) (int64, error) {
+        resp, err := c.GetConfigurationVersion(ctx, &v32.GetConfigurationVersionParams{})
+        if err != nil {
+            return 0, err
+        }
+        defer resp.Body.Close()
+        // ... parse version from response
+        return parsedVersion, nil
+    },
+    // ... similar for V31 and V30
+})
+```
+
+### Adding New Methods
+
+When adding support for new DataPlane API endpoints:
+
+1. **Check version support**: Determine which API versions support the feature
+2. **Choose dispatch method**:
+   - Use `Dispatch()` if all versions support it
+   - Use `DispatchWithCapability()` if only some versions support it
+   - Use `DispatchGeneric[T]()` if return type is not `*http.Response`
+3. **Implement version-specific calls**:
+   - Provide function for each supported version
+   - Omit versions that don't support the feature
+
+**Example - Adding new feature (v3.2+ only):**
+
+```go
+func (c *DataplaneClient) GetNewFeature(ctx context.Context, name string) (string, error) {
+    resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
+        V32: func(c *v32.Client) (*http.Response, error) {
+            return c.GetNewFeatureEndpoint(ctx, name, &v32.GetNewFeatureParams{})
+        },
+        // V31 and V30 omitted - feature not available
+    }, func(caps Capabilities) error {
+        // Add capability check if needed
+        if !caps.SupportsNewFeature {
+            return fmt.Errorf("new feature requires DataPlane API v3.2+")
+        }
+        return nil
+    })
+
+    if err != nil {
+        return "", fmt.Errorf("failed to get new feature: %w", err)
+    }
+    defer resp.Body.Close()
+
+    // Process response...
+    return result, nil
+}
+```
+
+**Benefits of dispatcher pattern:**
+
+- ✅ **DRY**: Version-switching logic centralized in one place (~200 lines)
+- ✅ **Type-safe**: Compile-time checking via Go generics
+- ✅ **Maintainable**: Adding v3.3+ requires updating only dispatcher.go
+- ✅ **Testable**: Single point to test version routing logic
+- ✅ **Readable**: Clear intent with minimal boilerplate
+
 ## Sub-Package Guidelines
 
 ### client/ - Dataplane API Client
@@ -235,6 +415,116 @@ func (c *MyCustomSectionComparator) Compare(current, desired *models.MyCustomSec
 // Register in comparator/comparator.go
 comparators["mycustomsection"] = &MyCustomSectionComparator{}
 ```
+
+**Comparator Section Implementation:**
+
+All section operations (Create, Delete, Update) use the Dispatch pattern to support multiple HAProxy versions. There are two implementation approaches:
+
+**Helper-based pattern** (for backend, frontend, defaults):
+
+Uses generic helper functions from `execute_helpers.go` to reduce boilerplate. Helpers handle validation, transformation, JSON marshaling, response checking, and error wrapping. Callers provide version-specific dispatch logic as inline callbacks.
+
+```go
+// comparator/sections/backend.go
+func (op *CreateBackendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
+    return executeCreateTransactionOnlyHelper(
+        ctx, c, transactionID,
+        op.Backend,                                           // Model to create
+        func(m *models.Backend) string { return m.Name },     // Name extractor
+        transform.ToAPIBackend,                               // Transform function
+        func(ctx context.Context, c *client.DataplaneClient, jsonData []byte, txID string) (*http.Response, error) {
+            params := &dataplaneapi.CreateBackendParams{TransactionId: &txID}
+            return c.Dispatch(ctx, client.CallFunc[*http.Response]{
+                V32: func(c *v32.Client) (*http.Response, error) {
+                    var backend v32.Backend
+                    json.Unmarshal(jsonData, &backend)
+                    return c.CreateBackend(ctx, (*v32.CreateBackendParams)(params), backend)
+                },
+                V31: func(c *v31.Client) (*http.Response, error) {
+                    var backend v31.Backend
+                    json.Unmarshal(jsonData, &backend)
+                    return c.CreateBackend(ctx, (*v31.CreateBackendParams)(params), backend)
+                },
+                V30: func(c *v30.Client) (*http.Response, error) {
+                    var backend v30.Backend
+                    json.Unmarshal(jsonData, &backend)
+                    return c.CreateBackend(ctx, (*v30.CreateBackendParams)(params), backend)
+                },
+            })
+        },
+        "backend",  // Resource type for error messages
+    )
+}
+```
+
+**Direct Dispatch pattern** (for most other sections):
+
+Implements full dispatch logic inline. Used for operations that require additional parameters (parent names, custom validation) or don't fit the helper pattern.
+
+```go
+// comparator/sections/binds.go
+func (op *CreateBindFrontendOperation) Execute(ctx context.Context, c *client.DataplaneClient, transactionID string) error {
+    // Marshal to JSON for version-specific unmarshaling
+    jsonData, err := json.Marshal(op.Bind)
+    if err != nil {
+        return fmt.Errorf("failed to marshal bind: %w", err)
+    }
+
+    params := &dataplaneapi.CreateBindFrontendParams{
+        TransactionId: &transactionID,
+    }
+
+    resp, err := c.Dispatch(ctx, client.CallFunc[*http.Response]{
+        V32: func(c *v32.Client) (*http.Response, error) {
+            var bind v32.Bind
+            if err := json.Unmarshal(jsonData, &bind); err != nil {
+                return nil, fmt.Errorf("failed to unmarshal bind for v3.2: %w", err)
+            }
+            return c.CreateBindFrontend(ctx, op.FrontendName, (*v32.CreateBindFrontendParams)(params), bind)
+        },
+        V31: func(c *v31.Client) (*http.Response, error) {
+            var bind v31.Bind
+            if err := json.Unmarshal(jsonData, &bind); err != nil {
+                return nil, fmt.Errorf("failed to unmarshal bind for v3.1: %w", err)
+            }
+            return c.CreateBindFrontend(ctx, op.FrontendName, (*v31.CreateBindFrontendParams)(params), bind)
+        },
+        V30: func(c *v30.Client) (*http.Response, error) {
+            var bind v30.Bind
+            if err := json.Unmarshal(jsonData, &bind); err != nil {
+                return nil, fmt.Errorf("failed to unmarshal bind for v3.0: %w", err)
+            }
+            return c.CreateBindFrontend(ctx, op.FrontendName, (*v30.CreateBindFrontendParams)(params), bind)
+        },
+    })
+    if err != nil {
+        return fmt.Errorf("failed to create bind '%s' in frontend '%s': %w", op.BindName, op.FrontendName, err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+        return fmt.Errorf("create bind failed with status %d", resp.StatusCode)
+    }
+
+    return nil
+}
+```
+
+**When to use each pattern:**
+
+- **Helper-based**: Transaction-only operations (backend, frontend, defaults) where API calls follow standard pattern: `Create<Type>(params, object)`, `Replace<Type>(name, params, object)`, `Delete<Type>(name, params)`
+- **Direct Dispatch**: Operations requiring parent identifiers (binds need frontend name), custom parameters, or API calls with non-standard signatures
+
+**Why JSON marshaling is required:**
+
+HAProxy DataPlane API version-specific types (v30.Backend, v31.Backend, v32.Backend) are structurally incompatible - newer versions add fields that older versions lack. Direct struct conversion fails at compile time. JSON marshaling provides type conversion:
+
+1. Marshal unified model (dataplaneapi.Backend) to JSON
+2. Unmarshal JSON into version-specific type (v32.Backend, v31.Backend, v30.Backend)
+3. Missing fields in older versions are ignored during unmarshaling
+4. Extra fields in newer versions get zero values when converting from older formats
+
+This pattern trades ~10µs per operation for type safety and compatibility across all HAProxy versions.
 
 ### transform/ - Model Transformation
 
