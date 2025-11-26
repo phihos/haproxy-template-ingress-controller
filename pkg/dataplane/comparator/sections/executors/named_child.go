@@ -3,6 +3,7 @@ package executors
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"haproxy-template-ic/pkg/dataplane/client"
@@ -223,24 +224,49 @@ func ServerCreate(backendName string) func(ctx context.Context, c *client.Datapl
 }
 
 // ServerUpdate returns an executor for updating servers in backends.
+// When txID is empty, it uses version-based update (DataPlane API decides if reload is needed).
+// When txID is non-empty, it uses the Configuration API with transaction.
 func ServerUpdate(backendName string) func(ctx context.Context, c *client.DataplaneClient, txID string, parent string, childName string, model *dataplaneapi.Server) error {
 	return func(ctx context.Context, c *client.DataplaneClient, txID string, _ string, childName string, model *dataplaneapi.Server) error {
-		params := &dataplaneapi.ReplaceServerBackendParams{TransactionId: &txID}
 		clientset := c.Clientset()
+
+		// Build params based on whether we have a transaction ID or not
+		var params32 *v32.ReplaceServerBackendParams
+		var params31 *v31.ReplaceServerBackendParams
+		var params30 *v30.ReplaceServerBackendParams
+
+		if txID != "" {
+			// Use transaction ID
+			params32 = &v32.ReplaceServerBackendParams{TransactionId: &txID}
+			params31 = &v31.ReplaceServerBackendParams{TransactionId: &txID}
+			params30 = &v30.ReplaceServerBackendParams{TransactionId: &txID}
+		} else {
+			// Use version-based update (DataPlane API decides if runtime update is possible)
+			version64, err := c.GetVersion(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to get configuration version: %w", err)
+			}
+			version32 := v32.Version(version64)
+			version31 := v31.Version(version64)
+			version30 := v30.Version(version64)
+			params32 = &v32.ReplaceServerBackendParams{Version: &version32}
+			params31 = &v31.ReplaceServerBackendParams{Version: &version31}
+			params30 = &v30.ReplaceServerBackendParams{Version: &version30}
+		}
 
 		resp, err := client.DispatchUpdate(ctx, c, childName, model,
 			func(name string, m v32.Server, _ *v32.ReplaceServerBackendParams) (*http.Response, error) {
-				return clientset.V32().ReplaceServerBackend(ctx, backendName, name, (*v32.ReplaceServerBackendParams)(params), m)
+				return clientset.V32().ReplaceServerBackend(ctx, backendName, name, params32, m)
 			},
 			func(name string, m v31.Server, _ *v31.ReplaceServerBackendParams) (*http.Response, error) {
-				return clientset.V31().ReplaceServerBackend(ctx, backendName, name, (*v31.ReplaceServerBackendParams)(params), m)
+				return clientset.V31().ReplaceServerBackend(ctx, backendName, name, params31, m)
 			},
 			func(name string, m v30.Server, _ *v30.ReplaceServerBackendParams) (*http.Response, error) {
-				return clientset.V30().ReplaceServerBackend(ctx, backendName, name, (*v30.ReplaceServerBackendParams)(params), m)
+				return clientset.V30().ReplaceServerBackend(ctx, backendName, name, params30, m)
 			},
-			(*v32.ReplaceServerBackendParams)(params),
-			(*v31.ReplaceServerBackendParams)(params),
-			(*v30.ReplaceServerBackendParams)(params),
+			params32,
+			params31,
+			params30,
 		)
 		if err != nil {
 			return err

@@ -43,6 +43,9 @@ func ptrStr(s *string) string {
 	return *s
 }
 
+// unknownIdentifier is the fallback identifier used when a model field is empty.
+const unknownIdentifier = "<unknown>"
+
 // =============================================================================
 // Backend Factory Functions
 // =============================================================================
@@ -295,6 +298,26 @@ func NewACLBackendDelete(backendName string, acl *models.ACL, index int) Operati
 // HTTP Request Rule Factory Functions (Index-based child)
 // =============================================================================
 
+// describeHTTPRequestRule creates a descriptive string for HTTP request rule operations.
+// Uses the rule's Type field for identification.
+func describeHTTPRequestRule(opType OperationType, rule *models.HTTPRequestRule, parentType, parentName string) string {
+	identifier := unknownIdentifier
+	if rule != nil && rule.Type != "" {
+		identifier = rule.Type
+	}
+
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create HTTP request rule (%s) in %s '%s'", identifier, parentType, parentName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update HTTP request rule (%s) in %s '%s'", identifier, parentType, parentName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete HTTP request rule (%s) from %s '%s'", identifier, parentType, parentName)
+	default:
+		return fmt.Sprintf("Unknown operation on HTTP request rule (%s) in %s '%s'", identifier, parentType, parentName)
+	}
+}
+
 // NewHTTPRequestRuleFrontendCreate creates an operation to create an HTTP request rule in a frontend.
 func NewHTTPRequestRuleFrontendCreate(frontendName string, rule *models.HTTPRequestRule, index int) Operation {
 	return NewIndexChildOp(
@@ -306,9 +329,7 @@ func NewHTTPRequestRuleFrontendCreate(frontendName string, rule *models.HTTPRequ
 		rule,
 		transform.ToAPIHTTPRequestRule,
 		executors.HTTPRequestRuleFrontendCreate(),
-		func() string {
-			return fmt.Sprintf("Create HTTP request rule at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeHTTPRequestRule(OperationCreate, rule, "frontend", frontendName) },
 	)
 }
 
@@ -323,9 +344,7 @@ func NewHTTPRequestRuleFrontendUpdate(frontendName string, rule *models.HTTPRequ
 		rule,
 		transform.ToAPIHTTPRequestRule,
 		executors.HTTPRequestRuleFrontendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update HTTP request rule at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeHTTPRequestRule(OperationUpdate, rule, "frontend", frontendName) },
 	)
 }
 
@@ -340,9 +359,7 @@ func NewHTTPRequestRuleFrontendDelete(frontendName string, rule *models.HTTPRequ
 		rule,
 		func(r *models.HTTPRequestRule) *dataplaneapi.HttpRequestRule { return nil },
 		executors.HTTPRequestRuleFrontendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete HTTP request rule at index %d from frontend '%s'", index, frontendName)
-		},
+		func() string { return describeHTTPRequestRule(OperationDelete, rule, "frontend", frontendName) },
 	)
 }
 
@@ -357,9 +374,7 @@ func NewHTTPRequestRuleBackendCreate(backendName string, rule *models.HTTPReques
 		rule,
 		transform.ToAPIHTTPRequestRule,
 		executors.HTTPRequestRuleBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create HTTP request rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPRequestRule(OperationCreate, rule, "backend", backendName) },
 	)
 }
 
@@ -374,9 +389,7 @@ func NewHTTPRequestRuleBackendUpdate(backendName string, rule *models.HTTPReques
 		rule,
 		transform.ToAPIHTTPRequestRule,
 		executors.HTTPRequestRuleBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update HTTP request rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPRequestRule(OperationUpdate, rule, "backend", backendName) },
 	)
 }
 
@@ -391,15 +404,33 @@ func NewHTTPRequestRuleBackendDelete(backendName string, rule *models.HTTPReques
 		rule,
 		func(r *models.HTTPRequestRule) *dataplaneapi.HttpRequestRule { return nil },
 		executors.HTTPRequestRuleBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete HTTP request rule at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPRequestRule(OperationDelete, rule, "backend", backendName) },
 	)
 }
 
 // =============================================================================
 // HTTP Response Rule Factory Functions (Index-based child)
 // =============================================================================
+
+// describeHTTPResponseRule creates a descriptive string for HTTP response rule operations.
+// Uses the rule's Type field for identification.
+func describeHTTPResponseRule(opType OperationType, rule *models.HTTPResponseRule, parentType, parentName string) string {
+	identifier := unknownIdentifier
+	if rule != nil && rule.Type != "" {
+		identifier = rule.Type
+	}
+
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create HTTP response rule (%s) in %s '%s'", identifier, parentType, parentName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update HTTP response rule (%s) in %s '%s'", identifier, parentType, parentName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete HTTP response rule (%s) from %s '%s'", identifier, parentType, parentName)
+	default:
+		return fmt.Sprintf("Unknown operation on HTTP response rule (%s) in %s '%s'", identifier, parentType, parentName)
+	}
+}
 
 // NewHTTPResponseRuleFrontendCreate creates an operation to create an HTTP response rule in a frontend.
 func NewHTTPResponseRuleFrontendCreate(frontendName string, rule *models.HTTPResponseRule, index int) Operation {
@@ -412,9 +443,7 @@ func NewHTTPResponseRuleFrontendCreate(frontendName string, rule *models.HTTPRes
 		rule,
 		transform.ToAPIHTTPResponseRule,
 		executors.HTTPResponseRuleFrontendCreate(),
-		func() string {
-			return fmt.Sprintf("Create HTTP response rule at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeHTTPResponseRule(OperationCreate, rule, "frontend", frontendName) },
 	)
 }
 
@@ -429,9 +458,7 @@ func NewHTTPResponseRuleFrontendUpdate(frontendName string, rule *models.HTTPRes
 		rule,
 		transform.ToAPIHTTPResponseRule,
 		executors.HTTPResponseRuleFrontendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update HTTP response rule at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeHTTPResponseRule(OperationUpdate, rule, "frontend", frontendName) },
 	)
 }
 
@@ -446,9 +473,7 @@ func NewHTTPResponseRuleFrontendDelete(frontendName string, rule *models.HTTPRes
 		rule,
 		func(r *models.HTTPResponseRule) *dataplaneapi.HttpResponseRule { return nil },
 		executors.HTTPResponseRuleFrontendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete HTTP response rule at index %d from frontend '%s'", index, frontendName)
-		},
+		func() string { return describeHTTPResponseRule(OperationDelete, rule, "frontend", frontendName) },
 	)
 }
 
@@ -463,9 +488,7 @@ func NewHTTPResponseRuleBackendCreate(backendName string, rule *models.HTTPRespo
 		rule,
 		transform.ToAPIHTTPResponseRule,
 		executors.HTTPResponseRuleBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create HTTP response rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPResponseRule(OperationCreate, rule, "backend", backendName) },
 	)
 }
 
@@ -480,9 +503,7 @@ func NewHTTPResponseRuleBackendUpdate(backendName string, rule *models.HTTPRespo
 		rule,
 		transform.ToAPIHTTPResponseRule,
 		executors.HTTPResponseRuleBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update HTTP response rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPResponseRule(OperationUpdate, rule, "backend", backendName) },
 	)
 }
 
@@ -497,15 +518,33 @@ func NewHTTPResponseRuleBackendDelete(backendName string, rule *models.HTTPRespo
 		rule,
 		func(r *models.HTTPResponseRule) *dataplaneapi.HttpResponseRule { return nil },
 		executors.HTTPResponseRuleBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete HTTP response rule at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPResponseRule(OperationDelete, rule, "backend", backendName) },
 	)
 }
 
 // =============================================================================
 // Backend Switching Rule Factory Functions (Index-based child)
 // =============================================================================
+
+// describeBackendSwitchingRule creates a descriptive string for backend switching rule operations.
+// Uses the rule's Name field which contains the condition expression.
+func describeBackendSwitchingRule(opType OperationType, rule *models.BackendSwitchingRule, frontendName string) string {
+	identifier := unknownIdentifier
+	if rule != nil && rule.Name != "" {
+		identifier = rule.Name
+	}
+
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create backend switching rule (%s) in frontend '%s'", identifier, frontendName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update backend switching rule (%s) in frontend '%s'", identifier, frontendName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete backend switching rule (%s) from frontend '%s'", identifier, frontendName)
+	default:
+		return fmt.Sprintf("Unknown operation on backend switching rule (%s) in frontend '%s'", identifier, frontendName)
+	}
+}
 
 // NewBackendSwitchingRuleFrontendCreate creates an operation to create a backend switching rule.
 func NewBackendSwitchingRuleFrontendCreate(frontendName string, rule *models.BackendSwitchingRule, index int) Operation {
@@ -518,9 +557,7 @@ func NewBackendSwitchingRuleFrontendCreate(frontendName string, rule *models.Bac
 		rule,
 		transform.ToAPIBackendSwitchingRule,
 		executors.BackendSwitchingRuleCreate(),
-		func() string {
-			return fmt.Sprintf("Create backend switching rule at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeBackendSwitchingRule(OperationCreate, rule, frontendName) },
 	)
 }
 
@@ -535,9 +572,7 @@ func NewBackendSwitchingRuleFrontendUpdate(frontendName string, rule *models.Bac
 		rule,
 		transform.ToAPIBackendSwitchingRule,
 		executors.BackendSwitchingRuleUpdate(),
-		func() string {
-			return fmt.Sprintf("Update backend switching rule at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeBackendSwitchingRule(OperationUpdate, rule, frontendName) },
 	)
 }
 
@@ -552,9 +587,7 @@ func NewBackendSwitchingRuleFrontendDelete(frontendName string, rule *models.Bac
 		rule,
 		func(r *models.BackendSwitchingRule) *dataplaneapi.BackendSwitchingRule { return nil },
 		executors.BackendSwitchingRuleDelete(),
-		func() string {
-			return fmt.Sprintf("Delete backend switching rule at index %d from frontend '%s'", index, frontendName)
-		},
+		func() string { return describeBackendSwitchingRule(OperationDelete, rule, frontendName) },
 	)
 }
 
@@ -573,7 +606,7 @@ func NewFilterFrontendCreate(frontendName string, filter *models.Filter, index i
 		filter,
 		transform.ToAPIFilter,
 		executors.FilterFrontendCreate(),
-		func() string { return fmt.Sprintf("Create filter at index %d in frontend '%s'", index, frontendName) },
+		func() string { return describeFilter(OperationCreate, filter, "frontend", frontendName, index) },
 	)
 }
 
@@ -588,7 +621,7 @@ func NewFilterFrontendUpdate(frontendName string, filter *models.Filter, index i
 		filter,
 		transform.ToAPIFilter,
 		executors.FilterFrontendUpdate(),
-		func() string { return fmt.Sprintf("Update filter at index %d in frontend '%s'", index, frontendName) },
+		func() string { return describeFilter(OperationUpdate, filter, "frontend", frontendName, index) },
 	)
 }
 
@@ -603,7 +636,7 @@ func NewFilterFrontendDelete(frontendName string, filter *models.Filter, index i
 		filter,
 		func(f *models.Filter) *dataplaneapi.Filter { return nil },
 		executors.FilterFrontendDelete(),
-		func() string { return fmt.Sprintf("Delete filter at index %d from frontend '%s'", index, frontendName) },
+		func() string { return describeFilter(OperationDelete, filter, "frontend", frontendName, index) },
 	)
 }
 
@@ -618,7 +651,7 @@ func NewFilterBackendCreate(backendName string, filter *models.Filter, index int
 		filter,
 		transform.ToAPIFilter,
 		executors.FilterBackendCreate(),
-		func() string { return fmt.Sprintf("Create filter at index %d in backend '%s'", index, backendName) },
+		func() string { return describeFilter(OperationCreate, filter, "backend", backendName, index) },
 	)
 }
 
@@ -633,7 +666,7 @@ func NewFilterBackendUpdate(backendName string, filter *models.Filter, index int
 		filter,
 		transform.ToAPIFilter,
 		executors.FilterBackendUpdate(),
-		func() string { return fmt.Sprintf("Update filter at index %d in backend '%s'", index, backendName) },
+		func() string { return describeFilter(OperationUpdate, filter, "backend", backendName, index) },
 	)
 }
 
@@ -648,7 +681,7 @@ func NewFilterBackendDelete(backendName string, filter *models.Filter, index int
 		filter,
 		func(f *models.Filter) *dataplaneapi.Filter { return nil },
 		executors.FilterBackendDelete(),
-		func() string { return fmt.Sprintf("Delete filter at index %d from backend '%s'", index, backendName) },
+		func() string { return describeFilter(OperationDelete, filter, "backend", backendName, index) },
 	)
 }
 
@@ -667,9 +700,7 @@ func NewLogTargetFrontendCreate(frontendName string, logTarget *models.LogTarget
 		logTarget,
 		transform.ToAPILogTarget,
 		executors.LogTargetFrontendCreate(),
-		func() string {
-			return fmt.Sprintf("Create log target at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeLogTarget(OperationCreate, logTarget, "frontend", frontendName, index) },
 	)
 }
 
@@ -684,9 +715,7 @@ func NewLogTargetFrontendUpdate(frontendName string, logTarget *models.LogTarget
 		logTarget,
 		transform.ToAPILogTarget,
 		executors.LogTargetFrontendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update log target at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeLogTarget(OperationUpdate, logTarget, "frontend", frontendName, index) },
 	)
 }
 
@@ -701,9 +730,7 @@ func NewLogTargetFrontendDelete(frontendName string, logTarget *models.LogTarget
 		logTarget,
 		func(l *models.LogTarget) *dataplaneapi.LogTarget { return nil },
 		executors.LogTargetFrontendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete log target at index %d from frontend '%s'", index, frontendName)
-		},
+		func() string { return describeLogTarget(OperationDelete, logTarget, "frontend", frontendName, index) },
 	)
 }
 
@@ -718,7 +745,7 @@ func NewLogTargetBackendCreate(backendName string, logTarget *models.LogTarget, 
 		logTarget,
 		transform.ToAPILogTarget,
 		executors.LogTargetBackendCreate(),
-		func() string { return fmt.Sprintf("Create log target at index %d in backend '%s'", index, backendName) },
+		func() string { return describeLogTarget(OperationCreate, logTarget, "backend", backendName, index) },
 	)
 }
 
@@ -733,7 +760,7 @@ func NewLogTargetBackendUpdate(backendName string, logTarget *models.LogTarget, 
 		logTarget,
 		transform.ToAPILogTarget,
 		executors.LogTargetBackendUpdate(),
-		func() string { return fmt.Sprintf("Update log target at index %d in backend '%s'", index, backendName) },
+		func() string { return describeLogTarget(OperationUpdate, logTarget, "backend", backendName, index) },
 	)
 }
 
@@ -748,9 +775,7 @@ func NewLogTargetBackendDelete(backendName string, logTarget *models.LogTarget, 
 		logTarget,
 		func(l *models.LogTarget) *dataplaneapi.LogTarget { return nil },
 		executors.LogTargetBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete log target at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeLogTarget(OperationDelete, logTarget, "backend", backendName, index) },
 	)
 }
 
@@ -761,6 +786,245 @@ func NewLogTargetBackendDelete(backendName string, logTarget *models.LogTarget, 
 
 // identityBindAPI returns the bind as-is (already API type).
 func identityBindAPI(b *dataplaneapi.Bind) *dataplaneapi.Bind { return b }
+
+// describeBindWithSSL creates a description for bind operations that includes SSL info.
+// This matches the legacy behavior where bind descriptions included SSL certificate paths.
+func describeBindWithSSL(opType OperationType, bind *dataplaneapi.Bind, frontendName string) string {
+	// Format bind description based on address and port
+	bindDesc := ""
+	if bind.Address != nil && bind.Port != nil {
+		bindDesc = fmt.Sprintf("%s:%d", *bind.Address, *bind.Port)
+	} else if bind.Port != nil {
+		bindDesc = fmt.Sprintf("*:%d", *bind.Port)
+	} else if bind.Name != nil {
+		bindDesc = *bind.Name
+	}
+
+	// Add SSL info if present
+	if bind.Ssl != nil && *bind.Ssl {
+		sslInfo := " ssl"
+		if bind.SslCertificate != nil {
+			sslInfo += fmt.Sprintf(" crt %s", *bind.SslCertificate)
+		}
+		bindDesc += sslInfo
+	}
+
+	// Use appropriate verb based on operation type
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create bind '%s' in frontend '%s'", bindDesc, frontendName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update bind '%s' in frontend '%s'", bindDesc, frontendName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete bind '%s' from frontend '%s'", bindDesc, frontendName)
+	default:
+		return fmt.Sprintf("Unknown operation on bind '%s' in frontend '%s'", bindDesc, frontendName)
+	}
+}
+
+// describeLogTarget generates a human-readable description for a log target operation.
+// Uses the Address field if available (e.g., "ring@myring"), falls back to index.
+func describeLogTarget(opType OperationType, logTarget *models.LogTarget, parentType, parentName string, index int) string {
+	// Use Address if available (e.g., "ring@myring", "127.0.0.1:514")
+	identifier := logTarget.Address
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+
+	// Use appropriate verb based on operation type
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create log target %s in %s '%s'", identifier, parentType, parentName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update log target %s in %s '%s'", identifier, parentType, parentName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete log target %s from %s '%s'", identifier, parentType, parentName)
+	default:
+		return fmt.Sprintf("Unknown operation on log target %s in %s '%s'", identifier, parentType, parentName)
+	}
+}
+
+// describeFilter generates a human-readable description for a filter operation.
+func describeFilter(opType OperationType, filter *models.Filter, parentType, parentName string, index int) string {
+	identifier := filter.Type
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create filter %s in %s '%s'", identifier, parentType, parentName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update filter %s in %s '%s'", identifier, parentType, parentName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete filter %s from %s '%s'", identifier, parentType, parentName)
+	default:
+		return fmt.Sprintf("Unknown operation on filter %s in %s '%s'", identifier, parentType, parentName)
+	}
+}
+
+// describeCapture generates a human-readable description for a capture operation.
+func describeCapture(opType OperationType, capture *models.Capture, frontendName string, index int) string {
+	identifier := capture.Type
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create capture %s in frontend '%s'", identifier, frontendName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update capture %s in frontend '%s'", identifier, frontendName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete capture %s from frontend '%s'", identifier, frontendName)
+	default:
+		return fmt.Sprintf("Unknown operation on capture %s in frontend '%s'", identifier, frontendName)
+	}
+}
+
+// describeTCPRequestRule generates a human-readable description for a TCP request rule operation.
+func describeTCPRequestRule(opType OperationType, rule *models.TCPRequestRule, parentType, parentName string, index int) string {
+	identifier := rule.Type
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create TCP request rule %s in %s '%s'", identifier, parentType, parentName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update TCP request rule %s in %s '%s'", identifier, parentType, parentName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete TCP request rule %s from %s '%s'", identifier, parentType, parentName)
+	default:
+		return fmt.Sprintf("Unknown operation on TCP request rule %s in %s '%s'", identifier, parentType, parentName)
+	}
+}
+
+// describeTCPResponseRule generates a human-readable description for a TCP response rule operation.
+func describeTCPResponseRule(opType OperationType, rule *models.TCPResponseRule, parentType, parentName string, index int) string {
+	identifier := rule.Type
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create TCP response rule %s in %s '%s'", identifier, parentType, parentName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update TCP response rule %s in %s '%s'", identifier, parentType, parentName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete TCP response rule %s from %s '%s'", identifier, parentType, parentName)
+	default:
+		return fmt.Sprintf("Unknown operation on TCP response rule %s in %s '%s'", identifier, parentType, parentName)
+	}
+}
+
+// describeHTTPCheck generates a human-readable description for an HTTP check operation.
+func describeHTTPCheck(opType OperationType, check *models.HTTPCheck, backendName string, index int) string {
+	identifier := check.Type
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create HTTP check %s in backend '%s'", identifier, backendName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update HTTP check %s in backend '%s'", identifier, backendName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete HTTP check %s from backend '%s'", identifier, backendName)
+	default:
+		return fmt.Sprintf("Unknown operation on HTTP check %s in backend '%s'", identifier, backendName)
+	}
+}
+
+// describeTCPCheck generates a human-readable description for a TCP check operation.
+func describeTCPCheck(opType OperationType, check *models.TCPCheck, backendName string, index int) string {
+	identifier := check.Action
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create TCP check %s in backend '%s'", identifier, backendName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update TCP check %s in backend '%s'", identifier, backendName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete TCP check %s from backend '%s'", identifier, backendName)
+	default:
+		return fmt.Sprintf("Unknown operation on TCP check %s in backend '%s'", identifier, backendName)
+	}
+}
+
+// describeStickRule generates a human-readable description for a stick rule operation.
+func describeStickRule(opType OperationType, rule *models.StickRule, backendName string, index int) string {
+	identifier := rule.Type
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create stick rule %s in backend '%s'", identifier, backendName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update stick rule %s in backend '%s'", identifier, backendName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete stick rule %s from backend '%s'", identifier, backendName)
+	default:
+		return fmt.Sprintf("Unknown operation on stick rule %s in backend '%s'", identifier, backendName)
+	}
+}
+
+// describeServerSwitchingRule generates a human-readable description for a server switching rule operation.
+func describeServerSwitchingRule(opType OperationType, rule *models.ServerSwitchingRule, backendName string, index int) string {
+	identifier := rule.TargetServer
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create server switching rule %s in backend '%s'", identifier, backendName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update server switching rule %s in backend '%s'", identifier, backendName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete server switching rule %s from backend '%s'", identifier, backendName)
+	default:
+		return fmt.Sprintf("Unknown operation on server switching rule %s in backend '%s'", identifier, backendName)
+	}
+}
+
+// describeHTTPAfterResponseRule generates a human-readable description for an HTTP after response rule operation.
+func describeHTTPAfterResponseRule(opType OperationType, rule *models.HTTPAfterResponseRule, backendName string, index int) string {
+	identifier := rule.Type
+	if identifier == "" {
+		identifier = fmt.Sprintf("at index %d", index)
+	} else {
+		identifier = fmt.Sprintf("(%s)", identifier)
+	}
+	switch opType {
+	case OperationCreate:
+		return fmt.Sprintf("Create HTTP after response rule %s in backend '%s'", identifier, backendName)
+	case OperationUpdate:
+		return fmt.Sprintf("Update HTTP after response rule %s in backend '%s'", identifier, backendName)
+	case OperationDelete:
+		return fmt.Sprintf("Delete HTTP after response rule %s from backend '%s'", identifier, backendName)
+	default:
+		return fmt.Sprintf("Unknown operation on HTTP after response rule %s in backend '%s'", identifier, backendName)
+	}
+}
 
 // NewBindFrontendCreate creates an operation to create a bind in a frontend.
 func NewBindFrontendCreate(frontendName, bindName string, bind *dataplaneapi.Bind) Operation {
@@ -773,7 +1037,7 @@ func NewBindFrontendCreate(frontendName, bindName string, bind *dataplaneapi.Bin
 		bind,
 		identityBindAPI,
 		executors.BindFrontendCreate(frontendName),
-		DescribeNamedChild(OperationCreate, "bind", bindName, "frontend", frontendName),
+		func() string { return describeBindWithSSL(OperationCreate, bind, frontendName) },
 	)
 }
 
@@ -788,7 +1052,7 @@ func NewBindFrontendUpdate(frontendName, bindName string, bind *dataplaneapi.Bin
 		bind,
 		identityBindAPI,
 		executors.BindFrontendUpdate(frontendName),
-		DescribeNamedChild(OperationUpdate, "bind", bindName, "frontend", frontendName),
+		func() string { return describeBindWithSSL(OperationUpdate, bind, frontendName) },
 	)
 }
 
@@ -803,7 +1067,7 @@ func NewBindFrontendDelete(frontendName, bindName string, bind *dataplaneapi.Bin
 		bind,
 		NilBindAPI,
 		executors.BindFrontendDelete(frontendName),
-		DescribeNamedChild(OperationDelete, "bind", bindName, "frontend", frontendName),
+		func() string { return describeBindWithSSL(OperationDelete, bind, frontendName) },
 	)
 }
 
@@ -871,7 +1135,7 @@ func NewMailerEntryCreate(mailersName string, entry *models.MailerEntry) Operati
 		transform.ToAPIMailerEntry,
 		MailerEntryName,
 		executors.MailerEntryCreate(mailersName),
-		DescribeContainerChild(OperationCreate, "mailer entry", entry.Name, "mailers", mailersName),
+		DescribeContainerChild(OperationCreate, "mailer entry", entry.Name, "mailers section", mailersName),
 	)
 }
 
@@ -886,7 +1150,7 @@ func NewMailerEntryUpdate(mailersName string, entry *models.MailerEntry) Operati
 		transform.ToAPIMailerEntry,
 		MailerEntryName,
 		executors.MailerEntryUpdate(mailersName),
-		DescribeContainerChild(OperationUpdate, "mailer entry", entry.Name, "mailers", mailersName),
+		DescribeContainerChild(OperationUpdate, "mailer entry", entry.Name, "mailers section", mailersName),
 	)
 }
 
@@ -901,7 +1165,7 @@ func NewMailerEntryDelete(mailersName string, entry *models.MailerEntry) Operati
 		NilMailerEntry,
 		MailerEntryName,
 		executors.MailerEntryDelete(mailersName),
-		DescribeContainerChild(OperationDelete, "mailer entry", entry.Name, "mailers", mailersName),
+		DescribeContainerChild(OperationDelete, "mailer entry", entry.Name, "mailers section", mailersName),
 	)
 }
 
@@ -920,7 +1184,7 @@ func NewPeerEntryCreate(peerSectionName string, entry *models.PeerEntry) Operati
 		transform.ToAPIPeerEntry,
 		PeerEntryName,
 		executors.PeerEntryCreate(peerSectionName),
-		DescribeContainerChild(OperationCreate, "peer entry", entry.Name, "peers", peerSectionName),
+		DescribeContainerChild(OperationCreate, "peer entry", entry.Name, "peer section", peerSectionName),
 	)
 }
 
@@ -935,7 +1199,7 @@ func NewPeerEntryUpdate(peerSectionName string, entry *models.PeerEntry) Operati
 		transform.ToAPIPeerEntry,
 		PeerEntryName,
 		executors.PeerEntryUpdate(peerSectionName),
-		DescribeContainerChild(OperationUpdate, "peer entry", entry.Name, "peers", peerSectionName),
+		DescribeContainerChild(OperationUpdate, "peer entry", entry.Name, "peer section", peerSectionName),
 	)
 }
 
@@ -950,7 +1214,7 @@ func NewPeerEntryDelete(peerSectionName string, entry *models.PeerEntry) Operati
 		NilPeerEntry,
 		PeerEntryName,
 		executors.PeerEntryDelete(peerSectionName),
-		DescribeContainerChild(OperationDelete, "peer entry", entry.Name, "peers", peerSectionName),
+		DescribeContainerChild(OperationDelete, "peer entry", entry.Name, "peer section", peerSectionName),
 	)
 }
 
@@ -969,7 +1233,7 @@ func NewNameserverCreate(resolverName string, nameserver *models.Nameserver) Ope
 		transform.ToAPINameserver,
 		NameserverName,
 		executors.NameserverCreate(resolverName),
-		DescribeContainerChild(OperationCreate, "nameserver", nameserver.Name, "resolver", resolverName),
+		DescribeContainerChild(OperationCreate, "nameserver", nameserver.Name, "resolvers section", resolverName),
 	)
 }
 
@@ -984,7 +1248,7 @@ func NewNameserverUpdate(resolverName string, nameserver *models.Nameserver) Ope
 		transform.ToAPINameserver,
 		NameserverName,
 		executors.NameserverUpdate(resolverName),
-		DescribeContainerChild(OperationUpdate, "nameserver", nameserver.Name, "resolver", resolverName),
+		DescribeContainerChild(OperationUpdate, "nameserver", nameserver.Name, "resolvers section", resolverName),
 	)
 }
 
@@ -999,7 +1263,7 @@ func NewNameserverDelete(resolverName string, nameserver *models.Nameserver) Ope
 		NilNameserver,
 		NameserverName,
 		executors.NameserverDelete(resolverName),
-		DescribeContainerChild(OperationDelete, "nameserver", nameserver.Name, "resolver", resolverName),
+		DescribeContainerChild(OperationDelete, "nameserver", nameserver.Name, "resolvers section", resolverName),
 	)
 }
 
@@ -1161,7 +1425,7 @@ func NewHTTPErrorsSectionCreate(section *models.HTTPErrorsSection) Operation {
 		transform.ToAPIHTTPErrorsSection,
 		HTTPErrorsSectionName,
 		executors.HTTPErrorsSectionCreate(),
-		DescribeTopLevel(OperationCreate, "http-errors", section.Name),
+		DescribeTopLevel(OperationCreate, "http-errors section", section.Name),
 	)
 }
 
@@ -1175,7 +1439,7 @@ func NewHTTPErrorsSectionUpdate(section *models.HTTPErrorsSection) Operation {
 		transform.ToAPIHTTPErrorsSection,
 		HTTPErrorsSectionName,
 		executors.HTTPErrorsSectionUpdate(),
-		DescribeTopLevel(OperationUpdate, "http-errors", section.Name),
+		DescribeTopLevel(OperationUpdate, "http-errors section", section.Name),
 	)
 }
 
@@ -1189,7 +1453,7 @@ func NewHTTPErrorsSectionDelete(section *models.HTTPErrorsSection) Operation {
 		NilHTTPErrorsSection,
 		HTTPErrorsSectionName,
 		executors.HTTPErrorsSectionDelete(),
-		DescribeTopLevel(OperationDelete, "http-errors", section.Name),
+		DescribeTopLevel(OperationDelete, "http-errors section", section.Name),
 	)
 }
 
@@ -1300,7 +1564,7 @@ func NewPeerSectionCreate(section *models.PeerSection) Operation {
 		transform.ToAPIPeerSection,
 		PeerSectionName,
 		executors.PeerSectionCreate(),
-		DescribeTopLevel(OperationCreate, "peers", section.Name),
+		DescribeTopLevel(OperationCreate, "peer section", section.Name),
 	)
 }
 
@@ -1316,7 +1580,7 @@ func NewPeerSectionUpdate(section *models.PeerSection) Operation {
 		transform.ToAPIPeerSection,
 		PeerSectionName,
 		executors.PeerSectionUpdate(),
-		DescribeTopLevel(OperationUpdate, "peers", section.Name),
+		DescribeTopLevel(OperationUpdate, "peer section", section.Name),
 	)
 }
 
@@ -1330,7 +1594,7 @@ func NewPeerSectionDelete(section *models.PeerSection) Operation {
 		NilPeerSection,
 		PeerSectionName,
 		executors.PeerSectionDelete(),
-		DescribeTopLevel(OperationDelete, "peers", section.Name),
+		DescribeTopLevel(OperationDelete, "peer section", section.Name),
 	)
 }
 
@@ -1611,9 +1875,7 @@ func NewTCPRequestRuleFrontendCreate(frontendName string, rule *models.TCPReques
 		rule,
 		transform.ToAPITCPRequestRule,
 		executors.TCPRequestRuleFrontendCreate(),
-		func() string {
-			return fmt.Sprintf("Create TCP request rule at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeTCPRequestRule(OperationCreate, rule, "frontend", frontendName, index) },
 	)
 }
 
@@ -1628,9 +1890,7 @@ func NewTCPRequestRuleFrontendUpdate(frontendName string, rule *models.TCPReques
 		rule,
 		transform.ToAPITCPRequestRule,
 		executors.TCPRequestRuleFrontendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update TCP request rule at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeTCPRequestRule(OperationUpdate, rule, "frontend", frontendName, index) },
 	)
 }
 
@@ -1645,9 +1905,7 @@ func NewTCPRequestRuleFrontendDelete(frontendName string, rule *models.TCPReques
 		rule,
 		func(r *models.TCPRequestRule) *dataplaneapi.TcpRequestRule { return nil },
 		executors.TCPRequestRuleFrontendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete TCP request rule at index %d from frontend '%s'", index, frontendName)
-		},
+		func() string { return describeTCPRequestRule(OperationDelete, rule, "frontend", frontendName, index) },
 	)
 }
 
@@ -1662,9 +1920,7 @@ func NewTCPRequestRuleBackendCreate(backendName string, rule *models.TCPRequestR
 		rule,
 		transform.ToAPITCPRequestRule,
 		executors.TCPRequestRuleBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create TCP request rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPRequestRule(OperationCreate, rule, "backend", backendName, index) },
 	)
 }
 
@@ -1679,9 +1935,7 @@ func NewTCPRequestRuleBackendUpdate(backendName string, rule *models.TCPRequestR
 		rule,
 		transform.ToAPITCPRequestRule,
 		executors.TCPRequestRuleBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update TCP request rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPRequestRule(OperationUpdate, rule, "backend", backendName, index) },
 	)
 }
 
@@ -1696,9 +1950,7 @@ func NewTCPRequestRuleBackendDelete(backendName string, rule *models.TCPRequestR
 		rule,
 		func(r *models.TCPRequestRule) *dataplaneapi.TcpRequestRule { return nil },
 		executors.TCPRequestRuleBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete TCP request rule at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPRequestRule(OperationDelete, rule, "backend", backendName, index) },
 	)
 }
 
@@ -1717,9 +1969,7 @@ func NewTCPResponseRuleBackendCreate(backendName string, rule *models.TCPRespons
 		rule,
 		transform.ToAPITCPResponseRule,
 		executors.TCPResponseRuleBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create TCP response rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPResponseRule(OperationCreate, rule, "backend", backendName, index) },
 	)
 }
 
@@ -1734,9 +1984,7 @@ func NewTCPResponseRuleBackendUpdate(backendName string, rule *models.TCPRespons
 		rule,
 		transform.ToAPITCPResponseRule,
 		executors.TCPResponseRuleBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update TCP response rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPResponseRule(OperationUpdate, rule, "backend", backendName, index) },
 	)
 }
 
@@ -1751,9 +1999,7 @@ func NewTCPResponseRuleBackendDelete(backendName string, rule *models.TCPRespons
 		rule,
 		func(r *models.TCPResponseRule) *dataplaneapi.TcpResponseRule { return nil },
 		executors.TCPResponseRuleBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete TCP response rule at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPResponseRule(OperationDelete, rule, "backend", backendName, index) },
 	)
 }
 
@@ -1772,9 +2018,7 @@ func NewStickRuleBackendCreate(backendName string, rule *models.StickRule, index
 		rule,
 		transform.ToAPIStickRule,
 		executors.StickRuleBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create stick rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeStickRule(OperationCreate, rule, backendName, index) },
 	)
 }
 
@@ -1789,9 +2033,7 @@ func NewStickRuleBackendUpdate(backendName string, rule *models.StickRule, index
 		rule,
 		transform.ToAPIStickRule,
 		executors.StickRuleBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update stick rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeStickRule(OperationUpdate, rule, backendName, index) },
 	)
 }
 
@@ -1806,9 +2048,7 @@ func NewStickRuleBackendDelete(backendName string, rule *models.StickRule, index
 		rule,
 		func(r *models.StickRule) *dataplaneapi.StickRule { return nil },
 		executors.StickRuleBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete stick rule at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeStickRule(OperationDelete, rule, backendName, index) },
 	)
 }
 
@@ -1827,9 +2067,7 @@ func NewHTTPAfterResponseRuleBackendCreate(backendName string, rule *models.HTTP
 		rule,
 		transform.ToAPIHTTPAfterResponseRule,
 		executors.HTTPAfterResponseRuleBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create HTTP after-response rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPAfterResponseRule(OperationCreate, rule, backendName, index) },
 	)
 }
 
@@ -1844,9 +2082,7 @@ func NewHTTPAfterResponseRuleBackendUpdate(backendName string, rule *models.HTTP
 		rule,
 		transform.ToAPIHTTPAfterResponseRule,
 		executors.HTTPAfterResponseRuleBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update HTTP after-response rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPAfterResponseRule(OperationUpdate, rule, backendName, index) },
 	)
 }
 
@@ -1861,9 +2097,7 @@ func NewHTTPAfterResponseRuleBackendDelete(backendName string, rule *models.HTTP
 		rule,
 		func(r *models.HTTPAfterResponseRule) *dataplaneapi.HttpAfterResponseRule { return nil },
 		executors.HTTPAfterResponseRuleBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete HTTP after-response rule at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPAfterResponseRule(OperationDelete, rule, backendName, index) },
 	)
 }
 
@@ -1882,9 +2116,7 @@ func NewServerSwitchingRuleBackendCreate(backendName string, rule *models.Server
 		rule,
 		transform.ToAPIServerSwitchingRule,
 		executors.ServerSwitchingRuleBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create server switching rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeServerSwitchingRule(OperationCreate, rule, backendName, index) },
 	)
 }
 
@@ -1899,9 +2131,7 @@ func NewServerSwitchingRuleBackendUpdate(backendName string, rule *models.Server
 		rule,
 		transform.ToAPIServerSwitchingRule,
 		executors.ServerSwitchingRuleBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update server switching rule at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeServerSwitchingRule(OperationUpdate, rule, backendName, index) },
 	)
 }
 
@@ -1916,9 +2146,7 @@ func NewServerSwitchingRuleBackendDelete(backendName string, rule *models.Server
 		rule,
 		func(r *models.ServerSwitchingRule) *dataplaneapi.ServerSwitchingRule { return nil },
 		executors.ServerSwitchingRuleBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete server switching rule at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeServerSwitchingRule(OperationDelete, rule, backendName, index) },
 	)
 }
 
@@ -1937,9 +2165,7 @@ func NewHTTPCheckBackendCreate(backendName string, check *models.HTTPCheck, inde
 		check,
 		transform.ToAPIHTTPCheck,
 		executors.HTTPCheckBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create HTTP check at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPCheck(OperationCreate, check, backendName, index) },
 	)
 }
 
@@ -1954,9 +2180,7 @@ func NewHTTPCheckBackendUpdate(backendName string, check *models.HTTPCheck, inde
 		check,
 		transform.ToAPIHTTPCheck,
 		executors.HTTPCheckBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update HTTP check at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPCheck(OperationUpdate, check, backendName, index) },
 	)
 }
 
@@ -1971,9 +2195,7 @@ func NewHTTPCheckBackendDelete(backendName string, check *models.HTTPCheck, inde
 		check,
 		func(c *models.HTTPCheck) *dataplaneapi.HttpCheck { return nil },
 		executors.HTTPCheckBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete HTTP check at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeHTTPCheck(OperationDelete, check, backendName, index) },
 	)
 }
 
@@ -1992,9 +2214,7 @@ func NewTCPCheckBackendCreate(backendName string, check *models.TCPCheck, index 
 		check,
 		transform.ToAPITCPCheck,
 		executors.TCPCheckBackendCreate(),
-		func() string {
-			return fmt.Sprintf("Create TCP check at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPCheck(OperationCreate, check, backendName, index) },
 	)
 }
 
@@ -2009,9 +2229,7 @@ func NewTCPCheckBackendUpdate(backendName string, check *models.TCPCheck, index 
 		check,
 		transform.ToAPITCPCheck,
 		executors.TCPCheckBackendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update TCP check at index %d in backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPCheck(OperationUpdate, check, backendName, index) },
 	)
 }
 
@@ -2026,9 +2244,7 @@ func NewTCPCheckBackendDelete(backendName string, check *models.TCPCheck, index 
 		check,
 		func(c *models.TCPCheck) *dataplaneapi.TcpCheck { return nil },
 		executors.TCPCheckBackendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete TCP check at index %d from backend '%s'", index, backendName)
-		},
+		func() string { return describeTCPCheck(OperationDelete, check, backendName, index) },
 	)
 }
 
@@ -2047,9 +2263,7 @@ func NewCaptureFrontendCreate(frontendName string, capture *models.Capture, inde
 		capture,
 		transform.ToAPICapture,
 		executors.DeclareCaptureFrontendCreate(),
-		func() string {
-			return fmt.Sprintf("Create capture at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeCapture(OperationCreate, capture, frontendName, index) },
 	)
 }
 
@@ -2064,9 +2278,7 @@ func NewCaptureFrontendUpdate(frontendName string, capture *models.Capture, inde
 		capture,
 		transform.ToAPICapture,
 		executors.DeclareCaptureFrontendUpdate(),
-		func() string {
-			return fmt.Sprintf("Update capture at index %d in frontend '%s'", index, frontendName)
-		},
+		func() string { return describeCapture(OperationUpdate, capture, frontendName, index) },
 	)
 }
 
@@ -2081,8 +2293,6 @@ func NewCaptureFrontendDelete(frontendName string, capture *models.Capture, inde
 		capture,
 		func(c *models.Capture) *dataplaneapi.Capture { return nil },
 		executors.DeclareCaptureFrontendDelete(),
-		func() string {
-			return fmt.Sprintf("Delete capture at index %d from frontend '%s'", index, frontendName)
-		},
+		func() string { return describeCapture(OperationDelete, capture, frontendName, index) },
 	)
 }
