@@ -5,12 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"mime/multipart"
 	"net/http"
-	"net/textproto"
-	"path/filepath"
-	"strings"
 
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
 )
@@ -19,44 +14,13 @@ import (
 // The API replaces dots in the filename (excluding the extension) with underscores.
 // For example: "example.com.crtlist" becomes "example_com.crtlist".
 func sanitizeCRTListName(name string) string {
-	// Get the file extension
-	ext := filepath.Ext(name)
-	if ext == "" {
-		// No extension, replace all dots
-		return strings.ReplaceAll(name, ".", "_")
-	}
-
-	// Get the base name without extension
-	base := strings.TrimSuffix(name, ext)
-
-	// Replace dots in the base name with underscores
-	sanitizedBase := strings.ReplaceAll(base, ".", "_")
-
-	// Return sanitized base + original extension
-	return sanitizedBase + ext
+	return SanitizeStorageName(name)
 }
 
 // unsanitizeCRTListName attempts to reverse the sanitization.
 // This is a best-effort conversion and may not be perfect for all cases.
-// For filenames like "example_com.crtlist", we assume underscores between
-// word-like segments were originally dots (common for domain names).
 func unsanitizeCRTListName(name string) string {
-	// Get the file extension
-	ext := filepath.Ext(name)
-	if ext == "" {
-		// No extension, can't reliably unsanitize
-		return name
-	}
-
-	// Get the base name without extension
-	base := strings.TrimSuffix(name, ext)
-
-	// Replace underscores with dots in the base name
-	// This assumes the original name was a domain name
-	unsanitizedBase := strings.ReplaceAll(base, "_", ".")
-
-	// Return unsanitized base + original extension
-	return unsanitizedBase + ext
+	return UnsanitizeStorageName(name)
 }
 
 // GetAllCRTListFiles retrieves all crt-list file names from the storage.
@@ -128,23 +92,7 @@ func (c *DataplaneClient) GetCRTListFileContent(ctx context.Context, name string
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("crt-list file '%s' not found", name)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("get crt-list file '%s' failed with status %d", name, resp.StatusCode)
-	}
-
-	// Read the raw crt-list file content (similar to map files)
-	// The API returns the raw content directly, not wrapped in JSON
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body for crt-list file '%s': %w", name, err)
-	}
-
-	// Return the raw content as a string
-	return string(bodyBytes), nil
+	return readRawStorageContent(resp, "crt-list file", name)
 }
 
 // CreateCRTListFile creates a new crt-list file using multipart form-data.
@@ -160,30 +108,10 @@ func (c *DataplaneClient) CreateCRTListFile(ctx context.Context, name, content s
 	// Sanitize the name for the API (e.g., "example.com.crtlist" -> "example_com.crtlist")
 	sanitizedName := sanitizeCRTListName(name)
 
-	// Create multipart form-data
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// Add crt-list file content as a form file field
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename=%q`, sanitizedName))
-	h.Set("Content-Type", "application/octet-stream")
-
-	part, err := writer.CreatePart(h)
+	body, contentType, err := buildMultipartFilePayload(sanitizedName, content)
 	if err != nil {
-		return fmt.Errorf("failed to create multipart part: %w", err)
+		return fmt.Errorf("failed to build payload for crt-list file '%s': %w", name, err)
 	}
-
-	if _, err := part.Write([]byte(content)); err != nil {
-		return fmt.Errorf("failed to write crt-list file content: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", err)
-	}
-
-	// Send request
-	contentType := writer.FormDataContentType()
 
 	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
 		V32: func(c *v32.Client) (*http.Response, error) {
@@ -201,17 +129,7 @@ func (c *DataplaneClient) CreateCRTListFile(ctx context.Context, name, content s
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return fmt.Errorf("crt-list file '%s' already exists", name)
-	}
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		// Try to read error body for more details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create crt-list file '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return checkCreateResponse(resp, "crt-list file", name)
 }
 
 // UpdateCRTListFile updates an existing crt-list file using text/plain content-type.
@@ -243,18 +161,7 @@ func (c *DataplaneClient) UpdateCRTListFile(ctx context.Context, name, content s
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("crt-list file '%s' not found", name)
-	}
-
-	// Accept both 200 (OK) and 202 (Accepted) as success
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		// Try to read error body for more details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("update crt-list file '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return checkUpdateResponse(resp, "crt-list file", name)
 }
 
 // DeleteCRTListFile deletes a crt-list file by name.
@@ -281,14 +188,5 @@ func (c *DataplaneClient) DeleteCRTListFile(ctx context.Context, name string) er
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("crt-list file '%s' not found", name)
-	}
-
-	// Accept 200 (OK), 202 (Accepted), and 204 (No Content) as success
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("delete crt-list file '%s' failed with status %d", name, resp.StatusCode)
-	}
-
-	return nil
+	return checkDeleteResponse(resp, "crt-list file", name)
 }

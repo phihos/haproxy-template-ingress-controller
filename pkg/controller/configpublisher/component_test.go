@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"haproxy-template-ic/pkg/apis/haproxytemplate/v1alpha1"
 	"haproxy-template-ic/pkg/controller/events"
 	busevents "haproxy-template-ic/pkg/events"
 	crdclientfake "haproxy-template-ic/pkg/generated/clientset/versioned/fake"
@@ -48,9 +49,90 @@ func testLogger() *slog.Logger {
 // 4. Component publishes runtime config CRs via Publisher.
 // 5. Component publishes ConfigPublishedEvent with correct metadata.
 func TestComponent_ConfigPublishedEvent(t *testing.T) {
-	// TODO: Publish complete event flow (ConfigValidatedEvent, TemplateRenderedEvent, ValidationCompletedEvent)
-	// and verify ConfigPublishedEvent is emitted with correct metadata.
-	t.Skip("TODO: Implement full event flow test")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Setup
+	k8sClient := k8sfake.NewSimpleClientset()
+	crdClient := crdclientfake.NewSimpleClientset()
+	eventBus := busevents.NewEventBus(100)
+
+	publisher := configpublisher.New(k8sClient, crdClient, testLogger())
+	component := New(publisher, eventBus, testLogger())
+
+	// Subscribe to capture ConfigPublishedEvent
+	eventChan := eventBus.Subscribe(50)
+
+	// Start event bus and component
+	eventBus.Start()
+	go component.Start(ctx)
+
+	// Give component time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Create template config for ConfigValidatedEvent
+	templateConfig := &v1alpha1.HAProxyTemplateConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-config",
+			Namespace: "default",
+			UID:       "test-uid-456",
+		},
+	}
+
+	// Step 1: Publish ConfigValidatedEvent to cache template config
+	eventBus.Publish(events.NewConfigValidatedEvent(
+		nil, // Config (not used by component)
+		templateConfig,
+		"v1",
+		"secret-v1",
+	))
+
+	// Step 2: Publish TemplateRenderedEvent to cache rendered config
+	testHAProxyConfig := "global\n  daemon\n\ndefaults\n  mode http\n"
+	eventBus.Publish(events.NewTemplateRenderedEvent(
+		testHAProxyConfig,
+		testHAProxyConfig, // validation config
+		nil,               // validation paths
+		nil,               // auxiliary files
+		0,                 // aux file count
+		100,               // duration ms
+	))
+
+	// Step 3: Publish ValidationCompletedEvent to trigger publishing
+	eventBus.Publish(events.NewValidationCompletedEvent(nil, 50))
+
+	// Wait for ConfigPublishedEvent
+	var receivedEvent *events.ConfigPublishedEvent
+	timeout := time.After(2 * time.Second)
+
+eventLoop:
+	for {
+		select {
+		case event := <-eventChan:
+			if published, ok := event.(*events.ConfigPublishedEvent); ok {
+				receivedEvent = published
+				break eventLoop
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for ConfigPublishedEvent")
+		}
+	}
+
+	// Verify ConfigPublishedEvent metadata
+	require.NotNil(t, receivedEvent)
+	assert.Equal(t, "test-config-haproxycfg", receivedEvent.RuntimeConfigName)
+	assert.Equal(t, "default", receivedEvent.RuntimeConfigNamespace)
+	assert.Equal(t, 0, receivedEvent.MapFileCount)
+	assert.Equal(t, 0, receivedEvent.SecretCount)
+
+	// Verify runtime config was created in Kubernetes
+	runtimeConfig, err := crdClient.HaproxyTemplateICV1alpha1().
+		HAProxyCfgs("default").
+		Get(ctx, "test-config-haproxycfg", metav1.GetOptions{})
+
+	require.NoError(t, err)
+	assert.Equal(t, "test-config-haproxycfg", runtimeConfig.Name)
+	assert.Contains(t, runtimeConfig.Spec.Content, "global")
 }
 
 // TestComponent_ConfigAppliedToPodEvent tests the component's response to ConfigAppliedToPodEvent.

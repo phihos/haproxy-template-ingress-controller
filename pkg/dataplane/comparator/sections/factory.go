@@ -55,9 +55,9 @@ func NewBackendCreate(backend *models.Backend) Operation {
 		PriorityBackend,
 		backend,
 		transform.ToAPIBackend,
-		func(b *models.Backend) string { return b.Name },
+		BackendName,
 		executors.BackendCreate(),
-		func() string { return fmt.Sprintf("Create backend '%s'", backend.Name) },
+		DescribeTopLevel(OperationCreate, "backend", backend.Name),
 	)
 }
 
@@ -69,9 +69,9 @@ func NewBackendUpdate(backend *models.Backend) Operation {
 		PriorityBackend,
 		backend,
 		transform.ToAPIBackend,
-		func(b *models.Backend) string { return b.Name },
+		BackendName,
 		executors.BackendUpdate(),
-		func() string { return fmt.Sprintf("Update backend '%s'", backend.Name) },
+		DescribeTopLevel(OperationUpdate, "backend", backend.Name),
 	)
 }
 
@@ -82,10 +82,10 @@ func NewBackendDelete(backend *models.Backend) Operation {
 		"backend",
 		PriorityBackend,
 		backend,
-		func(b *models.Backend) *dataplaneapi.Backend { return nil }, // Not needed for delete
-		func(b *models.Backend) string { return b.Name },
+		NilBackend,
+		BackendName,
 		executors.BackendDelete(),
-		func() string { return fmt.Sprintf("Delete backend '%s'", backend.Name) },
+		DescribeTopLevel(OperationDelete, "backend", backend.Name),
 	)
 }
 
@@ -101,9 +101,9 @@ func NewFrontendCreate(frontend *models.Frontend) Operation {
 		PriorityFrontend,
 		frontend,
 		transform.ToAPIFrontend,
-		func(f *models.Frontend) string { return f.Name },
+		FrontendName,
 		executors.FrontendCreate(),
-		func() string { return fmt.Sprintf("Create frontend '%s'", frontend.Name) },
+		DescribeTopLevel(OperationCreate, "frontend", frontend.Name),
 	)
 }
 
@@ -115,9 +115,9 @@ func NewFrontendUpdate(frontend *models.Frontend) Operation {
 		PriorityFrontend,
 		frontend,
 		transform.ToAPIFrontend,
-		func(f *models.Frontend) string { return f.Name },
+		FrontendName,
 		executors.FrontendUpdate(),
-		func() string { return fmt.Sprintf("Update frontend '%s'", frontend.Name) },
+		DescribeTopLevel(OperationUpdate, "frontend", frontend.Name),
 	)
 }
 
@@ -128,10 +128,10 @@ func NewFrontendDelete(frontend *models.Frontend) Operation {
 		"frontend",
 		PriorityFrontend,
 		frontend,
-		func(f *models.Frontend) *dataplaneapi.Frontend { return nil }, // Not needed for delete
-		func(f *models.Frontend) string { return f.Name },
+		NilFrontend,
+		FrontendName,
 		executors.FrontendDelete(),
-		func() string { return fmt.Sprintf("Delete frontend '%s'", frontend.Name) },
+		DescribeTopLevel(OperationDelete, "frontend", frontend.Name),
 	)
 }
 
@@ -147,9 +147,9 @@ func NewDefaultsCreate(defaults *models.Defaults) Operation {
 		PriorityDefaults,
 		defaults,
 		transform.ToAPIDefaults,
-		func(d *models.Defaults) string { return d.Name },
+		DefaultsName,
 		executors.DefaultsCreate(),
-		func() string { return fmt.Sprintf("Create defaults section '%s'", defaults.Name) },
+		DescribeTopLevel(OperationCreate, "defaults section", defaults.Name),
 	)
 }
 
@@ -161,9 +161,9 @@ func NewDefaultsUpdate(defaults *models.Defaults) Operation {
 		PriorityDefaults,
 		defaults,
 		transform.ToAPIDefaults,
-		func(d *models.Defaults) string { return d.Name },
+		DefaultsName,
 		executors.DefaultsUpdate(),
-		func() string { return fmt.Sprintf("Update defaults section '%s'", defaults.Name) },
+		DescribeTopLevel(OperationUpdate, "defaults section", defaults.Name),
 	)
 }
 
@@ -174,10 +174,10 @@ func NewDefaultsDelete(defaults *models.Defaults) Operation {
 		"defaults",
 		PriorityDefaults,
 		defaults,
-		func(d *models.Defaults) *dataplaneapi.Defaults { return nil }, // Not needed for delete
-		func(d *models.Defaults) string { return d.Name },
+		NilDefaults,
+		DefaultsName,
 		executors.DefaultsDelete(),
-		func() string { return fmt.Sprintf("Delete defaults section '%s'", defaults.Name) },
+		DescribeTopLevel(OperationDelete, "defaults section", defaults.Name),
 	)
 }
 
@@ -212,7 +212,7 @@ func NewACLFrontendCreate(frontendName string, acl *models.ACL, index int) Opera
 		acl,
 		transform.ToAPIACL,
 		executors.ACLFrontendCreate(),
-		func() string { return fmt.Sprintf("Create ACL '%s' in frontend '%s'", acl.ACLName, frontendName) },
+		DescribeACL(OperationCreate, acl.ACLName, "frontend", frontendName),
 	)
 }
 
@@ -227,7 +227,7 @@ func NewACLFrontendUpdate(frontendName string, acl *models.ACL, index int) Opera
 		acl,
 		transform.ToAPIACL,
 		executors.ACLFrontendUpdate(),
-		func() string { return fmt.Sprintf("Update ACL '%s' in frontend '%s'", acl.ACLName, frontendName) },
+		DescribeACL(OperationUpdate, acl.ACLName, "frontend", frontendName),
 	)
 }
 
@@ -240,9 +240,9 @@ func NewACLFrontendDelete(frontendName string, acl *models.ACL, index int) Opera
 		frontendName,
 		index,
 		acl,
-		func(a *models.ACL) *dataplaneapi.Acl { return nil },
+		NilACL,
 		executors.ACLFrontendDelete(),
-		func() string { return fmt.Sprintf("Delete ACL '%s' from frontend '%s'", acl.ACLName, frontendName) },
+		DescribeACL(OperationDelete, acl.ACLName, "frontend", frontendName),
 	)
 }
 
@@ -257,7 +257,7 @@ func NewACLBackendCreate(backendName string, acl *models.ACL, index int) Operati
 		acl,
 		transform.ToAPIACL,
 		executors.ACLBackendCreate(),
-		func() string { return fmt.Sprintf("Create ACL '%s' in backend '%s'", acl.ACLName, backendName) },
+		DescribeACL(OperationCreate, acl.ACLName, "backend", backendName),
 	)
 }
 
@@ -272,7 +272,7 @@ func NewACLBackendUpdate(backendName string, acl *models.ACL, index int) Operati
 		acl,
 		transform.ToAPIACL,
 		executors.ACLBackendUpdate(),
-		func() string { return fmt.Sprintf("Update ACL '%s' in backend '%s'", acl.ACLName, backendName) },
+		DescribeACL(OperationUpdate, acl.ACLName, "backend", backendName),
 	)
 }
 
@@ -285,9 +285,9 @@ func NewACLBackendDelete(backendName string, acl *models.ACL, index int) Operati
 		backendName,
 		index,
 		acl,
-		func(a *models.ACL) *dataplaneapi.Acl { return nil },
+		NilACL,
 		executors.ACLBackendDelete(),
-		func() string { return fmt.Sprintf("Delete ACL '%s' from backend '%s'", acl.ACLName, backendName) },
+		DescribeACL(OperationDelete, acl.ACLName, "backend", backendName),
 	)
 }
 
@@ -759,6 +759,9 @@ func NewLogTargetBackendDelete(backendName string, logTarget *models.LogTarget, 
 // Note: Binds use dataplaneapi.Bind directly (already transformed before factory call)
 // =============================================================================
 
+// identityBindAPI returns the bind as-is (already API type).
+func identityBindAPI(b *dataplaneapi.Bind) *dataplaneapi.Bind { return b }
+
 // NewBindFrontendCreate creates an operation to create a bind in a frontend.
 func NewBindFrontendCreate(frontendName, bindName string, bind *dataplaneapi.Bind) Operation {
 	return NewNameChildOp(
@@ -768,9 +771,9 @@ func NewBindFrontendCreate(frontendName, bindName string, bind *dataplaneapi.Bin
 		frontendName,
 		bindName,
 		bind,
-		func(b *dataplaneapi.Bind) *dataplaneapi.Bind { return b }, // Already API type
+		identityBindAPI,
 		executors.BindFrontendCreate(frontendName),
-		func() string { return fmt.Sprintf("Create bind '%s' in frontend '%s'", bindName, frontendName) },
+		DescribeNamedChild(OperationCreate, "bind", bindName, "frontend", frontendName),
 	)
 }
 
@@ -783,9 +786,9 @@ func NewBindFrontendUpdate(frontendName, bindName string, bind *dataplaneapi.Bin
 		frontendName,
 		bindName,
 		bind,
-		func(b *dataplaneapi.Bind) *dataplaneapi.Bind { return b }, // Already API type
+		identityBindAPI,
 		executors.BindFrontendUpdate(frontendName),
-		func() string { return fmt.Sprintf("Update bind '%s' in frontend '%s'", bindName, frontendName) },
+		DescribeNamedChild(OperationUpdate, "bind", bindName, "frontend", frontendName),
 	)
 }
 
@@ -798,9 +801,9 @@ func NewBindFrontendDelete(frontendName, bindName string, bind *dataplaneapi.Bin
 		frontendName,
 		bindName,
 		bind,
-		func(b *dataplaneapi.Bind) *dataplaneapi.Bind { return nil },
+		NilBindAPI,
 		executors.BindFrontendDelete(frontendName),
-		func() string { return fmt.Sprintf("Delete bind '%s' from frontend '%s'", bindName, frontendName) },
+		DescribeNamedChild(OperationDelete, "bind", bindName, "frontend", frontendName),
 	)
 }
 
@@ -817,9 +820,9 @@ func NewUserCreate(userlistName string, user *models.User) Operation {
 		userlistName,
 		user,
 		transform.ToAPIUser,
-		func(u *models.User) string { return u.Username },
+		UserName,
 		executors.UserCreate(userlistName),
-		func() string { return fmt.Sprintf("Create user '%s' in userlist '%s'", user.Username, userlistName) },
+		DescribeContainerChild(OperationCreate, "user", user.Username, "userlist", userlistName),
 	)
 }
 
@@ -832,9 +835,9 @@ func NewUserUpdate(userlistName string, user *models.User) Operation {
 		userlistName,
 		user,
 		transform.ToAPIUser,
-		func(u *models.User) string { return u.Username },
+		UserName,
 		executors.UserUpdate(userlistName),
-		func() string { return fmt.Sprintf("Update user '%s' in userlist '%s'", user.Username, userlistName) },
+		DescribeContainerChild(OperationUpdate, "user", user.Username, "userlist", userlistName),
 	)
 }
 
@@ -846,10 +849,10 @@ func NewUserDelete(userlistName string, user *models.User) Operation {
 		PriorityUser,
 		userlistName,
 		user,
-		func(u *models.User) *dataplaneapi.User { return nil },
-		func(u *models.User) string { return u.Username },
+		NilUser,
+		UserName,
 		executors.UserDelete(userlistName),
-		func() string { return fmt.Sprintf("Delete user '%s' from userlist '%s'", user.Username, userlistName) },
+		DescribeContainerChild(OperationDelete, "user", user.Username, "userlist", userlistName),
 	)
 }
 
@@ -866,9 +869,9 @@ func NewMailerEntryCreate(mailersName string, entry *models.MailerEntry) Operati
 		mailersName,
 		entry,
 		transform.ToAPIMailerEntry,
-		func(e *models.MailerEntry) string { return e.Name },
+		MailerEntryName,
 		executors.MailerEntryCreate(mailersName),
-		func() string { return fmt.Sprintf("Create mailer entry '%s' in mailers '%s'", entry.Name, mailersName) },
+		DescribeContainerChild(OperationCreate, "mailer entry", entry.Name, "mailers", mailersName),
 	)
 }
 
@@ -881,9 +884,9 @@ func NewMailerEntryUpdate(mailersName string, entry *models.MailerEntry) Operati
 		mailersName,
 		entry,
 		transform.ToAPIMailerEntry,
-		func(e *models.MailerEntry) string { return e.Name },
+		MailerEntryName,
 		executors.MailerEntryUpdate(mailersName),
-		func() string { return fmt.Sprintf("Update mailer entry '%s' in mailers '%s'", entry.Name, mailersName) },
+		DescribeContainerChild(OperationUpdate, "mailer entry", entry.Name, "mailers", mailersName),
 	)
 }
 
@@ -895,12 +898,10 @@ func NewMailerEntryDelete(mailersName string, entry *models.MailerEntry) Operati
 		PriorityMailers,
 		mailersName,
 		entry,
-		func(e *models.MailerEntry) *dataplaneapi.MailerEntry { return nil },
-		func(e *models.MailerEntry) string { return e.Name },
+		NilMailerEntry,
+		MailerEntryName,
 		executors.MailerEntryDelete(mailersName),
-		func() string {
-			return fmt.Sprintf("Delete mailer entry '%s' from mailers '%s'", entry.Name, mailersName)
-		},
+		DescribeContainerChild(OperationDelete, "mailer entry", entry.Name, "mailers", mailersName),
 	)
 }
 
@@ -917,9 +918,9 @@ func NewPeerEntryCreate(peerSectionName string, entry *models.PeerEntry) Operati
 		peerSectionName,
 		entry,
 		transform.ToAPIPeerEntry,
-		func(e *models.PeerEntry) string { return e.Name },
+		PeerEntryName,
 		executors.PeerEntryCreate(peerSectionName),
-		func() string { return fmt.Sprintf("Create peer entry '%s' in peers '%s'", entry.Name, peerSectionName) },
+		DescribeContainerChild(OperationCreate, "peer entry", entry.Name, "peers", peerSectionName),
 	)
 }
 
@@ -932,9 +933,9 @@ func NewPeerEntryUpdate(peerSectionName string, entry *models.PeerEntry) Operati
 		peerSectionName,
 		entry,
 		transform.ToAPIPeerEntry,
-		func(e *models.PeerEntry) string { return e.Name },
+		PeerEntryName,
 		executors.PeerEntryUpdate(peerSectionName),
-		func() string { return fmt.Sprintf("Update peer entry '%s' in peers '%s'", entry.Name, peerSectionName) },
+		DescribeContainerChild(OperationUpdate, "peer entry", entry.Name, "peers", peerSectionName),
 	)
 }
 
@@ -946,12 +947,10 @@ func NewPeerEntryDelete(peerSectionName string, entry *models.PeerEntry) Operati
 		PriorityPeerEntry,
 		peerSectionName,
 		entry,
-		func(e *models.PeerEntry) *dataplaneapi.PeerEntry { return nil },
-		func(e *models.PeerEntry) string { return e.Name },
+		NilPeerEntry,
+		PeerEntryName,
 		executors.PeerEntryDelete(peerSectionName),
-		func() string {
-			return fmt.Sprintf("Delete peer entry '%s' from peers '%s'", entry.Name, peerSectionName)
-		},
+		DescribeContainerChild(OperationDelete, "peer entry", entry.Name, "peers", peerSectionName),
 	)
 }
 
@@ -968,11 +967,9 @@ func NewNameserverCreate(resolverName string, nameserver *models.Nameserver) Ope
 		resolverName,
 		nameserver,
 		transform.ToAPINameserver,
-		func(n *models.Nameserver) string { return n.Name },
+		NameserverName,
 		executors.NameserverCreate(resolverName),
-		func() string {
-			return fmt.Sprintf("Create nameserver '%s' in resolver '%s'", nameserver.Name, resolverName)
-		},
+		DescribeContainerChild(OperationCreate, "nameserver", nameserver.Name, "resolver", resolverName),
 	)
 }
 
@@ -985,11 +982,9 @@ func NewNameserverUpdate(resolverName string, nameserver *models.Nameserver) Ope
 		resolverName,
 		nameserver,
 		transform.ToAPINameserver,
-		func(n *models.Nameserver) string { return n.Name },
+		NameserverName,
 		executors.NameserverUpdate(resolverName),
-		func() string {
-			return fmt.Sprintf("Update nameserver '%s' in resolver '%s'", nameserver.Name, resolverName)
-		},
+		DescribeContainerChild(OperationUpdate, "nameserver", nameserver.Name, "resolver", resolverName),
 	)
 }
 
@@ -1001,12 +996,10 @@ func NewNameserverDelete(resolverName string, nameserver *models.Nameserver) Ope
 		PriorityResolver,
 		resolverName,
 		nameserver,
-		func(n *models.Nameserver) *dataplaneapi.Nameserver { return nil },
-		func(n *models.Nameserver) string { return n.Name },
+		NilNameserver,
+		NameserverName,
 		executors.NameserverDelete(resolverName),
-		func() string {
-			return fmt.Sprintf("Delete nameserver '%s' from resolver '%s'", nameserver.Name, resolverName)
-		},
+		DescribeContainerChild(OperationDelete, "nameserver", nameserver.Name, "resolver", resolverName),
 	)
 }
 
@@ -1025,7 +1018,7 @@ func NewServerCreate(backendName string, server *models.Server) Operation {
 		server,
 		transform.ToAPIServer,
 		executors.ServerCreate(backendName),
-		func() string { return fmt.Sprintf("Create server '%s' in backend '%s'", server.Name, backendName) },
+		DescribeNamedChild(OperationCreate, "server", server.Name, "backend", backendName),
 	)
 }
 
@@ -1040,7 +1033,7 @@ func NewServerUpdate(backendName string, server *models.Server) Operation {
 		server,
 		transform.ToAPIServer,
 		executors.ServerUpdate(backendName),
-		func() string { return fmt.Sprintf("Update server '%s' in backend '%s'", server.Name, backendName) },
+		DescribeNamedChild(OperationUpdate, "server", server.Name, "backend", backendName),
 	)
 }
 
@@ -1053,9 +1046,9 @@ func NewServerDelete(backendName string, server *models.Server) Operation {
 		backendName,
 		server.Name,
 		server,
-		func(s *models.Server) *dataplaneapi.Server { return nil },
+		NilServer,
 		executors.ServerDelete(backendName),
-		func() string { return fmt.Sprintf("Delete server '%s' from backend '%s'", server.Name, backendName) },
+		DescribeNamedChild(OperationDelete, "server", server.Name, "backend", backendName),
 	)
 }
 
@@ -1074,9 +1067,7 @@ func NewServerTemplateCreate(backendName string, serverTemplate *models.ServerTe
 		serverTemplate,
 		transform.ToAPIServerTemplate,
 		executors.ServerTemplateCreate(backendName),
-		func() string {
-			return fmt.Sprintf("Create server template '%s' in backend '%s'", serverTemplate.Prefix, backendName)
-		},
+		DescribeNamedChild(OperationCreate, "server template", serverTemplate.Prefix, "backend", backendName),
 	)
 }
 
@@ -1091,9 +1082,7 @@ func NewServerTemplateUpdate(backendName string, serverTemplate *models.ServerTe
 		serverTemplate,
 		transform.ToAPIServerTemplate,
 		executors.ServerTemplateUpdate(backendName),
-		func() string {
-			return fmt.Sprintf("Update server template '%s' in backend '%s'", serverTemplate.Prefix, backendName)
-		},
+		DescribeNamedChild(OperationUpdate, "server template", serverTemplate.Prefix, "backend", backendName),
 	)
 }
 
@@ -1106,11 +1095,9 @@ func NewServerTemplateDelete(backendName string, serverTemplate *models.ServerTe
 		backendName,
 		serverTemplate.Prefix,
 		serverTemplate,
-		func(st *models.ServerTemplate) *dataplaneapi.ServerTemplate { return nil },
+		NilServerTemplate,
 		executors.ServerTemplateDelete(backendName),
-		func() string {
-			return fmt.Sprintf("Delete server template '%s' from backend '%s'", serverTemplate.Prefix, backendName)
-		},
+		DescribeNamedChild(OperationDelete, "server template", serverTemplate.Prefix, "backend", backendName),
 	)
 }
 
@@ -1126,9 +1113,9 @@ func NewCacheCreate(cache *models.Cache) Operation {
 		PriorityCache,
 		cache,
 		transform.ToAPICache,
-		func(c *models.Cache) string { return ptrStr(c.Name) },
+		CacheName,
 		executors.CacheCreate(),
-		func() string { return fmt.Sprintf("Create cache '%s'", ptrStr(cache.Name)) },
+		DescribeTopLevel(OperationCreate, "cache", CacheName(cache)),
 	)
 }
 
@@ -1140,9 +1127,9 @@ func NewCacheUpdate(cache *models.Cache) Operation {
 		PriorityCache,
 		cache,
 		transform.ToAPICache,
-		func(c *models.Cache) string { return ptrStr(c.Name) },
+		CacheName,
 		executors.CacheUpdate(),
-		func() string { return fmt.Sprintf("Update cache '%s'", ptrStr(cache.Name)) },
+		DescribeTopLevel(OperationUpdate, "cache", CacheName(cache)),
 	)
 }
 
@@ -1153,10 +1140,10 @@ func NewCacheDelete(cache *models.Cache) Operation {
 		"cache",
 		PriorityCache,
 		cache,
-		func(c *models.Cache) *dataplaneapi.Cache { return nil },
-		func(c *models.Cache) string { return ptrStr(c.Name) },
+		NilCache,
+		CacheName,
 		executors.CacheDelete(),
-		func() string { return fmt.Sprintf("Delete cache '%s'", ptrStr(cache.Name)) },
+		DescribeTopLevel(OperationDelete, "cache", CacheName(cache)),
 	)
 }
 
@@ -1172,9 +1159,9 @@ func NewHTTPErrorsSectionCreate(section *models.HTTPErrorsSection) Operation {
 		PriorityHTTPErrors,
 		section,
 		transform.ToAPIHTTPErrorsSection,
-		func(s *models.HTTPErrorsSection) string { return s.Name },
+		HTTPErrorsSectionName,
 		executors.HTTPErrorsSectionCreate(),
-		func() string { return fmt.Sprintf("Create http-errors section '%s'", section.Name) },
+		DescribeTopLevel(OperationCreate, "http-errors", section.Name),
 	)
 }
 
@@ -1186,9 +1173,9 @@ func NewHTTPErrorsSectionUpdate(section *models.HTTPErrorsSection) Operation {
 		PriorityHTTPErrors,
 		section,
 		transform.ToAPIHTTPErrorsSection,
-		func(s *models.HTTPErrorsSection) string { return s.Name },
+		HTTPErrorsSectionName,
 		executors.HTTPErrorsSectionUpdate(),
-		func() string { return fmt.Sprintf("Update http-errors section '%s'", section.Name) },
+		DescribeTopLevel(OperationUpdate, "http-errors", section.Name),
 	)
 }
 
@@ -1199,10 +1186,10 @@ func NewHTTPErrorsSectionDelete(section *models.HTTPErrorsSection) Operation {
 		"http_errors",
 		PriorityHTTPErrors,
 		section,
-		func(s *models.HTTPErrorsSection) *dataplaneapi.HttpErrorsSection { return nil },
-		func(s *models.HTTPErrorsSection) string { return s.Name },
+		NilHTTPErrorsSection,
+		HTTPErrorsSectionName,
 		executors.HTTPErrorsSectionDelete(),
-		func() string { return fmt.Sprintf("Delete http-errors section '%s'", section.Name) },
+		DescribeTopLevel(OperationDelete, "http-errors", section.Name),
 	)
 }
 
@@ -1218,9 +1205,9 @@ func NewLogForwardCreate(logForward *models.LogForward) Operation {
 		PriorityLogForward,
 		logForward,
 		transform.ToAPILogForward,
-		func(l *models.LogForward) string { return l.Name },
+		LogForwardName,
 		executors.LogForwardCreate(),
-		func() string { return fmt.Sprintf("Create log-forward '%s'", logForward.Name) },
+		DescribeTopLevel(OperationCreate, "log-forward", logForward.Name),
 	)
 }
 
@@ -1232,9 +1219,9 @@ func NewLogForwardUpdate(logForward *models.LogForward) Operation {
 		PriorityLogForward,
 		logForward,
 		transform.ToAPILogForward,
-		func(l *models.LogForward) string { return l.Name },
+		LogForwardName,
 		executors.LogForwardUpdate(),
-		func() string { return fmt.Sprintf("Update log-forward '%s'", logForward.Name) },
+		DescribeTopLevel(OperationUpdate, "log-forward", logForward.Name),
 	)
 }
 
@@ -1245,10 +1232,10 @@ func NewLogForwardDelete(logForward *models.LogForward) Operation {
 		"log_forward",
 		PriorityLogForward,
 		logForward,
-		func(l *models.LogForward) *dataplaneapi.LogForward { return nil },
-		func(l *models.LogForward) string { return l.Name },
+		NilLogForward,
+		LogForwardName,
 		executors.LogForwardDelete(),
-		func() string { return fmt.Sprintf("Delete log-forward '%s'", logForward.Name) },
+		DescribeTopLevel(OperationDelete, "log-forward", logForward.Name),
 	)
 }
 
@@ -1264,9 +1251,9 @@ func NewMailersSectionCreate(section *models.MailersSection) Operation {
 		PriorityMailers,
 		section,
 		transform.ToAPIMailersSection,
-		func(s *models.MailersSection) string { return s.Name },
+		MailersSectionName,
 		executors.MailersSectionCreate(),
-		func() string { return fmt.Sprintf("Create mailers section '%s'", section.Name) },
+		DescribeTopLevel(OperationCreate, "mailers", section.Name),
 	)
 }
 
@@ -1278,9 +1265,9 @@ func NewMailersSectionUpdate(section *models.MailersSection) Operation {
 		PriorityMailers,
 		section,
 		transform.ToAPIMailersSection,
-		func(s *models.MailersSection) string { return s.Name },
+		MailersSectionName,
 		executors.MailersSectionUpdate(),
-		func() string { return fmt.Sprintf("Update mailers section '%s'", section.Name) },
+		DescribeTopLevel(OperationUpdate, "mailers", section.Name),
 	)
 }
 
@@ -1291,10 +1278,10 @@ func NewMailersSectionDelete(section *models.MailersSection) Operation {
 		"mailers",
 		PriorityMailers,
 		section,
-		func(s *models.MailersSection) *dataplaneapi.MailersSection { return nil },
-		func(s *models.MailersSection) string { return s.Name },
+		NilMailersSection,
+		MailersSectionName,
 		executors.MailersSectionDelete(),
-		func() string { return fmt.Sprintf("Delete mailers section '%s'", section.Name) },
+		DescribeTopLevel(OperationDelete, "mailers", section.Name),
 	)
 }
 
@@ -1311,9 +1298,9 @@ func NewPeerSectionCreate(section *models.PeerSection) Operation {
 		PriorityPeer,
 		section,
 		transform.ToAPIPeerSection,
-		func(s *models.PeerSection) string { return s.Name },
+		PeerSectionName,
 		executors.PeerSectionCreate(),
-		func() string { return fmt.Sprintf("Create peer section '%s'", section.Name) },
+		DescribeTopLevel(OperationCreate, "peers", section.Name),
 	)
 }
 
@@ -1327,9 +1314,9 @@ func NewPeerSectionUpdate(section *models.PeerSection) Operation {
 		PriorityPeer,
 		section,
 		transform.ToAPIPeerSection,
-		func(s *models.PeerSection) string { return s.Name },
+		PeerSectionName,
 		executors.PeerSectionUpdate(),
-		func() string { return fmt.Sprintf("Update peer section '%s'", section.Name) },
+		DescribeTopLevel(OperationUpdate, "peers", section.Name),
 	)
 }
 
@@ -1340,10 +1327,10 @@ func NewPeerSectionDelete(section *models.PeerSection) Operation {
 		"peers",
 		PriorityPeer,
 		section,
-		func(s *models.PeerSection) *dataplaneapi.PeerSection { return nil },
-		func(s *models.PeerSection) string { return s.Name },
+		NilPeerSection,
+		PeerSectionName,
 		executors.PeerSectionDelete(),
-		func() string { return fmt.Sprintf("Delete peer section '%s'", section.Name) },
+		DescribeTopLevel(OperationDelete, "peers", section.Name),
 	)
 }
 
@@ -1359,9 +1346,9 @@ func NewProgramCreate(program *models.Program) Operation {
 		PriorityProgram,
 		program,
 		transform.ToAPIProgram,
-		func(p *models.Program) string { return p.Name },
+		ProgramName,
 		executors.ProgramCreate(),
-		func() string { return fmt.Sprintf("Create program '%s'", program.Name) },
+		DescribeTopLevel(OperationCreate, "program", program.Name),
 	)
 }
 
@@ -1373,9 +1360,9 @@ func NewProgramUpdate(program *models.Program) Operation {
 		PriorityProgram,
 		program,
 		transform.ToAPIProgram,
-		func(p *models.Program) string { return p.Name },
+		ProgramName,
 		executors.ProgramUpdate(),
-		func() string { return fmt.Sprintf("Update program '%s'", program.Name) },
+		DescribeTopLevel(OperationUpdate, "program", program.Name),
 	)
 }
 
@@ -1386,10 +1373,10 @@ func NewProgramDelete(program *models.Program) Operation {
 		"program",
 		PriorityProgram,
 		program,
-		func(p *models.Program) *dataplaneapi.Program { return nil },
-		func(p *models.Program) string { return p.Name },
+		NilProgram,
+		ProgramName,
 		executors.ProgramDelete(),
-		func() string { return fmt.Sprintf("Delete program '%s'", program.Name) },
+		DescribeTopLevel(OperationDelete, "program", program.Name),
 	)
 }
 
@@ -1405,9 +1392,9 @@ func NewResolverCreate(resolver *models.Resolver) Operation {
 		PriorityResolver,
 		resolver,
 		transform.ToAPIResolver,
-		func(r *models.Resolver) string { return r.Name },
+		ResolverName,
 		executors.ResolverCreate(),
-		func() string { return fmt.Sprintf("Create resolver '%s'", resolver.Name) },
+		DescribeTopLevel(OperationCreate, "resolver", resolver.Name),
 	)
 }
 
@@ -1419,9 +1406,9 @@ func NewResolverUpdate(resolver *models.Resolver) Operation {
 		PriorityResolver,
 		resolver,
 		transform.ToAPIResolver,
-		func(r *models.Resolver) string { return r.Name },
+		ResolverName,
 		executors.ResolverUpdate(),
-		func() string { return fmt.Sprintf("Update resolver '%s'", resolver.Name) },
+		DescribeTopLevel(OperationUpdate, "resolver", resolver.Name),
 	)
 }
 
@@ -1432,10 +1419,10 @@ func NewResolverDelete(resolver *models.Resolver) Operation {
 		"resolver",
 		PriorityResolver,
 		resolver,
-		func(r *models.Resolver) *dataplaneapi.Resolver { return nil },
-		func(r *models.Resolver) string { return r.Name },
+		NilResolver,
+		ResolverName,
 		executors.ResolverDelete(),
-		func() string { return fmt.Sprintf("Delete resolver '%s'", resolver.Name) },
+		DescribeTopLevel(OperationDelete, "resolver", resolver.Name),
 	)
 }
 
@@ -1451,9 +1438,9 @@ func NewRingCreate(ring *models.Ring) Operation {
 		PriorityRing,
 		ring,
 		transform.ToAPIRing,
-		func(r *models.Ring) string { return r.Name },
+		RingName,
 		executors.RingCreate(),
-		func() string { return fmt.Sprintf("Create ring '%s'", ring.Name) },
+		DescribeTopLevel(OperationCreate, "ring", ring.Name),
 	)
 }
 
@@ -1465,9 +1452,9 @@ func NewRingUpdate(ring *models.Ring) Operation {
 		PriorityRing,
 		ring,
 		transform.ToAPIRing,
-		func(r *models.Ring) string { return r.Name },
+		RingName,
 		executors.RingUpdate(),
-		func() string { return fmt.Sprintf("Update ring '%s'", ring.Name) },
+		DescribeTopLevel(OperationUpdate, "ring", ring.Name),
 	)
 }
 
@@ -1478,10 +1465,10 @@ func NewRingDelete(ring *models.Ring) Operation {
 		"ring",
 		PriorityRing,
 		ring,
-		func(r *models.Ring) *dataplaneapi.Ring { return nil },
-		func(r *models.Ring) string { return r.Name },
+		NilRing,
+		RingName,
 		executors.RingDelete(),
-		func() string { return fmt.Sprintf("Delete ring '%s'", ring.Name) },
+		DescribeTopLevel(OperationDelete, "ring", ring.Name),
 	)
 }
 
@@ -1497,9 +1484,9 @@ func NewCrtStoreCreate(crtStore *models.CrtStore) Operation {
 		PriorityCrtStore,
 		crtStore,
 		transform.ToAPICrtStore,
-		func(c *models.CrtStore) string { return c.Name },
+		CrtStoreName,
 		executors.CrtStoreCreate(),
-		func() string { return fmt.Sprintf("Create crt-store '%s'", crtStore.Name) },
+		DescribeTopLevel(OperationCreate, "crt-store", crtStore.Name),
 	)
 }
 
@@ -1511,9 +1498,9 @@ func NewCrtStoreUpdate(crtStore *models.CrtStore) Operation {
 		PriorityCrtStore,
 		crtStore,
 		transform.ToAPICrtStore,
-		func(c *models.CrtStore) string { return c.Name },
+		CrtStoreName,
 		executors.CrtStoreUpdate(),
-		func() string { return fmt.Sprintf("Update crt-store '%s'", crtStore.Name) },
+		DescribeTopLevel(OperationUpdate, "crt-store", crtStore.Name),
 	)
 }
 
@@ -1524,10 +1511,10 @@ func NewCrtStoreDelete(crtStore *models.CrtStore) Operation {
 		"crt_store",
 		PriorityCrtStore,
 		crtStore,
-		func(c *models.CrtStore) *dataplaneapi.CrtStore { return nil },
-		func(c *models.CrtStore) string { return c.Name },
+		NilCrtStore,
+		CrtStoreName,
 		executors.CrtStoreDelete(),
-		func() string { return fmt.Sprintf("Delete crt-store '%s'", crtStore.Name) },
+		DescribeTopLevel(OperationDelete, "crt-store", crtStore.Name),
 	)
 }
 
@@ -1543,9 +1530,9 @@ func NewUserlistCreate(userlist *models.Userlist) Operation {
 		PriorityUserlist,
 		userlist,
 		transform.ToAPIUserlist,
-		func(u *models.Userlist) string { return u.Name },
+		UserlistName,
 		executors.UserlistCreate(),
-		func() string { return fmt.Sprintf("Create userlist '%s'", userlist.Name) },
+		DescribeTopLevel(OperationCreate, "userlist", userlist.Name),
 	)
 }
 
@@ -1556,10 +1543,10 @@ func NewUserlistDelete(userlist *models.Userlist) Operation {
 		"userlist",
 		PriorityUserlist,
 		userlist,
-		func(u *models.Userlist) *dataplaneapi.Userlist { return nil },
-		func(u *models.Userlist) string { return u.Name },
+		NilUserlist,
+		UserlistName,
 		executors.UserlistDelete(),
-		func() string { return fmt.Sprintf("Delete userlist '%s'", userlist.Name) },
+		DescribeTopLevel(OperationDelete, "userlist", userlist.Name),
 	)
 }
 
@@ -1575,9 +1562,9 @@ func NewFCGIAppCreate(fcgiApp *models.FCGIApp) Operation {
 		PriorityFCGIApp,
 		fcgiApp,
 		transform.ToAPIFCGIApp,
-		func(f *models.FCGIApp) string { return f.Name },
+		FCGIAppName,
 		executors.FCGIAppCreate(),
-		func() string { return fmt.Sprintf("Create fcgi-app '%s'", fcgiApp.Name) },
+		DescribeTopLevel(OperationCreate, "fcgi-app", fcgiApp.Name),
 	)
 }
 
@@ -1589,9 +1576,9 @@ func NewFCGIAppUpdate(fcgiApp *models.FCGIApp) Operation {
 		PriorityFCGIApp,
 		fcgiApp,
 		transform.ToAPIFCGIApp,
-		func(f *models.FCGIApp) string { return f.Name },
+		FCGIAppName,
 		executors.FCGIAppUpdate(),
-		func() string { return fmt.Sprintf("Update fcgi-app '%s'", fcgiApp.Name) },
+		DescribeTopLevel(OperationUpdate, "fcgi-app", fcgiApp.Name),
 	)
 }
 
@@ -1602,10 +1589,10 @@ func NewFCGIAppDelete(fcgiApp *models.FCGIApp) Operation {
 		"fcgi_app",
 		PriorityFCGIApp,
 		fcgiApp,
-		func(f *models.FCGIApp) *dataplaneapi.FCGIApp { return nil },
-		func(f *models.FCGIApp) string { return f.Name },
+		NilFCGIApp,
+		FCGIAppName,
 		executors.FCGIAppDelete(),
-		func() string { return fmt.Sprintf("Delete fcgi-app '%s'", fcgiApp.Name) },
+		DescribeTopLevel(OperationDelete, "fcgi-app", fcgiApp.Name),
 	)
 }
 

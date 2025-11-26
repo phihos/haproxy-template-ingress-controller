@@ -192,3 +192,192 @@ loop:
 	cancel()
 	time.Sleep(50 * time.Millisecond)
 }
+
+// TestComponent_ConvertEndpoints tests endpoint conversion.
+func TestComponent_ConvertEndpoints(t *testing.T) {
+	bus := busevents.NewEventBus(100)
+	deployer := createTestDeployer(bus)
+
+	t.Run("valid endpoints", func(t *testing.T) {
+		endpoints := []interface{}{
+			dataplane.Endpoint{
+				URL:          "http://localhost:5555",
+				PodName:      "haproxy-0",
+				PodNamespace: "default",
+			},
+			dataplane.Endpoint{
+				URL:          "http://localhost:5556",
+				PodName:      "haproxy-1",
+				PodNamespace: "default",
+			},
+		}
+
+		result := deployer.convertEndpoints(endpoints)
+
+		assert.Len(t, result, 2)
+		assert.Equal(t, "http://localhost:5555", result[0].URL)
+		assert.Equal(t, "http://localhost:5556", result[1].URL)
+	})
+
+	t.Run("empty endpoints", func(t *testing.T) {
+		endpoints := []interface{}{}
+
+		result := deployer.convertEndpoints(endpoints)
+
+		assert.Len(t, result, 0)
+	})
+
+	t.Run("mixed valid and invalid endpoints", func(t *testing.T) {
+		endpoints := []interface{}{
+			dataplane.Endpoint{
+				URL:     "http://localhost:5555",
+				PodName: "haproxy-0",
+			},
+			"invalid-endpoint",
+			dataplane.Endpoint{
+				URL:     "http://localhost:5556",
+				PodName: "haproxy-1",
+			},
+		}
+
+		result := deployer.convertEndpoints(endpoints)
+
+		// Should only include valid endpoints
+		assert.Len(t, result, 2)
+	})
+}
+
+// TestComponent_ConvertAuxFiles tests auxiliary files conversion.
+func TestComponent_ConvertAuxFiles(t *testing.T) {
+	bus := busevents.NewEventBus(100)
+	deployer := createTestDeployer(bus)
+
+	t.Run("nil input", func(t *testing.T) {
+		result := deployer.convertAuxFiles(nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("valid AuxiliaryFiles pointer", func(t *testing.T) {
+		auxFiles := &dataplane.AuxiliaryFiles{}
+
+		result := deployer.convertAuxFiles(auxFiles)
+
+		assert.NotNil(t, result)
+	})
+
+	t.Run("invalid type", func(t *testing.T) {
+		result := deployer.convertAuxFiles("invalid-type")
+		assert.Nil(t, result)
+	})
+}
+
+// TestComponent_ConvertSyncResultToMetadata tests sync result conversion.
+func TestComponent_ConvertSyncResultToMetadata(t *testing.T) {
+	bus := busevents.NewEventBus(100)
+	deployer := createTestDeployer(bus)
+
+	t.Run("nil input", func(t *testing.T) {
+		result := deployer.convertSyncResultToMetadata(nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("valid sync result", func(t *testing.T) {
+		syncResult := &dataplane.SyncResult{
+			ReloadTriggered: true,
+			ReloadID:        "12345",
+			Duration:        100 * time.Millisecond,
+			Retries:         2,
+			FallbackToRaw:   false,
+			Details: dataplane.DiffDetails{
+				TotalOperations:  10,
+				BackendsAdded:    []string{"backend1", "backend2"},
+				BackendsDeleted:  []string{"backend3"},
+				BackendsModified: []string{"backend4"},
+				ServersAdded: map[string][]string{
+					"backend1": {"server1", "server2"},
+				},
+				ServersDeleted: map[string][]string{
+					"backend3": {"server3"},
+				},
+				ServersModified: map[string][]string{
+					"backend4": {"server4"},
+				},
+				FrontendsAdded:    []string{"frontend1"},
+				FrontendsDeleted:  []string{},
+				FrontendsModified: []string{"frontend2"},
+			},
+		}
+
+		result := deployer.convertSyncResultToMetadata(syncResult)
+
+		require.NotNil(t, result)
+		assert.True(t, result.ReloadTriggered)
+		assert.Equal(t, "12345", result.ReloadID)
+		assert.Equal(t, 100*time.Millisecond, result.SyncDuration)
+		assert.Equal(t, 2, result.VersionConflictRetries)
+		assert.False(t, result.FallbackUsed)
+		assert.Equal(t, 10, result.OperationCounts.TotalAPIOperations)
+		assert.Equal(t, 2, result.OperationCounts.BackendsAdded)
+		assert.Equal(t, 1, result.OperationCounts.BackendsRemoved)
+		assert.Equal(t, 1, result.OperationCounts.BackendsModified)
+		assert.Equal(t, 2, result.OperationCounts.ServersAdded)
+		assert.Equal(t, 1, result.OperationCounts.ServersRemoved)
+		assert.Equal(t, 1, result.OperationCounts.ServersModified)
+		assert.Equal(t, 1, result.OperationCounts.FrontendsAdded)
+		assert.Equal(t, 0, result.OperationCounts.FrontendsRemoved)
+		assert.Equal(t, 1, result.OperationCounts.FrontendsModified)
+		assert.Empty(t, result.Error)
+	})
+}
+
+// TestComponent_HandleEvent tests event handling.
+func TestComponent_HandleEvent(t *testing.T) {
+	bus := busevents.NewEventBus(100)
+	deployer := createTestDeployer(bus)
+
+	ctx := context.Background()
+
+	t.Run("ignores non-deployment events", func(t *testing.T) {
+		// Should not panic or error when receiving non-DeploymentScheduledEvent
+		otherEvent := events.NewValidationStartedEvent()
+		deployer.handleEvent(ctx, otherEvent)
+	})
+
+	t.Run("handles DeploymentScheduledEvent", func(t *testing.T) {
+		event := events.NewDeploymentScheduledEvent(
+			"test config",
+			nil,
+			[]interface{}{},
+			"test-runtime-config",
+			"test-namespace",
+			"test",
+		)
+		// Should not panic when receiving valid event with no endpoints
+		deployer.handleEvent(ctx, event)
+	})
+}
+
+// TestComponent_DeploymentInProgressFlag tests the atomic deployment in progress flag.
+func TestComponent_DeploymentInProgressFlag(t *testing.T) {
+	bus := busevents.NewEventBus(100)
+	bus.Start()
+	deployer := createTestDeployer(bus)
+
+	ctx := context.Background()
+
+	// First deployment should succeed
+	event := events.NewDeploymentScheduledEvent(
+		"test config",
+		nil,
+		[]interface{}{},
+		"test-runtime-config",
+		"test-namespace",
+		"test",
+	)
+
+	// Process first event - should set flag
+	deployer.handleDeploymentScheduled(ctx, event)
+
+	// Flag should be cleared after deployToEndpoints completes (even with no endpoints)
+	assert.False(t, deployer.deploymentInProgress.Load())
+}

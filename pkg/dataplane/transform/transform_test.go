@@ -463,3 +463,462 @@ func TestToAPIBackend_InputNotModified(t *testing.T) {
 	resultMetadata := *resultSrv1.Metadata
 	assert.Equal(t, map[string]interface{}{"value": "Original comment"}, resultMetadata["comment"])
 }
+
+// TestAllTransformFunctions_NilInput tests that all transform functions handle nil input gracefully.
+func TestAllTransformFunctions_NilInput(t *testing.T) {
+	assert.Nil(t, ToAPIACL(nil))
+	assert.Nil(t, ToAPIBackend(nil))
+	assert.Nil(t, ToAPIBackendSwitchingRule(nil))
+	assert.Nil(t, ToAPIBind(nil))
+	assert.Nil(t, ToAPICache(nil))
+	assert.Nil(t, ToAPICapture(nil))
+	assert.Nil(t, ToAPICrtStore(nil))
+	assert.Nil(t, ToAPIDefaults(nil))
+	assert.Nil(t, ToAPIFCGIApp(nil))
+	assert.Nil(t, ToAPIFilter(nil))
+	assert.Nil(t, ToAPIFrontend(nil))
+	assert.Nil(t, ToAPIGlobal(nil))
+	assert.Nil(t, ToAPIHTTPAfterResponseRule(nil))
+	assert.Nil(t, ToAPIHTTPCheck(nil))
+	assert.Nil(t, ToAPIHTTPErrorRule(nil))
+	assert.Nil(t, ToAPIHTTPErrorsSection(nil))
+	assert.Nil(t, ToAPIHTTPRequestRule(nil))
+	assert.Nil(t, ToAPIHTTPResponseRule(nil))
+	assert.Nil(t, ToAPILogForward(nil))
+	assert.Nil(t, ToAPILogTarget(nil))
+	assert.Nil(t, ToAPIMailerEntry(nil))
+	assert.Nil(t, ToAPIMailersSection(nil))
+	assert.Nil(t, ToAPINameserver(nil))
+	assert.Nil(t, ToAPIPeerEntry(nil))
+	assert.Nil(t, ToAPIPeerSection(nil))
+	assert.Nil(t, ToAPIProgram(nil))
+	assert.Nil(t, ToAPIResolver(nil))
+	assert.Nil(t, ToAPIRing(nil))
+	assert.Nil(t, ToAPIServer(nil))
+	assert.Nil(t, ToAPIServerSwitchingRule(nil))
+	assert.Nil(t, ToAPIServerTemplate(nil))
+	assert.Nil(t, ToAPIStickRule(nil))
+	assert.Nil(t, ToAPITCPCheck(nil))
+	assert.Nil(t, ToAPITCPRequestRule(nil))
+	assert.Nil(t, ToAPITCPResponseRule(nil))
+	assert.Nil(t, ToAPIUser(nil))
+	assert.Nil(t, ToAPIUserlist(nil))
+}
+
+// TestToAPIACL tests ACL transformation.
+func TestToAPIACL(t *testing.T) {
+	t.Run("basic ACL", func(t *testing.T) {
+		input := &models.ACL{
+			ACLName:   "is_api",
+			Criterion: "path_beg",
+			Value:     "/api",
+		}
+
+		result := ToAPIACL(input)
+
+		require.NotNil(t, result)
+		assert.Equal(t, "is_api", result.AclName)
+		assert.Equal(t, "path_beg", result.Criterion)
+		require.NotNil(t, result.Value)
+		assert.Equal(t, "/api", *result.Value)
+	})
+
+	t.Run("ACL with metadata", func(t *testing.T) {
+		input := &models.ACL{
+			ACLName:   "is_api",
+			Criterion: "path_beg",
+			Value:     "/api",
+			Metadata: map[string]interface{}{
+				"comment": "API path check",
+			},
+		}
+
+		result := ToAPIACL(input)
+
+		require.NotNil(t, result)
+		require.NotNil(t, result.Metadata)
+		metadata := *result.Metadata
+		assert.Equal(t, map[string]interface{}{"value": "API path check"}, metadata["comment"])
+	})
+}
+
+// TestToAPIBind tests Bind transformation.
+func TestToAPIBind(t *testing.T) {
+	t.Run("basic bind", func(t *testing.T) {
+		input := &models.Bind{
+			BindParams: models.BindParams{
+				Name: "http",
+			},
+			Address: "*",
+			Port:    ptrInt64(80),
+		}
+
+		result := ToAPIBind(input)
+
+		require.NotNil(t, result)
+		require.NotNil(t, result.Name)
+		assert.Equal(t, "http", *result.Name)
+		require.NotNil(t, result.Address)
+		assert.Equal(t, "*", *result.Address)
+		assert.Equal(t, 80, *result.Port)
+	})
+
+	t.Run("bind with metadata", func(t *testing.T) {
+		input := &models.Bind{
+			BindParams: models.BindParams{
+				Name: "https",
+			},
+			Address: "*",
+			Port:    ptrInt64(443),
+			Metadata: map[string]interface{}{
+				"ssl": "true",
+			},
+		}
+
+		result := ToAPIBind(input)
+
+		require.NotNil(t, result)
+		require.NotNil(t, result.Metadata)
+		metadata := *result.Metadata
+		assert.Equal(t, map[string]interface{}{"value": "true"}, metadata["ssl"])
+	})
+}
+
+// TestToAPIFrontend tests Frontend transformation.
+func TestToAPIFrontend(t *testing.T) {
+	input := &models.Frontend{
+		FrontendBase: models.FrontendBase{
+			Name:           "http-frontend",
+			Mode:           "http",
+			DefaultBackend: "default-backend",
+		},
+	}
+
+	result := ToAPIFrontend(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "http-frontend", result.Name)
+	require.NotNil(t, result.Mode)
+	assert.Equal(t, "http", string(*result.Mode))
+	require.NotNil(t, result.DefaultBackend)
+	assert.Equal(t, "default-backend", *result.DefaultBackend)
+}
+
+// TestToAPIDefaults tests Defaults transformation.
+func TestToAPIDefaults(t *testing.T) {
+	input := &models.Defaults{
+		DefaultsBase: models.DefaultsBase{
+			Name: "default-settings",
+			Mode: "http",
+		},
+	}
+
+	result := ToAPIDefaults(input)
+
+	require.NotNil(t, result)
+	require.NotNil(t, result.Name)
+	assert.Equal(t, "default-settings", *result.Name)
+	require.NotNil(t, result.Mode)
+	assert.Equal(t, "http", string(*result.Mode))
+}
+
+// TestToAPIGlobal tests Global transformation.
+func TestToAPIGlobal(t *testing.T) {
+	input := &models.Global{
+		GlobalBase: models.GlobalBase{
+			Daemon:      true,
+			Description: "test global config",
+		},
+	}
+
+	result := ToAPIGlobal(input)
+
+	require.NotNil(t, result)
+	require.NotNil(t, result.Daemon)
+	assert.True(t, *result.Daemon)
+	require.NotNil(t, result.Description)
+	assert.Equal(t, "test global config", *result.Description)
+}
+
+// TestToAPIHTTPRequestRule tests HTTP request rule transformation.
+func TestToAPIHTTPRequestRule(t *testing.T) {
+	t.Run("basic rule", func(t *testing.T) {
+		denyStatus := int64(403)
+		input := &models.HTTPRequestRule{
+			Type:       "deny",
+			DenyStatus: &denyStatus,
+			Cond:       "if",
+			CondTest:   "is_blocked",
+		}
+
+		result := ToAPIHTTPRequestRule(input)
+
+		require.NotNil(t, result)
+		assert.Equal(t, "deny", string(result.Type))
+		require.NotNil(t, result.Cond)
+		assert.Equal(t, "if", string(*result.Cond))
+		require.NotNil(t, result.CondTest)
+		assert.Equal(t, "is_blocked", *result.CondTest)
+	})
+
+	t.Run("rule with metadata", func(t *testing.T) {
+		input := &models.HTTPRequestRule{
+			Type: "deny",
+			Metadata: map[string]interface{}{
+				"reason": "security",
+			},
+		}
+
+		result := ToAPIHTTPRequestRule(input)
+
+		require.NotNil(t, result)
+		require.NotNil(t, result.Metadata)
+		metadata := *result.Metadata
+		assert.Equal(t, map[string]interface{}{"value": "security"}, metadata["reason"])
+	})
+}
+
+// TestToAPIHTTPResponseRule tests HTTP response rule transformation.
+func TestToAPIHTTPResponseRule(t *testing.T) {
+	input := &models.HTTPResponseRule{
+		Type:      "set-header",
+		HdrName:   "X-Custom",
+		HdrFormat: "value",
+		Metadata: map[string]interface{}{
+			"purpose": "custom header",
+		},
+	}
+
+	result := ToAPIHTTPResponseRule(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "set-header", string(result.Type))
+	require.NotNil(t, result.HdrName)
+	assert.Equal(t, "X-Custom", *result.HdrName)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPIFilter tests Filter transformation.
+func TestToAPIFilter(t *testing.T) {
+	input := &models.Filter{
+		Type: "compression",
+		Metadata: map[string]interface{}{
+			"comment": "compression filter",
+		},
+	}
+
+	result := ToAPIFilter(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "compression", string(result.Type))
+	require.NotNil(t, result.Metadata)
+	metadata := *result.Metadata
+	assert.Equal(t, map[string]interface{}{"value": "compression filter"}, metadata["comment"])
+}
+
+// TestToAPICache tests Cache transformation.
+func TestToAPICache(t *testing.T) {
+	cacheName := "my-cache"
+	input := &models.Cache{
+		Name:          &cacheName,
+		TotalMaxSize:  100,
+		MaxObjectSize: 1024,
+		Metadata: map[string]interface{}{
+			"type": "static",
+		},
+	}
+
+	result := ToAPICache(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "my-cache", result.Name)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPIResolver tests Resolver transformation.
+func TestToAPIResolver(t *testing.T) {
+	input := &models.Resolver{
+		ResolverBase: models.ResolverBase{
+			Name: "dns-resolver",
+			Metadata: map[string]interface{}{
+				"provider": "internal",
+			},
+		},
+	}
+
+	result := ToAPIResolver(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "dns-resolver", result.Name)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPIUserlist tests Userlist transformation.
+func TestToAPIUserlist(t *testing.T) {
+	input := &models.Userlist{
+		UserlistBase: models.UserlistBase{
+			Name: "admin-users",
+			Metadata: map[string]interface{}{
+				"scope": "admin",
+			},
+		},
+	}
+
+	result := ToAPIUserlist(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "admin-users", result.Name)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPIUser tests User transformation.
+func TestToAPIUser(t *testing.T) {
+	input := &models.User{
+		Username: "admin",
+		Password: "hashed-password",
+		Metadata: map[string]interface{}{
+			"role": "administrator",
+		},
+	}
+
+	result := ToAPIUser(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "admin", result.Username)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPIBackendSwitchingRule tests BackendSwitchingRule transformation.
+func TestToAPIBackendSwitchingRule(t *testing.T) {
+	input := &models.BackendSwitchingRule{
+		Name:     "api-backend",
+		Cond:     "if",
+		CondTest: "is_api",
+		Metadata: map[string]interface{}{
+			"priority": "high",
+		},
+	}
+
+	result := ToAPIBackendSwitchingRule(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "api-backend", result.Name)
+	require.NotNil(t, result.Cond)
+	assert.Equal(t, "if", string(*result.Cond))
+	require.NotNil(t, result.CondTest)
+	assert.Equal(t, "is_api", *result.CondTest)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPIServerSwitchingRule tests ServerSwitchingRule transformation.
+func TestToAPIServerSwitchingRule(t *testing.T) {
+	input := &models.ServerSwitchingRule{
+		TargetServer: "srv1",
+		Cond:         "if",
+		CondTest:     "is_primary",
+		Metadata: map[string]interface{}{
+			"reason": "failover",
+		},
+	}
+
+	result := ToAPIServerSwitchingRule(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "srv1", result.TargetServer)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPIStickRule tests StickRule transformation.
+func TestToAPIStickRule(t *testing.T) {
+	input := &models.StickRule{
+		Type:    "store-request",
+		Pattern: "src",
+		Metadata: map[string]interface{}{
+			"purpose": "session persistence",
+		},
+	}
+
+	result := ToAPIStickRule(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "store-request", string(result.Type))
+	assert.Equal(t, "src", result.Pattern)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPITCPRequestRule tests TCPRequestRule transformation.
+func TestToAPITCPRequestRule(t *testing.T) {
+	input := &models.TCPRequestRule{
+		Type:   "connection",
+		Action: "accept",
+		Metadata: map[string]interface{}{
+			"layer": "4",
+		},
+	}
+
+	result := ToAPITCPRequestRule(input)
+
+	require.NotNil(t, result)
+	assert.Equal(t, "connection", string(result.Type))
+	require.NotNil(t, result.Action)
+	assert.Equal(t, "accept", string(*result.Action))
+	require.NotNil(t, result.Metadata)
+}
+
+// TestToAPILogTarget tests LogTarget transformation.
+func TestToAPILogTarget(t *testing.T) {
+	input := &models.LogTarget{
+		Address:  "127.0.0.1:514",
+		Facility: "local0",
+		Metadata: map[string]interface{}{
+			"type": "syslog",
+		},
+	}
+
+	result := ToAPILogTarget(input)
+
+	require.NotNil(t, result)
+	require.NotNil(t, result.Address)
+	assert.Equal(t, "127.0.0.1:514", *result.Address)
+	require.NotNil(t, result.Metadata)
+}
+
+// TestMetadataPreservation_InputNotModified verifies that input metadata is not modified
+// during transformation for functions with metadata handling.
+func TestMetadataPreservation_InputNotModified(t *testing.T) {
+	originalMetadata := map[string]interface{}{
+		"comment": "original",
+		"owner":   "team-a",
+	}
+
+	// Test ACL
+	acl := &models.ACL{
+		ACLName:  "test",
+		Metadata: originalMetadata,
+	}
+	ToAPIACL(acl)
+	assert.Equal(t, originalMetadata, acl.Metadata, "ACL metadata should not be modified")
+
+	// Test Bind
+	bind := &models.Bind{
+		BindParams: models.BindParams{
+			Name: "test",
+		},
+		Metadata: originalMetadata,
+	}
+	ToAPIBind(bind)
+	assert.Equal(t, originalMetadata, bind.Metadata, "Bind metadata should not be modified")
+
+	// Test Filter
+	filter := &models.Filter{
+		Type:     "compression",
+		Metadata: originalMetadata,
+	}
+	ToAPIFilter(filter)
+	assert.Equal(t, originalMetadata, filter.Metadata, "Filter metadata should not be modified")
+}
+
+// Helper function to create pointer to int64.
+func ptrInt64(v int64) *int64 {
+	return &v
+}

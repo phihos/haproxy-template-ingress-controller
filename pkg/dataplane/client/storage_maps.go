@@ -5,13 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
-	"io"
-	"mime/multipart"
-	"net/http"
-	"net/textproto"
 )
 
 // GetAllMapFiles retrieves all map file names from the storage.
@@ -70,52 +68,16 @@ func (c *DataplaneClient) GetMapFileContent(ctx context.Context, name string) (s
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("map file '%s' not found", name)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("get map file '%s' failed with status %d", name, resp.StatusCode)
-	}
-
-	// Read the raw map file content (similar to general files)
-	// The API returns the raw content directly, not wrapped in JSON
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body for map file '%s': %w", name, err)
-	}
-
-	// Return the raw content as a string
-	return string(bodyBytes), nil
+	return readRawStorageContent(resp, "map file", name)
 }
 
 // CreateMapFile creates a new map file using multipart form-data.
 // Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) CreateMapFile(ctx context.Context, name, content string) error {
-	// Create multipart form-data
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// Add map file content as a form file field
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename=%q`, name))
-	h.Set("Content-Type", "application/octet-stream")
-
-	part, err := writer.CreatePart(h)
+	body, contentType, err := buildMultipartFilePayload(name, content)
 	if err != nil {
-		return fmt.Errorf("failed to create multipart part: %w", err)
+		return fmt.Errorf("failed to build payload for map file '%s': %w", name, err)
 	}
-
-	if _, err := part.Write([]byte(content)); err != nil {
-		return fmt.Errorf("failed to write map file content: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", err)
-	}
-
-	// Send request
-	contentType := writer.FormDataContentType()
 
 	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
 		V32: func(c *v32.Client) (*http.Response, error) {
@@ -134,17 +96,7 @@ func (c *DataplaneClient) CreateMapFile(ctx context.Context, name, content strin
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return fmt.Errorf("map file '%s' already exists", name)
-	}
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		// Try to read error body for more details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create map file '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return checkCreateResponse(resp, "map file", name)
 }
 
 // UpdateMapFile updates an existing map file using text/plain content-type.
@@ -172,18 +124,7 @@ func (c *DataplaneClient) UpdateMapFile(ctx context.Context, name, content strin
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("map file '%s' not found", name)
-	}
-
-	// Accept both 200 (OK) and 202 (Accepted) as success
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		// Try to read error body for more details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("update map file '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return checkUpdateResponse(resp, "map file", name)
 }
 
 // DeleteMapFile deletes a map file by name.
@@ -200,13 +141,5 @@ func (c *DataplaneClient) DeleteMapFile(ctx context.Context, name string) error 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("map file '%s' not found", name)
-	}
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("delete map file '%s' failed with status %d", name, resp.StatusCode)
-	}
-
-	return nil
+	return checkDeleteResponse(resp, "map file", name)
 }

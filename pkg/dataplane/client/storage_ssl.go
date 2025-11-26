@@ -5,15 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
-	"io"
-	"mime/multipart"
-	"net/http"
-	"net/textproto"
-	"path/filepath"
-	"strings"
 )
 
 // SanitizeSSLCertName sanitizes a certificate name for HAProxy Data Plane API storage.
@@ -21,21 +18,7 @@ import (
 // For example: "example.com.pem" becomes "example_com.pem".
 // This function is exported for use in tests to compare certificate names.
 func SanitizeSSLCertName(name string) string {
-	// Get the file extension
-	ext := filepath.Ext(name)
-	if ext == "" {
-		// No extension, replace all dots
-		return strings.ReplaceAll(name, ".", "_")
-	}
-
-	// Get the base name without extension
-	base := strings.TrimSuffix(name, ext)
-
-	// Replace dots in the base name with underscores
-	sanitizedBase := strings.ReplaceAll(base, ".", "_")
-
-	// Return sanitized base + original extension
-	return sanitizedBase + ext
+	return SanitizeStorageName(name)
 }
 
 // GetAllSSLCertificates retrieves all SSL certificate names from the storage.
@@ -182,30 +165,10 @@ func (c *DataplaneClient) CreateSSLCertificate(ctx context.Context, name, conten
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
 	sanitizedName := SanitizeSSLCertName(name)
 
-	// Create multipart form-data
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// Add certificate content as a form file field
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename=%q`, sanitizedName))
-	h.Set("Content-Type", "application/octet-stream")
-
-	part, err := writer.CreatePart(h)
+	body, contentType, err := buildMultipartFilePayload(sanitizedName, content)
 	if err != nil {
-		return fmt.Errorf("failed to create multipart part: %w", err)
+		return fmt.Errorf("failed to build payload for SSL certificate '%s': %w", name, err)
 	}
-
-	if _, err := part.Write([]byte(content)); err != nil {
-		return fmt.Errorf("failed to write certificate content: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", err)
-	}
-
-	// Send request
-	contentType := writer.FormDataContentType()
 
 	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
 		V32: func(c *v32.Client) (*http.Response, error) {
@@ -224,17 +187,7 @@ func (c *DataplaneClient) CreateSSLCertificate(ctx context.Context, name, conten
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return fmt.Errorf("SSL certificate '%s' already exists", name)
-	}
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		// Try to read error body for more details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create SSL certificate '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return checkCreateResponse(resp, "SSL certificate", name)
 }
 
 // UpdateSSLCertificate updates an existing SSL certificate using text/plain content.
@@ -265,18 +218,7 @@ func (c *DataplaneClient) UpdateSSLCertificate(ctx context.Context, name, conten
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("SSL certificate '%s' not found", name)
-	}
-
-	// Accept both 200 (OK) and 202 (Accepted) as success
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		// Try to read error body for more details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("update SSL certificate '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return checkUpdateResponse(resp, "SSL certificate", name)
 }
 
 // DeleteSSLCertificate deletes an SSL certificate by name.
@@ -304,14 +246,5 @@ func (c *DataplaneClient) DeleteSSLCertificate(ctx context.Context, name string)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("SSL certificate '%s' not found", name)
-	}
-
-	// Accept 200 (OK), 202 (Accepted), and 204 (No Content) as success
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("delete SSL certificate '%s' failed with status %d", name, resp.StatusCode)
-	}
-
-	return nil
+	return checkDeleteResponse(resp, "SSL certificate", name)
 }

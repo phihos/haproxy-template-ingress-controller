@@ -302,11 +302,17 @@ func ToAPICrtStore(model *models.CrtStore) *dataplaneapi.CrtStore {
 
 // ToAPIDefaults converts a client-native models.Defaults to dataplaneapi.Defaults.
 func ToAPIDefaults(model *models.Defaults) *dataplaneapi.Defaults {
+	if model == nil {
+		return nil
+	}
 	return transform[dataplaneapi.Defaults](model)
 }
 
 // ToAPIFCGIApp converts a client-native models.FCGIApp to dataplaneapi.FcgiApp.
 func ToAPIFCGIApp(model *models.FCGIApp) *dataplaneapi.FcgiApp {
+	if model == nil {
+		return nil
+	}
 	return transform[dataplaneapi.FcgiApp](model)
 }
 
@@ -343,11 +349,17 @@ func ToAPIFilter(model *models.Filter) *dataplaneapi.Filter {
 
 // ToAPIFrontend converts a client-native models.Frontend to dataplaneapi.Frontend.
 func ToAPIFrontend(model *models.Frontend) *dataplaneapi.Frontend {
+	if model == nil {
+		return nil
+	}
 	return transform[dataplaneapi.Frontend](model)
 }
 
 // ToAPIGlobal converts a client-native models.Global to dataplaneapi.Global.
 func ToAPIGlobal(model *models.Global) *dataplaneapi.Global {
+	if model == nil {
+		return nil
+	}
 	return transform[dataplaneapi.Global](model)
 }
 
