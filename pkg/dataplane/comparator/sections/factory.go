@@ -299,22 +299,22 @@ func NewACLBackendDelete(backendName string, acl *models.ACL, index int) Operati
 // =============================================================================
 
 // describeHTTPRequestRule creates a descriptive string for HTTP request rule operations.
-// Uses the rule's Type field for identification.
-func describeHTTPRequestRule(opType OperationType, rule *models.HTTPRequestRule, parentType, parentName string) string {
-	identifier := unknownIdentifier
+// Uses the rule's Type field for identification, falls back to index if not available.
+func describeHTTPRequestRule(opType OperationType, rule *models.HTTPRequestRule, parentType, parentName string, index int) string {
+	identifier := fmt.Sprintf("at index %d", index)
 	if rule != nil && rule.Type != "" {
-		identifier = rule.Type
+		identifier = fmt.Sprintf("(%s)", rule.Type)
 	}
 
 	switch opType {
 	case OperationCreate:
-		return fmt.Sprintf("Create HTTP request rule (%s) in %s '%s'", identifier, parentType, parentName)
+		return fmt.Sprintf("Create HTTP request rule %s in %s '%s'", identifier, parentType, parentName)
 	case OperationUpdate:
-		return fmt.Sprintf("Update HTTP request rule (%s) in %s '%s'", identifier, parentType, parentName)
+		return fmt.Sprintf("Update HTTP request rule %s in %s '%s'", identifier, parentType, parentName)
 	case OperationDelete:
-		return fmt.Sprintf("Delete HTTP request rule (%s) from %s '%s'", identifier, parentType, parentName)
+		return fmt.Sprintf("Delete HTTP request rule %s from %s '%s'", identifier, parentType, parentName)
 	default:
-		return fmt.Sprintf("Unknown operation on HTTP request rule (%s) in %s '%s'", identifier, parentType, parentName)
+		return fmt.Sprintf("Unknown operation on HTTP request rule %s in %s '%s'", identifier, parentType, parentName)
 	}
 }
 
@@ -329,7 +329,7 @@ func NewHTTPRequestRuleFrontendCreate(frontendName string, rule *models.HTTPRequ
 		rule,
 		transform.ToAPIHTTPRequestRule,
 		executors.HTTPRequestRuleFrontendCreate(),
-		func() string { return describeHTTPRequestRule(OperationCreate, rule, "frontend", frontendName) },
+		func() string { return describeHTTPRequestRule(OperationCreate, rule, "frontend", frontendName, index) },
 	)
 }
 
@@ -344,7 +344,7 @@ func NewHTTPRequestRuleFrontendUpdate(frontendName string, rule *models.HTTPRequ
 		rule,
 		transform.ToAPIHTTPRequestRule,
 		executors.HTTPRequestRuleFrontendUpdate(),
-		func() string { return describeHTTPRequestRule(OperationUpdate, rule, "frontend", frontendName) },
+		func() string { return describeHTTPRequestRule(OperationUpdate, rule, "frontend", frontendName, index) },
 	)
 }
 
@@ -359,7 +359,7 @@ func NewHTTPRequestRuleFrontendDelete(frontendName string, rule *models.HTTPRequ
 		rule,
 		func(r *models.HTTPRequestRule) *dataplaneapi.HttpRequestRule { return nil },
 		executors.HTTPRequestRuleFrontendDelete(),
-		func() string { return describeHTTPRequestRule(OperationDelete, rule, "frontend", frontendName) },
+		func() string { return describeHTTPRequestRule(OperationDelete, rule, "frontend", frontendName, index) },
 	)
 }
 
@@ -374,7 +374,7 @@ func NewHTTPRequestRuleBackendCreate(backendName string, rule *models.HTTPReques
 		rule,
 		transform.ToAPIHTTPRequestRule,
 		executors.HTTPRequestRuleBackendCreate(),
-		func() string { return describeHTTPRequestRule(OperationCreate, rule, "backend", backendName) },
+		func() string { return describeHTTPRequestRule(OperationCreate, rule, "backend", backendName, index) },
 	)
 }
 
@@ -389,7 +389,7 @@ func NewHTTPRequestRuleBackendUpdate(backendName string, rule *models.HTTPReques
 		rule,
 		transform.ToAPIHTTPRequestRule,
 		executors.HTTPRequestRuleBackendUpdate(),
-		func() string { return describeHTTPRequestRule(OperationUpdate, rule, "backend", backendName) },
+		func() string { return describeHTTPRequestRule(OperationUpdate, rule, "backend", backendName, index) },
 	)
 }
 
@@ -404,7 +404,7 @@ func NewHTTPRequestRuleBackendDelete(backendName string, rule *models.HTTPReques
 		rule,
 		func(r *models.HTTPRequestRule) *dataplaneapi.HttpRequestRule { return nil },
 		executors.HTTPRequestRuleBackendDelete(),
-		func() string { return describeHTTPRequestRule(OperationDelete, rule, "backend", backendName) },
+		func() string { return describeHTTPRequestRule(OperationDelete, rule, "backend", backendName, index) },
 	)
 }
 
@@ -527,22 +527,22 @@ func NewHTTPResponseRuleBackendDelete(backendName string, rule *models.HTTPRespo
 // =============================================================================
 
 // describeBackendSwitchingRule creates a descriptive string for backend switching rule operations.
-// Uses the rule's Name field which contains the condition expression.
-func describeBackendSwitchingRule(opType OperationType, rule *models.BackendSwitchingRule, frontendName string) string {
-	identifier := unknownIdentifier
+// Uses the rule's Name field which contains the condition expression, falls back to index if not available.
+func describeBackendSwitchingRule(opType OperationType, rule *models.BackendSwitchingRule, frontendName string, index int) string {
+	identifier := fmt.Sprintf("at index %d", index)
 	if rule != nil && rule.Name != "" {
-		identifier = rule.Name
+		identifier = fmt.Sprintf("(%s)", rule.Name)
 	}
 
 	switch opType {
 	case OperationCreate:
-		return fmt.Sprintf("Create backend switching rule (%s) in frontend '%s'", identifier, frontendName)
+		return fmt.Sprintf("Create backend switching rule %s in frontend '%s'", identifier, frontendName)
 	case OperationUpdate:
-		return fmt.Sprintf("Update backend switching rule (%s) in frontend '%s'", identifier, frontendName)
+		return fmt.Sprintf("Update backend switching rule %s in frontend '%s'", identifier, frontendName)
 	case OperationDelete:
-		return fmt.Sprintf("Delete backend switching rule (%s) from frontend '%s'", identifier, frontendName)
+		return fmt.Sprintf("Delete backend switching rule %s from frontend '%s'", identifier, frontendName)
 	default:
-		return fmt.Sprintf("Unknown operation on backend switching rule (%s) in frontend '%s'", identifier, frontendName)
+		return fmt.Sprintf("Unknown operation on backend switching rule %s in frontend '%s'", identifier, frontendName)
 	}
 }
 
@@ -557,7 +557,7 @@ func NewBackendSwitchingRuleFrontendCreate(frontendName string, rule *models.Bac
 		rule,
 		transform.ToAPIBackendSwitchingRule,
 		executors.BackendSwitchingRuleCreate(),
-		func() string { return describeBackendSwitchingRule(OperationCreate, rule, frontendName) },
+		func() string { return describeBackendSwitchingRule(OperationCreate, rule, frontendName, index) },
 	)
 }
 
@@ -572,7 +572,7 @@ func NewBackendSwitchingRuleFrontendUpdate(frontendName string, rule *models.Bac
 		rule,
 		transform.ToAPIBackendSwitchingRule,
 		executors.BackendSwitchingRuleUpdate(),
-		func() string { return describeBackendSwitchingRule(OperationUpdate, rule, frontendName) },
+		func() string { return describeBackendSwitchingRule(OperationUpdate, rule, frontendName, index) },
 	)
 }
 
@@ -587,7 +587,7 @@ func NewBackendSwitchingRuleFrontendDelete(frontendName string, rule *models.Bac
 		rule,
 		func(r *models.BackendSwitchingRule) *dataplaneapi.BackendSwitchingRule { return nil },
 		executors.BackendSwitchingRuleDelete(),
-		func() string { return describeBackendSwitchingRule(OperationDelete, rule, frontendName) },
+		func() string { return describeBackendSwitchingRule(OperationDelete, rule, frontendName, index) },
 	)
 }
 

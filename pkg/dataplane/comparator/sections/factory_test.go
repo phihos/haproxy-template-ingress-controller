@@ -468,7 +468,7 @@ func TestHTTPRequestRuleFactoryFunctions(t *testing.T) {
 }
 
 func TestBackendSwitchingRuleFactoryFunctions(t *testing.T) {
-	rule := &models.BackendSwitchingRule{Name: "api-backend"}
+	rule := &models.BackendSwitchingRule{}
 
 	tests := []struct {
 		name             string
@@ -646,19 +646,19 @@ func TestNameserverFactoryFunctions(t *testing.T) {
 			name:             "NewNameserverCreate",
 			factory:          NewNameserverCreate,
 			wantType:         OperationCreate,
-			wantDescContains: "Create nameserver 'ns1' in resolver 'dns'",
+			wantDescContains: "Create nameserver 'ns1' in resolvers section 'dns'",
 		},
 		{
 			name:             "NewNameserverUpdate",
 			factory:          NewNameserverUpdate,
 			wantType:         OperationUpdate,
-			wantDescContains: "Update nameserver 'ns1' in resolver 'dns'",
+			wantDescContains: "Update nameserver 'ns1' in resolvers section 'dns'",
 		},
 		{
 			name:             "NewNameserverDelete",
 			factory:          NewNameserverDelete,
 			wantType:         OperationDelete,
-			wantDescContains: "Delete nameserver 'ns1' from resolver 'dns'",
+			wantDescContains: "Delete nameserver 'ns1' from resolvers section 'dns'",
 		},
 	}
 
