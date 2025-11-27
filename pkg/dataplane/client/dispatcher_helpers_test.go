@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"haproxy-template-ic/pkg/generated/dataplaneapi"
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
@@ -127,12 +126,11 @@ func TestDispatchDeleteChild(t *testing.T) {
 }
 
 // TestDispatchHelpersWithRealTypes verifies that the dispatcher helpers work
-// with actual dataplaneapi types (not test types).
+// with actual versioned dataplaneapi types.
 func TestDispatchHelpersWithRealTypes(t *testing.T) {
-	t.Run("dispatchCreate with dataplaneapi.Backend", func(t *testing.T) {
-		// Create a real dataplaneapi backend model and verify it can be
-		// used with version-specific types through JSON marshaling.
-		backend := dataplaneapi.Backend{
+	t.Run("dispatchCreate with v32.Backend", func(t *testing.T) {
+		// Create a real v32 backend model and verify it has expected fields.
+		backend := v32.Backend{
 			Name: "test-backend",
 		}
 
@@ -140,11 +138,10 @@ func TestDispatchHelpersWithRealTypes(t *testing.T) {
 		assert.Equal(t, "test-backend", backend.Name)
 	})
 
-	t.Run("dispatchCreateChild with dataplaneapi.Acl", func(t *testing.T) {
-		// Create a real dataplaneapi ACL model and verify it can be
-		// used with version-specific types through JSON marshaling.
+	t.Run("dispatchCreateChild with v32.Acl", func(t *testing.T) {
+		// Create a real v32 ACL model and verify it has expected fields.
 		value := "/api"
-		acl := dataplaneapi.Acl{
+		acl := v32.Acl{
 			AclName:   "is_api",
 			Criterion: "path_beg",
 			Value:     &value,

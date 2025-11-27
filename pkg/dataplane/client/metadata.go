@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package transform
+package client
 
-// convertClientMetadataToAPI converts client-native flat metadata to Dataplane API nested format.
+// ConvertClientMetadataToAPI converts client-native flat metadata to Dataplane API nested format.
 //
 // The client-native library uses a flat map structure for metadata:
 //
@@ -22,11 +22,11 @@ package transform
 //
 // The Dataplane API expects a nested map structure:
 //
-//	*map[string]map[string]interface{}{"comment": {"value": "Pod: echo-server-v2"}}
+//	map[string]map[string]interface{}{"comment": {"value": "Pod: echo-server-v2"}}
 //
 // This conversion preserves server comments and other metadata throughout the
 // fine-grained sync process, ensuring synced config remains close to the original.
-func convertClientMetadataToAPI(clientMetadata map[string]interface{}) map[string]map[string]interface{} {
+func ConvertClientMetadataToAPI(clientMetadata map[string]interface{}) map[string]map[string]interface{} {
 	if len(clientMetadata) == 0 {
 		return nil
 	}
@@ -41,19 +41,19 @@ func convertClientMetadataToAPI(clientMetadata map[string]interface{}) map[strin
 	return nested
 }
 
-// convertAPIMetadataToClient converts Dataplane API nested metadata to client-native flat format.
+// ConvertAPIMetadataToClient converts Dataplane API nested metadata to client-native flat format.
 //
-// This is the reverse operation of convertClientMetadataToAPI, used when reading
+// This is the reverse operation of ConvertClientMetadataToAPI, used when reading
 // configurations from the Dataplane API and converting them back to client-native models.
 //
 // Dataplane API format:
 //
-//	*map[string]map[string]interface{}{"comment": {"value": "Pod: echo-server-v2"}}
+//	map[string]map[string]interface{}{"comment": {"value": "Pod: echo-server-v2"}}
 //
 // Converts to client-native format:
 //
 //	map[string]interface{}{"comment": "Pod: echo-server-v2"}
-func convertAPIMetadataToClient(apiMetadata map[string]map[string]interface{}) map[string]interface{} {
+func ConvertAPIMetadataToClient(apiMetadata map[string]map[string]interface{}) map[string]interface{} {
 	if len(apiMetadata) == 0 {
 		return nil
 	}

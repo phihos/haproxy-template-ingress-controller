@@ -33,34 +33,35 @@ import (
 // This eliminates the repetitive dispatch pattern that was duplicated 125+ times across section files.
 //
 // Type parameters:
-//   - TUnified: The unified dataplaneapi model type (e.g., dataplaneapi.Backend)
+//   - TUnified: The unified client-native model type (e.g., models.Backend)
 //   - TV32, TV31, TV30: The version-specific model types (e.g., v32.Backend, v31.Backend, v30.Backend)
-//   - TParams32, TParams31, TParams30: The version-specific parameter types
+//
+// Each callback receives only the unmarshaled model - params should be created inside the callback.
+// This ensures version-specific params are always created with the correct type.
 //
 // Usage example:
 //
-//	resp, err := dispatchCreate(ctx, c, apiModel,
-//	    func(m v32.Backend, p *v32.CreateBackendParams) (*http.Response, error) {
-//	        return v32Client.CreateBackend(ctx, p, m)
+//	resp, err := DispatchCreate(ctx, c, model,
+//	    func(m v32.Backend) (*http.Response, error) {
+//	        params := &v32.CreateBackendParams{TransactionId: &txID}
+//	        return clientset.V32().CreateBackend(ctx, params, m)
 //	    },
-//	    func(m v31.Backend, p *v31.CreateBackendParams) (*http.Response, error) {
-//	        return v31Client.CreateBackend(ctx, p, m)
+//	    func(m v31.Backend) (*http.Response, error) {
+//	        params := &v31.CreateBackendParams{TransactionId: &txID}
+//	        return clientset.V31().CreateBackend(ctx, params, m)
 //	    },
-//	    func(m v30.Backend, p *v30.CreateBackendParams) (*http.Response, error) {
-//	        return v30Client.CreateBackend(ctx, p, m)
+//	    func(m v30.Backend) (*http.Response, error) {
+//	        params := &v30.CreateBackendParams{TransactionId: &txID}
+//	        return clientset.V30().CreateBackend(ctx, params, m)
 //	    },
-//	    params32, params31, params30,
 //	)
-func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 any, TParams31 any, TParams30 any](
+func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any](
 	ctx context.Context,
 	c *DataplaneClient,
 	unifiedModel TUnified,
-	v32Call func(TV32, TParams32) (*http.Response, error),
-	v31Call func(TV31, TParams31) (*http.Response, error),
-	v30Call func(TV30, TParams30) (*http.Response, error),
-	params32 TParams32,
-	params31 TParams31,
-	params30 TParams30,
+	v32Call func(TV32) (*http.Response, error),
+	v31Call func(TV31) (*http.Response, error),
+	v30Call func(TV30) (*http.Response, error),
 ) (*http.Response, error) {
 	// Marshal unified model to JSON once
 	jsonData, err := json.Marshal(unifiedModel)
@@ -75,53 +76,55 @@ func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 any, T
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.2: %w", err)
 			}
-			return v32Call(model, params32)
+			return v32Call(model)
 		},
 		V31: func(client *v31.Client) (*http.Response, error) {
 			var model TV31
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.1: %w", err)
 			}
-			return v31Call(model, params31)
+			return v31Call(model)
 		},
 		V30: func(client *v30.Client) (*http.Response, error) {
 			var model TV30
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.0: %w", err)
 			}
-			return v30Call(model, params30)
+			return v30Call(model)
 		},
 	})
 }
 
 // DispatchUpdate is a generic helper for update/replace operations.
-// Similar to dispatchCreate but includes the resource name parameter.
+// Similar to DispatchCreate but includes the resource name parameter.
+//
+// Each callback receives the name and unmarshaled model - params should be created inside the callback.
+// This ensures version-specific params are always created with the correct type.
 //
 // Usage example:
 //
-//	resp, err := dispatchUpdate(ctx, c, name, apiModel,
-//	    func(n string, m v32.Backend, p *v32.ReplaceBackendParams) (*http.Response, error) {
-//	        return v32Client.ReplaceBackend(ctx, n, p, m)
+//	resp, err := DispatchUpdate(ctx, c, name, model,
+//	    func(n string, m v32.Backend) (*http.Response, error) {
+//	        params := &v32.ReplaceBackendParams{TransactionId: &txID}
+//	        return clientset.V32().ReplaceBackend(ctx, n, params, m)
 //	    },
-//	    func(n string, m v31.Backend, p *v31.ReplaceBackendParams) (*http.Response, error) {
-//	        return v31Client.ReplaceBackend(ctx, n, p, m)
+//	    func(n string, m v31.Backend) (*http.Response, error) {
+//	        params := &v31.ReplaceBackendParams{TransactionId: &txID}
+//	        return clientset.V31().ReplaceBackend(ctx, n, params, m)
 //	    },
-//	    func(n string, m v30.Backend, p *v30.ReplaceBackendParams) (*http.Response, error) {
-//	        return v30Client.ReplaceBackend(ctx, n, p, m)
+//	    func(n string, m v30.Backend) (*http.Response, error) {
+//	        params := &v30.ReplaceBackendParams{TransactionId: &txID}
+//	        return clientset.V30().ReplaceBackend(ctx, n, params, m)
 //	    },
-//	    params32, params31, params30,
 //	)
-func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 any, TParams31 any, TParams30 any](
+func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any](
 	ctx context.Context,
 	c *DataplaneClient,
 	name string,
 	unifiedModel TUnified,
-	v32Call func(string, TV32, TParams32) (*http.Response, error),
-	v31Call func(string, TV31, TParams31) (*http.Response, error),
-	v30Call func(string, TV30, TParams30) (*http.Response, error),
-	params32 TParams32,
-	params31 TParams31,
-	params30 TParams30,
+	v32Call func(string, TV32) (*http.Response, error),
+	v31Call func(string, TV31) (*http.Response, error),
+	v30Call func(string, TV30) (*http.Response, error),
 ) (*http.Response, error) {
 	// Marshal unified model to JSON once
 	jsonData, err := json.Marshal(unifiedModel)
@@ -136,21 +139,21 @@ func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 any, T
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.2: %w", err)
 			}
-			return v32Call(name, model, params32)
+			return v32Call(name, model)
 		},
 		V31: func(client *v31.Client) (*http.Response, error) {
 			var model TV31
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.1: %w", err)
 			}
-			return v31Call(name, model, params31)
+			return v31Call(name, model)
 		},
 		V30: func(client *v30.Client) (*http.Response, error) {
 			var model TV30
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.0: %w", err)
 			}
-			return v30Call(name, model, params30)
+			return v30Call(name, model)
 		},
 	})
 }
@@ -158,40 +161,42 @@ func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 any, T
 // DispatchDelete is a generic helper for delete operations.
 // No model marshaling needed since delete only requires the resource name.
 //
+// Each callback receives only the name - params should be created inside the callback.
+// This ensures version-specific params are always created with the correct type.
+//
 // Usage example:
 //
-//	resp, err := dispatchDelete(ctx, c, name,
-//	    func(n string, p *v32.DeleteBackendParams) (*http.Response, error) {
-//	        return v32Client.DeleteBackend(ctx, n, p)
+//	resp, err := DispatchDelete(ctx, c, name,
+//	    func(n string) (*http.Response, error) {
+//	        params := &v32.DeleteBackendParams{TransactionId: &txID}
+//	        return clientset.V32().DeleteBackend(ctx, n, params)
 //	    },
-//	    func(n string, p *v31.DeleteBackendParams) (*http.Response, error) {
-//	        return v31Client.DeleteBackend(ctx, n, p)
+//	    func(n string) (*http.Response, error) {
+//	        params := &v31.DeleteBackendParams{TransactionId: &txID}
+//	        return clientset.V31().DeleteBackend(ctx, n, params)
 //	    },
-//	    func(n string, p *v30.DeleteBackendParams) (*http.Response, error) {
-//	        return v30Client.DeleteBackend(ctx, n, p)
+//	    func(n string) (*http.Response, error) {
+//	        params := &v30.DeleteBackendParams{TransactionId: &txID}
+//	        return clientset.V30().DeleteBackend(ctx, n, params)
 //	    },
-//	    params32, params31, params30,
 //	)
-func DispatchDelete[TParams32 any, TParams31 any, TParams30 any](
+func DispatchDelete(
 	ctx context.Context,
 	c *DataplaneClient,
 	name string,
-	v32Call func(string, TParams32) (*http.Response, error),
-	v31Call func(string, TParams31) (*http.Response, error),
-	v30Call func(string, TParams30) (*http.Response, error),
-	params32 TParams32,
-	params31 TParams31,
-	params30 TParams30,
+	v32Call func(string) (*http.Response, error),
+	v31Call func(string) (*http.Response, error),
+	v30Call func(string) (*http.Response, error),
 ) (*http.Response, error) {
 	return c.Dispatch(ctx, CallFunc[*http.Response]{
 		V32: func(client *v32.Client) (*http.Response, error) {
-			return v32Call(name, params32)
+			return v32Call(name)
 		},
 		V31: func(client *v31.Client) (*http.Response, error) {
-			return v31Call(name, params31)
+			return v31Call(name)
 		},
 		V30: func(client *v30.Client) (*http.Response, error) {
-			return v30Call(name, params30)
+			return v30Call(name)
 		},
 	})
 }
@@ -199,32 +204,34 @@ func DispatchDelete[TParams32 any, TParams31 any, TParams30 any](
 // DispatchCreateChild is a generic helper for creating child resources (e.g., binds, servers, ACLs).
 // Child resources belong to a parent (e.g., frontend, backend) and require the parent name.
 //
+// Each callback receives parent name, index, and unmarshaled model - params should be created inside the callback.
+// This ensures version-specific params are always created with the correct type.
+//
 // Usage example:
 //
-//	resp, err := dispatchCreateChild(ctx, c, parentName, index, apiModel,
-//	    func(parent string, idx int, m v32.Acl, p *v32.CreateAclFrontendParams) (*http.Response, error) {
-//	        return v32Client.CreateAclFrontend(ctx, parent, idx, p, m)
+//	resp, err := DispatchCreateChild(ctx, c, parentName, index, model,
+//	    func(parent string, idx int, m v32.Acl) (*http.Response, error) {
+//	        params := &v32.CreateAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V32().CreateAclFrontend(ctx, parent, idx, params, m)
 //	    },
-//	    func(parent string, idx int, m v31.Acl, p *v31.CreateAclFrontendParams) (*http.Response, error) {
-//	        return v31Client.CreateAclFrontend(ctx, parent, idx, p, m)
+//	    func(parent string, idx int, m v31.Acl) (*http.Response, error) {
+//	        params := &v31.CreateAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V31().CreateAclFrontend(ctx, parent, idx, params, m)
 //	    },
-//	    func(parent string, idx int, m v30.Acl, p *v30.CreateAclFrontendParams) (*http.Response, error) {
-//	        return v30Client.CreateAclFrontend(ctx, parent, idx, p, m)
+//	    func(parent string, idx int, m v30.Acl) (*http.Response, error) {
+//	        params := &v30.CreateAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V30().CreateAclFrontend(ctx, parent, idx, params, m)
 //	    },
-//	    params32, params31, params30,
 //	)
-func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 any, TParams31 any, TParams30 any](
+func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any](
 	ctx context.Context,
 	c *DataplaneClient,
 	parentName string,
 	index int,
 	unifiedModel TUnified,
-	v32Call func(string, int, TV32, TParams32) (*http.Response, error),
-	v31Call func(string, int, TV31, TParams31) (*http.Response, error),
-	v30Call func(string, int, TV30, TParams30) (*http.Response, error),
-	params32 TParams32,
-	params31 TParams31,
-	params30 TParams30,
+	v32Call func(string, int, TV32) (*http.Response, error),
+	v31Call func(string, int, TV31) (*http.Response, error),
+	v30Call func(string, int, TV30) (*http.Response, error),
 ) (*http.Response, error) {
 	// Marshal unified model to JSON once
 	jsonData, err := json.Marshal(unifiedModel)
@@ -239,54 +246,56 @@ func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 a
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.2: %w", err)
 			}
-			return v32Call(parentName, index, model, params32)
+			return v32Call(parentName, index, model)
 		},
 		V31: func(client *v31.Client) (*http.Response, error) {
 			var model TV31
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.1: %w", err)
 			}
-			return v31Call(parentName, index, model, params31)
+			return v31Call(parentName, index, model)
 		},
 		V30: func(client *v30.Client) (*http.Response, error) {
 			var model TV30
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.0: %w", err)
 			}
-			return v30Call(parentName, index, model, params30)
+			return v30Call(parentName, index, model)
 		},
 	})
 }
 
 // DispatchReplaceChild is a generic helper for replacing/updating child resources.
-// Similar to dispatchCreateChild but for replace operations.
+// Similar to DispatchCreateChild but for replace operations.
+//
+// Each callback receives parent name, index, and unmarshaled model - params should be created inside the callback.
+// This ensures version-specific params are always created with the correct type.
 //
 // Usage example:
 //
-//	resp, err := dispatchReplaceChild(ctx, c, parentName, index, apiModel,
-//	    func(parent string, idx int, m v32.Acl, p *v32.ReplaceAclFrontendParams) (*http.Response, error) {
-//	        return v32Client.ReplaceAclFrontend(ctx, parent, idx, p, m)
+//	resp, err := DispatchReplaceChild(ctx, c, parentName, index, model,
+//	    func(parent string, idx int, m v32.Acl) (*http.Response, error) {
+//	        params := &v32.ReplaceAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V32().ReplaceAclFrontend(ctx, parent, idx, params, m)
 //	    },
-//	    func(parent string, idx int, m v31.Acl, p *v31.ReplaceAclFrontendParams) (*http.Response, error) {
-//	        return v31Client.ReplaceAclFrontend(ctx, parent, idx, p, m)
+//	    func(parent string, idx int, m v31.Acl) (*http.Response, error) {
+//	        params := &v31.ReplaceAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V31().ReplaceAclFrontend(ctx, parent, idx, params, m)
 //	    },
-//	    func(parent string, idx int, m v30.Acl, p *v30.ReplaceAclFrontendParams) (*http.Response, error) {
-//	        return v30Client.ReplaceAclFrontend(ctx, parent, idx, p, m)
+//	    func(parent string, idx int, m v30.Acl) (*http.Response, error) {
+//	        params := &v30.ReplaceAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V30().ReplaceAclFrontend(ctx, parent, idx, params, m)
 //	    },
-//	    params32, params31, params30,
 //	)
-func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 any, TParams31 any, TParams30 any](
+func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any](
 	ctx context.Context,
 	c *DataplaneClient,
 	parentName string,
 	index int,
 	unifiedModel TUnified,
-	v32Call func(string, int, TV32, TParams32) (*http.Response, error),
-	v31Call func(string, int, TV31, TParams31) (*http.Response, error),
-	v30Call func(string, int, TV30, TParams30) (*http.Response, error),
-	params32 TParams32,
-	params31 TParams31,
-	params30 TParams30,
+	v32Call func(string, int, TV32) (*http.Response, error),
+	v31Call func(string, int, TV31) (*http.Response, error),
+	v30Call func(string, int, TV30) (*http.Response, error),
 ) (*http.Response, error) {
 	// Marshal unified model to JSON once
 	jsonData, err := json.Marshal(unifiedModel)
@@ -301,21 +310,21 @@ func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.2: %w", err)
 			}
-			return v32Call(parentName, index, model, params32)
+			return v32Call(parentName, index, model)
 		},
 		V31: func(client *v31.Client) (*http.Response, error) {
 			var model TV31
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.1: %w", err)
 			}
-			return v31Call(parentName, index, model, params31)
+			return v31Call(parentName, index, model)
 		},
 		V30: func(client *v30.Client) (*http.Response, error) {
 			var model TV30
 			if err := json.Unmarshal(jsonData, &model); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal model for v3.0: %w", err)
 			}
-			return v30Call(parentName, index, model, params30)
+			return v30Call(parentName, index, model)
 		},
 	})
 }
@@ -323,41 +332,43 @@ func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any, TParams32 
 // DispatchDeleteChild is a generic helper for deleting child resources.
 // No model marshaling needed since delete only requires parent name and index.
 //
+// Each callback receives parent name and index - params should be created inside the callback.
+// This ensures version-specific params are always created with the correct type.
+//
 // Usage example:
 //
-//	resp, err := dispatchDeleteChild(ctx, c, parentName, index,
-//	    func(parent string, idx int, p *v32.DeleteAclFrontendParams) (*http.Response, error) {
-//	        return v32Client.DeleteAclFrontend(ctx, parent, idx, p)
+//	resp, err := DispatchDeleteChild(ctx, c, parentName, index,
+//	    func(parent string, idx int) (*http.Response, error) {
+//	        params := &v32.DeleteAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V32().DeleteAclFrontend(ctx, parent, idx, params)
 //	    },
-//	    func(parent string, idx int, p *v31.DeleteAclFrontendParams) (*http.Response, error) {
-//	        return v31Client.DeleteAclFrontend(ctx, parent, idx, p)
+//	    func(parent string, idx int) (*http.Response, error) {
+//	        params := &v31.DeleteAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V31().DeleteAclFrontend(ctx, parent, idx, params)
 //	    },
-//	    func(parent string, idx int, p *v30.DeleteAclFrontendParams) (*http.Response, error) {
-//	        return v30Client.DeleteAclFrontend(ctx, parent, idx, p)
+//	    func(parent string, idx int) (*http.Response, error) {
+//	        params := &v30.DeleteAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V30().DeleteAclFrontend(ctx, parent, idx, params)
 //	    },
-//	    params32, params31, params30,
 //	)
-func DispatchDeleteChild[TParams32 any, TParams31 any, TParams30 any](
+func DispatchDeleteChild(
 	ctx context.Context,
 	c *DataplaneClient,
 	parentName string,
 	index int,
-	v32Call func(string, int, TParams32) (*http.Response, error),
-	v31Call func(string, int, TParams31) (*http.Response, error),
-	v30Call func(string, int, TParams30) (*http.Response, error),
-	params32 TParams32,
-	params31 TParams31,
-	params30 TParams30,
+	v32Call func(string, int) (*http.Response, error),
+	v31Call func(string, int) (*http.Response, error),
+	v30Call func(string, int) (*http.Response, error),
 ) (*http.Response, error) {
 	return c.Dispatch(ctx, CallFunc[*http.Response]{
 		V32: func(client *v32.Client) (*http.Response, error) {
-			return v32Call(parentName, index, params32)
+			return v32Call(parentName, index)
 		},
 		V31: func(client *v31.Client) (*http.Response, error) {
-			return v31Call(parentName, index, params31)
+			return v31Call(parentName, index)
 		},
 		V30: func(client *v30.Client) (*http.Response, error) {
-			return v30Call(parentName, index, params30)
+			return v30Call(parentName, index)
 		},
 	})
 }

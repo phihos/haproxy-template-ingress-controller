@@ -48,7 +48,8 @@ func (r *Runner) assertHAProxyValid(
 	}
 
 	// Use dataplane.ValidateConfiguration to validate HAProxy config with worker-specific paths
-	err := dataplane.ValidateConfiguration(haproxyConfig, auxiliaryFiles, validationPaths)
+	// Pass nil version to use default v3.0 schema (safest for validation)
+	err := dataplane.ValidateConfiguration(haproxyConfig, auxiliaryFiles, validationPaths, nil)
 	failed := err != nil
 	if failed {
 		result.Passed = false

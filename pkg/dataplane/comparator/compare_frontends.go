@@ -5,7 +5,6 @@ import (
 
 	"haproxy-template-ic/pkg/dataplane/comparator/sections"
 	"haproxy-template-ic/pkg/dataplane/parser"
-	"haproxy-template-ic/pkg/dataplane/transform"
 )
 
 // compareFrontends compares frontend configurations between current and desired.
@@ -206,9 +205,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 	for name := range desiredBinds {
 		if _, exists := currentBinds[name]; !exists {
 			bind := desiredBinds[name]
-			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := transform.ToAPIBind(&bind)
-			operations = append(operations, sections.NewBindFrontendCreate(frontendName, name, apiBind))
+			operations = append(operations, sections.NewBindFrontendCreate(frontendName, name, &bind))
 		}
 	}
 
@@ -216,9 +213,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 	for name := range currentBinds {
 		if _, exists := desiredBinds[name]; !exists {
 			bind := currentBinds[name]
-			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := transform.ToAPIBind(&bind)
-			operations = append(operations, sections.NewBindFrontendDelete(frontendName, name, apiBind))
+			operations = append(operations, sections.NewBindFrontendDelete(frontendName, name, &bind))
 		}
 	}
 
@@ -231,9 +226,7 @@ func (c *Comparator) compareBinds(frontendName string, currentBinds, desiredBind
 		desiredBind := desiredBinds[name]
 		// Compare using built-in Equal() method
 		if !currentBind.Equal(desiredBind) {
-			// Convert models.Bind to dataplaneapi.Bind
-			apiBind := transform.ToAPIBind(&desiredBind)
-			operations = append(operations, sections.NewBindFrontendUpdate(frontendName, name, apiBind))
+			operations = append(operations, sections.NewBindFrontendUpdate(frontendName, name, &desiredBind))
 		}
 	}
 

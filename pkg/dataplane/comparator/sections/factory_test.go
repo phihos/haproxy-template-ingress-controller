@@ -19,8 +19,6 @@ import (
 
 	"github.com/haproxytech/client-native/v6/models"
 	"github.com/stretchr/testify/assert"
-
-	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
 func TestPtrStr(t *testing.T) {
@@ -344,12 +342,11 @@ func TestServerFactoryFunctions(t *testing.T) {
 }
 
 func TestBindFactoryFunctions(t *testing.T) {
-	bindName := "http-bind"
-	bind := &dataplaneapi.Bind{Name: &bindName}
+	bind := &models.Bind{BindParams: models.BindParams{Name: "http-bind"}}
 
 	tests := []struct {
 		name             string
-		factory          func(string, string, *dataplaneapi.Bind) Operation
+		factory          func(string, string, *models.Bind) Operation
 		wantType         OperationType
 		wantDescContains string
 	}{
