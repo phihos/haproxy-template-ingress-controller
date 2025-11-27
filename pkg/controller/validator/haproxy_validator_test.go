@@ -27,6 +27,7 @@ import (
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/controller/renderer"
 	"haproxy-template-ic/pkg/core/config"
+	"haproxy-template-ic/pkg/dataplane"
 	busevents "haproxy-template-ic/pkg/events"
 	"haproxy-template-ic/pkg/k8s/types"
 )
@@ -97,7 +98,9 @@ backend servers
 	haproxyPodStore := &mockStore{}
 
 	// Create renderer
-	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 	require.NoError(t, err)
 
 	// Create validator
@@ -185,7 +188,9 @@ backend servers
 	// Create mock haproxy-pods store
 	haproxyPodStore := &mockStore{}
 
-	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 	require.NoError(t, err)
 
 	validatorComponent := NewHAProxyValidator(bus, logger)
@@ -268,7 +273,9 @@ backend servers
 	// Create mock haproxy-pods store
 	haproxyPodStore := &mockStore{}
 
-	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 	require.NoError(t, err)
 
 	validatorComponent := NewHAProxyValidator(bus, logger)
@@ -344,7 +351,9 @@ backend servers
 	// Create mock haproxy-pods store
 	haproxyPodStore := &mockStore{}
 
-	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 	require.NoError(t, err)
 
 	validatorComponent := NewHAProxyValidator(bus, logger)

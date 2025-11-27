@@ -59,8 +59,9 @@ type Runner struct {
 	config          *config.Config
 	logger          *slog.Logger
 	workers         int
-	debugFilters    bool // Enable detailed filter operation logging
-	traceTemplates  bool // Enable template execution tracing
+	debugFilters    bool                   // Enable detailed filter operation logging
+	traceTemplates  bool                   // Enable template execution tracing
+	capabilities    dataplane.Capabilities // HAProxy/DataPlane API capabilities
 }
 
 // testEntry is a tuple of test name and test definition for worker processing.
@@ -85,6 +86,10 @@ type Options struct {
 	// DebugFilters enables detailed filter operation logging.
 	// When enabled, each sort comparison is logged with values and results.
 	DebugFilters bool
+
+	// Capabilities defines which features are available for the local HAProxy version.
+	// Used to determine path resolution (e.g., CRT-list paths fallback when not supported).
+	Capabilities dataplane.Capabilities
 }
 
 // TestResults contains the results of running validation tests.
@@ -204,6 +209,7 @@ func New(
 		workers:         workers,
 		debugFilters:    options.DebugFilters,
 		traceTemplates:  traceTemplates,
+		capabilities:    options.Capabilities,
 	}
 }
 
@@ -734,12 +740,13 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 
 	// Create file registry for dynamic auxiliary file registration
 	// Use test-specific validation paths to ensure files are registered with correct paths
-	pathResolver := &templating.PathResolver{
-		MapsDir:    validationPaths.MapsDir,
-		SSLDir:     validationPaths.SSLCertsDir,
-		CRTListDir: validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
-		GeneralDir: validationPaths.GeneralStorageDir,
-	}
+	// The factory function handles CRT-list fallback when HAProxy < 3.2
+	pathResolver := templating.NewPathResolverWithCapabilities(
+		validationPaths.MapsDir,
+		validationPaths.SSLCertsDir,
+		validationPaths.GeneralStorageDir,
+		r.capabilities.SupportsCrtList,
+	)
 	fileRegistry := renderer.NewFileRegistry(pathResolver)
 
 	// Build final context

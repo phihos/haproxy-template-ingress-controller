@@ -142,13 +142,75 @@ Different API versions support different features. The client provides capabilit
 | Runtime maps | ✅ | ✅ | ✅ | `SupportsRuntimeMaps` |
 | Runtime servers | ✅ | ✅ | ✅ | `SupportsRuntimeServers` |
 
-**Usage:**
+**Usage with DataPlane API Client:**
 
 ```go
 if client.Clientset().Capabilities().SupportsCrtList {
     // Use crt-list storage (v3.2+ only)
     err := client.CreateCRTListFile(ctx, "example.crtlist", content)
 }
+```
+
+### Capabilities Type Export
+
+The `Capabilities` struct is exported from `pkg/dataplane` for use in components that need to check HAProxy feature availability without a DataPlane API connection (e.g., local CLI validation, template rendering).
+
+**Type Alias:**
+
+```go
+// pkg/dataplane/capabilities.go
+package dataplane
+
+import "haproxy-template-ic/pkg/dataplane/client"
+
+// Capabilities represents HAProxy feature availability based on version.
+// This is a type alias for client.Capabilities, exported for use by
+// controller components that need capability information.
+type Capabilities = client.Capabilities
+```
+
+**Creating Capabilities from Local HAProxy Version:**
+
+When the controller runs alongside HAProxy (e.g., in sidecar mode), use `CapabilitiesFromVersion()` to detect capabilities from the local HAProxy binary:
+
+```go
+// Detect local HAProxy version
+localVersion, err := dataplane.GetLocalVersion(ctx)
+if err != nil {
+    return fmt.Errorf("failed to detect local HAProxy: %w", err)
+}
+
+// Create capabilities from detected version
+capabilities := dataplane.CapabilitiesFromVersion(localVersion)
+
+// Use capabilities for template rendering, CLI validation, etc.
+if capabilities.SupportsCrtList {
+    // Configure CRT-list based SSL certificate paths
+}
+```
+
+**Capabilities Fields:**
+
+| Field | Description | Version |
+|-------|-------------|---------|
+| `SupportsCrtList` | CRT-list file storage support | v3.2+ |
+| `SupportsMapStorage` | Map file storage support | v3.1+ |
+| `SupportsGeneralStorage` | General file storage support | v3.0+ |
+| `SupportsHTTP2` | HTTP/2 protocol support | v3.0+ |
+| `SupportsQUIC` | QUIC/HTTP3 protocol support | v3.2+ |
+| `SupportsAdvancedACLs` | Advanced ACL features | v3.1+ |
+| `SupportsRuntimeMaps` | Runtime map updates | v3.0+ |
+| `SupportsRuntimeServers` | Runtime server updates | v3.0+ |
+
+**Safe Defaults:**
+
+When version is unknown (nil), `CapabilitiesFromVersion()` returns all capabilities as `false` - the safest default that prevents using features that might not be available.
+
+```go
+// Safe handling of unknown version
+var version *dataplane.Version // nil - unknown
+caps := dataplane.CapabilitiesFromVersion(version)
+// All caps.Supports* fields are false - safe fallback behavior
 ```
 
 ### Dispatcher Pattern

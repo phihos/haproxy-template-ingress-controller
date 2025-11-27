@@ -600,6 +600,7 @@ type reconciliationComponents struct {
 	deploymentScheduler *deployer.DeploymentScheduler
 	driftMonitor        *deployer.DriftPreventionMonitor
 	configPublisher     *ctrlconfigpublisher.Component
+	capabilities        dataplane.Capabilities // HAProxy/DataPlane API capabilities
 }
 
 // leaderOnlyComponents holds components that only the leader should run.
@@ -623,6 +624,19 @@ func createReconciliationComponents(
 	// Create Reconciler with default configuration
 	reconcilerComponent := reconciler.New(bus, logger, nil)
 
+	// Detect local HAProxy version and compute capabilities
+	localVersion, err := dataplane.DetectLocalVersion()
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect local HAProxy version: %w", err)
+	}
+	capabilities := dataplane.CapabilitiesFromVersion(localVersion)
+
+	logger.Info("detected local HAProxy version",
+		"version", localVersion.Full,
+		"supports_crt_list", capabilities.SupportsCrtList,
+		"supports_map_storage", capabilities.SupportsMapStorage,
+		"supports_general_storage", capabilities.SupportsGeneralStorage)
+
 	// Create Renderer with stores from ResourceWatcher
 	stores := resourceWatcher.GetAllStores()
 
@@ -632,7 +646,7 @@ func createReconciliationComponents(
 		return nil, fmt.Errorf("haproxy-pods store not found (should be auto-injected)")
 	}
 
-	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, logger)
+	rendererComponent, err := renderer.New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create renderer: %w", err)
 	}
@@ -687,6 +701,7 @@ func createReconciliationComponents(
 		deploymentScheduler: deploymentSchedulerComponent,
 		driftMonitor:        driftMonitorComponent,
 		configPublisher:     configPublisherComponent,
+		capabilities:        capabilities,
 	}, nil
 }
 
@@ -832,6 +847,7 @@ func setupWebhook(
 	k8sClient *client.Client,
 	bus *busevents.EventBus,
 	storeManager *resourcestore.Manager,
+	capabilities dataplane.Capabilities,
 	logger *slog.Logger,
 	metricsRecorder webhook.MetricsRecorder,
 	cancel context.CancelFunc,
@@ -889,7 +905,7 @@ func setupWebhook(
 	}
 
 	// Create DryRunValidator
-	dryrunValidator := dryrunvalidator.New(bus, storeManager, cfg, engine, validationPaths, logger)
+	dryrunValidator := dryrunvalidator.New(bus, storeManager, cfg, engine, validationPaths, capabilities, logger)
 
 	// Start DryRunValidator before webhook
 	go func() {
@@ -1201,7 +1217,7 @@ func runIteration(
 	// 8. Setup webhook validation if enabled
 	if webhook.HasWebhookEnabled(cfg) {
 		logger.Info("Stage 7: Setting up webhook validation")
-		setupWebhook(setup.IterCtx, cfg, webhookCerts, k8sClient, setup.Bus, setup.StoreManager, logger, setup.MetricsComponent.Metrics(), setup.Cancel)
+		setupWebhook(setup.IterCtx, cfg, webhookCerts, k8sClient, setup.Bus, setup.StoreManager, reconComponents.capabilities, logger, setup.MetricsComponent.Metrics(), setup.Cancel)
 	}
 
 	// 9. Setup debug and metrics infrastructure

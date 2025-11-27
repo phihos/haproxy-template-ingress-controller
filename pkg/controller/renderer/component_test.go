@@ -26,6 +26,7 @@ import (
 
 	"haproxy-template-ic/pkg/controller/events"
 	"haproxy-template-ic/pkg/core/config"
+	"haproxy-template-ic/pkg/dataplane"
 	busevents "haproxy-template-ic/pkg/events"
 	"haproxy-template-ic/pkg/k8s/types"
 	"haproxy-template-ic/pkg/templating"
@@ -82,7 +83,9 @@ func TestNew_Success(t *testing.T) {
 
 	haproxyPodStore := &mockStore{}
 
-	renderer, err := New(bus, cfg, stores, haproxyPodStore, logger)
+	// Use capabilities for HAProxy 3.2+ to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 
 	require.NoError(t, err)
 	assert.NotNil(t, renderer)
@@ -108,7 +111,9 @@ func TestNew_InvalidTemplate(t *testing.T) {
 
 	haproxyPodStore := &mockStore{}
 
-	renderer, err := New(bus, cfg, stores, haproxyPodStore, logger)
+	// Use capabilities for HAProxy 3.2+ to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 
 	assert.Error(t, err)
 	assert.Nil(t, renderer)
@@ -151,7 +156,9 @@ defaults
 		"ingresses": ingressStore,
 	}
 
-	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, &mockStore{}, capabilities, logger)
 	require.NoError(t, err)
 
 	// Subscribe to events
@@ -234,7 +241,9 @@ func TestRenderer_WithAuxiliaryFiles(t *testing.T) {
 		"ingresses": ingressStore,
 	}
 
-	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, &mockStore{}, capabilities, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -294,7 +303,9 @@ func TestRenderer_RenderFailure(t *testing.T) {
 
 	haproxyPodStore := &mockStore{}
 
-	renderer, err := New(bus, cfg, stores, haproxyPodStore, logger)
+	// Use capabilities for HAProxy 3.2+ to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -350,7 +361,9 @@ func TestRenderer_EmptyStores(t *testing.T) {
 		"ingresses": &mockStore{items: []interface{}{}}, // Empty store
 	}
 
-	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, &mockStore{}, capabilities, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -422,7 +435,9 @@ func TestRenderer_MultipleStores(t *testing.T) {
 		},
 	}
 
-	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, &mockStore{}, capabilities, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -475,7 +490,9 @@ func TestRenderer_ContextCancellation(t *testing.T) {
 
 	haproxyPodStore := &mockStore{}
 
-	renderer, err := New(bus, cfg, stores, haproxyPodStore, logger)
+	// Use capabilities for HAProxy 3.2+ to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, haproxyPodStore, capabilities, logger)
 	require.NoError(t, err)
 
 	bus.Start()
@@ -523,7 +540,9 @@ func TestRenderer_MultipleReconciliations(t *testing.T) {
 		"ingresses": ingressStore,
 	}
 
-	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, &mockStore{}, capabilities, logger)
 	require.NoError(t, err)
 
 	eventChan := bus.Subscribe(50)
@@ -609,7 +628,9 @@ func TestBuildRenderingContext(t *testing.T) {
 		},
 	}
 
-	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, &mockStore{}, capabilities, logger)
 	require.NoError(t, err)
 
 	// Build context
@@ -650,6 +671,118 @@ func TestBuildRenderingContext(t *testing.T) {
 	assert.Len(t, services, 1)
 }
 
+// TestPathResolverWithCapabilities_CRTListFallback tests CRT-list path resolution
+// based on HAProxy version capabilities. When CRT-list storage is not supported
+// (HAProxy < 3.2), CRT-list files should use the general files directory.
+func TestPathResolverWithCapabilities_CRTListFallback(t *testing.T) {
+	tests := []struct {
+		name                   string
+		version                *dataplane.Version
+		expectSSLDir           bool // true = SSL dir (/etc/haproxy/ssl), false = general dir (/etc/haproxy/files)
+		expectCrtListSupported bool
+		expectMapSupported     bool
+	}{
+		{
+			name:                   "HAProxy 3.0 - CRT-list uses general directory",
+			version:                &dataplane.Version{Major: 3, Minor: 0, Full: "3.0.0"},
+			expectSSLDir:           false,
+			expectCrtListSupported: false,
+			expectMapSupported:     false,
+		},
+		{
+			name:                   "HAProxy 3.1 - CRT-list uses general directory",
+			version:                &dataplane.Version{Major: 3, Minor: 1, Full: "3.1.0"},
+			expectSSLDir:           false,
+			expectCrtListSupported: false,
+			expectMapSupported:     true,
+		},
+		{
+			name:                   "HAProxy 3.2 - CRT-list uses SSL directory",
+			version:                &dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"},
+			expectSSLDir:           true,
+			expectCrtListSupported: true,
+			expectMapSupported:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := busevents.NewEventBus(100)
+			logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+			cfg := &config.Config{
+				HAProxyConfig: config.HAProxyConfig{
+					Template: `global
+    daemon
+
+frontend test
+    bind *:443 ssl crt-list {{ pathResolver.GetPath("certificate-list.txt", "crt-list") }}
+`,
+				},
+				Dataplane: config.DataplaneConfig{
+					MapsDir:           "/etc/haproxy/maps",
+					SSLCertsDir:       "/etc/haproxy/ssl",
+					GeneralStorageDir: "/etc/haproxy/files",
+				},
+			}
+
+			stores := map[string]types.Store{
+				"ingresses": &mockStore{},
+			}
+
+			capabilities := dataplane.CapabilitiesFromVersion(tt.version)
+			assert.Equal(t, tt.expectCrtListSupported, capabilities.SupportsCrtList, "SupportsCrtList mismatch")
+			assert.Equal(t, tt.expectMapSupported, capabilities.SupportsMapStorage, "SupportsMapStorage mismatch")
+
+			renderer, err := New(bus, cfg, stores, &mockStore{}, capabilities, logger)
+			require.NoError(t, err)
+
+			eventChan := bus.Subscribe(50)
+			bus.Start()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			go renderer.Start(ctx)
+			time.Sleep(50 * time.Millisecond)
+
+			bus.Publish(events.NewReconciliationTriggeredEvent("test"))
+
+			renderedEvent := waitForTemplateRenderedEvent(t, eventChan, 1*time.Second)
+			require.NotNil(t, renderedEvent)
+
+			if tt.expectSSLDir {
+				assert.Contains(t, renderedEvent.HAProxyConfig, "crt-list /etc/haproxy/ssl/certificate-list.txt",
+					"CRT-list should use SSL directory")
+				assert.NotContains(t, renderedEvent.HAProxyConfig, "crt-list /etc/haproxy/files/certificate-list.txt",
+					"CRT-list should NOT use general files directory")
+			} else {
+				assert.Contains(t, renderedEvent.HAProxyConfig, "crt-list /etc/haproxy/files/certificate-list.txt",
+					"CRT-list should fall back to general files directory")
+				assert.NotContains(t, renderedEvent.HAProxyConfig, "crt-list /etc/haproxy/ssl/certificate-list.txt",
+					"CRT-list should NOT use SSL directory")
+			}
+		})
+	}
+}
+
+// waitForTemplateRenderedEvent waits for a TemplateRenderedEvent on the event channel.
+func waitForTemplateRenderedEvent(t *testing.T, eventChan <-chan busevents.Event, timeout time.Duration) *events.TemplateRenderedEvent {
+	t.Helper()
+	timer := time.After(timeout)
+	for {
+		select {
+		case event := <-eventChan:
+			if e, ok := event.(*events.TemplateRenderedEvent); ok {
+				return e
+			}
+		case <-timer:
+			t.Fatal("Timeout waiting for TemplateRenderedEvent")
+			return nil
+		}
+	}
+}
+
 // TestPathResolverInitialization tests that the PathResolver is correctly initialized
 // with all required directory paths for the pathResolver.GetPath() method.
 func TestPathResolverInitialization(t *testing.T) {
@@ -678,7 +811,9 @@ frontend test
 		"ingresses": &mockStore{},
 	}
 
-	renderer, err := New(bus, cfg, stores, &mockStore{}, logger)
+	// Use HAProxy 3.2+ version to enable CRT-list support in tests
+	capabilities := dataplane.CapabilitiesFromVersion(&dataplane.Version{Major: 3, Minor: 2, Full: "3.2.0"})
+	renderer, err := New(bus, cfg, stores, &mockStore{}, capabilities, logger)
 	require.NoError(t, err)
 
 	// Get the path resolver from the engine

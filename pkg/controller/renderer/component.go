@@ -45,8 +45,8 @@ const (
 
 // Component implements the renderer component.
 //
-// It subscribes to ReconciliationTriggeredEvent and BecameLeaderEvent, renders all templates
-// using the template engine and resource stores, and publishes the results
+// It subscribes to ReconciliationTriggeredEvent and BecameLeaderEvent,
+// renders all templates using the template engine and resource stores, and publishes the results
 // via TemplateRenderedEvent or TemplateRenderFailedEvent.
 //
 // The component renders configurations twice per reconciliation:
@@ -55,6 +55,12 @@ const (
 //
 // The component caches the last rendered output to support state replay during
 // leadership transitions (when new leader-only components start subscribing).
+//
+// CRT-list Fallback:
+// The component determines CRT-list storage capability from the local HAProxy version
+// (passed at construction time). When CRT-list storage is not supported (HAProxy < 3.2),
+// CRT-list file paths are resolved to the general files directory instead of the SSL
+// directory, ensuring the generated configuration matches where files are actually stored.
 type Component struct {
 	eventBus        *busevents.EventBus
 	eventChan       <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
@@ -64,7 +70,7 @@ type Component struct {
 	haproxyPodStore types.Store // HAProxy controller pods store for pod-maxconn calculations
 	logger          *slog.Logger
 
-	// State protected by mutex (for leadership transition replay)
+	// State protected by mutex (for leadership transition replay and capabilities)
 	mu                   sync.RWMutex
 	lastHAProxyConfig    string
 	lastValidationConfig string
@@ -73,6 +79,11 @@ type Component struct {
 	lastAuxFileCount     int
 	lastRenderDurationMs int64
 	hasRenderedConfig    bool
+
+	// capabilities defines which features are available for the local HAProxy version.
+	// Determined from local HAProxy version at construction time via CapabilitiesFromVersion().
+	// When capabilities.SupportsCrtList is false, CRT-list paths resolve to general files directory.
+	capabilities dataplane.Capabilities
 }
 
 // New creates a new Renderer component.
@@ -85,6 +96,7 @@ type Component struct {
 //   - config: Controller configuration containing templates
 //   - stores: Map of resource type names to their stores (e.g., "ingresses" -> Store)
 //   - haproxyPodStore: Store containing HAProxy controller pods for pod-maxconn calculations
+//   - capabilities: HAProxy capabilities determined from local version
 //   - logger: Structured logger for component logging
 //
 // Returns:
@@ -95,6 +107,7 @@ func New(
 	config *config.Config,
 	stores map[string]types.Store,
 	haproxyPodStore types.Store,
+	capabilities dataplane.Capabilities,
 	logger *slog.Logger,
 ) (*Component, error) {
 	// Log stores received during initialization
@@ -133,6 +146,11 @@ func New(
 	// This ensures proper startup synchronization without timing-based sleeps
 	eventChan := eventBus.Subscribe(EventBufferSize)
 
+	logger.Info("renderer initialized with capabilities",
+		"supports_crt_list", capabilities.SupportsCrtList,
+		"supports_map_storage", capabilities.SupportsMapStorage,
+		"supports_general_storage", capabilities.SupportsGeneralStorage)
+
 	return &Component{
 		eventBus:        eventBus,
 		eventChan:       eventChan,
@@ -141,6 +159,7 @@ func New(
 		stores:          stores,
 		haproxyPodStore: haproxyPodStore,
 		logger:          logger,
+		capabilities:    capabilities,
 	}, nil
 }
 
@@ -229,20 +248,22 @@ func (c *Component) setupValidationEnvironment() (*validationEnvironment, func()
 }
 
 // createPathResolvers creates production and validation path resolvers.
+// When CRT-list storage is not supported (HAProxy < 3.2), CRT-list files are stored
+// in the general files directory instead of the SSL directory.
 func (c *Component) createPathResolvers(env *validationEnvironment) (production, validation *templating.PathResolver) {
-	production = &templating.PathResolver{
-		MapsDir:    c.config.Dataplane.MapsDir,
-		SSLDir:     c.config.Dataplane.SSLCertsDir,
-		CRTListDir: c.config.Dataplane.SSLCertsDir,
-		GeneralDir: c.config.Dataplane.GeneralStorageDir,
-	}
+	production = templating.NewPathResolverWithCapabilities(
+		c.config.Dataplane.MapsDir,
+		c.config.Dataplane.SSLCertsDir,
+		c.config.Dataplane.GeneralStorageDir,
+		c.capabilities.SupportsCrtList,
+	)
 
-	validation = &templating.PathResolver{
-		MapsDir:    env.mapsDir,
-		SSLDir:     env.sslDir,
-		CRTListDir: env.sslDir,
-		GeneralDir: env.generalDir,
-	}
+	validation = templating.NewPathResolverWithCapabilities(
+		env.mapsDir,
+		env.sslDir,
+		env.generalDir,
+		c.capabilities.SupportsCrtList,
+	)
 
 	return production, validation
 }

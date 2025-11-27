@@ -65,6 +65,7 @@ type Component struct {
 	validationPaths dataplane.ValidationPaths
 	testRunner      *testrunner.Runner
 	logger          *slog.Logger
+	capabilities    dataplane.Capabilities // HAProxy/DataPlane API capabilities
 }
 
 // New creates a new DryRunValidator component.
@@ -75,6 +76,7 @@ type Component struct {
 //   - cfg: Controller configuration containing templates
 //   - engine: Pre-compiled template engine for rendering
 //   - validationPaths: Filesystem paths for HAProxy validation
+//   - capabilities: HAProxy capabilities determined from local version
 //   - logger: Structured logger
 //
 // Returns:
@@ -85,6 +87,7 @@ func New(
 	cfg *config.Config,
 	engine *templating.TemplateEngine,
 	validationPaths dataplane.ValidationPaths,
+	capabilities dataplane.Capabilities,
 	logger *slog.Logger,
 ) *Component {
 	// Create test runner for validation tests
@@ -94,8 +97,9 @@ func New(
 		engine,
 		validationPaths,
 		testrunner.Options{
-			Logger:  logger.With("component", "test-runner"),
-			Workers: 1, // Sequential execution in webhook context
+			Logger:       logger.With("component", "test-runner"),
+			Workers:      1, // Sequential execution in webhook context
+			Capabilities: capabilities,
 		},
 	)
 
@@ -107,6 +111,7 @@ func New(
 		validationPaths: validationPaths,
 		testRunner:      testRunnerInstance,
 		logger:          logger.With("component", "dryrun-validator"),
+		capabilities:    capabilities,
 	}
 }
 
@@ -312,13 +317,14 @@ func (c *Component) buildRenderingContext(stores map[string]types.Store) map[str
 	// Build template snippets list
 	snippetNames := c.sortSnippetsByPriority()
 
-	// Create pathResolver from validation paths
-	pathResolver := &templating.PathResolver{
-		MapsDir:    c.validationPaths.MapsDir,
-		SSLDir:     c.validationPaths.SSLCertsDir,
-		CRTListDir: c.validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
-		GeneralDir: c.validationPaths.GeneralStorageDir,
-	}
+	// Create pathResolver from validation paths using the factory function
+	// which handles CRT-list fallback when HAProxy < 3.2
+	pathResolver := templating.NewPathResolverWithCapabilities(
+		c.validationPaths.MapsDir,
+		c.validationPaths.SSLCertsDir,
+		c.validationPaths.GeneralStorageDir,
+		c.capabilities.SupportsCrtList,
+	)
 
 	// Build final context
 	return map[string]interface{}{

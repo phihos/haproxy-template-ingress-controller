@@ -176,6 +176,14 @@ func runValidationTests(
 		return nil, fmt.Errorf("failed to convert config: %w", err)
 	}
 
+	// Detect local HAProxy version to determine capabilities
+	// CRT-list storage is only available in HAProxy 3.2+
+	localVersion, err := dataplane.DetectLocalVersion()
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect local HAProxy version: %w\nHint: Ensure 'haproxy' is in PATH", err)
+	}
+	capabilities := dataplane.CapabilitiesFromVersion(localVersion)
+
 	// Create test runner
 	runner := testrunner.New(
 		cfg,
@@ -185,6 +193,7 @@ func runValidationTests(
 			Logger:       logger,
 			Workers:      validateWorkers,
 			DebugFilters: validateDebugFilters,
+			Capabilities: capabilities,
 		},
 	)
 
