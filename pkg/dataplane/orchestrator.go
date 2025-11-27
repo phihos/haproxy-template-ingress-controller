@@ -130,7 +130,7 @@ func (o *orchestrator) attemptFineGrainedSyncWithDiffs(
 	o.logger.Info("Fine-grained sync completed successfully",
 		"operations", len(appliedOps),
 		"reload_triggered", reloadTriggered,
-		"retries", retries-1,
+		"retries", max(0, retries-1),
 		"duration", time.Since(startTime))
 
 	return &SyncResult{
@@ -140,7 +140,7 @@ func (o *orchestrator) attemptFineGrainedSyncWithDiffs(
 		ReloadID:          reloadID,
 		FallbackToRaw:     false,
 		Duration:          time.Since(startTime),
-		Retries:           retries - 1,
+		Retries:           max(0, retries-1),
 		Details:           convertDiffSummary(&diff.Summary),
 		Message:           fmt.Sprintf("Successfully applied %d configuration changes", len(appliedOps)),
 	}, nil
