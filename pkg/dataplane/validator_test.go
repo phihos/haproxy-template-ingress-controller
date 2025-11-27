@@ -23,10 +23,10 @@ import (
 )
 
 // testValidationPaths returns validation paths for testing using temporary directories.
-func testValidationPaths(t *testing.T) ValidationPaths {
+func testValidationPaths(t *testing.T) *ValidationPaths {
 	t.Helper()
 	tmpDir := t.TempDir()
-	return ValidationPaths{
+	return &ValidationPaths{
 		MapsDir:           tmpDir + "/maps",
 		SSLCertsDir:       tmpDir + "/certs",
 		GeneralStorageDir: tmpDir + "/general",

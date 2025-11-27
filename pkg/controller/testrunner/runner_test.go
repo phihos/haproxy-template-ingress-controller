@@ -273,7 +273,7 @@ func TestRunner_RunTests(t *testing.T) {
 			runner := New(
 				cfg,
 				engine,
-				dataplane.ValidationPaths{}, // Empty paths for unit tests
+				&dataplane.ValidationPaths{}, // Empty paths for unit tests
 				Options{
 					TestName: tt.testName,
 					Logger:   logger,
@@ -376,7 +376,7 @@ backend {{ svc.metadata.namespace }}-{{ svc.metadata.name }}
 	runner := New(
 		cfg,
 		engine,
-		dataplane.ValidationPaths{},
+		&dataplane.ValidationPaths{},
 		Options{Logger: logger},
 	)
 
@@ -446,7 +446,7 @@ func TestRunner_RenderError(t *testing.T) {
 	runner := New(
 		cfg,
 		engine,
-		dataplane.ValidationPaths{},
+		&dataplane.ValidationPaths{},
 		Options{Logger: logger},
 	)
 

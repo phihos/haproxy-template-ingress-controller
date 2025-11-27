@@ -164,7 +164,7 @@ func (v *HAProxyValidatorComponent) handleTemplateRendered(event *events.Templat
 
 	// Validate configuration using validation config and paths from event
 	// Use ValidationHAProxyConfig (rendered with temp paths) instead of HAProxyConfig (production paths)
-	err := dataplane.ValidateConfiguration(event.ValidationHAProxyConfig, auxiliaryFiles, *validationPaths)
+	err := dataplane.ValidateConfiguration(event.ValidationHAProxyConfig, auxiliaryFiles, validationPaths)
 	if err != nil {
 		// Simplify error message for user-facing output
 		// Keep full error in logs for debugging

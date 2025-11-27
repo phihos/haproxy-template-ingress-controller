@@ -41,6 +41,7 @@ var haproxyCheckMutex sync.Mutex
 type ValidationPaths struct {
 	MapsDir           string
 	SSLCertsDir       string
+	CRTListDir        string // Directory for CRT-list files (may differ from SSLCertsDir on HAProxy < 3.2)
 	GeneralStorageDir string
 	ConfigFile        string
 }
@@ -62,7 +63,7 @@ type ValidationPaths struct {
 // Returns:
 //   - nil if validation succeeds
 //   - ValidationError with phase information if validation fails
-func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths *ValidationPaths) error {
 	// Phase 1: Syntax validation with client-native parser
 	// This also returns the parsed configuration for Phase 1.5
 	parsedConfig, err := validateSyntax(mainConfig)
@@ -671,7 +672,7 @@ func validateAgainstSchema(spec *openapi3.T, schemaName string, model interface{
 
 // validateSemantics performs semantic validation using haproxy binary.
 // This writes files to actual /etc/haproxy/ directories and runs haproxy -c.
-func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths *ValidationPaths) error {
 	// Clear validation directories to remove any pre-existing files
 	if err := clearValidationDirectories(paths); err != nil {
 		return fmt.Errorf("failed to clear validation directories: %w", err)
@@ -699,7 +700,7 @@ func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths Valida
 // This ensures no pre-existing files interfere with validation.
 // It clears both the traditional validation directories (for absolute/simple paths)
 // and subdirectories in the config directory (for relative paths with subdirectories).
-func clearValidationDirectories(paths ValidationPaths) error {
+func clearValidationDirectories(paths *ValidationPaths) error {
 	configDir := filepath.Dir(paths.ConfigFile)
 
 	// Clear traditional validation directories (for absolute paths and simple filenames)
@@ -780,7 +781,7 @@ func writeFileWithDir(path, content, fileType string) error {
 }
 
 // writeAuxiliaryFiles writes all auxiliary files to their respective directories.
-func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths *ValidationPaths) error {
 	if auxFiles == nil {
 		return nil // No auxiliary files to write
 	}
@@ -812,8 +813,9 @@ func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error 
 	}
 
 	// Write CRT-list files
+	// Use CRTListDir which may differ from SSLCertsDir on HAProxy < 3.2
 	for _, crtList := range auxFiles.CRTListFiles {
-		crtListPath := resolveAuxiliaryFilePath(crtList.Path, configDir, paths.SSLCertsDir)
+		crtListPath := resolveAuxiliaryFilePath(crtList.Path, configDir, paths.CRTListDir)
 		if err := writeFileWithDir(crtListPath, crtList.Content, "CRT-list file "+crtList.Path); err != nil {
 			return err
 		}

@@ -247,25 +247,42 @@ func (c *Component) setupValidationEnvironment() (*validationEnvironment, func()
 	return env, cleanup, nil
 }
 
+// toPathResolver converts dataplane.ResolvedPaths to templating.PathResolver.
+// This conversion is done in the controller layer to maintain architectural separation
+// between pkg/dataplane and pkg/templating.
+func toPathResolver(r *dataplane.ResolvedPaths) *templating.PathResolver {
+	return &templating.PathResolver{
+		MapsDir:    r.MapsDir,
+		SSLDir:     r.SSLDir,
+		CRTListDir: r.CRTListDir,
+		GeneralDir: r.GeneralDir,
+	}
+}
+
 // createPathResolvers creates production and validation path resolvers.
-// When CRT-list storage is not supported (HAProxy < 3.2), CRT-list files are stored
-// in the general files directory instead of the SSL directory.
-func (c *Component) createPathResolvers(env *validationEnvironment) (production, validation *templating.PathResolver) {
-	production = templating.NewPathResolverWithCapabilities(
-		c.config.Dataplane.MapsDir,
-		c.config.Dataplane.SSLCertsDir,
-		c.config.Dataplane.GeneralStorageDir,
-		c.capabilities.SupportsCrtList,
-	)
+// Uses centralized path resolution to ensure CRT-list fallback is handled consistently.
+func (c *Component) createPathResolvers(env *validationEnvironment) (production, validation *templating.PathResolver, validationPaths *dataplane.ValidationPaths) {
+	// Production paths from config
+	productionBase := dataplane.PathConfig{
+		MapsDir:    c.config.Dataplane.MapsDir,
+		SSLDir:     c.config.Dataplane.SSLCertsDir,
+		GeneralDir: c.config.Dataplane.GeneralStorageDir,
+	}
+	productionResolved := dataplane.ResolvePaths(productionBase, c.capabilities)
+	production = toPathResolver(productionResolved)
 
-	validation = templating.NewPathResolverWithCapabilities(
-		env.mapsDir,
-		env.sslDir,
-		env.generalDir,
-		c.capabilities.SupportsCrtList,
-	)
+	// Validation paths from temp environment
+	validationBase := dataplane.PathConfig{
+		MapsDir:    env.mapsDir,
+		SSLDir:     env.sslDir,
+		GeneralDir: env.generalDir,
+		ConfigFile: env.configFile,
+	}
+	validationResolved := dataplane.ResolvePaths(validationBase, c.capabilities)
+	validation = toPathResolver(validationResolved)
+	validationPaths = validationResolved.ToValidationPaths()
 
-	return production, validation
+	return production, validation, validationPaths
 }
 
 // handleReconciliationTriggered renders all templates when reconciliation is triggered.
@@ -282,8 +299,8 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 	}
 	defer cleanup()
 
-	// Create path resolvers
-	productionPathResolver, validationPathResolver := c.createPathResolvers(validationEnv)
+	// Create path resolvers (includes capability-aware CRTListDir)
+	productionPathResolver, validationPathResolver, validationPaths := c.createPathResolvers(validationEnv)
 
 	// RENDER 1: Production configuration (for deployment)
 	c.logger.Info("rendering production configuration")
@@ -322,14 +339,6 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 
 	validationDynamicFiles := validationFileRegistry.GetFiles()
 	_ = MergeAuxiliaryFiles(validationStaticFiles, validationDynamicFiles) // Not needed for event, only production files are deployed
-
-	// Create ValidationPaths struct for HAProxyValidator
-	validationPaths := &dataplane.ValidationPaths{
-		MapsDir:           validationEnv.mapsDir,
-		SSLCertsDir:       validationEnv.sslDir,
-		GeneralStorageDir: validationEnv.generalDir,
-		ConfigFile:        validationEnv.configFile,
-	}
 
 	// Calculate metrics
 	durationMs := time.Since(startTime).Milliseconds()

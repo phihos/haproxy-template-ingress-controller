@@ -35,7 +35,7 @@ func (r *Runner) assertHAProxyValid(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	assertion *config.ValidationAssertion,
-	validationPaths dataplane.ValidationPaths,
+	validationPaths *dataplane.ValidationPaths,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        "haproxy_valid",

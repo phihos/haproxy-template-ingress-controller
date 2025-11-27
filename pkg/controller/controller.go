@@ -897,7 +897,7 @@ func setupWebhook(
 	}
 
 	// Create validation paths
-	validationPaths := dataplane.ValidationPaths{
+	validationPaths := &dataplane.ValidationPaths{
 		MapsDir:           cfg.Dataplane.MapsDir,
 		SSLCertsDir:       cfg.Dataplane.SSLCertsDir,
 		GeneralStorageDir: cfg.Dataplane.GeneralStorageDir,

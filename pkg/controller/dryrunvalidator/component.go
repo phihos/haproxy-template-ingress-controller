@@ -62,7 +62,7 @@ type Component struct {
 	storeManager    *resourcestore.Manager
 	config          *config.Config
 	engine          *templating.TemplateEngine
-	validationPaths dataplane.ValidationPaths
+	validationPaths *dataplane.ValidationPaths
 	testRunner      *testrunner.Runner
 	logger          *slog.Logger
 	capabilities    dataplane.Capabilities // HAProxy/DataPlane API capabilities
@@ -86,7 +86,7 @@ func New(
 	storeManager *resourcestore.Manager,
 	cfg *config.Config,
 	engine *templating.TemplateEngine,
-	validationPaths dataplane.ValidationPaths,
+	validationPaths *dataplane.ValidationPaths,
 	capabilities dataplane.Capabilities,
 	logger *slog.Logger,
 ) *Component {
@@ -317,14 +317,14 @@ func (c *Component) buildRenderingContext(stores map[string]types.Store) map[str
 	// Build template snippets list
 	snippetNames := c.sortSnippetsByPriority()
 
-	// Create pathResolver from validation paths using the factory function
-	// which handles CRT-list fallback when HAProxy < 3.2
-	pathResolver := templating.NewPathResolverWithCapabilities(
-		c.validationPaths.MapsDir,
-		c.validationPaths.SSLCertsDir,
-		c.validationPaths.GeneralStorageDir,
-		c.capabilities.SupportsCrtList,
-	)
+	// Create PathResolver from ValidationPaths
+	// ValidationPaths already has CRTListDir set correctly based on capabilities
+	pathResolver := &templating.PathResolver{
+		MapsDir:    c.validationPaths.MapsDir,
+		SSLDir:     c.validationPaths.SSLCertsDir,
+		CRTListDir: c.validationPaths.CRTListDir,
+		GeneralDir: c.validationPaths.GeneralStorageDir,
+	}
 
 	// Build final context
 	return map[string]interface{}{
