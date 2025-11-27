@@ -15,6 +15,7 @@
 package discovery
 
 import (
+	"os/exec"
 	"testing"
 	"time"
 
@@ -29,10 +30,26 @@ import (
 )
 
 func TestNewDiscoveryEngine(t *testing.T) {
-	discovery := newDiscoveryEngine(5555)
+	// Skip if haproxy is not available (newDiscoveryEngine detects local version)
+	if _, err := exec.LookPath("haproxy"); err != nil {
+		t.Skip("skipping test: haproxy binary not found in PATH")
+	}
 
+	discovery, err := newDiscoveryEngine(5555)
+
+	require.NoError(t, err)
 	assert.NotNil(t, discovery)
 	assert.Equal(t, 5555, discovery.dataplanePort)
+	assert.NotNil(t, discovery.localVersion)
+}
+
+// createTestDiscovery creates a Discovery instance for testing without requiring haproxy.
+// This is used by tests that only test DiscoverEndpoints, which doesn't need localVersion.
+func createTestDiscovery(dataplanePort int) *Discovery {
+	return &Discovery{
+		dataplanePort: dataplanePort,
+		// localVersion is nil - not needed for DiscoverEndpoints tests
+	}
 }
 
 func TestDiscovery_DiscoverEndpoints_Success(t *testing.T) {
@@ -280,8 +297,8 @@ func TestDiscovery_DiscoverEndpoints_Success(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			// Create discovery instance
-			discovery := newDiscoveryEngine(tt.dataplanePort)
+			// Create discovery instance (using test helper that doesn't require haproxy)
+			discovery := createTestDiscovery(tt.dataplanePort)
 
 			// Discover endpoints
 			endpoints, err := discovery.DiscoverEndpoints(podStore, tt.credentials)
@@ -307,7 +324,7 @@ func TestDiscovery_DiscoverEndpoints_Success(t *testing.T) {
 }
 
 func TestDiscovery_DiscoverEndpoints_NilStore(t *testing.T) {
-	discovery := newDiscoveryEngine(5555)
+	discovery := createTestDiscovery(5555)
 	credentials := coreconfig.Credentials{
 		DataplaneUsername: "admin",
 		DataplanePassword: "secret",
@@ -326,7 +343,7 @@ func TestDiscovery_DiscoverEndpoints_StoreListError(t *testing.T) {
 		listErr: assert.AnError,
 	}
 
-	discovery := newDiscoveryEngine(5555)
+	discovery := createTestDiscovery(5555)
 	credentials := coreconfig.Credentials{
 		DataplaneUsername: "admin",
 		DataplanePassword: "secret",

@@ -206,11 +206,15 @@ func NewClient(ctx context.Context, endpoint *Endpoint) (*Client, error) {
 	logger := slog.Default().With("pod", endpoint.PodName)
 
 	// Create dataplane client
-	c, err := client.NewFromEndpoint(ctx, client.Endpoint{
-		URL:      endpoint.URL,
-		Username: endpoint.Username,
-		Password: endpoint.Password,
-		PodName:  endpoint.PodName,
+	// Pass cached version info to avoid redundant /v3/info calls
+	c, err := client.NewFromEndpoint(ctx, &client.Endpoint{
+		URL:                endpoint.URL,
+		Username:           endpoint.Username,
+		Password:           endpoint.Password,
+		PodName:            endpoint.PodName,
+		CachedMajorVersion: endpoint.DetectedMajorVersion,
+		CachedMinorVersion: endpoint.DetectedMinorVersion,
+		CachedFullVersion:  endpoint.DetectedFullVersion,
 	}, logger)
 	if err != nil {
 		return nil, NewConnectionError(endpoint.URL, err)

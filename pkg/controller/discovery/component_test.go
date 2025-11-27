@@ -18,6 +18,8 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,10 +35,36 @@ import (
 	"haproxy-template-ic/pkg/k8s/types"
 )
 
+// createTestComponent creates a new Component for testing, skipping if haproxy is not available.
+func createTestComponent(t *testing.T, bus *busevents.EventBus, logger *slog.Logger) *Component {
+	t.Helper()
+
+	component, err := New(bus, logger)
+	if err != nil {
+		// Check if it's because haproxy is not found
+		if strings.Contains(err.Error(), "haproxy binary not found") ||
+			strings.Contains(err.Error(), "failed to detect local HAProxy version") {
+			t.Skipf("skipping test: haproxy not available: %v", err)
+		}
+		t.Fatalf("unexpected error creating discovery component: %v", err)
+	}
+	return component
+}
+
+// skipIfNoHAProxy skips the test if haproxy binary is not available.
+func skipIfNoHAProxy(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("haproxy"); err != nil {
+		t.Skip("skipping test: haproxy binary not found in PATH")
+	}
+}
+
 func TestComponent_ConfigValidatedEvent(t *testing.T) {
+	skipIfNoHAProxy(t)
+
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	component := New(bus, logger)
+	component := createTestComponent(t, bus, logger)
 
 	// Set pod store and credentials
 	podStore := createTestPodStore(t, []string{"10.0.0.1", "10.0.0.2"})
@@ -99,9 +127,11 @@ func TestComponent_ConfigValidatedEvent(t *testing.T) {
 }
 
 func TestComponent_CredentialsUpdatedEvent(t *testing.T) {
+	skipIfNoHAProxy(t)
+
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	component := New(bus, logger)
+	component := createTestComponent(t, bus, logger)
 
 	// Set pod store and config
 	podStore := createTestPodStore(t, []string{"10.0.0.1"})
@@ -153,9 +183,11 @@ func TestComponent_CredentialsUpdatedEvent(t *testing.T) {
 }
 
 func TestComponent_ResourceIndexUpdatedEvent(t *testing.T) {
+	skipIfNoHAProxy(t)
+
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	component := New(bus, logger)
+	component := createTestComponent(t, bus, logger)
 
 	// Set pod store, config, and credentials
 	podStore := createTestPodStore(t, []string{"10.0.0.1"})
@@ -211,9 +243,11 @@ func TestComponent_ResourceIndexUpdatedEvent(t *testing.T) {
 }
 
 func TestComponent_ResourceIndexUpdatedEvent_InitialSync_Skipped(t *testing.T) {
+	skipIfNoHAProxy(t)
+
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	component := New(bus, logger)
+	component := createTestComponent(t, bus, logger)
 
 	// Set pod store, config, and credentials
 	podStore := createTestPodStore(t, []string{"10.0.0.1"})
@@ -269,9 +303,11 @@ func TestComponent_ResourceIndexUpdatedEvent_InitialSync_Skipped(t *testing.T) {
 }
 
 func TestComponent_ResourceIndexUpdatedEvent_WrongResourceType_Ignored(t *testing.T) {
+	skipIfNoHAProxy(t)
+
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	component := New(bus, logger)
+	component := createTestComponent(t, bus, logger)
 
 	// Set pod store, config, and credentials
 	podStore := createTestPodStore(t, []string{"10.0.0.1"})
@@ -327,9 +363,11 @@ func TestComponent_ResourceIndexUpdatedEvent_WrongResourceType_Ignored(t *testin
 }
 
 func TestComponent_ResourceSyncCompleteEvent(t *testing.T) {
+	skipIfNoHAProxy(t)
+
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	component := New(bus, logger)
+	component := createTestComponent(t, bus, logger)
 
 	// Set pod store, config, and credentials
 	podStore := createTestPodStore(t, []string{"10.0.0.1"})
@@ -379,9 +417,11 @@ func TestComponent_ResourceSyncCompleteEvent(t *testing.T) {
 }
 
 func TestComponent_ResourceSyncCompleteEvent_WrongResourceType_Ignored(t *testing.T) {
+	skipIfNoHAProxy(t)
+
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	component := New(bus, logger)
+	component := createTestComponent(t, bus, logger)
 
 	// Set pod store, config, and credentials
 	podStore := createTestPodStore(t, []string{"10.0.0.1"})
@@ -478,10 +518,11 @@ func TestComponent_MissingPrerequisites(t *testing.T) {
 // testMissingPrerequisite is a helper that tests discovery with missing prerequisites.
 func testMissingPrerequisite(t *testing.T, hasConfig, hasCredentials, hasPodStore, shouldDiscover bool) {
 	t.Helper()
+	skipIfNoHAProxy(t)
 
 	bus := busevents.NewEventBus(100)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	component := New(bus, logger)
+	component := createTestComponent(t, bus, logger)
 
 	// Set prerequisites based on test case
 	if hasPodStore {

@@ -127,7 +127,7 @@ func TestNewFromEndpoint(t *testing.T) {
 		PodName:  "haproxy-pod",
 	}
 
-	client, err := NewFromEndpoint(context.Background(), endpoint, nil)
+	client, err := NewFromEndpoint(context.Background(), &endpoint, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, client)

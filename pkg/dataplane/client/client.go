@@ -23,6 +23,16 @@ type Endpoint struct {
 	Username string
 	Password string
 	PodName  string // Kubernetes pod name for observability
+
+	// Cached version info (optional, avoids redundant /v3/info calls if set)
+	CachedMajorVersion int
+	CachedMinorVersion int
+	CachedFullVersion  string
+}
+
+// HasCachedVersion returns true if version info has been cached.
+func (e *Endpoint) HasCachedVersion() bool {
+	return e.CachedMajorVersion > 0
 }
 
 // DataplaneClient wraps the multi-version Clientset with additional functionality
@@ -92,7 +102,7 @@ func New(ctx context.Context, cfg *Config) (*DataplaneClient, error) {
 	}
 
 	// Create multi-version clientset with automatic version detection
-	clientset, err := NewClientset(ctx, endpoint, logger)
+	clientset, err := NewClientset(ctx, &endpoint, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create clientset: %w", err)
 	}
@@ -149,7 +159,7 @@ func (c *DataplaneClient) BaseURL() string {
 
 // NewFromEndpoint creates a new DataplaneClient from an Endpoint.
 // This is a convenience function for creating a client with default options.
-func NewFromEndpoint(ctx context.Context, endpoint Endpoint, logger *slog.Logger) (*DataplaneClient, error) {
+func NewFromEndpoint(ctx context.Context, endpoint *Endpoint, logger *slog.Logger) (*DataplaneClient, error) {
 	return New(ctx, &Config{
 		BaseURL:  endpoint.URL,
 		Username: endpoint.Username,

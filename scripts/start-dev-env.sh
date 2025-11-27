@@ -484,6 +484,9 @@ build_and_load_local_image() {
     if [[ "$SKIP_BUILD" != "true" ]]; then
         local build_args=("-t" "${LOCAL_IMAGE}")
 
+        # Pass HAProxy version to use matching base image
+        build_args+=("--build-arg" "HAPROXY_VERSION=${HAPROXY_VERSION}")
+
         if [[ "$FORCE_REBUILD" == "true" ]]; then
             build_args+=("--no-cache")
         fi
@@ -493,7 +496,7 @@ build_and_load_local_image() {
         local docker_path
         docker_path="$(command -v docker)"
 
-        run_with_spinner "Building controller image '${LOCAL_IMAGE}'" \
+        run_with_spinner "Building controller image '${LOCAL_IMAGE}' with HAProxy ${HAPROXY_VERSION}" \
             "${docker_path}" build "${build_args[@]}" || {
             err "Docker build failed"
             return 1

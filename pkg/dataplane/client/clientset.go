@@ -86,37 +86,53 @@ type VersionInfo struct {
 //	    client := clientset.V30()
 //	    // Fallback to v3.0-compatible operations
 //	}
-func NewClientset(ctx context.Context, endpoint Endpoint, logger *slog.Logger) (*Clientset, error) {
+func NewClientset(ctx context.Context, endpoint *Endpoint, logger *slog.Logger) (*Clientset, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	// Detect server version
-	versionInfo, err := detectVersion(ctx, endpoint, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to detect DataPlane API version: %w", err)
-	}
+	var major, minor int
+	var detectedVersion string
 
-	// Parse version string (e.g., "v3.2.6 87ad0bcf" -> major=3, minor=2)
-	major, minor, err := parseVersion(versionInfo.API.Version)
-	if err != nil {
-		logger.Warn("failed to parse version, assuming v3.0",
-			"version", versionInfo.API.Version,
-			"error", err,
+	// Use cached version if available (avoids redundant /v3/info call)
+	if endpoint.HasCachedVersion() {
+		major = endpoint.CachedMajorVersion
+		minor = endpoint.CachedMinorVersion
+		detectedVersion = endpoint.CachedFullVersion
+		logger.Debug("using cached version from discovery",
+			"version", detectedVersion,
+			"major", major,
+			"minor", minor,
 		)
-		major, minor = 3, 0
+	} else {
+		// Detect server version
+		versionInfo, err := DetectVersion(ctx, endpoint, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to detect DataPlane API version: %w", err)
+		}
+
+		// Parse version string (e.g., "v3.2.6 87ad0bcf" -> major=3, minor=2)
+		major, minor, err = ParseVersion(versionInfo.API.Version)
+		if err != nil {
+			logger.Warn("failed to parse version, assuming v3.0",
+				"version", versionInfo.API.Version,
+				"error", err,
+			)
+			major, minor = 3, 0
+		}
+		detectedVersion = versionInfo.API.Version
+
+		logger.Info("detected DataPlane API version",
+			"version", detectedVersion,
+			"major", major,
+			"minor", minor,
+		)
 	}
 
 	// Validate we support this major version
 	if major != 3 {
 		return nil, fmt.Errorf("unsupported DataPlane API major version: %d (only v3.x is supported)", major)
 	}
-
-	logger.Info("detected DataPlane API version",
-		"version", versionInfo.API.Version,
-		"major", major,
-		"minor", minor,
-	)
 
 	// Build capabilities map based on detected version
 	capabilities := buildCapabilities(major, minor)
@@ -148,11 +164,11 @@ func NewClientset(ctx context.Context, endpoint Endpoint, logger *slog.Logger) (
 		v30Client:       v30Client,
 		v31Client:       v31Client,
 		v32Client:       v32Client,
-		detectedVersion: versionInfo.API.Version,
+		detectedVersion: detectedVersion,
 		majorVersion:    major,
 		minorVersion:    minor,
 		capabilities:    capabilities,
-		endpoint:        endpoint,
+		endpoint:        *endpoint,
 		logger:          logger,
 	}, nil
 }
@@ -215,8 +231,10 @@ func (c *Clientset) PreferredClient() interface{} {
 	}
 }
 
-// detectVersion queries the DataPlane API /v3/info endpoint to determine the server version.
-func detectVersion(ctx context.Context, endpoint Endpoint, _ *slog.Logger) (*VersionInfo, error) {
+// DetectVersion queries the DataPlane API /v3/info endpoint to determine the server version.
+// This function is exported for use by the discovery component to check remote pod versions
+// before admitting them for deployment.
+func DetectVersion(ctx context.Context, endpoint *Endpoint, _ *slog.Logger) (*VersionInfo, error) {
 	// Construct /v3/info URL (strip any version suffix from base URL)
 	baseURL := strings.TrimSuffix(endpoint.URL, "/")
 	baseURL = strings.TrimSuffix(baseURL, "/v2")
@@ -253,9 +271,10 @@ func detectVersion(ctx context.Context, endpoint Endpoint, _ *slog.Logger) (*Ver
 	return &versionInfo, nil
 }
 
-// parseVersion extracts major and minor version numbers from version string.
+// ParseVersion extracts major and minor version numbers from version string.
 // Example: "v3.2.6 87ad0bcf" -> (3, 2, nil).
-func parseVersion(version string) (major, minor int, err error) {
+// This function is exported for use by the version compatibility checking logic.
+func ParseVersion(version string) (major, minor int, err error) {
 	// Split on whitespace to get version part (e.g., "v3.2.6")
 	parts := strings.Fields(version)
 	if len(parts) == 0 {

@@ -72,7 +72,7 @@ func TestParseVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			major, minor, err := parseVersion(tt.version)
+			major, minor, err := ParseVersion(tt.version)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -230,7 +230,7 @@ func TestDetectVersion(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			versionInfo, err := detectVersion(ctx, endpoint, nil)
+			versionInfo, err := DetectVersion(ctx, &endpoint, nil)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -268,7 +268,7 @@ func TestNewClientset(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	clientset, err := NewClientset(ctx, endpoint, nil)
+	clientset, err := NewClientset(ctx, &endpoint, nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, clientset)

@@ -656,7 +656,12 @@ func createReconciliationComponents(
 	driftMonitorComponent := deployer.NewDriftPreventionMonitor(bus, logger, driftPreventionInterval)
 
 	// Create Discovery component and set pod store
-	discoveryComponent := discovery.New(bus, logger)
+	// This detects the local HAProxy version (fatal if fails - controller cannot start
+	// without knowing its local version for compatibility checking)
+	discoveryComponent, err := discovery.New(bus, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create discovery component: %w", err)
+	}
 	podStore := resourceWatcher.GetStore("haproxy-pods")
 	if podStore == nil {
 		return nil, fmt.Errorf("haproxy-pods store not found (should be auto-injected)")
