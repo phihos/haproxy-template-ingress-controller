@@ -575,7 +575,20 @@ wait_for_services_ready() {
         debug "Echo-server-v2 pods not found (skipping)"
     fi
 
-    # Step 3.5: Wait for Ingress resources to exist
+    # Step 4: Check for haproxy-demo-backend pods (SSL/PROXY protocol backends)
+    debug "Checking haproxy-demo-backend pod readiness..."
+    if kubectl -n echo get pods -l app=haproxy-demo-backend >/dev/null 2>&1; then
+        if ! kubectl -n echo wait --for=condition=ready pod \
+            -l app=haproxy-demo-backend --timeout=120s >/dev/null 2>&1; then
+            warn "haproxy-demo-backend pods exist but are not ready (continuing anyway)"
+        else
+            ok "haproxy-demo-backend pods are ready"
+        fi
+    else
+        debug "haproxy-demo-backend pods not found (skipping)"
+    fi
+
+    # Step 5: Wait for Ingress resources to exist
     log INFO "Waiting for Ingress resources to be created..."
     local ingress_attempts=30  # 60 seconds
     local attempt=1
@@ -609,7 +622,7 @@ wait_for_services_ready() {
     fi
     ok "Ingress resources created"
 
-    # Step 3.6: Wait for service endpoints to be populated
+    # Step 6: Wait for service endpoints to be populated
     # We check this BEFORE configuration reconciliation because backends need endpoints
     log INFO "Waiting for service endpoints to be populated..."
     local endpoint_attempts=30
@@ -645,7 +658,7 @@ wait_for_services_ready() {
     fi
     ok "Service endpoints populated"
 
-    # Step 3.7: Wait for controller to reconcile with backends
+    # Step 7: Wait for controller to reconcile with backends
     # Now that endpoints exist, wait for HAProxyCfg that includes backends
     log INFO "Waiting for HAProxy configuration with backends..."
     local config_attempts=30  # 60 seconds
