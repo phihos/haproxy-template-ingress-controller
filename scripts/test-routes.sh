@@ -111,11 +111,33 @@ assert_response_ok() {
     debug "  Host: $host, Path: $path"
     debug "  Extra args: ${extra_args[*]}"
 
-    local response
-    if ! response=$(curl -s --max-time 5 -H "Host: $host" "${extra_args[@]}" "${BASE_URL}${path}" 2>&1); then
-        err "$description - Connection failed"
-        return 1
-    fi
+    # Retry logic for flaky CI environments
+    local max_retries=3
+    local retry_delay=2
+    local attempt=1
+    local response=""
+    local last_error=""
+
+    while [[ $attempt -le $max_retries ]]; do
+        if response=$(curl -s --max-time 5 -H "Host: $host" "${extra_args[@]}" "${BASE_URL}${path}" 2>&1); then
+            # Check if we got a valid response
+            if echo "$response" | grep -q "\"http\":"; then
+                break  # Success, exit retry loop
+            else
+                last_error="Invalid response (empty or malformed)"
+                debug "  Attempt $attempt/$max_retries: $last_error"
+            fi
+        else
+            last_error="Connection failed"
+            debug "  Attempt $attempt/$max_retries: $last_error"
+        fi
+
+        if [[ $attempt -lt $max_retries ]]; then
+            debug "  Retrying in ${retry_delay}s..."
+            sleep "$retry_delay"
+        fi
+        attempt=$((attempt + 1))
+    done
 
     debug "  Response: ${response:0:200}..."
 
@@ -137,6 +159,7 @@ assert_response_ok() {
         else
             err "$description - Invalid response"
             echo "  Received: ${response:0:500}"
+            [[ -n "$last_error" ]] && echo "  Last error: $last_error (after $max_retries attempts)"
             return 1
         fi
     fi
@@ -757,6 +780,45 @@ should_test() {
     else
         true
     fi
+}
+
+# Wait for HTTPRoute/Gateway backends to be deployed
+# This is called before HTTPRoute tests to ensure Gateway API resources are reconciled
+wait_for_httproute_backends() {
+    log INFO "Waiting for HTTPRoute backends to be deployed..."
+
+    local config_attempts=30  # 60 seconds
+    local attempt=1
+    local backends_deployed=false
+
+    while [[ $attempt -le $config_attempts ]]; do
+        # Check if HAProxyCfg contains Gateway/HTTPRoute backends (prefixed with gtw_)
+        local gtw_backend_count=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
+            jq -r '.items[0].spec.content // ""' | grep -c "^backend gtw_" 2>/dev/null || echo 0)
+
+        debug "HTTPRoute backend count: $gtw_backend_count (attempt $attempt/$config_attempts)"
+
+        if [[ $gtw_backend_count -gt 0 ]]; then
+            backends_deployed=true
+            break
+        fi
+
+        if [[ $attempt -lt $config_attempts ]]; then
+            sleep 2
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    if [[ "$backends_deployed" == "true" ]]; then
+        ok "HTTPRoute backends deployed ($gtw_backend_count backends)"
+    else
+        warn "HTTPRoute backends not found in config (tests may fail)"
+    fi
+
+    # Additional wait for HAProxy to reload with new config
+    # This helps with flakiness when config was just deployed
+    sleep 2
 }
 
 #═══════════════════════════════════════════════════════════════════════════
@@ -1727,6 +1789,7 @@ main() {
 
     # Run HTTPRoute tests
     if [[ "$INGRESS_ONLY" != "true" ]]; then
+        wait_for_httproute_backends
         test_httproute_basic
         test_httproute_paths
         test_httproute_methods
