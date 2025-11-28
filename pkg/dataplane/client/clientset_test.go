@@ -99,11 +99,10 @@ func TestBuildCapabilities(t *testing.T) {
 			minor: 0,
 			want: Capabilities{
 				SupportsCrtList:        false,
-				SupportsMapStorage:     false,
+				SupportsMapStorage:     true, // All v3.x have /storage/maps
 				SupportsGeneralStorage: true,
 				SupportsHTTP2:          true,
-				SupportsQUIC:           false,
-				SupportsAdvancedACLs:   false,
+				SupportsQUIC:           true, // All v3.x have QUIC options
 				SupportsRuntimeMaps:    true,
 				SupportsRuntimeServers: true,
 			},
@@ -117,8 +116,7 @@ func TestBuildCapabilities(t *testing.T) {
 				SupportsMapStorage:     true,
 				SupportsGeneralStorage: true,
 				SupportsHTTP2:          true,
-				SupportsQUIC:           false,
-				SupportsAdvancedACLs:   true,
+				SupportsQUIC:           true,
 				SupportsRuntimeMaps:    true,
 				SupportsRuntimeServers: true,
 			},
@@ -128,12 +126,11 @@ func TestBuildCapabilities(t *testing.T) {
 			major: 3,
 			minor: 2,
 			want: Capabilities{
-				SupportsCrtList:        true,
+				SupportsCrtList:        true, // Only v3.2+ has /storage/ssl_crt_lists
 				SupportsMapStorage:     true,
 				SupportsGeneralStorage: true,
 				SupportsHTTP2:          true,
 				SupportsQUIC:           true,
-				SupportsAdvancedACLs:   true,
 				SupportsRuntimeMaps:    true,
 				SupportsRuntimeServers: true,
 			},

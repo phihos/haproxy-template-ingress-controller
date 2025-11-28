@@ -32,43 +32,40 @@ func TestCapabilitiesFromVersion(t *testing.T) {
 			want:    Capabilities{}, // All false
 		},
 		{
-			name:    "HAProxy 3.0 - minimal capabilities",
+			name:    "HAProxy 3.0 - base v3 capabilities",
 			version: &Version{Major: 3, Minor: 0, Full: "3.0.0"},
 			want: Capabilities{
 				SupportsCrtList:        false,
-				SupportsMapStorage:     false,
+				SupportsMapStorage:     true, // All v3.x have /storage/maps
 				SupportsGeneralStorage: true,
 				SupportsHTTP2:          true,
-				SupportsQUIC:           false,
-				SupportsAdvancedACLs:   false,
+				SupportsQUIC:           true, // All v3.x have QUIC options
 				SupportsRuntimeMaps:    true,
 				SupportsRuntimeServers: true,
 			},
 		},
 		{
-			name:    "HAProxy 3.1 - map storage and advanced ACLs",
+			name:    "HAProxy 3.1 - same as 3.0 (no new API capabilities)",
 			version: &Version{Major: 3, Minor: 1, Full: "3.1.0"},
 			want: Capabilities{
 				SupportsCrtList:        false,
 				SupportsMapStorage:     true,
 				SupportsGeneralStorage: true,
 				SupportsHTTP2:          true,
-				SupportsQUIC:           false,
-				SupportsAdvancedACLs:   true,
+				SupportsQUIC:           true,
 				SupportsRuntimeMaps:    true,
 				SupportsRuntimeServers: true,
 			},
 		},
 		{
-			name:    "HAProxy 3.2 - full capabilities including CRT-list and QUIC",
+			name:    "HAProxy 3.2 - adds CRT-list storage",
 			version: &Version{Major: 3, Minor: 2, Full: "3.2.0"},
 			want: Capabilities{
-				SupportsCrtList:        true,
+				SupportsCrtList:        true, // Only v3.2+ has /storage/ssl_crt_lists
 				SupportsMapStorage:     true,
 				SupportsGeneralStorage: true,
 				SupportsHTTP2:          true,
 				SupportsQUIC:           true,
-				SupportsAdvancedACLs:   true,
 				SupportsRuntimeMaps:    true,
 				SupportsRuntimeServers: true,
 			},
@@ -82,7 +79,6 @@ func TestCapabilitiesFromVersion(t *testing.T) {
 				SupportsGeneralStorage: true,
 				SupportsHTTP2:          true,
 				SupportsQUIC:           true,
-				SupportsAdvancedACLs:   true,
 				SupportsRuntimeMaps:    true,
 				SupportsRuntimeServers: true,
 			},
@@ -96,7 +92,6 @@ func TestCapabilitiesFromVersion(t *testing.T) {
 				SupportsGeneralStorage: true,
 				SupportsHTTP2:          true,
 				SupportsQUIC:           true,
-				SupportsAdvancedACLs:   true,
 				SupportsRuntimeMaps:    true,
 				SupportsRuntimeServers: true,
 			},
@@ -110,7 +105,6 @@ func TestCapabilitiesFromVersion(t *testing.T) {
 				SupportsGeneralStorage: false,
 				SupportsHTTP2:          false,
 				SupportsQUIC:           false,
-				SupportsAdvancedACLs:   false,
 				SupportsRuntimeMaps:    false,
 				SupportsRuntimeServers: false,
 			},
@@ -126,7 +120,6 @@ func TestCapabilitiesFromVersion(t *testing.T) {
 			assert.Equal(t, tt.want.SupportsGeneralStorage, got.SupportsGeneralStorage, "SupportsGeneralStorage mismatch")
 			assert.Equal(t, tt.want.SupportsHTTP2, got.SupportsHTTP2, "SupportsHTTP2 mismatch")
 			assert.Equal(t, tt.want.SupportsQUIC, got.SupportsQUIC, "SupportsQUIC mismatch")
-			assert.Equal(t, tt.want.SupportsAdvancedACLs, got.SupportsAdvancedACLs, "SupportsAdvancedACLs mismatch")
 			assert.Equal(t, tt.want.SupportsRuntimeMaps, got.SupportsRuntimeMaps, "SupportsRuntimeMaps mismatch")
 			assert.Equal(t, tt.want.SupportsRuntimeServers, got.SupportsRuntimeServers, "SupportsRuntimeServers mismatch")
 		})
@@ -157,15 +150,15 @@ func TestCapabilitiesFromVersion_CrtListThreshold(t *testing.T) {
 }
 
 func TestCapabilitiesFromVersion_MapStorageThreshold(t *testing.T) {
-	// Detailed tests for the map storage threshold (v3.1+)
+	// Detailed tests for the map storage threshold (v3.0+)
 	tests := []struct {
 		major    int
 		minor    int
 		expected bool
 	}{
 		{2, 9, false},
-		{3, 0, false},
-		{3, 1, true}, // Threshold
+		{3, 0, true}, // Threshold - all v3.x have /storage/maps
+		{3, 1, true},
 		{3, 2, true},
 		{4, 0, true},
 	}

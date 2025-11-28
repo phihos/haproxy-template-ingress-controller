@@ -687,7 +687,7 @@ func TestPathResolverWithCapabilities_CRTListFallback(t *testing.T) {
 			version:                &dataplane.Version{Major: 3, Minor: 0, Full: "3.0.0"},
 			expectSSLDir:           false,
 			expectCrtListSupported: false,
-			expectMapSupported:     false,
+			expectMapSupported:     true, // All v3.x have /storage/maps
 		},
 		{
 			name:                   "HAProxy 3.1 - CRT-list uses general directory",

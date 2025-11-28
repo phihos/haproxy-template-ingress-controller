@@ -23,12 +23,11 @@ type Capabilities = client.Capabilities
 // CapabilitiesFromVersion computes capabilities based on a HAProxy version.
 // This is used for local HAProxy binary detection (haproxy -v).
 //
-// Capability thresholds:
+// Capability thresholds (verified against OpenAPI specs):
 //   - SupportsCrtList: v3.2+ (CRT-list storage endpoint)
-//   - SupportsMapStorage: v3.1+ (Map file storage endpoint)
+//   - SupportsMapStorage: v3.0+ (Map file storage endpoint)
 //   - SupportsGeneralStorage: v3.0+ (General file storage)
-//   - SupportsQUIC: v3.2+ (QUIC/HTTP3 support)
-//   - SupportsAdvancedACLs: v3.1+ (Advanced ACL operators)
+//   - SupportsQUIC: v3.0+ (QUIC/HTTP3 configuration options)
 //   - SupportsHTTP2: v3.0+ (HTTP/2 configuration)
 //   - SupportsRuntimeMaps: v3.0+ (Runtime map operations)
 //   - SupportsRuntimeServers: v3.0+ (Runtime server operations)
@@ -40,13 +39,12 @@ func CapabilitiesFromVersion(v *Version) Capabilities {
 	return Capabilities{
 		// Storage capabilities
 		SupportsCrtList:        v.Major > 3 || (v.Major == 3 && v.Minor >= 2),
-		SupportsMapStorage:     v.Major > 3 || (v.Major == 3 && v.Minor >= 1),
+		SupportsMapStorage:     v.Major >= 3,
 		SupportsGeneralStorage: v.Major >= 3,
 
 		// Configuration capabilities
-		SupportsHTTP2:        v.Major >= 3,
-		SupportsQUIC:         v.Major > 3 || (v.Major == 3 && v.Minor >= 2),
-		SupportsAdvancedACLs: v.Major > 3 || (v.Major == 3 && v.Minor >= 1),
+		SupportsHTTP2: v.Major >= 3,
+		SupportsQUIC:  v.Major >= 3,
 
 		// Runtime capabilities
 		SupportsRuntimeMaps:    v.Major >= 3,

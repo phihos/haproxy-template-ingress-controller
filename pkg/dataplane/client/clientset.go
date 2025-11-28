@@ -41,16 +41,16 @@ type Clientset struct {
 }
 
 // Capabilities defines which features are available for a given DataPlane API version.
+// Version thresholds verified against OpenAPI specs for v3.0, v3.1, v3.2.
 type Capabilities struct {
 	// Storage capabilities
-	SupportsCrtList        bool // /v3/storage/ssl_certificates (v3.2+)
-	SupportsMapStorage     bool // /v3/storage/maps (v3.1+)
+	SupportsCrtList        bool // /v3/storage/ssl_crt_lists (v3.2+)
+	SupportsMapStorage     bool // /v3/storage/maps (v3.0+)
 	SupportsGeneralStorage bool // /v3/storage/general (v3.0+)
 
 	// Configuration capabilities
-	SupportsHTTP2        bool // HTTP/2 configuration (v3.0+)
-	SupportsQUIC         bool // QUIC/HTTP3 support (v3.2+)
-	SupportsAdvancedACLs bool // Advanced ACL operators (v3.1+)
+	SupportsHTTP2 bool // HTTP/2 configuration (v3.0+)
+	SupportsQUIC  bool // QUIC/HTTP3 configuration (v3.0+)
 
 	// Runtime capabilities
 	SupportsRuntimeMaps    bool // Runtime map operations (v3.0+)
@@ -306,25 +306,21 @@ func ParseVersion(version string) (major, minor int, err error) {
 }
 
 // buildCapabilities constructs a capability map based on version.
+// Thresholds verified against OpenAPI specs for v3.0, v3.1, v3.2.
 func buildCapabilities(_, minor int) Capabilities {
-	// Baseline: all v3.0+ features
+	// Baseline: all v3.0+ features (verified against OpenAPI specs)
 	caps := Capabilities{
 		SupportsGeneralStorage: true,
+		SupportsMapStorage:     true, // All v3.x have /storage/maps
 		SupportsHTTP2:          true,
+		SupportsQUIC:           true, // All v3.x have QUIC options
 		SupportsRuntimeMaps:    true,
 		SupportsRuntimeServers: true,
 	}
 
-	// v3.1+ features
-	if minor >= 1 {
-		caps.SupportsMapStorage = true
-		caps.SupportsAdvancedACLs = true
-	}
-
 	// v3.2+ features
 	if minor >= 2 {
-		caps.SupportsCrtList = true
-		caps.SupportsQUIC = true
+		caps.SupportsCrtList = true // Only v3.2+ has /storage/ssl_crt_lists
 	}
 
 	return caps

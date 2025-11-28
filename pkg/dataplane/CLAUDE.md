@@ -131,14 +131,13 @@ Different API versions support different features. The client provides capabilit
 |---------|------|------|------|-----------------|
 | **Storage** |
 | General files | ✅ | ✅ | ✅ | `SupportsGeneralStorage` |
-| Map files | ❌ | ✅ | ✅ | `SupportsMapStorage` |
+| Map files | ✅ | ✅ | ✅ | `SupportsMapStorage` |
 | SSL certificates | ✅ | ✅ | ✅ | _(always available)_ |
 | CRT-list files | ❌ | ❌ | ✅ | `SupportsCrtList` |
 | **Protocol Support** |
 | HTTP/2 | ✅ | ✅ | ✅ | `SupportsHTTP2` |
-| QUIC/HTTP3 | ❌ | ❌ | ✅ | `SupportsQUIC` |
-| **Configuration** |
-| Advanced ACLs | ❌ | ✅ | ✅ | `SupportsAdvancedACLs` |
+| QUIC/HTTP3 | ✅ | ✅ | ✅ | `SupportsQUIC` |
+| **Runtime** |
 | Runtime maps | ✅ | ✅ | ✅ | `SupportsRuntimeMaps` |
 | Runtime servers | ✅ | ✅ | ✅ | `SupportsRuntimeServers` |
 
@@ -194,11 +193,10 @@ if capabilities.SupportsCrtList {
 | Field | Description | Version |
 |-------|-------------|---------|
 | `SupportsCrtList` | CRT-list file storage support | v3.2+ |
-| `SupportsMapStorage` | Map file storage support | v3.1+ |
+| `SupportsMapStorage` | Map file storage support | v3.0+ |
 | `SupportsGeneralStorage` | General file storage support | v3.0+ |
 | `SupportsHTTP2` | HTTP/2 protocol support | v3.0+ |
-| `SupportsQUIC` | QUIC/HTTP3 protocol support | v3.2+ |
-| `SupportsAdvancedACLs` | Advanced ACL features | v3.1+ |
+| `SupportsQUIC` | QUIC/HTTP3 protocol support | v3.0+ |
 | `SupportsRuntimeMaps` | Runtime map updates | v3.0+ |
 | `SupportsRuntimeServers` | Runtime server updates | v3.0+ |
 
