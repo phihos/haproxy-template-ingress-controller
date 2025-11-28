@@ -125,8 +125,8 @@ assert_response_ok() {
             if [[ "$response" == *"503 Service Unavailable"* ]]; then
                 last_error="Backend not ready (503)"
                 debug "  Attempt $attempt/$max_retries: $last_error"
-            # Check if we got a valid response
-            elif echo "$response" | grep -q "\"http\":"; then
+            # Check if we got a valid response (avoid pipe to grep -q which causes SIGPIPE)
+            elif [[ "$response" == *'"http":'* ]]; then
                 break  # Success, exit retry loop
             else
                 last_error="Invalid response (empty or malformed)"
@@ -146,11 +146,11 @@ assert_response_ok() {
 
     debug "  Response: ${response:0:200}..."
 
-    # Check for expected backend if specified
+    # Check for expected backend if specified (avoid pipe to grep -q which causes SIGPIPE)
     if [[ -n "$expected_backend" ]]; then
-        if echo "$response" | grep -q "\"ENVIRONMENT\":\"$expected_backend\""; then
+        if [[ "$response" == *"\"ENVIRONMENT\":\"$expected_backend\""* ]]; then
             ok "$description - Routed to $expected_backend"
-        elif echo "$response" | grep -q "\"ENVIRONMENT\""; then
+        elif [[ "$response" == *'"ENVIRONMENT"'* ]]; then
             local actual_backend=$(echo "$response" | grep -o '"ENVIRONMENT":"[^"]*"' | cut -d'"' -f4)
             err "$description - Expected backend '$expected_backend', got '$actual_backend'"
             return 1
@@ -158,8 +158,8 @@ assert_response_ok() {
             ok "$description - Routed to default backend"
         fi
     else
-        # Just check for successful response
-        if echo "$response" | grep -q "\"http\":"; then
+        # Just check for successful response (avoid pipe to grep -q which causes SIGPIPE)
+        if [[ "$response" == *'"http":'* ]]; then
             ok "$description - Response OK"
         else
             err "$description - Invalid response"
@@ -189,7 +189,7 @@ assert_weighted_distribution() {
         local response
         response=$(curl -s --max-time 5 -H "Host: $host" "${BASE_URL}/" 2>&1)
 
-        if echo "$response" | grep -q '"ENVIRONMENT":"v2"'; then
+        if [[ "$response" == *'"ENVIRONMENT":"v2"'* ]]; then
             count_v2=$((count_v2 + 1))
         else
             count_default=$((count_default + 1))
@@ -246,7 +246,7 @@ assert_auth_success() {
         return 1
     fi
 
-    if echo "$response" | grep -q "\"http\":"; then
+    if [[ "$response" == *'"http":'* ]]; then
         ok "$description - Auth successful with $username:$password"
     else
         err "$description - Auth failed"
@@ -317,7 +317,7 @@ assert_header_value() {
 
     debug "  Actual value: $actual_value"
 
-    if echo "$actual_value" | grep -qF "$expected_value"; then
+    if [[ "$actual_value" == *"$expected_value"* ]]; then
         ok "$description - Header value matches"
     else
         err "$description - Header value mismatch. Expected: '$expected_value', Got: '$actual_value'"
@@ -497,8 +497,8 @@ assert_path_rewrite() {
     fi
 
     # Check that the echo server received the expected path
-    # The echo server returns the path in the "originalUrl" field
-    if echo "$response" | grep -q "\"originalUrl\":\"${expected_path}\""; then
+    # The echo server returns the path in the "originalUrl" field (avoid pipe to grep -q which causes SIGPIPE)
+    if [[ "$response" == *"\"originalUrl\":\"${expected_path}\""* ]]; then
         ok "$description - Path rewritten correctly"
     else
         local actual_path=$(echo "$response" | grep -o '"originalUrl":"[^"]*"' | cut -d'"' -f4)
@@ -726,8 +726,8 @@ wait_for_services_ready() {
 
         local response
         if response=$(curl -s --max-time 5 -H "Host: echo.localdev.me" "${BASE_URL}/" 2>&1); then
-            # Check that response contains valid JSON with expected structure
-            if echo "$response" | grep -q "\"http\":"; then
+            # Check that response contains valid JSON with expected structure (avoid pipe to grep -q which causes SIGPIPE)
+            if [[ "$response" == *'"http":'* ]]; then
                 debug "Services responding with valid JSON"
                 http_ready=true
                 break
@@ -1186,7 +1186,7 @@ test_ingress_backend_snippet() {
     local response
     response=$(curl -s --max-time 5 -H "Host: echo-backend-snippet.localdev.me" "${BASE_URL}/api/test" 2>&1)
 
-    if echo "$response" | grep -q "\"http\":"; then
+    if [[ "$response" == *'"http":'* ]]; then
         ok "Backend snippet routing works (/api path)"
     else
         err "Backend snippet test failed"
@@ -1218,7 +1218,7 @@ test_ingress_ssl_redirect() {
     local location
     location=$(curl -s -I --max-time 5 -H "Host: echo-ssl-redirect.localdev.me" "${BASE_URL}/" 2>&1 | grep -i "^location:" | tr -d '\r')
 
-    if echo "$location" | grep -q "https://"; then
+    if [[ "$location" == *"https://"* ]]; then
         ok "Location header uses https://"
     else
         err "Location header should use https://"
@@ -1334,8 +1334,8 @@ test_ingress_ssl_passthrough() {
         return 1
     fi
 
-    # Check that response contains valid JSON with expected structure
-    if echo "$response" | grep -q "\"http\":"; then
+    # Check that response contains valid JSON with expected structure (avoid pipe to grep -q which causes SIGPIPE)
+    if [[ "$response" == *'"http":'* ]]; then
         ok "SSL passthrough - Encrypted traffic passed through to backend"
     else
         err "SSL passthrough - Invalid response"
@@ -1361,8 +1361,8 @@ test_ingress_tls() {
         return 1
     fi
 
-    # Check that response contains valid JSON with expected structure
-    if echo "$response" | grep -q "\"http\":"; then
+    # Check that response contains valid JSON with expected structure (avoid pipe to grep -q which causes SIGPIPE)
+    if [[ "$response" == *'"http":'* ]]; then
         ok "TLS termination - HTTPS request successful"
     else
         err "TLS termination - Invalid response"
@@ -1388,7 +1388,7 @@ test_ingress_tls_multi() {
         return 1
     fi
 
-    if echo "$response1" | grep -q "\"http\":"; then
+    if [[ "$response1" == *'"http":'* ]]; then
         ok "Multi-host TLS - Primary hostname works"
     else
         err "Multi-host TLS - Primary host invalid response"
@@ -1402,7 +1402,7 @@ test_ingress_tls_multi() {
         return 1
     fi
 
-    if echo "$response2" | grep -q "\"http\":"; then
+    if [[ "$response2" == *'"http":'* ]]; then
         ok "Multi-host TLS - Alternate hostname works"
     else
         err "Multi-host TLS - Alternate host invalid response"
@@ -1426,24 +1426,24 @@ test_ingress_tls_combined() {
         return 1
     fi
 
-    # Check for HSTS header
-    if echo "$headers" | grep -qi "Strict-Transport-Security:"; then
+    # Check for HSTS header (case-insensitive using bash lowercase conversion)
+    if [[ "${headers,,}" == *"strict-transport-security:"* ]]; then
         ok "TLS combined - HSTS header present"
     else
         err "TLS combined - HSTS header missing"
         return 1
     fi
 
-    # Check for X-Frame-Options header
-    if echo "$headers" | grep -qi "X-Frame-Options:.*DENY"; then
+    # Check for X-Frame-Options header (case-insensitive)
+    if [[ "${headers,,}" == *"x-frame-options:"*"deny"* ]]; then
         ok "TLS combined - X-Frame-Options header present"
     else
         err "TLS combined - X-Frame-Options header missing"
         return 1
     fi
 
-    # Check for X-Content-Type-Options header
-    if echo "$headers" | grep -qi "X-Content-Type-Options:.*nosniff"; then
+    # Check for X-Content-Type-Options header (case-insensitive)
+    if [[ "${headers,,}" == *"x-content-type-options:"*"nosniff"* ]]; then
         ok "TLS combined - X-Content-Type-Options header present"
     else
         err "TLS combined - X-Content-Type-Options header missing"
@@ -1698,8 +1698,8 @@ test_gateway_tls_terminate() {
         return 1
     fi
 
-    # Check that response contains valid JSON with expected structure
-    if echo "$response" | grep -q "\"http\":"; then
+    # Check that response contains valid JSON with expected structure (avoid pipe to grep -q which causes SIGPIPE)
+    if [[ "$response" == *'"http":'* ]]; then
         ok "Gateway TLS Terminate - HTTPS request successful"
     else
         err "Gateway TLS Terminate - Invalid response"
