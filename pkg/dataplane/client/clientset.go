@@ -13,26 +13,36 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v30ee "haproxy-template-ic/pkg/generated/dataplaneapi/v30ee"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v31ee "haproxy-template-ic/pkg/generated/dataplaneapi/v31ee"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // Clientset provides access to clients for all supported HAProxy DataPlane API versions.
 // This follows the Kubernetes clientset pattern, allowing version-specific operations
 // while maintaining compatibility across HAProxy versions.
 type Clientset struct {
-	// Version-specific clients
+	// Community version-specific clients
 	v30Client *v30.Client
 	v31Client *v31.Client
 	v32Client *v32.Client
 
+	// Enterprise version-specific clients
+	v30eeClient *v30ee.Client
+	v31eeClient *v31ee.Client
+	v32eeClient *v32ee.Client
+
 	// Detected server version information
-	detectedVersion string       // Full version string (e.g., "v3.2.6 87ad0bcf")
+	detectedVersion string       // Full version string (e.g., "v3.2.6 87ad0bcf" or "v3.0r1")
 	majorVersion    int          // Major version (3)
 	minorVersion    int          // Minor version (0, 1, or 2)
+	isEnterprise    bool         // True if HAProxy Enterprise edition
 	capabilities    Capabilities // Feature availability map
 
 	// Configuration
@@ -93,16 +103,19 @@ func NewClientset(ctx context.Context, endpoint *Endpoint, logger *slog.Logger) 
 
 	var major, minor int
 	var detectedVersion string
+	var isEnterprise bool
 
 	// Use cached version if available (avoids redundant /v3/info call)
 	if endpoint.HasCachedVersion() {
 		major = endpoint.CachedMajorVersion
 		minor = endpoint.CachedMinorVersion
 		detectedVersion = endpoint.CachedFullVersion
+		isEnterprise = endpoint.CachedIsEnterprise
 		logger.Debug("using cached version from discovery",
 			"version", detectedVersion,
 			"major", major,
 			"minor", minor,
+			"enterprise", isEnterprise,
 		)
 	} else {
 		// Detect server version
@@ -122,10 +135,14 @@ func NewClientset(ctx context.Context, endpoint *Endpoint, logger *slog.Logger) 
 		}
 		detectedVersion = versionInfo.API.Version
 
+		// Detect enterprise edition from version string
+		isEnterprise = IsEnterpriseVersion(detectedVersion)
+
 		logger.Info("detected DataPlane API version",
 			"version", detectedVersion,
 			"major", major,
 			"minor", minor,
+			"enterprise", isEnterprise,
 		)
 	}
 
@@ -143,7 +160,7 @@ func NewClientset(ctx context.Context, endpoint *Endpoint, logger *slog.Logger) 
 		return nil
 	}
 
-	// Create clients for all supported versions
+	// Create community clients for all supported versions
 	// Note: We create all clients regardless of detected version for maximum flexibility
 	v30Client, err := v30.NewClient(endpoint.URL, v30.WithRequestEditorFn(authEditor))
 	if err != nil {
@@ -160,13 +177,33 @@ func NewClientset(ctx context.Context, endpoint *Endpoint, logger *slog.Logger) 
 		return nil, fmt.Errorf("failed to create v3.2 client: %w", err)
 	}
 
+	// Create enterprise clients for all supported versions
+	v30eeClient, err := v30ee.NewClient(endpoint.URL, v30ee.WithRequestEditorFn(authEditor))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create v3.0 enterprise client: %w", err)
+	}
+
+	v31eeClient, err := v31ee.NewClient(endpoint.URL, v31ee.WithRequestEditorFn(authEditor))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create v3.1 enterprise client: %w", err)
+	}
+
+	v32eeClient, err := v32ee.NewClient(endpoint.URL, v32ee.WithRequestEditorFn(authEditor))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create v3.2 enterprise client: %w", err)
+	}
+
 	return &Clientset{
 		v30Client:       v30Client,
 		v31Client:       v31Client,
 		v32Client:       v32Client,
+		v30eeClient:     v30eeClient,
+		v31eeClient:     v31eeClient,
+		v32eeClient:     v32eeClient,
 		detectedVersion: detectedVersion,
 		majorVersion:    major,
 		minorVersion:    minor,
+		isEnterprise:    isEnterprise,
 		capabilities:    capabilities,
 		endpoint:        *endpoint,
 		logger:          logger,
@@ -191,8 +228,23 @@ func (c *Clientset) V32() *v32.Client {
 	return c.v32Client
 }
 
+// V30EE returns the HAProxy Enterprise DataPlane API v3.0 client.
+func (c *Clientset) V30EE() *v30ee.Client {
+	return c.v30eeClient
+}
+
+// V31EE returns the HAProxy Enterprise DataPlane API v3.1 client.
+func (c *Clientset) V31EE() *v31ee.Client {
+	return c.v31eeClient
+}
+
+// V32EE returns the HAProxy Enterprise DataPlane API v3.2 client.
+func (c *Clientset) V32EE() *v32ee.Client {
+	return c.v32eeClient
+}
+
 // DetectedVersion returns the full version string detected from the server.
-// Example: "v3.2.6 87ad0bcf".
+// Example: "v3.2.6 87ad0bcf" for community or "v3.0r1" for enterprise.
 func (c *Clientset) DetectedVersion() string {
 	return c.detectedVersion
 }
@@ -212,15 +264,35 @@ func (c *Clientset) Capabilities() Capabilities {
 	return c.capabilities
 }
 
-// PreferredClient returns the most appropriate client based on detected version.
+// IsEnterprise returns true if the detected HAProxy is an Enterprise edition.
+func (c *Clientset) IsEnterprise() bool {
+	return c.isEnterprise
+}
+
+// PreferredClient returns the most appropriate client based on detected version and edition.
 // This is useful for code that wants to use the best available API without
 // explicitly checking capabilities.
 //
 // Returns:
-//   - v32.Client if server is v3.2+
-//   - v31.Client if server is v3.1
-//   - v30.Client if server is v3.0 or unknown
+//   - Enterprise clients (v32ee, v31ee, v30ee) if HAProxy Enterprise is detected
+//   - Community clients (v32, v31, v30) for HAProxy Community
+//
+// Version selection:
+//   - v3.2+ client if server is v3.2+
+//   - v3.1 client if server is v3.1
+//   - v3.0 client if server is v3.0 or unknown
 func (c *Clientset) PreferredClient() interface{} {
+	if c.isEnterprise {
+		switch c.minorVersion {
+		case 2:
+			return c.v32eeClient
+		case 1:
+			return c.v31eeClient
+		default:
+			return c.v30eeClient
+		}
+	}
+
 	switch c.minorVersion {
 	case 2:
 		return c.v32Client
@@ -324,4 +396,33 @@ func buildCapabilities(_, minor int) Capabilities {
 	}
 
 	return caps
+}
+
+// IsEnterpriseVersion detects if a version string indicates HAProxy Enterprise edition.
+// Enterprise versions typically contain "r" followed by a number (e.g., "3.0r1", "v3.1r1")
+// or contain "Enterprise" in the version string.
+//
+// Examples:
+//   - "v3.0r1" -> true (enterprise version format)
+//   - "3.1r1" -> true (enterprise version format)
+//   - "v3.2.6 87ad0bcf" -> false (community version format)
+//   - "HAProxy Enterprise 3.0r1" -> true (contains "Enterprise")
+//
+// enterpriseVersionPattern matches enterprise version format: X.YrZ (e.g., 3.0r1, v3.1r1).
+var enterpriseVersionPattern = regexp.MustCompile(`^v?\d+\.\d+r\d+`)
+
+func IsEnterpriseVersion(version string) bool {
+	// Check for "Enterprise" keyword (case-insensitive)
+	if strings.Contains(strings.ToLower(version), "enterprise") {
+		return true
+	}
+
+	// Check for enterprise version format: X.YrZ (e.g., 3.0r1, 3.1r1)
+	// This pattern matches versions like "v3.0r1", "3.1r1", "v3.2r1"
+	versionPart := strings.Fields(version)
+	if len(versionPart) == 0 {
+		return false
+	}
+
+	return enterpriseVersionPattern.MatchString(versionPart[0])
 }

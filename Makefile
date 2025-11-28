@@ -243,8 +243,29 @@ generate-dataplaneapi-v32: ## Generate HAProxy DataPlane API v3.2 client
 		pkg/generated/dataplaneapi/v32/spec.json
 	@echo "✓ DataPlane API v3.2 client generated"
 
-generate-dataplaneapi-all: generate-dataplaneapi-v30 generate-dataplaneapi-v31 generate-dataplaneapi-v32 ## Generate all HAProxy DataPlane API versions
-	@echo "✓ All DataPlane API clients generated"
+generate-dataplaneapi-v30ee: ## Generate HAProxy Enterprise DataPlane API v3.0 client
+	@echo "Generating Enterprise DataPlane API v3.0 client (models + client)..."
+	@mkdir -p pkg/generated/dataplaneapi/v30ee
+	$(OAPI_CODEGEN) -config hack/oapi-codegen-v30ee.yaml \
+		pkg/generated/dataplaneapi/v30ee/spec.json
+	@echo "✓ Enterprise DataPlane API v3.0 client generated"
+
+generate-dataplaneapi-v31ee: ## Generate HAProxy Enterprise DataPlane API v3.1 client
+	@echo "Generating Enterprise DataPlane API v3.1 client (models + client)..."
+	@mkdir -p pkg/generated/dataplaneapi/v31ee
+	$(OAPI_CODEGEN) -config hack/oapi-codegen-v31ee.yaml \
+		pkg/generated/dataplaneapi/v31ee/spec.json
+	@echo "✓ Enterprise DataPlane API v3.1 client generated"
+
+generate-dataplaneapi-v32ee: ## Generate HAProxy Enterprise DataPlane API v3.2 client
+	@echo "Generating Enterprise DataPlane API v3.2 client (models + client)..."
+	@mkdir -p pkg/generated/dataplaneapi/v32ee
+	$(OAPI_CODEGEN) -config hack/oapi-codegen-v32ee.yaml \
+		pkg/generated/dataplaneapi/v32ee/spec.json
+	@echo "✓ Enterprise DataPlane API v3.2 client generated"
+
+generate-dataplaneapi-all: generate-dataplaneapi-v30 generate-dataplaneapi-v31 generate-dataplaneapi-v32 generate-dataplaneapi-v30ee generate-dataplaneapi-v31ee generate-dataplaneapi-v32ee ## Generate all HAProxy DataPlane API versions
+	@echo "✓ All DataPlane API clients generated (Community + Enterprise)"
 
 ## Cleanup
 

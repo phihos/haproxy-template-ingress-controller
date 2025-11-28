@@ -9,8 +9,11 @@ import (
 
 	"haproxy-template-ic/pkg/dataplane/client"
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v30ee "haproxy-template-ic/pkg/generated/dataplaneapi/v30ee"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v31ee "haproxy-template-ic/pkg/generated/dataplaneapi/v31ee"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // =============================================================================
@@ -36,6 +39,18 @@ func GlobalUpdate() func(ctx context.Context, c *client.DataplaneClient, txID st
 			func(_ string, m v30.Global) (*http.Response, error) {
 				params := &v30.ReplaceGlobalParams{TransactionId: &txID}
 				return clientset.V30().ReplaceGlobal(ctx, params, m)
+			},
+			func(_ string, m v32ee.Global) (*http.Response, error) {
+				params := &v32ee.ReplaceGlobalParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceGlobal(ctx, params, m)
+			},
+			func(_ string, m v31ee.Global) (*http.Response, error) {
+				params := &v31ee.ReplaceGlobalParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceGlobal(ctx, params, m)
+			},
+			func(_ string, m v30ee.Global) (*http.Response, error) {
+				params := &v30ee.ReplaceGlobalParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceGlobal(ctx, params, m)
 			},
 		)
 		if err != nil {

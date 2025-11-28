@@ -13,8 +13,11 @@ import (
 
 	"haproxy-template-ic/pkg/dataplane/client"
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v30ee "haproxy-template-ic/pkg/generated/dataplaneapi/v30ee"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v31ee "haproxy-template-ic/pkg/generated/dataplaneapi/v31ee"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // BackendCreate returns an executor for creating backends.
@@ -34,6 +37,18 @@ func BackendCreate() func(ctx context.Context, c *client.DataplaneClient, txID s
 			func(m v30.Backend) (*http.Response, error) {
 				params := &v30.CreateBackendParams{TransactionId: &txID}
 				return clientset.V30().CreateBackend(ctx, params, m)
+			},
+			func(m v32ee.Backend) (*http.Response, error) {
+				params := &v32ee.CreateBackendParams{TransactionId: &txID}
+				return clientset.V32EE().CreateBackend(ctx, params, m)
+			},
+			func(m v31ee.Backend) (*http.Response, error) {
+				params := &v31ee.CreateBackendParams{TransactionId: &txID}
+				return clientset.V31EE().CreateBackend(ctx, params, m)
+			},
+			func(m v30ee.Backend) (*http.Response, error) {
+				params := &v30ee.CreateBackendParams{TransactionId: &txID}
+				return clientset.V30EE().CreateBackend(ctx, params, m)
 			},
 		)
 		if err != nil {
@@ -62,6 +77,18 @@ func BackendUpdate() func(ctx context.Context, c *client.DataplaneClient, txID s
 				params := &v30.ReplaceBackendParams{TransactionId: &txID}
 				return clientset.V30().ReplaceBackend(ctx, n, params, m)
 			},
+			func(n string, m v32ee.Backend) (*http.Response, error) {
+				params := &v32ee.ReplaceBackendParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceBackend(ctx, n, params, m)
+			},
+			func(n string, m v31ee.Backend) (*http.Response, error) {
+				params := &v31ee.ReplaceBackendParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceBackend(ctx, n, params, m)
+			},
+			func(n string, m v30ee.Backend) (*http.Response, error) {
+				params := &v30ee.ReplaceBackendParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceBackend(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -88,6 +115,18 @@ func BackendDelete() func(ctx context.Context, c *client.DataplaneClient, txID s
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteBackendParams{TransactionId: &txID}
 				return clientset.V30().DeleteBackend(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteBackendParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteBackend(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteBackendParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteBackend(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteBackendParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteBackend(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -116,6 +155,18 @@ func FrontendCreate() func(ctx context.Context, c *client.DataplaneClient, txID 
 				params := &v30.CreateFrontendParams{TransactionId: &txID}
 				return clientset.V30().CreateFrontend(ctx, params, m)
 			},
+			func(m v32ee.Frontend) (*http.Response, error) {
+				params := &v32ee.CreateFrontendParams{TransactionId: &txID}
+				return clientset.V32EE().CreateFrontend(ctx, params, m)
+			},
+			func(m v31ee.Frontend) (*http.Response, error) {
+				params := &v31ee.CreateFrontendParams{TransactionId: &txID}
+				return clientset.V31EE().CreateFrontend(ctx, params, m)
+			},
+			func(m v30ee.Frontend) (*http.Response, error) {
+				params := &v30ee.CreateFrontendParams{TransactionId: &txID}
+				return clientset.V30EE().CreateFrontend(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -142,6 +193,18 @@ func FrontendUpdate() func(ctx context.Context, c *client.DataplaneClient, txID 
 			func(n string, m v30.Frontend) (*http.Response, error) {
 				params := &v30.ReplaceFrontendParams{TransactionId: &txID}
 				return clientset.V30().ReplaceFrontend(ctx, n, params, m)
+			},
+			func(n string, m v32ee.Frontend) (*http.Response, error) {
+				params := &v32ee.ReplaceFrontendParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceFrontend(ctx, n, params, m)
+			},
+			func(n string, m v31ee.Frontend) (*http.Response, error) {
+				params := &v31ee.ReplaceFrontendParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceFrontend(ctx, n, params, m)
+			},
+			func(n string, m v30ee.Frontend) (*http.Response, error) {
+				params := &v30ee.ReplaceFrontendParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceFrontend(ctx, n, params, m)
 			},
 		)
 		if err != nil {
@@ -170,6 +233,18 @@ func FrontendDelete() func(ctx context.Context, c *client.DataplaneClient, txID 
 				params := &v30.DeleteFrontendParams{TransactionId: &txID}
 				return clientset.V30().DeleteFrontend(ctx, n, params)
 			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteFrontendParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteFrontend(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteFrontendParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteFrontend(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteFrontendParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteFrontend(ctx, n, params)
+			},
 		)
 		if err != nil {
 			return err
@@ -196,6 +271,18 @@ func DefaultsCreate() func(ctx context.Context, c *client.DataplaneClient, txID 
 			func(m v30.Defaults) (*http.Response, error) {
 				params := &v30.CreateDefaultsSectionParams{TransactionId: &txID}
 				return clientset.V30().CreateDefaultsSection(ctx, params, m)
+			},
+			func(m v32ee.Defaults) (*http.Response, error) {
+				params := &v32ee.CreateDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V32EE().CreateDefaultsSection(ctx, params, m)
+			},
+			func(m v31ee.Defaults) (*http.Response, error) {
+				params := &v31ee.CreateDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V31EE().CreateDefaultsSection(ctx, params, m)
+			},
+			func(m v30ee.Defaults) (*http.Response, error) {
+				params := &v30ee.CreateDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V30EE().CreateDefaultsSection(ctx, params, m)
 			},
 		)
 		if err != nil {
@@ -224,6 +311,18 @@ func DefaultsUpdate() func(ctx context.Context, c *client.DataplaneClient, txID 
 				params := &v30.ReplaceDefaultsSectionParams{TransactionId: &txID}
 				return clientset.V30().ReplaceDefaultsSection(ctx, n, params, m)
 			},
+			func(n string, m v32ee.Defaults) (*http.Response, error) {
+				params := &v32ee.ReplaceDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceDefaultsSection(ctx, n, params, m)
+			},
+			func(n string, m v31ee.Defaults) (*http.Response, error) {
+				params := &v31ee.ReplaceDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceDefaultsSection(ctx, n, params, m)
+			},
+			func(n string, m v30ee.Defaults) (*http.Response, error) {
+				params := &v30ee.ReplaceDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceDefaultsSection(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -250,6 +349,18 @@ func DefaultsDelete() func(ctx context.Context, c *client.DataplaneClient, txID 
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteDefaultsSectionParams{TransactionId: &txID}
 				return clientset.V30().DeleteDefaultsSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteDefaultsSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteDefaultsSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteDefaultsSectionParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteDefaultsSection(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -282,6 +393,18 @@ func CacheCreate() func(ctx context.Context, c *client.DataplaneClient, txID str
 				params := &v30.CreateCacheParams{TransactionId: &txID}
 				return clientset.V30().CreateCache(ctx, params, m)
 			},
+			func(m v32ee.Cache) (*http.Response, error) {
+				params := &v32ee.CreateCacheParams{TransactionId: &txID}
+				return clientset.V32EE().CreateCache(ctx, params, m)
+			},
+			func(m v31ee.Cache) (*http.Response, error) {
+				params := &v31ee.CreateCacheParams{TransactionId: &txID}
+				return clientset.V31EE().CreateCache(ctx, params, m)
+			},
+			func(m v30ee.Cache) (*http.Response, error) {
+				params := &v30ee.CreateCacheParams{TransactionId: &txID}
+				return clientset.V30EE().CreateCache(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -309,6 +432,18 @@ func CacheUpdate() func(ctx context.Context, c *client.DataplaneClient, txID str
 				params := &v30.ReplaceCacheParams{TransactionId: &txID}
 				return clientset.V30().ReplaceCache(ctx, n, params, m)
 			},
+			func(n string, m v32ee.Cache) (*http.Response, error) {
+				params := &v32ee.ReplaceCacheParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceCache(ctx, n, params, m)
+			},
+			func(n string, m v31ee.Cache) (*http.Response, error) {
+				params := &v31ee.ReplaceCacheParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceCache(ctx, n, params, m)
+			},
+			func(n string, m v30ee.Cache) (*http.Response, error) {
+				params := &v30ee.ReplaceCacheParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceCache(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -335,6 +470,18 @@ func CacheDelete() func(ctx context.Context, c *client.DataplaneClient, txID str
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteCacheParams{TransactionId: &txID}
 				return clientset.V30().DeleteCache(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteCacheParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteCache(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteCacheParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteCache(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteCacheParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteCache(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -367,6 +514,18 @@ func HTTPErrorsSectionCreate() func(ctx context.Context, c *client.DataplaneClie
 				params := &v30.CreateHTTPErrorsSectionParams{TransactionId: &txID}
 				return clientset.V30().CreateHTTPErrorsSection(ctx, params, m)
 			},
+			func(m v32ee.HttpErrorsSection) (*http.Response, error) {
+				params := &v32ee.CreateHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V32EE().CreateHTTPErrorsSection(ctx, params, m)
+			},
+			func(m v31ee.HttpErrorsSection) (*http.Response, error) {
+				params := &v31ee.CreateHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V31EE().CreateHTTPErrorsSection(ctx, params, m)
+			},
+			func(m v30ee.HttpErrorsSection) (*http.Response, error) {
+				params := &v30ee.CreateHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V30EE().CreateHTTPErrorsSection(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -394,6 +553,18 @@ func HTTPErrorsSectionUpdate() func(ctx context.Context, c *client.DataplaneClie
 				params := &v30.ReplaceHTTPErrorsSectionParams{TransactionId: &txID}
 				return clientset.V30().ReplaceHTTPErrorsSection(ctx, n, params, m)
 			},
+			func(n string, m v32ee.HttpErrorsSection) (*http.Response, error) {
+				params := &v32ee.ReplaceHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceHTTPErrorsSection(ctx, n, params, m)
+			},
+			func(n string, m v31ee.HttpErrorsSection) (*http.Response, error) {
+				params := &v31ee.ReplaceHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceHTTPErrorsSection(ctx, n, params, m)
+			},
+			func(n string, m v30ee.HttpErrorsSection) (*http.Response, error) {
+				params := &v30ee.ReplaceHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceHTTPErrorsSection(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -420,6 +591,18 @@ func HTTPErrorsSectionDelete() func(ctx context.Context, c *client.DataplaneClie
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteHTTPErrorsSectionParams{TransactionId: &txID}
 				return clientset.V30().DeleteHTTPErrorsSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteHTTPErrorsSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteHTTPErrorsSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteHTTPErrorsSectionParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteHTTPErrorsSection(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -452,6 +635,18 @@ func LogForwardCreate() func(ctx context.Context, c *client.DataplaneClient, txI
 				params := &v30.CreateLogForwardParams{TransactionId: &txID}
 				return clientset.V30().CreateLogForward(ctx, params, m)
 			},
+			func(m v32ee.LogForward) (*http.Response, error) {
+				params := &v32ee.CreateLogForwardParams{TransactionId: &txID}
+				return clientset.V32EE().CreateLogForward(ctx, params, m)
+			},
+			func(m v31ee.LogForward) (*http.Response, error) {
+				params := &v31ee.CreateLogForwardParams{TransactionId: &txID}
+				return clientset.V31EE().CreateLogForward(ctx, params, m)
+			},
+			func(m v30ee.LogForward) (*http.Response, error) {
+				params := &v30ee.CreateLogForwardParams{TransactionId: &txID}
+				return clientset.V30EE().CreateLogForward(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -479,6 +674,18 @@ func LogForwardUpdate() func(ctx context.Context, c *client.DataplaneClient, txI
 				params := &v30.ReplaceLogForwardParams{TransactionId: &txID}
 				return clientset.V30().ReplaceLogForward(ctx, n, params, m)
 			},
+			func(n string, m v32ee.LogForward) (*http.Response, error) {
+				params := &v32ee.ReplaceLogForwardParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceLogForward(ctx, n, params, m)
+			},
+			func(n string, m v31ee.LogForward) (*http.Response, error) {
+				params := &v31ee.ReplaceLogForwardParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceLogForward(ctx, n, params, m)
+			},
+			func(n string, m v30ee.LogForward) (*http.Response, error) {
+				params := &v30ee.ReplaceLogForwardParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceLogForward(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -505,6 +712,18 @@ func LogForwardDelete() func(ctx context.Context, c *client.DataplaneClient, txI
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteLogForwardParams{TransactionId: &txID}
 				return clientset.V30().DeleteLogForward(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteLogForwardParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteLogForward(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteLogForwardParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteLogForward(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteLogForwardParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteLogForward(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -537,6 +756,18 @@ func MailersSectionCreate() func(ctx context.Context, c *client.DataplaneClient,
 				params := &v30.CreateMailersSectionParams{TransactionId: &txID}
 				return clientset.V30().CreateMailersSection(ctx, params, m)
 			},
+			func(m v32ee.MailersSection) (*http.Response, error) {
+				params := &v32ee.CreateMailersSectionParams{TransactionId: &txID}
+				return clientset.V32EE().CreateMailersSection(ctx, params, m)
+			},
+			func(m v31ee.MailersSection) (*http.Response, error) {
+				params := &v31ee.CreateMailersSectionParams{TransactionId: &txID}
+				return clientset.V31EE().CreateMailersSection(ctx, params, m)
+			},
+			func(m v30ee.MailersSection) (*http.Response, error) {
+				params := &v30ee.CreateMailersSectionParams{TransactionId: &txID}
+				return clientset.V30EE().CreateMailersSection(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -564,6 +795,18 @@ func MailersSectionUpdate() func(ctx context.Context, c *client.DataplaneClient,
 				params := &v30.EditMailersSectionParams{TransactionId: &txID}
 				return clientset.V30().EditMailersSection(ctx, n, params, m)
 			},
+			func(n string, m v32ee.MailersSection) (*http.Response, error) {
+				params := &v32ee.EditMailersSectionParams{TransactionId: &txID}
+				return clientset.V32EE().EditMailersSection(ctx, n, params, m)
+			},
+			func(n string, m v31ee.MailersSection) (*http.Response, error) {
+				params := &v31ee.EditMailersSectionParams{TransactionId: &txID}
+				return clientset.V31EE().EditMailersSection(ctx, n, params, m)
+			},
+			func(n string, m v30ee.MailersSection) (*http.Response, error) {
+				params := &v30ee.EditMailersSectionParams{TransactionId: &txID}
+				return clientset.V30EE().EditMailersSection(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -590,6 +833,18 @@ func MailersSectionDelete() func(ctx context.Context, c *client.DataplaneClient,
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteMailersSectionParams{TransactionId: &txID}
 				return clientset.V30().DeleteMailersSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteMailersSectionParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteMailersSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteMailersSectionParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteMailersSection(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteMailersSectionParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteMailersSection(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -621,6 +876,18 @@ func PeerSectionCreate() func(ctx context.Context, c *client.DataplaneClient, tx
 			func(m v30.PeerSection) (*http.Response, error) {
 				params := &v30.CreatePeerParams{TransactionId: &txID}
 				return clientset.V30().CreatePeer(ctx, params, m)
+			},
+			func(m v32ee.PeerSection) (*http.Response, error) {
+				params := &v32ee.CreatePeerParams{TransactionId: &txID}
+				return clientset.V32EE().CreatePeer(ctx, params, m)
+			},
+			func(m v31ee.PeerSection) (*http.Response, error) {
+				params := &v31ee.CreatePeerParams{TransactionId: &txID}
+				return clientset.V31EE().CreatePeer(ctx, params, m)
+			},
+			func(m v30ee.PeerSection) (*http.Response, error) {
+				params := &v30ee.CreatePeerParams{TransactionId: &txID}
+				return clientset.V30EE().CreatePeer(ctx, params, m)
 			},
 		)
 		if err != nil {
@@ -657,6 +924,18 @@ func PeerSectionDelete() func(ctx context.Context, c *client.DataplaneClient, tx
 				params := &v30.DeletePeerParams{TransactionId: &txID}
 				return clientset.V30().DeletePeer(ctx, n, params)
 			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeletePeerParams{TransactionId: &txID}
+				return clientset.V32EE().DeletePeer(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeletePeerParams{TransactionId: &txID}
+				return clientset.V31EE().DeletePeer(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeletePeerParams{TransactionId: &txID}
+				return clientset.V30EE().DeletePeer(ctx, n, params)
+			},
 		)
 		if err != nil {
 			return err
@@ -688,6 +967,18 @@ func ProgramCreate() func(ctx context.Context, c *client.DataplaneClient, txID s
 				params := &v30.CreateProgramParams{TransactionId: &txID}
 				return clientset.V30().CreateProgram(ctx, params, m)
 			},
+			func(m v32ee.Program) (*http.Response, error) {
+				params := &v32ee.CreateProgramParams{TransactionId: &txID}
+				return clientset.V32EE().CreateProgram(ctx, params, m)
+			},
+			func(m v31ee.Program) (*http.Response, error) {
+				params := &v31ee.CreateProgramParams{TransactionId: &txID}
+				return clientset.V31EE().CreateProgram(ctx, params, m)
+			},
+			func(m v30ee.Program) (*http.Response, error) {
+				params := &v30ee.CreateProgramParams{TransactionId: &txID}
+				return clientset.V30EE().CreateProgram(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -715,6 +1006,18 @@ func ProgramUpdate() func(ctx context.Context, c *client.DataplaneClient, txID s
 				params := &v30.ReplaceProgramParams{TransactionId: &txID}
 				return clientset.V30().ReplaceProgram(ctx, n, params, m)
 			},
+			func(n string, m v32ee.Program) (*http.Response, error) {
+				params := &v32ee.ReplaceProgramParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceProgram(ctx, n, params, m)
+			},
+			func(n string, m v31ee.Program) (*http.Response, error) {
+				params := &v31ee.ReplaceProgramParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceProgram(ctx, n, params, m)
+			},
+			func(n string, m v30ee.Program) (*http.Response, error) {
+				params := &v30ee.ReplaceProgramParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceProgram(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -741,6 +1044,18 @@ func ProgramDelete() func(ctx context.Context, c *client.DataplaneClient, txID s
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteProgramParams{TransactionId: &txID}
 				return clientset.V30().DeleteProgram(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteProgramParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteProgram(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteProgramParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteProgram(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteProgramParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteProgram(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -773,6 +1088,18 @@ func ResolverCreate() func(ctx context.Context, c *client.DataplaneClient, txID 
 				params := &v30.CreateResolverParams{TransactionId: &txID}
 				return clientset.V30().CreateResolver(ctx, params, m)
 			},
+			func(m v32ee.Resolver) (*http.Response, error) {
+				params := &v32ee.CreateResolverParams{TransactionId: &txID}
+				return clientset.V32EE().CreateResolver(ctx, params, m)
+			},
+			func(m v31ee.Resolver) (*http.Response, error) {
+				params := &v31ee.CreateResolverParams{TransactionId: &txID}
+				return clientset.V31EE().CreateResolver(ctx, params, m)
+			},
+			func(m v30ee.Resolver) (*http.Response, error) {
+				params := &v30ee.CreateResolverParams{TransactionId: &txID}
+				return clientset.V30EE().CreateResolver(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -800,6 +1127,18 @@ func ResolverUpdate() func(ctx context.Context, c *client.DataplaneClient, txID 
 				params := &v30.ReplaceResolverParams{TransactionId: &txID}
 				return clientset.V30().ReplaceResolver(ctx, n, params, m)
 			},
+			func(n string, m v32ee.Resolver) (*http.Response, error) {
+				params := &v32ee.ReplaceResolverParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceResolver(ctx, n, params, m)
+			},
+			func(n string, m v31ee.Resolver) (*http.Response, error) {
+				params := &v31ee.ReplaceResolverParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceResolver(ctx, n, params, m)
+			},
+			func(n string, m v30ee.Resolver) (*http.Response, error) {
+				params := &v30ee.ReplaceResolverParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceResolver(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -826,6 +1165,18 @@ func ResolverDelete() func(ctx context.Context, c *client.DataplaneClient, txID 
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteResolverParams{TransactionId: &txID}
 				return clientset.V30().DeleteResolver(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteResolverParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteResolver(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteResolverParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteResolver(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteResolverParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteResolver(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -858,6 +1209,18 @@ func RingCreate() func(ctx context.Context, c *client.DataplaneClient, txID stri
 				params := &v30.CreateRingParams{TransactionId: &txID}
 				return clientset.V30().CreateRing(ctx, params, m)
 			},
+			func(m v32ee.Ring) (*http.Response, error) {
+				params := &v32ee.CreateRingParams{TransactionId: &txID}
+				return clientset.V32EE().CreateRing(ctx, params, m)
+			},
+			func(m v31ee.Ring) (*http.Response, error) {
+				params := &v31ee.CreateRingParams{TransactionId: &txID}
+				return clientset.V31EE().CreateRing(ctx, params, m)
+			},
+			func(m v30ee.Ring) (*http.Response, error) {
+				params := &v30ee.CreateRingParams{TransactionId: &txID}
+				return clientset.V30EE().CreateRing(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -885,6 +1248,18 @@ func RingUpdate() func(ctx context.Context, c *client.DataplaneClient, txID stri
 				params := &v30.ReplaceRingParams{TransactionId: &txID}
 				return clientset.V30().ReplaceRing(ctx, n, params, m)
 			},
+			func(n string, m v32ee.Ring) (*http.Response, error) {
+				params := &v32ee.ReplaceRingParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceRing(ctx, n, params, m)
+			},
+			func(n string, m v31ee.Ring) (*http.Response, error) {
+				params := &v31ee.ReplaceRingParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceRing(ctx, n, params, m)
+			},
+			func(n string, m v30ee.Ring) (*http.Response, error) {
+				params := &v30ee.ReplaceRingParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceRing(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -911,6 +1286,18 @@ func RingDelete() func(ctx context.Context, c *client.DataplaneClient, txID stri
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteRingParams{TransactionId: &txID}
 				return clientset.V30().DeleteRing(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteRingParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteRing(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteRingParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteRing(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteRingParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteRing(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -943,6 +1330,18 @@ func CrtStoreCreate() func(ctx context.Context, c *client.DataplaneClient, txID 
 				params := &v30.CreateCrtStoreParams{TransactionId: &txID}
 				return clientset.V30().CreateCrtStore(ctx, params, m)
 			},
+			func(m v32ee.CrtStore) (*http.Response, error) {
+				params := &v32ee.CreateCrtStoreParams{TransactionId: &txID}
+				return clientset.V32EE().CreateCrtStore(ctx, params, m)
+			},
+			func(m v31ee.CrtStore) (*http.Response, error) {
+				params := &v31ee.CreateCrtStoreParams{TransactionId: &txID}
+				return clientset.V31EE().CreateCrtStore(ctx, params, m)
+			},
+			func(m v30ee.CrtStore) (*http.Response, error) {
+				params := &v30ee.CreateCrtStoreParams{TransactionId: &txID}
+				return clientset.V30EE().CreateCrtStore(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -970,6 +1369,18 @@ func CrtStoreUpdate() func(ctx context.Context, c *client.DataplaneClient, txID 
 				params := &v30.EditCrtStoreParams{TransactionId: &txID}
 				return clientset.V30().EditCrtStore(ctx, n, params, m)
 			},
+			func(n string, m v32ee.CrtStore) (*http.Response, error) {
+				params := &v32ee.EditCrtStoreParams{TransactionId: &txID}
+				return clientset.V32EE().EditCrtStore(ctx, n, params, m)
+			},
+			func(n string, m v31ee.CrtStore) (*http.Response, error) {
+				params := &v31ee.EditCrtStoreParams{TransactionId: &txID}
+				return clientset.V31EE().EditCrtStore(ctx, n, params, m)
+			},
+			func(n string, m v30ee.CrtStore) (*http.Response, error) {
+				params := &v30ee.EditCrtStoreParams{TransactionId: &txID}
+				return clientset.V30EE().EditCrtStore(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -996,6 +1407,18 @@ func CrtStoreDelete() func(ctx context.Context, c *client.DataplaneClient, txID 
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteCrtStoreParams{TransactionId: &txID}
 				return clientset.V30().DeleteCrtStore(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteCrtStoreParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteCrtStore(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteCrtStoreParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteCrtStore(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteCrtStoreParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteCrtStore(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -1028,6 +1451,18 @@ func UserlistCreate() func(ctx context.Context, c *client.DataplaneClient, txID 
 				params := &v30.CreateUserlistParams{TransactionId: &txID}
 				return clientset.V30().CreateUserlist(ctx, params, m)
 			},
+			func(m v32ee.Userlist) (*http.Response, error) {
+				params := &v32ee.CreateUserlistParams{TransactionId: &txID}
+				return clientset.V32EE().CreateUserlist(ctx, params, m)
+			},
+			func(m v31ee.Userlist) (*http.Response, error) {
+				params := &v31ee.CreateUserlistParams{TransactionId: &txID}
+				return clientset.V31EE().CreateUserlist(ctx, params, m)
+			},
+			func(m v30ee.Userlist) (*http.Response, error) {
+				params := &v30ee.CreateUserlistParams{TransactionId: &txID}
+				return clientset.V30EE().CreateUserlist(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -1054,6 +1489,18 @@ func UserlistDelete() func(ctx context.Context, c *client.DataplaneClient, txID 
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteUserlistParams{TransactionId: &txID}
 				return clientset.V30().DeleteUserlist(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteUserlistParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteUserlist(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteUserlistParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteUserlist(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteUserlistParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteUserlist(ctx, n, params)
 			},
 		)
 		if err != nil {
@@ -1086,6 +1533,18 @@ func FCGIAppCreate() func(ctx context.Context, c *client.DataplaneClient, txID s
 				params := &v30.CreateFCGIAppParams{TransactionId: &txID}
 				return clientset.V30().CreateFCGIApp(ctx, params, m)
 			},
+			func(m v32ee.FCGIApp) (*http.Response, error) {
+				params := &v32ee.CreateFCGIAppParams{TransactionId: &txID}
+				return clientset.V32EE().CreateFCGIApp(ctx, params, m)
+			},
+			func(m v31ee.FCGIApp) (*http.Response, error) {
+				params := &v31ee.CreateFCGIAppParams{TransactionId: &txID}
+				return clientset.V31EE().CreateFCGIApp(ctx, params, m)
+			},
+			func(m v30ee.FCGIApp) (*http.Response, error) {
+				params := &v30ee.CreateFCGIAppParams{TransactionId: &txID}
+				return clientset.V30EE().CreateFCGIApp(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -1113,6 +1572,18 @@ func FCGIAppUpdate() func(ctx context.Context, c *client.DataplaneClient, txID s
 				params := &v30.ReplaceFCGIAppParams{TransactionId: &txID}
 				return clientset.V30().ReplaceFCGIApp(ctx, n, params, m)
 			},
+			func(n string, m v32ee.FCGIApp) (*http.Response, error) {
+				params := &v32ee.ReplaceFCGIAppParams{TransactionId: &txID}
+				return clientset.V32EE().ReplaceFCGIApp(ctx, n, params, m)
+			},
+			func(n string, m v31ee.FCGIApp) (*http.Response, error) {
+				params := &v31ee.ReplaceFCGIAppParams{TransactionId: &txID}
+				return clientset.V31EE().ReplaceFCGIApp(ctx, n, params, m)
+			},
+			func(n string, m v30ee.FCGIApp) (*http.Response, error) {
+				params := &v30ee.ReplaceFCGIAppParams{TransactionId: &txID}
+				return clientset.V30EE().ReplaceFCGIApp(ctx, n, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -1139,6 +1610,18 @@ func FCGIAppDelete() func(ctx context.Context, c *client.DataplaneClient, txID s
 			func(n string) (*http.Response, error) {
 				params := &v30.DeleteFCGIAppParams{TransactionId: &txID}
 				return clientset.V30().DeleteFCGIApp(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v32ee.DeleteFCGIAppParams{TransactionId: &txID}
+				return clientset.V32EE().DeleteFCGIApp(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v31ee.DeleteFCGIAppParams{TransactionId: &txID}
+				return clientset.V31EE().DeleteFCGIApp(ctx, n, params)
+			},
+			func(n string) (*http.Response, error) {
+				params := &v30ee.DeleteFCGIAppParams{TransactionId: &txID}
+				return clientset.V30EE().DeleteFCGIApp(ctx, n, params)
 			},
 		)
 		if err != nil {

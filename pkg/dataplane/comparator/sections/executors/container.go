@@ -9,8 +9,11 @@ import (
 
 	"haproxy-template-ic/pkg/dataplane/client"
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v30ee "haproxy-template-ic/pkg/generated/dataplaneapi/v30ee"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v31ee "haproxy-template-ic/pkg/generated/dataplaneapi/v31ee"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // =============================================================================
@@ -34,6 +37,18 @@ func UserCreate(userlistName string) func(ctx context.Context, c *client.Datapla
 			func(m v30.User) (*http.Response, error) {
 				params := &v30.CreateUserParams{TransactionId: &txID, Userlist: userlistName}
 				return clientset.V30().CreateUser(ctx, params, m)
+			},
+			func(m v32ee.User) (*http.Response, error) {
+				params := &v32ee.CreateUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V32EE().CreateUser(ctx, params, m)
+			},
+			func(m v31ee.User) (*http.Response, error) {
+				params := &v31ee.CreateUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V31EE().CreateUser(ctx, params, m)
+			},
+			func(m v30ee.User) (*http.Response, error) {
+				params := &v30ee.CreateUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V30EE().CreateUser(ctx, params, m)
 			},
 		)
 		if err != nil {
@@ -62,6 +77,18 @@ func UserUpdate(userlistName string) func(ctx context.Context, c *client.Datapla
 				params := &v30.ReplaceUserParams{TransactionId: &txID, Userlist: userlistName}
 				return clientset.V30().ReplaceUser(ctx, name, params, m)
 			},
+			func(name string, m v32ee.User) (*http.Response, error) {
+				params := &v32ee.ReplaceUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V32EE().ReplaceUser(ctx, name, params, m)
+			},
+			func(name string, m v31ee.User) (*http.Response, error) {
+				params := &v31ee.ReplaceUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V31EE().ReplaceUser(ctx, name, params, m)
+			},
+			func(name string, m v30ee.User) (*http.Response, error) {
+				params := &v30ee.ReplaceUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V30EE().ReplaceUser(ctx, name, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -88,6 +115,18 @@ func UserDelete(userlistName string) func(ctx context.Context, c *client.Datapla
 			func(name string) (*http.Response, error) {
 				params := &v30.DeleteUserParams{TransactionId: &txID, Userlist: userlistName}
 				return clientset.V30().DeleteUser(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v32ee.DeleteUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V32EE().DeleteUser(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v31ee.DeleteUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V31EE().DeleteUser(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v30ee.DeleteUserParams{TransactionId: &txID, Userlist: userlistName}
+				return clientset.V30EE().DeleteUser(ctx, name, params)
 			},
 		)
 		if err != nil {
@@ -120,6 +159,18 @@ func MailerEntryCreate(mailersName string) func(ctx context.Context, c *client.D
 				params := &v30.CreateMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
 				return clientset.V30().CreateMailerEntry(ctx, params, m)
 			},
+			func(m v32ee.MailerEntry) (*http.Response, error) {
+				params := &v32ee.CreateMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V32EE().CreateMailerEntry(ctx, params, m)
+			},
+			func(m v31ee.MailerEntry) (*http.Response, error) {
+				params := &v31ee.CreateMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V31EE().CreateMailerEntry(ctx, params, m)
+			},
+			func(m v30ee.MailerEntry) (*http.Response, error) {
+				params := &v30ee.CreateMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V30EE().CreateMailerEntry(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -147,6 +198,18 @@ func MailerEntryUpdate(mailersName string) func(ctx context.Context, c *client.D
 				params := &v30.ReplaceMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
 				return clientset.V30().ReplaceMailerEntry(ctx, name, params, m)
 			},
+			func(name string, m v32ee.MailerEntry) (*http.Response, error) {
+				params := &v32ee.ReplaceMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V32EE().ReplaceMailerEntry(ctx, name, params, m)
+			},
+			func(name string, m v31ee.MailerEntry) (*http.Response, error) {
+				params := &v31ee.ReplaceMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V31EE().ReplaceMailerEntry(ctx, name, params, m)
+			},
+			func(name string, m v30ee.MailerEntry) (*http.Response, error) {
+				params := &v30ee.ReplaceMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V30EE().ReplaceMailerEntry(ctx, name, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -173,6 +236,18 @@ func MailerEntryDelete(mailersName string) func(ctx context.Context, c *client.D
 			func(name string) (*http.Response, error) {
 				params := &v30.DeleteMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
 				return clientset.V30().DeleteMailerEntry(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v32ee.DeleteMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V32EE().DeleteMailerEntry(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v31ee.DeleteMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V31EE().DeleteMailerEntry(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v30ee.DeleteMailerEntryParams{TransactionId: &txID, MailersSection: mailersName}
+				return clientset.V30EE().DeleteMailerEntry(ctx, name, params)
 			},
 		)
 		if err != nil {
@@ -205,6 +280,18 @@ func PeerEntryCreate(peerSectionName string) func(ctx context.Context, c *client
 				params := &v30.CreatePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
 				return clientset.V30().CreatePeerEntry(ctx, params, m)
 			},
+			func(m v32ee.PeerEntry) (*http.Response, error) {
+				params := &v32ee.CreatePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V32EE().CreatePeerEntry(ctx, params, m)
+			},
+			func(m v31ee.PeerEntry) (*http.Response, error) {
+				params := &v31ee.CreatePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V31EE().CreatePeerEntry(ctx, params, m)
+			},
+			func(m v30ee.PeerEntry) (*http.Response, error) {
+				params := &v30ee.CreatePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V30EE().CreatePeerEntry(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -232,6 +319,18 @@ func PeerEntryUpdate(peerSectionName string) func(ctx context.Context, c *client
 				params := &v30.ReplacePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
 				return clientset.V30().ReplacePeerEntry(ctx, name, params, m)
 			},
+			func(name string, m v32ee.PeerEntry) (*http.Response, error) {
+				params := &v32ee.ReplacePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V32EE().ReplacePeerEntry(ctx, name, params, m)
+			},
+			func(name string, m v31ee.PeerEntry) (*http.Response, error) {
+				params := &v31ee.ReplacePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V31EE().ReplacePeerEntry(ctx, name, params, m)
+			},
+			func(name string, m v30ee.PeerEntry) (*http.Response, error) {
+				params := &v30ee.ReplacePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V30EE().ReplacePeerEntry(ctx, name, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -258,6 +357,18 @@ func PeerEntryDelete(peerSectionName string) func(ctx context.Context, c *client
 			func(name string) (*http.Response, error) {
 				params := &v30.DeletePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
 				return clientset.V30().DeletePeerEntry(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v32ee.DeletePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V32EE().DeletePeerEntry(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v31ee.DeletePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V31EE().DeletePeerEntry(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v30ee.DeletePeerEntryParams{TransactionId: &txID, PeerSection: peerSectionName}
+				return clientset.V30EE().DeletePeerEntry(ctx, name, params)
 			},
 		)
 		if err != nil {
@@ -290,6 +401,18 @@ func NameserverCreate(resolverName string) func(ctx context.Context, c *client.D
 				params := &v30.CreateNameserverParams{TransactionId: &txID, Resolver: resolverName}
 				return clientset.V30().CreateNameserver(ctx, params, m)
 			},
+			func(m v32ee.Nameserver) (*http.Response, error) {
+				params := &v32ee.CreateNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V32EE().CreateNameserver(ctx, params, m)
+			},
+			func(m v31ee.Nameserver) (*http.Response, error) {
+				params := &v31ee.CreateNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V31EE().CreateNameserver(ctx, params, m)
+			},
+			func(m v30ee.Nameserver) (*http.Response, error) {
+				params := &v30ee.CreateNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V30EE().CreateNameserver(ctx, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -317,6 +440,18 @@ func NameserverUpdate(resolverName string) func(ctx context.Context, c *client.D
 				params := &v30.ReplaceNameserverParams{TransactionId: &txID, Resolver: resolverName}
 				return clientset.V30().ReplaceNameserver(ctx, name, params, m)
 			},
+			func(name string, m v32ee.Nameserver) (*http.Response, error) {
+				params := &v32ee.ReplaceNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V32EE().ReplaceNameserver(ctx, name, params, m)
+			},
+			func(name string, m v31ee.Nameserver) (*http.Response, error) {
+				params := &v31ee.ReplaceNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V31EE().ReplaceNameserver(ctx, name, params, m)
+			},
+			func(name string, m v30ee.Nameserver) (*http.Response, error) {
+				params := &v30ee.ReplaceNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V30EE().ReplaceNameserver(ctx, name, params, m)
+			},
 		)
 		if err != nil {
 			return err
@@ -343,6 +478,18 @@ func NameserverDelete(resolverName string) func(ctx context.Context, c *client.D
 			func(name string) (*http.Response, error) {
 				params := &v30.DeleteNameserverParams{TransactionId: &txID, Resolver: resolverName}
 				return clientset.V30().DeleteNameserver(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v32ee.DeleteNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V32EE().DeleteNameserver(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v31ee.DeleteNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V31EE().DeleteNameserver(ctx, name, params)
+			},
+			func(name string) (*http.Response, error) {
+				params := &v30ee.DeleteNameserverParams{TransactionId: &txID, Resolver: resolverName}
+				return clientset.V30EE().DeleteNameserver(ctx, name, params)
 			},
 		)
 		if err != nil {
