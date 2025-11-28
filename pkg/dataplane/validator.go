@@ -26,9 +26,11 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/haproxytech/client-native/v6/models"
 
+	"haproxy-template-ic/pkg/dataplane/client"
 	"haproxy-template-ic/pkg/dataplane/parser"
-	"haproxy-template-ic/pkg/dataplane/transform"
-	"haproxy-template-ic/pkg/generated/dataplaneapi"
+	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
 )
 
 // haproxyCheckMutex serializes HAProxy validation to work around issues with
@@ -36,11 +38,44 @@ import (
 // interfere with each other even though they use isolated temp directories.
 var haproxyCheckMutex sync.Mutex
 
+// =============================================================================
+// Version-aware Model Conversion (using centralized client converters)
+// =============================================================================
+
+// versionMinor extracts the minor version from a Version pointer.
+// Returns 0 (v3.0) if version is nil, which is the safest default.
+func versionMinor(version *Version) int {
+	if version == nil {
+		return 0
+	}
+	return version.Minor
+}
+
+// validateModel validates a client-native model against the OpenAPI schema.
+// Uses generic type parameters for type-safe version conversion.
+// This uses the centralized conversion functions from pkg/dataplane/client.
+func validateModel[TV32, TV31, TV30 any](spec *openapi3.T, version *Version, schemaName string, model interface{}) error {
+	// Use centralized marshal + metadata transformation
+	jsonData, err := client.MarshalForVersion(model)
+	if err != nil {
+		return err
+	}
+
+	// Use centralized generic conversion
+	apiModel, err := client.ConvertToVersioned[TV32, TV31, TV30](jsonData, versionMinor(version))
+	if err != nil {
+		return fmt.Errorf("failed to convert to API model: %w", err)
+	}
+
+	return validateAgainstSchema(spec, schemaName, apiModel)
+}
+
 // ValidationPaths holds the filesystem paths for HAProxy validation.
 // These paths must match the HAProxy Dataplane API server's resource configuration.
 type ValidationPaths struct {
 	MapsDir           string
 	SSLCertsDir       string
+	CRTListDir        string // Directory for CRT-list files (may differ from SSLCertsDir on HAProxy < 3.2)
 	GeneralStorageDir string
 	ConfigFile        string
 }
@@ -58,11 +93,12 @@ type ValidationPaths struct {
 //   - mainConfig: The rendered HAProxy configuration (haproxy.cfg content)
 //   - auxFiles: All auxiliary files (maps, certificates, general files)
 //   - paths: Filesystem paths for validation (must be isolated for parallel execution)
+//   - version: HAProxy/DataPlane API version for schema selection (nil uses default v3.0)
 //
 // Returns:
 //   - nil if validation succeeds
 //   - ValidationError with phase information if validation fails
-func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths *ValidationPaths, version *Version) error {
 	// Phase 1: Syntax validation with client-native parser
 	// This also returns the parsed configuration for Phase 1.5
 	parsedConfig, err := validateSyntax(mainConfig)
@@ -75,7 +111,7 @@ func ValidateConfiguration(mainConfig string, auxFiles *AuxiliaryFiles, paths Va
 	}
 
 	// Phase 1.5: API schema validation with OpenAPI spec
-	if err := validateAPISchema(parsedConfig); err != nil {
+	if err := validateAPISchema(parsedConfig, version); err != nil {
 		return &ValidationError{
 			Phase:   "schema",
 			Message: "configuration violates API schema constraints",
@@ -113,12 +149,41 @@ func validateSyntax(config string) (*parser.StructuredConfig, error) {
 	return parsed, nil
 }
 
+// getSwaggerForVersion returns the OpenAPI spec for the given HAProxy/DataPlane API version.
+// If version is nil, defaults to v3.0 (safest, most compatible).
+func getSwaggerForVersion(version *Version) (*openapi3.T, error) {
+	if version == nil {
+		// Default to v3.0 - safest default when version is unknown
+		return v30.GetSwagger()
+	}
+
+	// Select OpenAPI spec based on major.minor version
+	if version.Major == 3 {
+		switch {
+		case version.Minor >= 2:
+			return v32.GetSwagger()
+		case version.Minor >= 1:
+			return v31.GetSwagger()
+		default:
+			return v30.GetSwagger()
+		}
+	}
+
+	// For versions > 3.x, use the latest available spec
+	if version.Major > 3 {
+		return v32.GetSwagger()
+	}
+
+	// For versions < 3.0, use v3.0 as fallback
+	return v30.GetSwagger()
+}
+
 // validateAPISchema performs API schema validation using OpenAPI spec.
-// This transforms client-native models to API models and validates them against
-// the Dataplane API's OpenAPI schema constraints (patterns, formats, required fields).
-func validateAPISchema(parsed *parser.StructuredConfig) error {
-	// Load OpenAPI specification
-	spec, err := dataplaneapi.GetSwagger()
+// This validates parsed configuration models against the Dataplane API's OpenAPI
+// schema constraints (patterns, formats, required fields).
+func validateAPISchema(parsed *parser.StructuredConfig, version *Version) error {
+	// Load OpenAPI specification for the detected version
+	spec, err := getSwaggerForVersion(version)
 	if err != nil {
 		return fmt.Errorf("failed to load OpenAPI spec: %w", err)
 	}
@@ -127,10 +192,10 @@ func validateAPISchema(parsed *parser.StructuredConfig) error {
 	var validationErrors []string
 
 	// Validate backend sections
-	validationErrors = append(validationErrors, validateBackendSections(spec, parsed.Backends)...)
+	validationErrors = append(validationErrors, validateBackendSections(spec, version, parsed.Backends)...)
 
 	// Validate frontend sections
-	validationErrors = append(validationErrors, validateFrontendSections(spec, parsed.Frontends)...)
+	validationErrors = append(validationErrors, validateFrontendSections(spec, version, parsed.Frontends)...)
 
 	// If there were any validation errors, return them
 	if len(validationErrors) > 0 {
@@ -142,343 +207,156 @@ func validateAPISchema(parsed *parser.StructuredConfig) error {
 }
 
 // validateBackendSections validates all configuration elements within backends.
-func validateBackendSections(spec *openapi3.T, backends []*models.Backend) []string {
+func validateBackendSections(spec *openapi3.T, version *Version, backends []*models.Backend) []string {
 	var errors []string
 	for i := range backends {
 		backend := backends[i]
-		errors = append(errors, validateBackendServers(spec, backend)...)
-		errors = append(errors, validateBackendRules(spec, backend)...)
-		errors = append(errors, validateBackendChecks(spec, backend)...)
+		errors = append(errors, validateBackendServers(spec, version, backend)...)
+		errors = append(errors, validateBackendRules(spec, version, backend)...)
+		errors = append(errors, validateBackendChecks(spec, version, backend)...)
 	}
 	return errors
 }
 
 // validateFrontendSections validates all configuration elements within frontends.
-func validateFrontendSections(spec *openapi3.T, frontends []*models.Frontend) []string {
+func validateFrontendSections(spec *openapi3.T, version *Version, frontends []*models.Frontend) []string {
 	var errors []string
 	for i := range frontends {
 		frontend := frontends[i]
-		errors = append(errors, validateFrontendBinds(spec, frontend)...)
-		errors = append(errors, validateFrontendRules(spec, frontend)...)
-		errors = append(errors, validateFrontendElements(spec, frontend)...)
+		errors = append(errors, validateFrontendBinds(spec, version, frontend)...)
+		errors = append(errors, validateFrontendRules(spec, version, frontend)...)
+		errors = append(errors, validateFrontendElements(spec, version, frontend)...)
+	}
+	return errors
+}
+
+// validateRuleSlice validates a slice of rules using generic type parameters.
+// TV32, TV31, TV30 are the version-specific API types for the rule.
+func validateRuleSlice[T any, TV32, TV31, TV30 any](spec *openapi3.T, version *Version, schemaName, parentName, ruleType string, rules []T) []string {
+	var errors []string
+	for idx, rule := range rules {
+		if err := validateModel[TV32, TV31, TV30](spec, version, schemaName, rule); err != nil {
+			errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, ruleType, idx, err))
+		}
 	}
 	return errors
 }
 
 // validateBackendServers validates servers and server templates in a backend.
-func validateBackendServers(spec *openapi3.T, backend *models.Backend) []string {
+func validateBackendServers(spec *openapi3.T, version *Version, backend *models.Backend) []string {
 	var errors []string
 	for serverName := range backend.Servers {
 		server := backend.Servers[serverName]
-		if apiServer := transform.ToAPIServer(&server); apiServer != nil {
-			if err := validateAgainstSchema(spec, "server", apiServer); err != nil {
-				errors = append(errors, fmt.Sprintf("backend %s, server %s: %v", backend.Name, serverName, err))
-			}
+		if err := validateModel[v32.Server, v31.Server, v30.Server](spec, version, "server", &server); err != nil {
+			errors = append(errors, fmt.Sprintf("backend %s, server %s: %v", backend.Name, serverName, err))
 		}
 	}
 	for templateName := range backend.ServerTemplates {
 		template := backend.ServerTemplates[templateName]
-		if apiTemplate := transform.ToAPIServerTemplate(&template); apiTemplate != nil {
-			if err := validateAgainstSchema(spec, "server_template", apiTemplate); err != nil {
-				errors = append(errors, fmt.Sprintf("backend %s, server template %s: %v", backend.Name, templateName, err))
-			}
+		if err := validateModel[v32.ServerTemplate, v31.ServerTemplate, v30.ServerTemplate](spec, version, "server_template", &template); err != nil {
+			errors = append(errors, fmt.Sprintf("backend %s, server template %s: %v", backend.Name, templateName, err))
 		}
 	}
 	return errors
 }
 
 // validateBackendRules validates various rule types in a backend.
-func validateBackendRules(spec *openapi3.T, backend *models.Backend) []string {
+func validateBackendRules(spec *openapi3.T, version *Version, backend *models.Backend) []string {
 	var errors []string
-	ruleValidators := []struct {
-		list       interface{}
-		transform  func(interface{}) interface{}
-		schemaName string
-		typeName   string
-	}{
-		{backend.HTTPRequestRuleList, func(v interface{}) interface{} { return transform.ToAPIHTTPRequestRule(v.(*models.HTTPRequestRule)) }, "http_request_rule", "http-request rule"},
-		{backend.HTTPResponseRuleList, func(v interface{}) interface{} { return transform.ToAPIHTTPResponseRule(v.(*models.HTTPResponseRule)) }, "http_response_rule", "http-response rule"},
-		{backend.TCPRequestRuleList, func(v interface{}) interface{} { return transform.ToAPITCPRequestRule(v.(*models.TCPRequestRule)) }, "tcp_request_rule", "tcp-request rule"},
-		{backend.TCPResponseRuleList, func(v interface{}) interface{} { return transform.ToAPITCPResponseRule(v.(*models.TCPResponseRule)) }, "tcp_response_rule", "tcp-response rule"},
-		{backend.HTTPAfterResponseRuleList, func(v interface{}) interface{} {
-			return transform.ToAPIHTTPAfterResponseRule(v.(*models.HTTPAfterResponseRule))
-		}, "http_after_response_rule", "http-after-response rule"},
-		{backend.HTTPErrorRuleList, func(v interface{}) interface{} { return transform.ToAPIHTTPErrorRule(v.(*models.HTTPErrorRule)) }, "http_error_rule", "http-error rule"},
-		{backend.ServerSwitchingRuleList, func(v interface{}) interface{} {
-			return transform.ToAPIServerSwitchingRule(v.(*models.ServerSwitchingRule))
-		}, "server_switching_rule", "server switching rule"},
-		{backend.StickRuleList, func(v interface{}) interface{} { return transform.ToAPIStickRule(v.(*models.StickRule)) }, "stick_rule", "stick rule"},
-	}
-	for _, rv := range ruleValidators {
-		errors = append(errors, validateRuleList(spec, backend.Name, rv.list, rv.transform, rv.schemaName, rv.typeName)...)
-	}
-	errors = append(errors, validateACLList(spec, backend.Name, backend.ACLList)...)
-	errors = append(errors, validateFilterList(spec, backend.Name, backend.FilterList)...)
-	errors = append(errors, validateLogTargetList(spec, backend.Name, backend.LogTargetList)...)
+	name := "backend " + backend.Name
+
+	errors = append(errors, validateRuleSlice[*models.HTTPRequestRule, v32.HttpRequestRule, v31.HttpRequestRule, v30.HttpRequestRule](spec, version, "http_request_rule", name, "http-request rule", backend.HTTPRequestRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPResponseRule, v32.HttpResponseRule, v31.HttpResponseRule, v30.HttpResponseRule](spec, version, "http_response_rule", name, "http-response rule", backend.HTTPResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.TCPRequestRule, v32.TcpRequestRule, v31.TcpRequestRule, v30.TcpRequestRule](spec, version, "tcp_request_rule", name, "tcp-request rule", backend.TCPRequestRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.TCPResponseRule, v32.TcpResponseRule, v31.TcpResponseRule, v30.TcpResponseRule](spec, version, "tcp_response_rule", name, "tcp-response rule", backend.TCPResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPAfterResponseRule, v32.HttpAfterResponseRule, v31.HttpAfterResponseRule, v30.HttpAfterResponseRule](spec, version, "http_after_response_rule", name, "http-after-response rule", backend.HTTPAfterResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPErrorRule, v32.HttpErrorRule, v31.HttpErrorRule, v30.HttpErrorRule](spec, version, "http_error_rule", name, "http-error rule", backend.HTTPErrorRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.ServerSwitchingRule, v32.ServerSwitchingRule, v31.ServerSwitchingRule, v30.ServerSwitchingRule](spec, version, "server_switching_rule", name, "server switching rule", backend.ServerSwitchingRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.StickRule, v32.StickRule, v31.StickRule, v30.StickRule](spec, version, "stick_rule", name, "stick rule", backend.StickRuleList)...)
+
+	errors = append(errors, validateACLList(spec, version, name, backend.ACLList)...)
+	errors = append(errors, validateFilterList(spec, version, name, backend.FilterList)...)
+	errors = append(errors, validateLogTargetList(spec, version, name, backend.LogTargetList)...)
 	return errors
 }
 
 // validateBackendChecks validates health checks in a backend.
-func validateBackendChecks(spec *openapi3.T, backend *models.Backend) []string {
+func validateBackendChecks(spec *openapi3.T, version *Version, backend *models.Backend) []string {
 	var errors []string
-	for idx, check := range backend.HTTPCheckList {
-		if apiCheck := transform.ToAPIHTTPCheck(check); apiCheck != nil {
-			if err := validateAgainstSchema(spec, "http_check", apiCheck); err != nil {
-				errors = append(errors, fmt.Sprintf("backend %s, http-check %d: %v", backend.Name, idx, err))
-			}
-		}
-	}
-	for idx, check := range backend.TCPCheckRuleList {
-		if apiCheck := transform.ToAPITCPCheck(check); apiCheck != nil {
-			if err := validateAgainstSchema(spec, "tcp_check", apiCheck); err != nil {
-				errors = append(errors, fmt.Sprintf("backend %s, tcp-check %d: %v", backend.Name, idx, err))
-			}
-		}
-	}
+	name := "backend " + backend.Name
+
+	errors = append(errors, validateRuleSlice[*models.HTTPCheck, v32.HttpCheck, v31.HttpCheck, v30.HttpCheck](spec, version, "http_check", name, "http-check", backend.HTTPCheckList)...)
+	errors = append(errors, validateRuleSlice[*models.TCPCheck, v32.TcpCheck, v31.TcpCheck, v30.TcpCheck](spec, version, "tcp_check", name, "tcp-check", backend.TCPCheckRuleList)...)
 	return errors
 }
 
 // validateFrontendBinds validates bind configurations in a frontend.
-func validateFrontendBinds(spec *openapi3.T, frontend *models.Frontend) []string {
+func validateFrontendBinds(spec *openapi3.T, version *Version, frontend *models.Frontend) []string {
 	var errors []string
 	for bindName := range frontend.Binds {
 		bind := frontend.Binds[bindName]
-		if apiBind := transform.ToAPIBind(&bind); apiBind != nil {
-			if err := validateAgainstSchema(spec, "bind", apiBind); err != nil {
-				errors = append(errors, fmt.Sprintf("frontend %s, bind %s: %v", frontend.Name, bindName, err))
-			}
+		if err := validateModel[v32.Bind, v31.Bind, v30.Bind](spec, version, "bind", &bind); err != nil {
+			errors = append(errors, fmt.Sprintf("frontend %s, bind %s: %v", frontend.Name, bindName, err))
 		}
 	}
 	return errors
 }
 
 // validateFrontendRules validates various rule types in a frontend.
-func validateFrontendRules(spec *openapi3.T, frontend *models.Frontend) []string {
+func validateFrontendRules(spec *openapi3.T, version *Version, frontend *models.Frontend) []string {
 	var errors []string
-	ruleValidators := []struct {
-		list       interface{}
-		transform  func(interface{}) interface{}
-		schemaName string
-		typeName   string
-	}{
-		{frontend.HTTPRequestRuleList, func(v interface{}) interface{} { return transform.ToAPIHTTPRequestRule(v.(*models.HTTPRequestRule)) }, "http_request_rule", "http-request rule"},
-		{frontend.HTTPResponseRuleList, func(v interface{}) interface{} { return transform.ToAPIHTTPResponseRule(v.(*models.HTTPResponseRule)) }, "http_response_rule", "http-response rule"},
-		{frontend.TCPRequestRuleList, func(v interface{}) interface{} { return transform.ToAPITCPRequestRule(v.(*models.TCPRequestRule)) }, "tcp_request_rule", "tcp-request rule"},
-		{frontend.HTTPAfterResponseRuleList, func(v interface{}) interface{} {
-			return transform.ToAPIHTTPAfterResponseRule(v.(*models.HTTPAfterResponseRule))
-		}, "http_after_response_rule", "http-after-response rule"},
-		{frontend.HTTPErrorRuleList, func(v interface{}) interface{} { return transform.ToAPIHTTPErrorRule(v.(*models.HTTPErrorRule)) }, "http_error_rule", "http-error rule"},
-		{frontend.BackendSwitchingRuleList, func(v interface{}) interface{} {
-			return transform.ToAPIBackendSwitchingRule(v.(*models.BackendSwitchingRule))
-		}, "backend_switching_rule", "backend switching rule"},
-	}
-	for _, rv := range ruleValidators {
-		errors = append(errors, validateRuleList(spec, frontend.Name, rv.list, rv.transform, rv.schemaName, rv.typeName)...)
-	}
-	errors = append(errors, validateACLList(spec, frontend.Name, frontend.ACLList)...)
+	name := "frontend " + frontend.Name
+
+	errors = append(errors, validateRuleSlice[*models.HTTPRequestRule, v32.HttpRequestRule, v31.HttpRequestRule, v30.HttpRequestRule](spec, version, "http_request_rule", name, "http-request rule", frontend.HTTPRequestRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPResponseRule, v32.HttpResponseRule, v31.HttpResponseRule, v30.HttpResponseRule](spec, version, "http_response_rule", name, "http-response rule", frontend.HTTPResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.TCPRequestRule, v32.TcpRequestRule, v31.TcpRequestRule, v30.TcpRequestRule](spec, version, "tcp_request_rule", name, "tcp-request rule", frontend.TCPRequestRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPAfterResponseRule, v32.HttpAfterResponseRule, v31.HttpAfterResponseRule, v30.HttpAfterResponseRule](spec, version, "http_after_response_rule", name, "http-after-response rule", frontend.HTTPAfterResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPErrorRule, v32.HttpErrorRule, v31.HttpErrorRule, v30.HttpErrorRule](spec, version, "http_error_rule", name, "http-error rule", frontend.HTTPErrorRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.BackendSwitchingRule, v32.BackendSwitchingRule, v31.BackendSwitchingRule, v30.BackendSwitchingRule](spec, version, "backend_switching_rule", name, "backend switching rule", frontend.BackendSwitchingRuleList)...)
+
+	errors = append(errors, validateACLList(spec, version, name, frontend.ACLList)...)
 	return errors
 }
 
 // validateFrontendElements validates other frontend elements (filters, log targets, captures).
-func validateFrontendElements(spec *openapi3.T, frontend *models.Frontend) []string {
+func validateFrontendElements(spec *openapi3.T, version *Version, frontend *models.Frontend) []string {
 	var errors []string
-	errors = append(errors, validateFilterList(spec, frontend.Name, frontend.FilterList)...)
-	errors = append(errors, validateLogTargetList(spec, frontend.Name, frontend.LogTargetList)...)
-	for idx, capture := range frontend.CaptureList {
-		if apiCapture := transform.ToAPICapture(capture); apiCapture != nil {
-			if err := validateAgainstSchema(spec, "capture", apiCapture); err != nil {
-				errors = append(errors, fmt.Sprintf("frontend %s, capture %d: %v", frontend.Name, idx, err))
-			}
-		}
-	}
-	return errors
-}
+	name := "frontend " + frontend.Name
 
-// validateRuleList validates a list of rules using a transform function.
-func validateRuleList(spec *openapi3.T, parentName string, list interface{}, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	switch v := list.(type) {
-	case []*models.HTTPRequestRule:
-		return validateHTTPRequestRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.HTTPRequestRules:
-		return validateHTTPRequestRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case []*models.HTTPResponseRule:
-		return validateHTTPResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.HTTPResponseRules:
-		return validateHTTPResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case []*models.TCPRequestRule:
-		return validateTCPRequestRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.TCPRequestRules:
-		return validateTCPRequestRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case []*models.TCPResponseRule:
-		return validateTCPResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.TCPResponseRules:
-		return validateTCPResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case []*models.HTTPAfterResponseRule:
-		return validateHTTPAfterResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.HTTPAfterResponseRules:
-		return validateHTTPAfterResponseRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case []*models.HTTPErrorRule:
-		return validateHTTPErrorRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.HTTPErrorRules:
-		return validateHTTPErrorRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case []*models.ServerSwitchingRule:
-		return validateServerSwitchingRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.ServerSwitchingRules:
-		return validateServerSwitchingRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case []*models.StickRule:
-		return validateStickRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.StickRules:
-		return validateStickRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case []*models.BackendSwitchingRule:
-		return validateBackendSwitchingRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	case models.BackendSwitchingRules:
-		return validateBackendSwitchingRules(spec, parentName, v, transformFunc, schemaName, typeName)
-	}
-	return nil
-}
-
-func validateHTTPRequestRules(spec *openapi3.T, parentName string, rules []*models.HTTPRequestRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
-	return errors
-}
-
-func validateHTTPResponseRules(spec *openapi3.T, parentName string, rules []*models.HTTPResponseRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
-	return errors
-}
-
-func validateTCPRequestRules(spec *openapi3.T, parentName string, rules []*models.TCPRequestRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
-	return errors
-}
-
-func validateTCPResponseRules(spec *openapi3.T, parentName string, rules []*models.TCPResponseRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
-	return errors
-}
-
-func validateHTTPAfterResponseRules(spec *openapi3.T, parentName string, rules []*models.HTTPAfterResponseRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
-	return errors
-}
-
-func validateHTTPErrorRules(spec *openapi3.T, parentName string, rules []*models.HTTPErrorRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
-	return errors
-}
-
-func validateServerSwitchingRules(spec *openapi3.T, parentName string, rules []*models.ServerSwitchingRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
-	return errors
-}
-
-func validateStickRules(spec *openapi3.T, parentName string, rules []*models.StickRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
-	return errors
-}
-
-func validateBackendSwitchingRules(spec *openapi3.T, parentName string, rules []*models.BackendSwitchingRule, transformFunc func(interface{}) interface{}, schemaName, typeName string) []string {
-	var errors []string
-	for idx := range rules {
-		if apiRule := transformFunc(rules[idx]); apiRule != nil {
-			if err := validateAgainstSchema(spec, schemaName, apiRule); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, typeName, idx, err))
-			}
-		}
-	}
+	errors = append(errors, validateFilterList(spec, version, name, frontend.FilterList)...)
+	errors = append(errors, validateLogTargetList(spec, version, name, frontend.LogTargetList)...)
+	errors = append(errors, validateRuleSlice[*models.Capture, v32.Capture, v31.Capture, v30.Capture](spec, version, "capture", name, "capture", frontend.CaptureList)...)
 	return errors
 }
 
 // validateACLList validates ACL configurations.
-func validateACLList(spec *openapi3.T, parentName string, aclList []*models.ACL) []string {
+func validateACLList(spec *openapi3.T, version *Version, parentName string, aclList []*models.ACL) []string {
 	var errors []string
 	for idx, acl := range aclList {
-		if apiACL := transform.ToAPIACL(acl); apiACL != nil {
-			if err := validateAgainstSchema(spec, "acl", apiACL); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, ACL %d: %v", parentName, idx, err))
-			}
+		if err := validateModel[v32.Acl, v31.Acl, v30.Acl](spec, version, "acl", acl); err != nil {
+			errors = append(errors, fmt.Sprintf("%s, ACL %d: %v", parentName, idx, err))
 		}
 	}
 	return errors
 }
 
 // validateFilterList validates filter configurations.
-func validateFilterList(spec *openapi3.T, parentName string, filterList []*models.Filter) []string {
+func validateFilterList(spec *openapi3.T, version *Version, parentName string, filterList []*models.Filter) []string {
 	var errors []string
 	for idx, filter := range filterList {
-		if apiFilter := transform.ToAPIFilter(filter); apiFilter != nil {
-			if err := validateAgainstSchema(spec, "filter", apiFilter); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, filter %d: %v", parentName, idx, err))
-			}
+		if err := validateModel[v32.Filter, v31.Filter, v30.Filter](spec, version, "filter", filter); err != nil {
+			errors = append(errors, fmt.Sprintf("%s, filter %d: %v", parentName, idx, err))
 		}
 	}
 	return errors
 }
 
 // validateLogTargetList validates log target configurations.
-func validateLogTargetList(spec *openapi3.T, parentName string, logTargetList []*models.LogTarget) []string {
+func validateLogTargetList(spec *openapi3.T, version *Version, parentName string, logTargetList []*models.LogTarget) []string {
 	var errors []string
 	for idx, logTarget := range logTargetList {
-		if apiLogTarget := transform.ToAPILogTarget(logTarget); apiLogTarget != nil {
-			if err := validateAgainstSchema(spec, "log_target", apiLogTarget); err != nil {
-				errors = append(errors, fmt.Sprintf("%s, log target %d: %v", parentName, idx, err))
-			}
+		if err := validateModel[v32.LogTarget, v31.LogTarget, v30.LogTarget](spec, version, "log_target", logTarget); err != nil {
+			errors = append(errors, fmt.Sprintf("%s, log target %d: %v", parentName, idx, err))
 		}
 	}
 	return errors
@@ -671,7 +549,7 @@ func validateAgainstSchema(spec *openapi3.T, schemaName string, model interface{
 
 // validateSemantics performs semantic validation using haproxy binary.
 // This writes files to actual /etc/haproxy/ directories and runs haproxy -c.
-func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths *ValidationPaths) error {
 	// Clear validation directories to remove any pre-existing files
 	if err := clearValidationDirectories(paths); err != nil {
 		return fmt.Errorf("failed to clear validation directories: %w", err)
@@ -699,7 +577,7 @@ func validateSemantics(mainConfig string, auxFiles *AuxiliaryFiles, paths Valida
 // This ensures no pre-existing files interfere with validation.
 // It clears both the traditional validation directories (for absolute/simple paths)
 // and subdirectories in the config directory (for relative paths with subdirectories).
-func clearValidationDirectories(paths ValidationPaths) error {
+func clearValidationDirectories(paths *ValidationPaths) error {
 	configDir := filepath.Dir(paths.ConfigFile)
 
 	// Clear traditional validation directories (for absolute paths and simple filenames)
@@ -780,7 +658,7 @@ func writeFileWithDir(path, content, fileType string) error {
 }
 
 // writeAuxiliaryFiles writes all auxiliary files to their respective directories.
-func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error {
+func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths *ValidationPaths) error {
 	if auxFiles == nil {
 		return nil // No auxiliary files to write
 	}
@@ -812,8 +690,9 @@ func writeAuxiliaryFiles(auxFiles *AuxiliaryFiles, paths ValidationPaths) error 
 	}
 
 	// Write CRT-list files
+	// Use CRTListDir which may differ from SSLCertsDir on HAProxy < 3.2
 	for _, crtList := range auxFiles.CRTListFiles {
-		crtListPath := resolveAuxiliaryFilePath(crtList.Path, configDir, paths.SSLCertsDir)
+		crtListPath := resolveAuxiliaryFilePath(crtList.Path, configDir, paths.CRTListDir)
 		if err := writeFileWithDir(crtListPath, crtList.Content, "CRT-list file "+crtList.Path); err != nil {
 			return err
 		}

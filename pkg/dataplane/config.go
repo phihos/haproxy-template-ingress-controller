@@ -22,6 +22,17 @@ type Endpoint struct {
 
 	// PodNamespace is the Kubernetes pod namespace (for observability)
 	PodNamespace string
+
+	// Version info (cached after discovery admission, avoids redundant /v3/info calls)
+	// Zero values indicate version not yet detected.
+	DetectedMajorVersion int    // Major version (e.g., 3)
+	DetectedMinorVersion int    // Minor version (e.g., 2)
+	DetectedFullVersion  string // Full version string (e.g., "v3.2.6 87ad0bcf")
+}
+
+// HasCachedVersion returns true if version info has been cached on this endpoint.
+func (e *Endpoint) HasCachedVersion() bool {
+	return e.DetectedMajorVersion > 0
 }
 
 // Redacted returns a redacted version of the endpoint for safe logging.

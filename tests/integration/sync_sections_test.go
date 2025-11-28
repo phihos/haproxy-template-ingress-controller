@@ -76,9 +76,9 @@ func TestSyncSections(t *testing.T) {
 			expectedDeletes:   0,
 			expectedOperations: []string{
 				"Create peer section 'mycluster'",
-				"Create peer entry 'node1' in peers section 'mycluster'",
-				"Create peer entry 'node2' in peers section 'mycluster'",
-				"Create peer entry 'node3' in peers section 'mycluster'",
+				"Create peer entry 'node1' in peer section 'mycluster'",
+				"Create peer entry 'node2' in peer section 'mycluster'",
+				"Create peer entry 'node3' in peer section 'mycluster'",
 				"Update backend 'web'",
 			},
 			expectedReload: true,

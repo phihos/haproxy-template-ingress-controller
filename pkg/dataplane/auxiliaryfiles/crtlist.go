@@ -2,6 +2,7 @@ package auxiliaryfiles
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -50,6 +51,31 @@ func (o *crtListFileOps) Delete(ctx context.Context, id string) error {
 	return o.client.DeleteCRTListFile(ctx, filename)
 }
 
+// convertCRTListsToGeneralFiles converts CRT-list files to general files for fallback storage.
+// This is used when CRT-list storage is not supported (HAProxy <3.2) to store the files
+// as general files instead.
+func convertCRTListsToGeneralFiles(crtLists []CRTListFile) []GeneralFile {
+	generalFiles := make([]GeneralFile, len(crtLists))
+	for i, crtList := range crtLists {
+		// Use the base filename as the identifier
+		filename := filepath.Base(crtList.Path)
+		generalFiles[i] = GeneralFile{
+			Filename: filename,
+			Content:  crtList.Content,
+		}
+	}
+	return generalFiles
+}
+
+// convertCRTListDiffToFileDiff converts a CRTListDiff to a FileDiff for general file storage.
+func convertCRTListDiffToFileDiff(crtListDiff *CRTListDiff) *FileDiff {
+	return &FileDiff{
+		ToCreate: convertCRTListsToGeneralFiles(crtListDiff.ToCreate),
+		ToUpdate: convertCRTListsToGeneralFiles(crtListDiff.ToUpdate),
+		ToDelete: crtListDiff.ToDelete, // Delete paths remain the same
+	}
+}
+
 // CompareCRTLists compares the current state of crt-list files in HAProxy storage
 // with the desired state, and returns a diff describing what needs to be created,
 // updated, or deleted.
@@ -63,7 +89,49 @@ func (o *crtListFileOps) Delete(ctx context.Context, id string) error {
 // Path normalization: The API returns filenames only (e.g., "certificate-list.txt"), but
 // CRTListFile.Path may contain full paths (e.g., "/etc/haproxy/certs/certificate-list.txt").
 // We normalize using filepath.Base() for comparison.
+//
+// Version compatibility: CRT-list storage is only available in HAProxy DataPlane API v3.2+.
+// On older versions (3.0, 3.1), this function automatically falls back to general file storage.
 func CompareCRTLists(ctx context.Context, c *client.DataplaneClient, desired []CRTListFile) (*CRTListDiff, error) {
+	// Check if CRT-list storage is supported by this HAProxy version
+	if !c.Capabilities().SupportsCrtList {
+		slog.Info("CRT-list storage not supported, using general file storage fallback",
+			"haproxy_version", c.DetectedVersion())
+
+		// Convert CRT-list files to general files for fallback storage
+		generalFiles := convertCRTListsToGeneralFiles(desired)
+
+		// Compare using general file storage
+		generalDiff, err := CompareGeneralFiles(ctx, c, generalFiles)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert general file diff back to CRT-list diff format
+		crtListDiff := &CRTListDiff{
+			ToCreate: make([]CRTListFile, len(generalDiff.ToCreate)),
+			ToUpdate: make([]CRTListFile, len(generalDiff.ToUpdate)),
+			ToDelete: generalDiff.ToDelete,
+		}
+
+		// Convert general files back to CRT-list files (restore Path format)
+		for i, gf := range generalDiff.ToCreate {
+			crtListDiff.ToCreate[i] = CRTListFile{
+				Path:    gf.Filename, // Use filename as path
+				Content: gf.Content,
+			}
+		}
+		for i, gf := range generalDiff.ToUpdate {
+			crtListDiff.ToUpdate[i] = CRTListFile{
+				Path:    gf.Filename,
+				Content: gf.Content,
+			}
+		}
+
+		return crtListDiff, nil
+	}
+
+	// CRT-list storage is supported - use native CRT-list API
 	// Normalize desired crt-lists to use filenames for identifiers
 	normalizedDesired := make([]CRTListFile, len(desired))
 	for i, crtList := range desired {
@@ -125,11 +193,27 @@ func CompareCRTLists(ctx context.Context, c *client.DataplaneClient, desired []C
 //   - Phase 2 (post-config): Call with diff containing ToDelete
 //
 // The caller is responsible for splitting the diff into these phases.
+//
+// Version compatibility: CRT-list storage is only available in HAProxy DataPlane API v3.2+.
+// On older versions (3.0, 3.1), this function automatically falls back to general file storage.
 func SyncCRTLists(ctx context.Context, c *client.DataplaneClient, diff *CRTListDiff) error {
 	if diff == nil {
 		return nil
 	}
 
+	// Check if CRT-list storage is supported by this HAProxy version
+	if !c.Capabilities().SupportsCrtList {
+		slog.Info("CRT-list storage not supported, using general file storage fallback for sync",
+			"haproxy_version", c.DetectedVersion())
+
+		// Convert CRT-list diff to general file diff
+		generalDiff := convertCRTListDiffToFileDiff(diff)
+
+		// Sync using general file storage
+		return SyncGeneralFiles(ctx, c, generalDiff)
+	}
+
+	// CRT-list storage is supported - use native CRT-list API
 	ops := &crtListFileOps{client: c}
 
 	// Convert CRTListDiff to generic diff

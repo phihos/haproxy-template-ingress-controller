@@ -55,12 +55,13 @@ type Runner struct {
 	// engineTemplate is a pre-compiled template engine WITHOUT path filters.
 	// Workers will create their own engines with worker-specific paths.
 	engineTemplate  *templating.TemplateEngine
-	validationPaths dataplane.ValidationPaths // Base paths (used to create worker-specific paths)
+	validationPaths *dataplane.ValidationPaths // Base paths (used to create worker-specific paths)
 	config          *config.Config
 	logger          *slog.Logger
 	workers         int
-	debugFilters    bool // Enable detailed filter operation logging
-	traceTemplates  bool // Enable template execution tracing
+	debugFilters    bool                   // Enable detailed filter operation logging
+	traceTemplates  bool                   // Enable template execution tracing
+	capabilities    dataplane.Capabilities // HAProxy/DataPlane API capabilities
 }
 
 // testEntry is a tuple of test name and test definition for worker processing.
@@ -85,6 +86,10 @@ type Options struct {
 	// DebugFilters enables detailed filter operation logging.
 	// When enabled, each sort comparison is logged with values and results.
 	DebugFilters bool
+
+	// Capabilities defines which features are available for the local HAProxy version.
+	// Used to determine path resolution (e.g., CRT-list paths fallback when not supported).
+	Capabilities dataplane.Capabilities
 }
 
 // TestResults contains the results of running validation tests.
@@ -180,7 +185,7 @@ type AssertionResult struct {
 func New(
 	cfg *config.Config,
 	engine *templating.TemplateEngine,
-	validationPaths dataplane.ValidationPaths,
+	validationPaths *dataplane.ValidationPaths,
 	options Options,
 ) *Runner {
 	logger := options.Logger
@@ -204,6 +209,7 @@ func New(
 		workers:         workers,
 		debugFilters:    options.DebugFilters,
 		traceTemplates:  traceTemplates,
+		capabilities:    options.Capabilities,
 	}
 }
 
@@ -290,35 +296,42 @@ func (r *Runner) createWorkerEngine() (*templating.TemplateEngine, error) {
 //
 // Each test gets its own isolated directories to prevent file conflicts during
 // parallel test execution, even when multiple tests are processed by the same worker.
-func (r *Runner) createTestPaths(workerID, testNum int) (dataplane.ValidationPaths, error) {
+func (r *Runner) createTestPaths(workerID, testNum int) (*dataplane.ValidationPaths, error) {
 	// Extract base temp directory from the shared validation paths
 	baseTempDir := filepath.Dir(r.validationPaths.ConfigFile)
 
 	// Create test-specific subdirectory within worker space
 	testDir := filepath.Join(baseTempDir, fmt.Sprintf("worker-%d", workerID), fmt.Sprintf("test-%d", testNum))
 
-	// Create subdirectories for auxiliary files
+	// Create base path configuration
 	// IMPORTANT: Subdirectory names are derived from configured dataplane paths
 	// using filepath.Base() to ensure consistency between production and validation.
 	// HAProxy requires absolute paths to locate files, so we create absolute paths
 	// within the isolated test directory (e.g., /tmp/haproxy-validate-12345/worker-0/test-1/maps).
-	mapsDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.MapsDir))
-	certsDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.SSLCertsDir))
-	generalDir := filepath.Join(testDir, filepath.Base(r.config.Dataplane.GeneralStorageDir))
+	basePaths := dataplane.PathConfig{
+		MapsDir:    filepath.Join(testDir, filepath.Base(r.config.Dataplane.MapsDir)),
+		SSLDir:     filepath.Join(testDir, filepath.Base(r.config.Dataplane.SSLCertsDir)),
+		GeneralDir: filepath.Join(testDir, filepath.Base(r.config.Dataplane.GeneralStorageDir)),
+		ConfigFile: filepath.Join(testDir, "haproxy.cfg"),
+	}
 
-	// Create all directories
-	for _, dir := range []string{mapsDir, certsDir, generalDir} {
+	// Use centralized path resolution to get capability-aware paths
+	// This ensures CRTListDir is set correctly for HAProxy < 3.2
+	resolvedPaths := dataplane.ResolvePaths(basePaths, r.capabilities)
+
+	// Create all directories (CRTListDir may be same as GeneralDir or SSLDir)
+	dirsToCreate := []string{resolvedPaths.MapsDir, resolvedPaths.SSLDir, resolvedPaths.GeneralDir}
+	if resolvedPaths.CRTListDir != resolvedPaths.SSLDir && resolvedPaths.CRTListDir != resolvedPaths.GeneralDir {
+		dirsToCreate = append(dirsToCreate, resolvedPaths.CRTListDir)
+	}
+
+	for _, dir := range dirsToCreate {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return dataplane.ValidationPaths{}, fmt.Errorf("failed to create test directory %s: %w", dir, err)
+			return nil, fmt.Errorf("failed to create test directory %s: %w", dir, err)
 		}
 	}
 
-	return dataplane.ValidationPaths{
-		MapsDir:           mapsDir,
-		SSLCertsDir:       certsDir,
-		GeneralStorageDir: generalDir,
-		ConfigFile:        filepath.Join(testDir, "haproxy.cfg"),
-	}, nil
+	return resolvedPaths.ToValidationPaths(), nil
 }
 
 // RunTests executes all validation tests (or a specific test if filtered).
@@ -524,7 +537,7 @@ func (r *Runner) filterTests(tests map[string]config.ValidationTest, name string
 }
 
 // runSingleTest executes a single validation test using worker-specific engine and validation paths.
-func (r *Runner) runSingleTest(ctx context.Context, testName string, test config.ValidationTest, engine *templating.TemplateEngine, validationPaths dataplane.ValidationPaths) TestResult {
+func (r *Runner) runSingleTest(ctx context.Context, testName string, test config.ValidationTest, engine *templating.TemplateEngine, validationPaths *dataplane.ValidationPaths) TestResult {
 	startTime := time.Now()
 
 	result := TestResult{
@@ -636,7 +649,7 @@ func (r *Runner) executeAssertions(
 	haproxyConfig string,
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	templateContext map[string]interface{},
-	validationPaths dataplane.ValidationPaths,
+	validationPaths *dataplane.ValidationPaths,
 ) {
 	for i := range test.Assertions {
 		assertionResult := r.runAssertion(ctx, &test.Assertions[i], haproxyConfig, auxiliaryFiles, templateContext, result.RenderError, validationPaths)
@@ -662,7 +675,7 @@ func hasRenderingErrorAssertions(assertions []config.ValidationAssertion) bool {
 // renderWithStores renders HAProxy configuration using test fixture stores and worker-specific engine.
 //
 // This follows the same pattern as DryRunValidator.renderWithOverlayStores.
-func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[string]types.Store, validationPaths dataplane.ValidationPaths) (string, *dataplane.AuxiliaryFiles, error) {
+func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[string]types.Store, validationPaths *dataplane.ValidationPaths) (string, *dataplane.AuxiliaryFiles, error) {
 	// Build rendering context with fixture stores
 	context := r.buildRenderingContext(stores, validationPaths)
 
@@ -701,7 +714,7 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 //
 // This mirrors DryRunValidator.buildRenderingContext and Renderer.buildRenderingContext.
 // The context includes resources (fixture stores), template snippets, file_registry, pathResolver, and controller configuration.
-func (r *Runner) buildRenderingContext(stores map[string]types.Store, validationPaths dataplane.ValidationPaths) map[string]interface{} {
+func (r *Runner) buildRenderingContext(stores map[string]types.Store, validationPaths *dataplane.ValidationPaths) map[string]interface{} {
 	// Create resources map with wrapped stores (excluding haproxy-pods)
 	resources := make(map[string]interface{})
 
@@ -732,12 +745,12 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 	// Build template snippets list
 	snippetNames := r.sortSnippetsByPriority()
 
-	// Create file registry for dynamic auxiliary file registration
-	// Use test-specific validation paths to ensure files are registered with correct paths
+	// Create PathResolver from ValidationPaths
+	// ValidationPaths already has CRTListDir set correctly based on capabilities
 	pathResolver := &templating.PathResolver{
 		MapsDir:    validationPaths.MapsDir,
 		SSLDir:     validationPaths.SSLCertsDir,
-		CRTListDir: validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
+		CRTListDir: validationPaths.CRTListDir,
 		GeneralDir: validationPaths.GeneralStorageDir,
 	}
 	fileRegistry := renderer.NewFileRegistry(pathResolver)
@@ -849,7 +862,7 @@ func (r *Runner) runAssertion(
 	auxiliaryFiles *dataplane.AuxiliaryFiles,
 	templateContext map[string]interface{},
 	renderError string,
-	validationPaths dataplane.ValidationPaths,
+	validationPaths *dataplane.ValidationPaths,
 ) AssertionResult {
 	result := AssertionResult{
 		Type:        assertion.Type,

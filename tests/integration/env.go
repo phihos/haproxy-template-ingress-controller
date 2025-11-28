@@ -160,7 +160,7 @@ func TestDataplaneClient(env fixenv.Env) *client.DataplaneClient {
 	return fixenv.CacheResult(env, func() (*fixenv.GenericResult[*client.DataplaneClient], error) {
 		endpoint := haproxy.GetDataplaneEndpoint()
 
-		dataplaneClient, err := client.New(&client.Config{
+		dataplaneClient, err := client.New(context.Background(), &client.Config{
 			BaseURL:  endpoint.URL,
 			Username: endpoint.Username,
 			Password: endpoint.Password,

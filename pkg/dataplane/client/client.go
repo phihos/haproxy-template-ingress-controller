@@ -1,8 +1,9 @@
 // Package client provides a high-level wrapper around the generated HAProxy Dataplane API client.
 //
 // This wrapper adds:
-// - Basic authentication
-// - Version management
+// - Multi-version support (v3.0, v3.1, v3.2)
+// - Runtime version detection
+// - Capability-based feature detection
 // - Transaction lifecycle management
 // - Configuration fetch/push operations
 // - Error handling and retry logic
@@ -10,13 +11,9 @@ package client
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-
-	"haproxy-template-ic/pkg/generated/dataplaneapi"
 )
 
 // Endpoint represents HAProxy Dataplane API connection information.
@@ -26,13 +23,25 @@ type Endpoint struct {
 	Username string
 	Password string
 	PodName  string // Kubernetes pod name for observability
+
+	// Cached version info (optional, avoids redundant /v3/info calls if set)
+	CachedMajorVersion int
+	CachedMinorVersion int
+	CachedFullVersion  string
 }
 
-// DataplaneClient wraps the generated API client with additional functionality
-// for HAProxy Dataplane API operations.
+// HasCachedVersion returns true if version info has been cached.
+func (e *Endpoint) HasCachedVersion() bool {
+	return e.CachedMajorVersion > 0
+}
+
+// DataplaneClient wraps the multi-version Clientset with additional functionality
+// for HAProxy Dataplane API operations. It automatically uses the appropriate
+// client version based on runtime detection.
 type DataplaneClient struct {
-	client   *dataplaneapi.Client
-	Endpoint Endpoint // Embedded endpoint information
+	clientset *Clientset
+	Endpoint  Endpoint // Embedded endpoint information
+	logger    *slog.Logger
 }
 
 // Config contains configuration options for creating a DataplaneClient.
@@ -58,15 +67,17 @@ type Config struct {
 }
 
 // New creates a new DataplaneClient with the provided configuration.
+// It automatically detects the server's DataPlane API version and creates
+// an appropriate multi-version clientset.
 //
 // Example:
 //
-//	client, err := client.New(client.Config{
-//	    BaseURL:  "http://haproxy-dataplane:5555/v2",
+//	client, err := client.New(ctx, client.Config{
+//	    BaseURL:  "http://haproxy-dataplane:5555",
 //	    Username: "admin",
 //	    Password: "password",
 //	})
-func New(cfg *Config) (*DataplaneClient, error) {
+func New(ctx context.Context, cfg *Config) (*DataplaneClient, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
@@ -77,54 +88,68 @@ func New(cfg *Config) (*DataplaneClient, error) {
 		return nil, fmt.Errorf("password is required")
 	}
 
-	// Create request editor for basic auth
-	authEditor := func(ctx context.Context, req *http.Request) error {
-		auth := cfg.Username + ":" + cfg.Password
-		encoded := base64.StdEncoding.EncodeToString([]byte(auth))
-		req.Header.Set("Authorization", "Basic "+encoded)
-		return nil
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 
-	// Get base HTTP client (either provided or default)
-	baseClient := cfg.HTTPClient
-	if baseClient == nil {
-		baseClient = &http.Client{}
+	// Create endpoint
+	endpoint := Endpoint{
+		URL:      cfg.BaseURL,
+		Username: cfg.Username,
+		Password: cfg.Password,
+		PodName:  cfg.PodName,
 	}
 
-	// Wrap the client's transport with logging middleware for 422 error debugging
-	wrappedTransport := newLoggingRoundTripper(baseClient.Transport, cfg.Logger)
-	loggingClient := &http.Client{
-		Transport: wrappedTransport,
-		Timeout:   baseClient.Timeout,
-	}
-
-	// Configure options for generated client
-	opts := []dataplaneapi.ClientOption{
-		dataplaneapi.WithRequestEditorFn(authEditor),
-		dataplaneapi.WithHTTPClient(loggingClient),
-	}
-
-	// Create generated client
-	genClient, err := dataplaneapi.NewClient(cfg.BaseURL, opts...)
+	// Create multi-version clientset with automatic version detection
+	clientset, err := NewClientset(ctx, &endpoint, logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create dataplane client: %w", err)
+		return nil, fmt.Errorf("failed to create clientset: %w", err)
 	}
+
+	logger.Info("created DataPlane API client",
+		"endpoint", endpoint.URL,
+		"version", clientset.DetectedVersion(),
+		"capabilities", clientset.Capabilities(),
+	)
 
 	return &DataplaneClient{
-		client: genClient,
-		Endpoint: Endpoint{
-			URL:      cfg.BaseURL,
-			Username: cfg.Username,
-			Password: cfg.Password,
-			PodName:  cfg.PodName,
-		},
+		clientset: clientset,
+		Endpoint:  endpoint,
+		logger:    logger,
 	}, nil
 }
 
-// Client returns the underlying generated client for direct access to API methods.
-// This should be used when the wrapper doesn't provide a convenience method.
-func (c *DataplaneClient) Client() *dataplaneapi.Client {
-	return c.client
+// Clientset returns the underlying multi-version clientset for advanced operations.
+// Use this when you need version-specific features or capability checking.
+//
+// Example:
+//
+//	if client.Clientset().Capabilities().SupportsCrtList {
+//	    v32Client := client.Clientset().V32()
+//	    // Use v3.2-specific crt-list operations
+//	}
+func (c *DataplaneClient) Clientset() *Clientset {
+	return c.clientset
+}
+
+// PreferredClient returns the most appropriate versioned client based on
+// the detected server version. Returns one of: *v30.Client, *v31.Client, *v32.Client.
+//
+// For most operations, you should use the wrapper methods instead of this.
+// This is provided for operations that aren't wrapped yet.
+func (c *DataplaneClient) PreferredClient() interface{} {
+	return c.clientset.PreferredClient()
+}
+
+// DetectedVersion returns the full version string of the DataPlane API server.
+func (c *DataplaneClient) DetectedVersion() string {
+	return c.clientset.DetectedVersion()
+}
+
+// Capabilities returns the feature availability for the detected version.
+func (c *DataplaneClient) Capabilities() Capabilities {
+	return c.clientset.Capabilities()
 }
 
 // BaseURL returns the configured base URL for the Dataplane API.
@@ -134,76 +159,12 @@ func (c *DataplaneClient) BaseURL() string {
 
 // NewFromEndpoint creates a new DataplaneClient from an Endpoint.
 // This is a convenience function for creating a client with default options.
-func NewFromEndpoint(endpoint Endpoint, logger *slog.Logger) (*DataplaneClient, error) {
-	return New(&Config{
+func NewFromEndpoint(ctx context.Context, endpoint *Endpoint, logger *slog.Logger) (*DataplaneClient, error) {
+	return New(ctx, &Config{
 		BaseURL:  endpoint.URL,
 		Username: endpoint.Username,
 		Password: endpoint.Password,
 		PodName:  endpoint.PodName,
 		Logger:   logger,
 	})
-}
-
-// StartTransaction creates a new configuration transaction.
-// Returns the transaction ID which must be used in subsequent API calls.
-func (c *DataplaneClient) StartTransaction(ctx context.Context, version int) (string, error) {
-	params := &dataplaneapi.StartTransactionParams{
-		Version: version,
-	}
-
-	resp, err := c.client.StartTransaction(ctx, params)
-	if err != nil {
-		return "", fmt.Errorf("failed to start transaction: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("start transaction failed with status %d", resp.StatusCode)
-	}
-
-	// Parse response body to get transaction ID
-	var transaction dataplaneapi.Transaction
-	if err := json.NewDecoder(resp.Body).Decode(&transaction); err != nil {
-		return "", fmt.Errorf("failed to decode transaction response: %w", err)
-	}
-
-	if transaction.Id == nil {
-		return "", fmt.Errorf("transaction ID is nil in response")
-	}
-
-	return *transaction.Id, nil
-}
-
-// CommitTransaction commits a configuration transaction.
-// This applies all changes made within the transaction to the HAProxy configuration.
-func (c *DataplaneClient) CommitTransaction(ctx context.Context, transactionID string) error {
-	params := &dataplaneapi.CommitTransactionParams{}
-
-	resp, err := c.client.CommitTransaction(ctx, transactionID, params)
-	if err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("commit transaction failed with status %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
-// DeleteTransaction deletes a configuration transaction without committing it.
-// This is useful for rolling back changes.
-func (c *DataplaneClient) DeleteTransaction(ctx context.Context, transactionID string) error {
-	resp, err := c.client.DeleteTransaction(ctx, transactionID)
-	if err != nil {
-		return fmt.Errorf("failed to delete transaction: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("delete transaction failed with status %d", resp.StatusCode)
-	}
-
-	return nil
 }

@@ -104,6 +104,15 @@ func TestMain(m *testing.M) {
 			}
 			fmt.Println("DEBUG: HAProxyTemplateConfig CRD installed successfully")
 
+			// Wait for CRD to be established (API server needs time to process)
+			cmd = exec.CommandContext(ctx, "kubectl", "wait", "--kubeconfig", kubeconfigPath,
+				"--for=condition=Established",
+				"crd/haproxytemplateconfigs.haproxy-template-ic.github.io",
+				"--timeout=60s")
+			if output, err := cmd.CombinedOutput(); err != nil {
+				return ctx, fmt.Errorf("failed to wait for CRD to be established: %w\nOutput: %s", err, string(output))
+			}
+
 			return ctx, nil
 		},
 	)

@@ -38,8 +38,12 @@ import (
 // This is a pure component that takes a pod store and credentials and returns
 // a list of Dataplane API endpoints. It has no knowledge of events or the
 // event bus - that coordination is handled by the event adapter.
+//
+// The Discovery also holds the local HAProxy version, detected at startup,
+// which is used by the event adapter for version compatibility checking.
 type Discovery struct {
 	dataplanePort int
+	localVersion  *dataplane.Version
 }
 
 // newDiscoveryEngine creates a new Discovery instance.
@@ -47,11 +51,26 @@ type Discovery struct {
 // Parameters:
 //   - dataplanePort: The port where Dataplane API is exposed on HAProxy pods
 //
-// Returns a configured Discovery instance.
-func newDiscoveryEngine(dataplanePort int) *Discovery {
+// Returns a configured Discovery instance and an error if local HAProxy version
+// detection fails (which is fatal - the controller cannot start without knowing
+// its local version for compatibility checking).
+func newDiscoveryEngine(dataplanePort int) (*Discovery, error) {
+	// Detect local HAProxy version at startup
+	localVer, err := dataplane.DetectLocalVersion()
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect local HAProxy version: %w", err)
+	}
+
 	return &Discovery{
 		dataplanePort: dataplanePort,
-	}
+		localVersion:  localVer,
+	}, nil
+}
+
+// LocalVersion returns the detected local HAProxy version.
+// This is used by the event adapter for version compatibility checking.
+func (d *Discovery) LocalVersion() *dataplane.Version {
+	return d.localVersion
 }
 
 // isDataplaneContainerReady checks if the container exposing the dataplane port is ready.

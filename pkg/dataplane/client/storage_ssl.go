@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
-	"net/textproto"
-	"path/filepath"
-	"strings"
+
+	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
 )
 
 // SanitizeSSLCertName sanitizes a certificate name for HAProxy Data Plane API storage.
@@ -18,29 +18,21 @@ import (
 // For example: "example.com.pem" becomes "example_com.pem".
 // This function is exported for use in tests to compare certificate names.
 func SanitizeSSLCertName(name string) string {
-	// Get the file extension
-	ext := filepath.Ext(name)
-	if ext == "" {
-		// No extension, replace all dots
-		return strings.ReplaceAll(name, ".", "_")
-	}
-
-	// Get the base name without extension
-	base := strings.TrimSuffix(name, ext)
-
-	// Replace dots in the base name with underscores
-	sanitizedBase := strings.ReplaceAll(base, ".", "_")
-
-	// Return sanitized base + original extension
-	return sanitizedBase + ext
+	return SanitizeStorageName(name)
 }
 
 // GetAllSSLCertificates retrieves all SSL certificate names from the storage.
 // Note: This returns only certificate names, not the certificate contents.
 // Use GetSSLCertificateContent to retrieve the actual certificate contents.
 // The returned names are unsanitized (dots restored) for user convenience.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) GetAllSSLCertificates(ctx context.Context) ([]string, error) {
-	resp, err := c.client.GetAllStorageSSLCertificates(ctx)
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+		V31: func(c *v31.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+		V30: func(c *v30.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all SSL certificates: %w", err)
 	}
@@ -90,11 +82,18 @@ func (c *DataplaneClient) GetAllSSLCertificates(ctx context.Context) ([]string, 
 //
 // The name parameter can use dots (e.g., "example.com.pem"), which will be sanitized
 // automatically before calling the API.
+//
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name string) (string, error) {
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
 	sanitizedName := SanitizeSSLCertName(name)
 
-	resp, err := c.client.GetOneStorageSSLCertificate(ctx, sanitizedName)
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) { return c.GetOneStorageSSLCertificate(ctx, sanitizedName) },
+		V31: func(c *v31.Client) (*http.Response, error) { return c.GetOneStorageSSLCertificate(ctx, sanitizedName) },
+		V30: func(c *v30.Client) (*http.Response, error) { return c.GetOneStorageSSLCertificate(ctx, sanitizedName) },
+	})
+
 	if err != nil {
 		return "", fmt.Errorf("failed to get SSL certificate '%s': %w", name, err)
 	}
@@ -161,56 +160,40 @@ func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name str
 // CreateSSLCertificate creates a new SSL certificate using multipart form-data.
 // The name parameter can use dots (e.g., "example.com.pem"), which will be sanitized
 // automatically before calling the API.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) CreateSSLCertificate(ctx context.Context, name, content string) error {
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
 	sanitizedName := SanitizeSSLCertName(name)
 
-	// Create multipart form-data
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// Add certificate content as a form file field
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file_upload"; filename=%q`, sanitizedName))
-	h.Set("Content-Type", "application/octet-stream")
-
-	part, err := writer.CreatePart(h)
+	body, contentType, err := buildMultipartFilePayload(sanitizedName, content)
 	if err != nil {
-		return fmt.Errorf("failed to create multipart part: %w", err)
+		return fmt.Errorf("failed to build payload for SSL certificate '%s': %w", name, err)
 	}
 
-	if _, err := part.Write([]byte(content)); err != nil {
-		return fmt.Errorf("failed to write certificate content: %w", err)
-	}
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.CreateStorageSSLCertificateWithBody(ctx, nil, contentType, body)
+		},
+		V31: func(c *v31.Client) (*http.Response, error) {
+			return c.CreateStorageSSLCertificateWithBody(ctx, nil, contentType, body)
+		},
+		V30: func(c *v30.Client) (*http.Response, error) {
+			return c.CreateStorageSSLCertificateWithBody(ctx, nil, contentType, body)
+		},
+	})
 
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", err)
-	}
-
-	// Send request
-	contentType := writer.FormDataContentType()
-	resp, err := c.client.CreateStorageSSLCertificateWithBody(ctx, nil, contentType, body)
 	if err != nil {
 		return fmt.Errorf("failed to create SSL certificate '%s': %w", name, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return fmt.Errorf("SSL certificate '%s' already exists", name)
-	}
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-		// Try to read error body for more details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create SSL certificate '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return checkCreateResponse(resp, "SSL certificate", name)
 }
 
 // UpdateSSLCertificate updates an existing SSL certificate using text/plain content.
 // The name parameter can use dots (e.g., "example.com.pem"), which will be sanitized
 // automatically before calling the API.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) UpdateSSLCertificate(ctx context.Context, name, content string) error {
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
 	sanitizedName := SanitizeSSLCertName(name)
@@ -218,48 +201,50 @@ func (c *DataplaneClient) UpdateSSLCertificate(ctx context.Context, name, conten
 	// Send certificate content as text/plain (per API spec: postHAProxyConfigurationData)
 	body := bytes.NewBufferString(content)
 
-	// Send request with text/plain content type
-	resp, err := c.client.ReplaceStorageSSLCertificateWithBody(ctx, sanitizedName, nil, "text/plain", body)
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.ReplaceStorageSSLCertificateWithBody(ctx, sanitizedName, nil, "text/plain", body)
+		},
+		V31: func(c *v31.Client) (*http.Response, error) {
+			return c.ReplaceStorageSSLCertificateWithBody(ctx, sanitizedName, nil, "text/plain", body)
+		},
+		V30: func(c *v30.Client) (*http.Response, error) {
+			return c.ReplaceStorageSSLCertificateWithBody(ctx, sanitizedName, nil, "text/plain", body)
+		},
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to update SSL certificate '%s': %w", name, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("SSL certificate '%s' not found", name)
-	}
-
-	// Accept both 200 (OK) and 202 (Accepted) as success
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		// Try to read error body for more details
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("update SSL certificate '%s' failed with status %d: %s", name, resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return checkUpdateResponse(resp, "SSL certificate", name)
 }
 
 // DeleteSSLCertificate deletes an SSL certificate by name.
 // The name parameter can use dots (e.g., "example.com.pem"), which will be sanitized
 // automatically before calling the API.
+// Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) DeleteSSLCertificate(ctx context.Context, name string) error {
 	// Sanitize the name for the API (e.g., "example.com.pem" -> "example_com.pem")
 	sanitizedName := SanitizeSSLCertName(name)
 
-	resp, err := c.client.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
+	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
+		V32: func(c *v32.Client) (*http.Response, error) {
+			return c.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
+		},
+		V31: func(c *v31.Client) (*http.Response, error) {
+			return c.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
+		},
+		V30: func(c *v30.Client) (*http.Response, error) {
+			return c.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
+		},
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to delete SSL certificate '%s': %w", name, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("SSL certificate '%s' not found", name)
-	}
-
-	// Accept 200 (OK), 202 (Accepted), and 204 (No Content) as success
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("delete SSL certificate '%s' failed with status %d", name, resp.StatusCode)
-	}
-
-	return nil
+	return checkDeleteResponse(resp, "SSL certificate", name)
 }

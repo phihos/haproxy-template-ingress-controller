@@ -402,6 +402,42 @@ err := ValidateConfiguration(config, auxFiles, paths)
 - Validation directories are cleared before each validation to ensure clean state
 - This approach matches exactly how the HAProxy Dataplane API validates configurations
 
+### Feature Detection with Capabilities
+
+The library provides capability detection for HAProxy version-specific features:
+
+```go
+import "haproxy-template-ic/pkg/dataplane"
+
+// When using DataPlane API client
+client, err := dataplane.NewClient(ctx, endpoint)
+if client.Clientset().Capabilities().SupportsCrtList {
+    // Use CRT-list storage (v3.2+ only)
+}
+
+// When using local HAProxy binary (e.g., CLI validation)
+localVersion, err := dataplane.GetLocalVersion(ctx)
+if err == nil {
+    caps := dataplane.CapabilitiesFromVersion(localVersion)
+    if caps.SupportsCrtList {
+        // Configure CRT-list based paths
+    }
+}
+```
+
+**Available Capabilities:**
+
+| Capability | Description | HAProxy Version |
+|------------|-------------|-----------------|
+| `SupportsCrtList` | CRT-list file storage | v3.2+ |
+| `SupportsMapStorage` | Map file storage | v3.1+ |
+| `SupportsGeneralStorage` | General file storage | v3.0+ |
+| `SupportsHTTP2` | HTTP/2 protocol | v3.0+ |
+| `SupportsQUIC` | QUIC/HTTP3 protocol | v3.2+ |
+| `SupportsAdvancedACLs` | Advanced ACL features | v3.1+ |
+| `SupportsRuntimeMaps` | Runtime map updates | v3.0+ |
+| `SupportsRuntimeServers` | Runtime server updates | v3.0+ |
+
 ## How It Works
 
 The library performs the following steps:

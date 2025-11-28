@@ -16,6 +16,16 @@ import (
 	"haproxy-template-ic/pkg/dataplane/client"
 )
 
+// skipIfCRTListNotSupported skips the test if the HAProxy version doesn't support CRT-list storage.
+// CRT-list storage requires DataPlane API v3.2+.
+func skipIfCRTListNotSupported(t *testing.T, env fixenv.Env) {
+	t.Helper()
+	dataplaneClient := TestDataplaneClient(env)
+	if !dataplaneClient.Capabilities().SupportsCrtList {
+		t.Skipf("Skipping test: CRT-list storage requires DataPlane API v3.2+ (detected version: %s)", dataplaneClient.DetectedVersion())
+	}
+}
+
 // TestGeneralFiles tests Create, Update, and Delete operations for general files
 func TestGeneralFiles(t *testing.T) {
 	testCases := []struct {
@@ -934,6 +944,9 @@ func TestCRTLists(t *testing.T) {
 			env := fixenv.New(t)
 			ctx := context.Background()
 
+			// Skip if CRT-list storage is not supported (requires DataPlane API v3.2+)
+			skipIfCRTListNotSupported(t, env)
+
 			// Setup
 			if tc.setup != nil {
 				tc.setup(t, ctx, env)
@@ -952,6 +965,9 @@ func TestCRTLists(t *testing.T) {
 // through sequential phases that build upon each other.
 func TestCRTListsCompareAndSync(t *testing.T) {
 	env := fixenv.New(t)
+
+	// Skip if CRT-list storage is not supported (requires DataPlane API v3.2+)
+	skipIfCRTListNotSupported(t, env)
 	ctx := context.Background()
 	client := TestDataplaneClient(env)
 

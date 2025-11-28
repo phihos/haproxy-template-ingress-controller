@@ -62,9 +62,10 @@ type Component struct {
 	storeManager    *resourcestore.Manager
 	config          *config.Config
 	engine          *templating.TemplateEngine
-	validationPaths dataplane.ValidationPaths
+	validationPaths *dataplane.ValidationPaths
 	testRunner      *testrunner.Runner
 	logger          *slog.Logger
+	capabilities    dataplane.Capabilities // HAProxy/DataPlane API capabilities
 }
 
 // New creates a new DryRunValidator component.
@@ -75,6 +76,7 @@ type Component struct {
 //   - cfg: Controller configuration containing templates
 //   - engine: Pre-compiled template engine for rendering
 //   - validationPaths: Filesystem paths for HAProxy validation
+//   - capabilities: HAProxy capabilities determined from local version
 //   - logger: Structured logger
 //
 // Returns:
@@ -84,7 +86,8 @@ func New(
 	storeManager *resourcestore.Manager,
 	cfg *config.Config,
 	engine *templating.TemplateEngine,
-	validationPaths dataplane.ValidationPaths,
+	validationPaths *dataplane.ValidationPaths,
+	capabilities dataplane.Capabilities,
 	logger *slog.Logger,
 ) *Component {
 	// Create test runner for validation tests
@@ -94,8 +97,9 @@ func New(
 		engine,
 		validationPaths,
 		testrunner.Options{
-			Logger:  logger.With("component", "test-runner"),
-			Workers: 1, // Sequential execution in webhook context
+			Logger:       logger.With("component", "test-runner"),
+			Workers:      1, // Sequential execution in webhook context
+			Capabilities: capabilities,
 		},
 	)
 
@@ -107,6 +111,7 @@ func New(
 		validationPaths: validationPaths,
 		testRunner:      testRunnerInstance,
 		logger:          logger.With("component", "dryrun-validator"),
+		capabilities:    capabilities,
 	}
 }
 
@@ -200,7 +205,8 @@ func (c *Component) handleValidationRequest(req *events.WebhookValidationRequest
 	}
 
 	// Validate the rendered configuration
-	err = dataplane.ValidateConfiguration(haproxyConfig, auxiliaryFiles, c.validationPaths)
+	// Pass nil version to use default v3.0 schema (safest for validation)
+	err = dataplane.ValidateConfiguration(haproxyConfig, auxiliaryFiles, c.validationPaths, nil)
 	if err != nil {
 		c.logger.Info("Dry-run validation failed",
 			"request_id", req.ID,
@@ -312,11 +318,12 @@ func (c *Component) buildRenderingContext(stores map[string]types.Store) map[str
 	// Build template snippets list
 	snippetNames := c.sortSnippetsByPriority()
 
-	// Create pathResolver from validation paths
+	// Create PathResolver from ValidationPaths
+	// ValidationPaths already has CRTListDir set correctly based on capabilities
 	pathResolver := &templating.PathResolver{
 		MapsDir:    c.validationPaths.MapsDir,
 		SSLDir:     c.validationPaths.SSLCertsDir,
-		CRTListDir: c.validationPaths.SSLCertsDir, // CRT-list files stored in SSL directory
+		CRTListDir: c.validationPaths.CRTListDir,
 		GeneralDir: c.validationPaths.GeneralStorageDir,
 	}
 

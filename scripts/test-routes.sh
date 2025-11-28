@@ -111,19 +111,46 @@ assert_response_ok() {
     debug "  Host: $host, Path: $path"
     debug "  Extra args: ${extra_args[*]}"
 
-    local response
-    if ! response=$(curl -s --max-time 5 -H "Host: $host" "${extra_args[@]}" "${BASE_URL}${path}" 2>&1); then
-        err "$description - Connection failed"
-        return 1
-    fi
+    # Retry logic for flaky CI environments
+    # Use 5 retries to handle slow backend initialization (503 errors)
+    local max_retries=5
+    local retry_delay=2
+    local attempt=1
+    local response=""
+    local last_error=""
+
+    while [[ $attempt -le $max_retries ]]; do
+        if response=$(curl -s --max-time 5 -H "Host: $host" "${extra_args[@]}" "${BASE_URL}${path}" 2>&1); then
+            # Check if backend is not ready yet (503 Service Unavailable)
+            if [[ "$response" == *"503 Service Unavailable"* ]]; then
+                last_error="Backend not ready (503)"
+                debug "  Attempt $attempt/$max_retries: $last_error"
+            # Check if we got a valid response (avoid pipe to grep -q which causes SIGPIPE)
+            elif [[ "$response" == *'"http":'* ]]; then
+                break  # Success, exit retry loop
+            else
+                last_error="Invalid response (empty or malformed)"
+                debug "  Attempt $attempt/$max_retries: $last_error"
+            fi
+        else
+            last_error="Connection failed"
+            debug "  Attempt $attempt/$max_retries: $last_error"
+        fi
+
+        if [[ $attempt -lt $max_retries ]]; then
+            debug "  Retrying in ${retry_delay}s..."
+            sleep "$retry_delay"
+        fi
+        attempt=$((attempt + 1))
+    done
 
     debug "  Response: ${response:0:200}..."
 
-    # Check for expected backend if specified
+    # Check for expected backend if specified (avoid pipe to grep -q which causes SIGPIPE)
     if [[ -n "$expected_backend" ]]; then
-        if echo "$response" | grep -q "\"ENVIRONMENT\":\"$expected_backend\""; then
+        if [[ "$response" == *"\"ENVIRONMENT\":\"$expected_backend\""* ]]; then
             ok "$description - Routed to $expected_backend"
-        elif echo "$response" | grep -q "\"ENVIRONMENT\""; then
+        elif [[ "$response" == *'"ENVIRONMENT"'* ]]; then
             local actual_backend=$(echo "$response" | grep -o '"ENVIRONMENT":"[^"]*"' | cut -d'"' -f4)
             err "$description - Expected backend '$expected_backend', got '$actual_backend'"
             return 1
@@ -131,12 +158,13 @@ assert_response_ok() {
             ok "$description - Routed to default backend"
         fi
     else
-        # Just check for successful response
-        if echo "$response" | grep -q "\"http\":"; then
+        # Just check for successful response (avoid pipe to grep -q which causes SIGPIPE)
+        if [[ "$response" == *'"http":'* ]]; then
             ok "$description - Response OK"
         else
             err "$description - Invalid response"
             echo "  Received: ${response:0:500}"
+            [[ -n "$last_error" ]] && echo "  Last error: $last_error (after $max_retries attempts)"
             return 1
         fi
     fi
@@ -161,7 +189,7 @@ assert_weighted_distribution() {
         local response
         response=$(curl -s --max-time 5 -H "Host: $host" "${BASE_URL}/" 2>&1)
 
-        if echo "$response" | grep -q '"ENVIRONMENT":"v2"'; then
+        if [[ "$response" == *'"ENVIRONMENT":"v2"'* ]]; then
             count_v2=$((count_v2 + 1))
         else
             count_default=$((count_default + 1))
@@ -218,7 +246,7 @@ assert_auth_success() {
         return 1
     fi
 
-    if echo "$response" | grep -q "\"http\":"; then
+    if [[ "$response" == *'"http":'* ]]; then
         ok "$description - Auth successful with $username:$password"
     else
         err "$description - Auth failed"
@@ -289,7 +317,7 @@ assert_header_value() {
 
     debug "  Actual value: $actual_value"
 
-    if echo "$actual_value" | grep -qF "$expected_value"; then
+    if [[ "$actual_value" == *"$expected_value"* ]]; then
         ok "$description - Header value matches"
     else
         err "$description - Header value mismatch. Expected: '$expected_value', Got: '$actual_value'"
@@ -469,8 +497,8 @@ assert_path_rewrite() {
     fi
 
     # Check that the echo server received the expected path
-    # The echo server returns the path in the "originalUrl" field
-    if echo "$response" | grep -q "\"originalUrl\":\"${expected_path}\""; then
+    # The echo server returns the path in the "originalUrl" field (avoid pipe to grep -q which causes SIGPIPE)
+    if [[ "$response" == *"\"originalUrl\":\"${expected_path}\""* ]]; then
         ok "$description - Path rewritten correctly"
     else
         local actual_path=$(echo "$response" | grep -o '"originalUrl":"[^"]*"' | cut -d'"' -f4)
@@ -547,7 +575,20 @@ wait_for_services_ready() {
         debug "Echo-server-v2 pods not found (skipping)"
     fi
 
-    # Step 3.5: Wait for Ingress resources to exist
+    # Step 4: Check for haproxy-demo-backend pods (SSL/PROXY protocol backends)
+    debug "Checking haproxy-demo-backend pod readiness..."
+    if kubectl -n echo get pods -l app=haproxy-demo-backend >/dev/null 2>&1; then
+        if ! kubectl -n echo wait --for=condition=ready pod \
+            -l app=haproxy-demo-backend --timeout=120s >/dev/null 2>&1; then
+            warn "haproxy-demo-backend pods exist but are not ready (continuing anyway)"
+        else
+            ok "haproxy-demo-backend pods are ready"
+        fi
+    else
+        debug "haproxy-demo-backend pods not found (skipping)"
+    fi
+
+    # Step 5: Wait for Ingress resources to exist
     log INFO "Waiting for Ingress resources to be created..."
     local ingress_attempts=30  # 60 seconds
     local attempt=1
@@ -581,7 +622,7 @@ wait_for_services_ready() {
     fi
     ok "Ingress resources created"
 
-    # Step 3.6: Wait for service endpoints to be populated
+    # Step 6: Wait for service endpoints to be populated
     # We check this BEFORE configuration reconciliation because backends need endpoints
     log INFO "Waiting for service endpoints to be populated..."
     local endpoint_attempts=30
@@ -617,7 +658,7 @@ wait_for_services_ready() {
     fi
     ok "Service endpoints populated"
 
-    # Step 3.7: Wait for controller to reconcile with backends
+    # Step 7: Wait for controller to reconcile with backends
     # Now that endpoints exist, wait for HAProxyCfg that includes backends
     log INFO "Waiting for HAProxy configuration with backends..."
     local config_attempts=30  # 60 seconds
@@ -698,8 +739,8 @@ wait_for_services_ready() {
 
         local response
         if response=$(curl -s --max-time 5 -H "Host: echo.localdev.me" "${BASE_URL}/" 2>&1); then
-            # Check that response contains valid JSON with expected structure
-            if echo "$response" | grep -q "\"http\":"; then
+            # Check that response contains valid JSON with expected structure (avoid pipe to grep -q which causes SIGPIPE)
+            if [[ "$response" == *'"http":'* ]]; then
                 debug "Services responding with valid JSON"
                 http_ready=true
                 break
@@ -757,6 +798,45 @@ should_test() {
     else
         true
     fi
+}
+
+# Wait for HTTPRoute/Gateway backends to be deployed
+# This is called before HTTPRoute tests to ensure Gateway API resources are reconciled
+wait_for_httproute_backends() {
+    log INFO "Waiting for HTTPRoute backends to be deployed..."
+
+    local config_attempts=30  # 60 seconds
+    local attempt=1
+    local backends_deployed=false
+
+    while [[ $attempt -le $config_attempts ]]; do
+        # Check if HAProxyCfg contains Gateway/HTTPRoute backends (prefixed with gtw_)
+        local gtw_backend_count=$(kubectl -n haproxy-template-ic get haproxycfg -o json 2>/dev/null | \
+            jq -r '.items[0].spec.content // ""' | grep -c "^backend gtw_" 2>/dev/null || echo 0)
+
+        debug "HTTPRoute backend count: $gtw_backend_count (attempt $attempt/$config_attempts)"
+
+        if [[ $gtw_backend_count -gt 0 ]]; then
+            backends_deployed=true
+            break
+        fi
+
+        if [[ $attempt -lt $config_attempts ]]; then
+            sleep 2
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    if [[ "$backends_deployed" == "true" ]]; then
+        ok "HTTPRoute backends deployed ($gtw_backend_count backends)"
+    else
+        warn "HTTPRoute backends not found in config (tests may fail)"
+    fi
+
+    # Additional wait for HAProxy to reload with new config
+    # This helps with flakiness when config was just deployed
+    sleep 2
 }
 
 #═══════════════════════════════════════════════════════════════════════════
@@ -1119,7 +1199,7 @@ test_ingress_backend_snippet() {
     local response
     response=$(curl -s --max-time 5 -H "Host: echo-backend-snippet.localdev.me" "${BASE_URL}/api/test" 2>&1)
 
-    if echo "$response" | grep -q "\"http\":"; then
+    if [[ "$response" == *'"http":'* ]]; then
         ok "Backend snippet routing works (/api path)"
     else
         err "Backend snippet test failed"
@@ -1151,7 +1231,7 @@ test_ingress_ssl_redirect() {
     local location
     location=$(curl -s -I --max-time 5 -H "Host: echo-ssl-redirect.localdev.me" "${BASE_URL}/" 2>&1 | grep -i "^location:" | tr -d '\r')
 
-    if echo "$location" | grep -q "https://"; then
+    if [[ "$location" == *"https://"* ]]; then
         ok "Location header uses https://"
     else
         err "Location header should use https://"
@@ -1237,7 +1317,7 @@ test_ingress_scale_slots() {
         local backend_config
         backend_config=$(kubectl --context "kind-${CLUSTER_NAME}" -n haproxy-template-ic exec "$haproxy_pod" -c haproxy -- cat /etc/haproxy/haproxy.cfg 2>/dev/null | grep -A 20 "backend.*echo-scale-slots")
 
-        if echo "$backend_config" | grep -q "server-template\|scale-server-slots"; then
+        if [[ "$backend_config" == *"server-template"* ]] || [[ "$backend_config" == *"scale-server-slots"* ]]; then
             ok "Server slot pre-allocation configured in HAProxy"
         else
             debug "Could not verify scale-server-slots in HAProxy config"
@@ -1267,8 +1347,8 @@ test_ingress_ssl_passthrough() {
         return 1
     fi
 
-    # Check that response contains valid JSON with expected structure
-    if echo "$response" | grep -q "\"http\":"; then
+    # Check that response contains valid JSON with expected structure (avoid pipe to grep -q which causes SIGPIPE)
+    if [[ "$response" == *'"http":'* ]]; then
         ok "SSL passthrough - Encrypted traffic passed through to backend"
     else
         err "SSL passthrough - Invalid response"
@@ -1294,8 +1374,8 @@ test_ingress_tls() {
         return 1
     fi
 
-    # Check that response contains valid JSON with expected structure
-    if echo "$response" | grep -q "\"http\":"; then
+    # Check that response contains valid JSON with expected structure (avoid pipe to grep -q which causes SIGPIPE)
+    if [[ "$response" == *'"http":'* ]]; then
         ok "TLS termination - HTTPS request successful"
     else
         err "TLS termination - Invalid response"
@@ -1321,7 +1401,7 @@ test_ingress_tls_multi() {
         return 1
     fi
 
-    if echo "$response1" | grep -q "\"http\":"; then
+    if [[ "$response1" == *'"http":'* ]]; then
         ok "Multi-host TLS - Primary hostname works"
     else
         err "Multi-host TLS - Primary host invalid response"
@@ -1335,7 +1415,7 @@ test_ingress_tls_multi() {
         return 1
     fi
 
-    if echo "$response2" | grep -q "\"http\":"; then
+    if [[ "$response2" == *'"http":'* ]]; then
         ok "Multi-host TLS - Alternate hostname works"
     else
         err "Multi-host TLS - Alternate host invalid response"
@@ -1359,24 +1439,24 @@ test_ingress_tls_combined() {
         return 1
     fi
 
-    # Check for HSTS header
-    if echo "$headers" | grep -qi "Strict-Transport-Security:"; then
+    # Check for HSTS header (case-insensitive using bash lowercase conversion)
+    if [[ "${headers,,}" == *"strict-transport-security:"* ]]; then
         ok "TLS combined - HSTS header present"
     else
         err "TLS combined - HSTS header missing"
         return 1
     fi
 
-    # Check for X-Frame-Options header
-    if echo "$headers" | grep -qi "X-Frame-Options:.*DENY"; then
+    # Check for X-Frame-Options header (case-insensitive)
+    if [[ "${headers,,}" == *"x-frame-options:"*"deny"* ]]; then
         ok "TLS combined - X-Frame-Options header present"
     else
         err "TLS combined - X-Frame-Options header missing"
         return 1
     fi
 
-    # Check for X-Content-Type-Options header
-    if echo "$headers" | grep -qi "X-Content-Type-Options:.*nosniff"; then
+    # Check for X-Content-Type-Options header (case-insensitive)
+    if [[ "${headers,,}" == *"x-content-type-options:"*"nosniff"* ]]; then
         ok "TLS combined - X-Content-Type-Options header present"
     else
         err "TLS combined - X-Content-Type-Options header missing"
@@ -1631,8 +1711,8 @@ test_gateway_tls_terminate() {
         return 1
     fi
 
-    # Check that response contains valid JSON with expected structure
-    if echo "$response" | grep -q "\"http\":"; then
+    # Check that response contains valid JSON with expected structure (avoid pipe to grep -q which causes SIGPIPE)
+    if [[ "$response" == *'"http":'* ]]; then
         ok "Gateway TLS Terminate - HTTPS request successful"
     else
         err "Gateway TLS Terminate - Invalid response"
@@ -1727,6 +1807,7 @@ main() {
 
     # Run HTTPRoute tests
     if [[ "$INGRESS_ONLY" != "true" ]]; then
+        wait_for_httproute_backends
         test_httproute_basic
         test_httproute_paths
         test_httproute_methods
