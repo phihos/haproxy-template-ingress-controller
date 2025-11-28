@@ -112,7 +112,8 @@ assert_response_ok() {
     debug "  Extra args: ${extra_args[*]}"
 
     # Retry logic for flaky CI environments
-    local max_retries=3
+    # Use 5 retries to handle slow backend initialization (503 errors)
+    local max_retries=5
     local retry_delay=2
     local attempt=1
     local response=""
@@ -120,8 +121,12 @@ assert_response_ok() {
 
     while [[ $attempt -le $max_retries ]]; do
         if response=$(curl -s --max-time 5 -H "Host: $host" "${extra_args[@]}" "${BASE_URL}${path}" 2>&1); then
+            # Check if backend is not ready yet (503 Service Unavailable)
+            if [[ "$response" == *"503 Service Unavailable"* ]]; then
+                last_error="Backend not ready (503)"
+                debug "  Attempt $attempt/$max_retries: $last_error"
             # Check if we got a valid response
-            if echo "$response" | grep -q "\"http\":"; then
+            elif echo "$response" | grep -q "\"http\":"; then
                 break  # Success, exit retry loop
             else
                 last_error="Invalid response (empty or malformed)"
