@@ -9,8 +9,11 @@ import (
 	"net/http"
 
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v30ee "haproxy-template-ic/pkg/generated/dataplaneapi/v30ee"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v31ee "haproxy-template-ic/pkg/generated/dataplaneapi/v31ee"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // SanitizeSSLCertName sanitizes a certificate name for HAProxy Data Plane API storage.
@@ -28,9 +31,12 @@ func SanitizeSSLCertName(name string) string {
 // Works with all HAProxy DataPlane API versions (v3.0+).
 func (c *DataplaneClient) GetAllSSLCertificates(ctx context.Context) ([]string, error) {
 	resp, err := c.Dispatch(ctx, CallFunc[*http.Response]{
-		V32: func(c *v32.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
-		V31: func(c *v31.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
-		V30: func(c *v30.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+		V32:   func(c *v32.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+		V31:   func(c *v31.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+		V30:   func(c *v30.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+		V32EE: func(c *v32ee.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+		V31EE: func(c *v31ee.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
+		V30EE: func(c *v30ee.Client) (*http.Response, error) { return c.GetAllStorageSSLCertificates(ctx) },
 	})
 
 	if err != nil {
@@ -92,6 +98,15 @@ func (c *DataplaneClient) GetSSLCertificateContent(ctx context.Context, name str
 		V32: func(c *v32.Client) (*http.Response, error) { return c.GetOneStorageSSLCertificate(ctx, sanitizedName) },
 		V31: func(c *v31.Client) (*http.Response, error) { return c.GetOneStorageSSLCertificate(ctx, sanitizedName) },
 		V30: func(c *v30.Client) (*http.Response, error) { return c.GetOneStorageSSLCertificate(ctx, sanitizedName) },
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.GetOneStorageSSLCertificate(ctx, sanitizedName)
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.GetOneStorageSSLCertificate(ctx, sanitizedName)
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
+			return c.GetOneStorageSSLCertificate(ctx, sanitizedName)
+		},
 	})
 
 	if err != nil {
@@ -180,6 +195,15 @@ func (c *DataplaneClient) CreateSSLCertificate(ctx context.Context, name, conten
 		V30: func(c *v30.Client) (*http.Response, error) {
 			return c.CreateStorageSSLCertificateWithBody(ctx, nil, contentType, body)
 		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.CreateStorageSSLCertificateWithBody(ctx, nil, contentType, body)
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.CreateStorageSSLCertificateWithBody(ctx, nil, contentType, body)
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
+			return c.CreateStorageSSLCertificateWithBody(ctx, nil, contentType, body)
+		},
 	})
 
 	if err != nil {
@@ -211,6 +235,15 @@ func (c *DataplaneClient) UpdateSSLCertificate(ctx context.Context, name, conten
 		V30: func(c *v30.Client) (*http.Response, error) {
 			return c.ReplaceStorageSSLCertificateWithBody(ctx, sanitizedName, nil, "text/plain", body)
 		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.ReplaceStorageSSLCertificateWithBody(ctx, sanitizedName, nil, "text/plain", body)
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.ReplaceStorageSSLCertificateWithBody(ctx, sanitizedName, nil, "text/plain", body)
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
+			return c.ReplaceStorageSSLCertificateWithBody(ctx, sanitizedName, nil, "text/plain", body)
+		},
 	})
 
 	if err != nil {
@@ -237,6 +270,15 @@ func (c *DataplaneClient) DeleteSSLCertificate(ctx context.Context, name string)
 			return c.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
 		},
 		V30: func(c *v30.Client) (*http.Response, error) {
+			return c.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
+		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
 			return c.DeleteStorageSSLCertificate(ctx, sanitizedName, nil)
 		},
 	})

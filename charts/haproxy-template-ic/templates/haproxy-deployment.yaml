@@ -26,17 +26,29 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.haproxy.podSecurityContext }}
       securityContext:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+        runAsNonRoot: true
+        runAsUser: {{ include "haproxy-template-ic.haproxy.runAsUser" . }}
+        runAsGroup: {{ include "haproxy-template-ic.haproxy.runAsGroup" . }}
+        fsGroup: {{ include "haproxy-template-ic.haproxy.fsGroup" . }}
+        {{- with .Values.haproxy.podSecurityContext.seccompProfile }}
+        seccompProfile:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
       containers:
         # HAProxy container
         - name: haproxy
-          {{- with .Values.haproxy.securityContext }}
           securityContext:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              {{- if .Values.haproxy.enterprise.enabled }}
+              # Enterprise binaries have file capabilities requiring NET_BIND_SERVICE
+              # PSS Restricted profile allows this capability
+              add: [NET_BIND_SERVICE]
+              {{- end }}
+            runAsNonRoot: true
+            runAsUser: {{ include "haproxy-template-ic.haproxy.runAsUser" . }}
           image: {{ include "haproxy-template-ic.haproxy.image" . }}
           imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
           command: ["/bin/sh", "-c"]
@@ -44,13 +56,14 @@ spec:
             - |
               # Create required directories
               mkdir -p /etc/haproxy/maps /etc/haproxy/certs /etc/haproxy/errors /etc/haproxy/general
-              chown -R haproxy:haproxy /etc/haproxy || true
+              # Use UIDs for chown (user/group names differ between Community and Enterprise)
+              chown -R {{ include "haproxy-template-ic.haproxy.runAsUser" . }}:{{ include "haproxy-template-ic.haproxy.runAsGroup" . }} /etc/haproxy || true
 
               # Copy initial config
               cp /config/haproxy.cfg /etc/haproxy/haproxy.cfg
 
               # Start HAProxy in master-worker mode with master socket
-              exec haproxy -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
+              exec {{ include "haproxy-template-ic.haproxy.bin" . }} -W -db -S "/etc/haproxy/haproxy-master.sock,level,admin" -- /etc/haproxy/haproxy.cfg
           ports:
             - name: http
               containerPort: {{ .Values.haproxy.ports.http }}
@@ -83,10 +96,18 @@ spec:
 
         # Dataplane API sidecar
         - name: dataplane
-          {{- with .Values.haproxy.dataplaneSidecarSecurityContext }}
           securityContext:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              {{- if .Values.haproxy.enterprise.enabled }}
+              # Enterprise: dataplaneapi calls HAProxy binary which has file capabilities
+              # PSS Restricted profile allows this capability
+              add: [NET_BIND_SERVICE]
+              {{- end }}
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: {{ include "haproxy-template-ic.haproxy.dataplaneRunAsUser" . }}
           image: {{ include "haproxy-template-ic.haproxy.image" . }}
           imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
           command: ["/bin/sh", "-c"]
@@ -124,7 +145,7 @@ spec:
                   general_storage_dir: /etc/haproxy/general
               haproxy:
                 config_file: /etc/haproxy/haproxy.cfg
-                haproxy_bin: /usr/local/sbin/haproxy
+                haproxy_bin: {{ include "haproxy-template-ic.haproxy.bin" . }}
                 master_worker_mode: true
                 master_runtime: /etc/haproxy/haproxy-master.sock
                 reload:
@@ -141,7 +162,7 @@ spec:
               EOF
 
               # Start Dataplane API
-              exec dataplaneapi -f /etc/haproxy/dataplaneapi.yaml
+              exec {{ include "haproxy-template-ic.haproxy.dataplanebin" . }} -f /etc/haproxy/dataplaneapi.yaml
           ports:
             - name: dataplane
               containerPort: {{ .Values.haproxy.ports.dataplane }}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // sanitizeCRTListName sanitizes a crt-list file name for HAProxy Data Plane API storage.
@@ -29,7 +30,8 @@ func unsanitizeCRTListName(name string) string {
 // CRT-list storage is only available in HAProxy DataPlane API v3.2+.
 func (c *DataplaneClient) GetAllCRTListFiles(ctx context.Context) ([]string, error) {
 	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
-		V32: func(c *v32.Client) (*http.Response, error) { return c.GetAllStorageSSLCrtListFiles(ctx) },
+		V32:   func(c *v32.Client) (*http.Response, error) { return c.GetAllStorageSSLCrtListFiles(ctx) },
+		V32EE: func(c *v32ee.Client) (*http.Response, error) { return c.GetAllStorageSSLCrtListFiles(ctx) },
 	}, func(caps Capabilities) error {
 		if !caps.SupportsCrtList {
 			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
@@ -80,6 +82,9 @@ func (c *DataplaneClient) GetCRTListFileContent(ctx context.Context, name string
 
 	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
 		V32: func(c *v32.Client) (*http.Response, error) { return c.GetOneStorageSSLCrtListFile(ctx, sanitizedName) },
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.GetOneStorageSSLCrtListFile(ctx, sanitizedName)
+		},
 	}, func(caps Capabilities) error {
 		if !caps.SupportsCrtList {
 			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
@@ -117,6 +122,9 @@ func (c *DataplaneClient) CreateCRTListFile(ctx context.Context, name, content s
 		V32: func(c *v32.Client) (*http.Response, error) {
 			return c.CreateStorageSSLCrtListFileWithBody(ctx, &v32.CreateStorageSSLCrtListFileParams{}, contentType, body)
 		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.CreateStorageSSLCrtListFileWithBody(ctx, &v32ee.CreateStorageSSLCrtListFileParams{}, contentType, body)
+		},
 	}, func(caps Capabilities) error {
 		if !caps.SupportsCrtList {
 			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
@@ -149,6 +157,9 @@ func (c *DataplaneClient) UpdateCRTListFile(ctx context.Context, name, content s
 		V32: func(c *v32.Client) (*http.Response, error) {
 			return c.ReplaceStorageSSLCrtListFileWithBody(ctx, sanitizedName, &v32.ReplaceStorageSSLCrtListFileParams{}, "text/plain", body)
 		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.ReplaceStorageSSLCrtListFileWithBody(ctx, sanitizedName, &v32ee.ReplaceStorageSSLCrtListFileParams{}, "text/plain", body)
+		},
 	}, func(caps Capabilities) error {
 		if !caps.SupportsCrtList {
 			return fmt.Errorf("crt-list storage requires DataPlane API v3.2+")
@@ -175,6 +186,9 @@ func (c *DataplaneClient) DeleteCRTListFile(ctx context.Context, name string) er
 	resp, err := c.DispatchWithCapability(ctx, CallFunc[*http.Response]{
 		V32: func(c *v32.Client) (*http.Response, error) {
 			return c.DeleteStorageSSLCrtListFile(ctx, sanitizedName, &v32.DeleteStorageSSLCrtListFileParams{})
+		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.DeleteStorageSSLCrtListFile(ctx, sanitizedName, &v32ee.DeleteStorageSSLCrtListFileParams{})
 		},
 	}, func(caps Capabilities) error {
 		if !caps.SupportsCrtList {

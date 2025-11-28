@@ -10,8 +10,11 @@ import (
 	"sync"
 
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v30ee "haproxy-template-ic/pkg/generated/dataplaneapi/v30ee"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v31ee "haproxy-template-ic/pkg/generated/dataplaneapi/v31ee"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // Transaction represents an HAProxy Dataplane API transaction.
@@ -76,6 +79,15 @@ func (c *DataplaneClient) CreateTransaction(ctx context.Context, version int64) 
 		},
 		V30: func(c *v30.Client) (*http.Response, error) {
 			return c.StartTransaction(ctx, &v30.StartTransactionParams{Version: int(version)})
+		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.StartTransaction(ctx, &v32ee.StartTransactionParams{Version: int(version)})
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.StartTransaction(ctx, &v31ee.StartTransactionParams{Version: int(version)})
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
+			return c.StartTransaction(ctx, &v30ee.StartTransactionParams{Version: int(version)})
 		},
 	})
 
@@ -183,6 +195,15 @@ func (tx *Transaction) Commit(ctx context.Context) (*CommitResult, error) {
 		V30: func(c *v30.Client) (*http.Response, error) {
 			return c.CommitTransaction(ctx, tx.ID, &v30.CommitTransactionParams{ForceReload: &forceReload})
 		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.CommitTransaction(ctx, tx.ID, &v32ee.CommitTransactionParams{ForceReload: &forceReload})
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.CommitTransaction(ctx, tx.ID, &v31ee.CommitTransactionParams{ForceReload: &forceReload})
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
+			return c.CommitTransaction(ctx, tx.ID, &v30ee.CommitTransactionParams{ForceReload: &forceReload})
+		},
 	})
 
 	if err != nil {
@@ -261,9 +282,12 @@ func (tx *Transaction) Abort(ctx context.Context) error {
 
 	// Perform actual abort
 	resp, err := tx.client.Dispatch(ctx, CallFunc[*http.Response]{
-		V32: func(c *v32.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
-		V31: func(c *v31.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
-		V30: func(c *v30.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+		V32:   func(c *v32.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+		V31:   func(c *v31.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+		V30:   func(c *v30.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+		V32EE: func(c *v32ee.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+		V31EE: func(c *v31ee.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
+		V30EE: func(c *v30ee.Client) (*http.Response, error) { return c.DeleteTransaction(ctx, tx.ID) },
 	})
 
 	if err != nil {

@@ -16,6 +16,7 @@ ECHO_IMAGE="ealen/echo-server:latest"
 LOCAL_IMAGE="haproxy-template-ic:dev"
 HELM_RELEASE_NAME="haproxy-template-ic"
 HAPROXY_VERSION="${HAPROXY_VERSION:-3.2}"
+HAPROXY_ENTERPRISE="${HAPROXY_ENTERPRISE:-false}"
 TIMEOUT="180"
 SKIP_BUILD=false
 SKIP_ECHO=false
@@ -41,6 +42,26 @@ ok() { echo -e "${GREEN}✔${NC} $*"; }
 warn() { echo -e "${YELLOW}⚠${NC} $*"; }
 err() { echo -e "${RED}✖${NC} $*"; }
 debug() { [[ "$VERBOSE" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $*" || true; }
+
+# Compute HAProxy image settings based on enterprise mode
+compute_haproxy_image() {
+    if [[ "$HAPROXY_ENTERPRISE" == "true" ]]; then
+        HAPROXY_REPO="hapee-registry.haproxy.com/haproxy-enterprise"
+        # Map community version to enterprise version format (X.YrZ)
+        case "$HAPROXY_VERSION" in
+            3.0*) HAPROXY_TAG="3.0r1"; HAPROXY_ENTERPRISE_VERSION="3.0" ;;
+            3.1*) HAPROXY_TAG="3.1r1"; HAPROXY_ENTERPRISE_VERSION="3.1" ;;
+            3.2*) HAPROXY_TAG="3.2r1"; HAPROXY_ENTERPRISE_VERSION="3.2" ;;
+            *)    HAPROXY_TAG="$HAPROXY_VERSION"; HAPROXY_ENTERPRISE_VERSION="$HAPROXY_VERSION" ;;
+        esac
+        debug "Using HAProxy Enterprise: ${HAPROXY_REPO}:${HAPROXY_TAG}"
+    else
+        HAPROXY_REPO="haproxytech/haproxy-debian"
+        HAPROXY_TAG="$HAPROXY_VERSION"
+        HAPROXY_ENTERPRISE_VERSION=""
+        debug "Using HAProxy Community: ${HAPROXY_REPO}:${HAPROXY_TAG}"
+    fi
+}
 
 print_section() {
     echo
@@ -119,6 +140,9 @@ OPTIONS:
 ENVIRONMENT VARIABLES:
     HAPROXY_VERSION         HAProxy version for production pods (default: 3.2)
                             Supported: 3.0, 3.1, 3.2, 3.3-dev
+    HAPROXY_ENTERPRISE      Use HAProxy Enterprise instead of Community (default: false)
+                            Enterprise versions: 3.0r1, 3.1r1, 3.2r1
+                            Registry: hapee-registry.haproxy.com/haproxy-enterprise
 
 EXAMPLES:
     $0                      # Start dev environment with defaults
@@ -134,6 +158,8 @@ EXAMPLES:
     $0 down                 # Delete cluster
     $0 restart --verbose    # Restart with debug output
     HAPROXY_VERSION=3.0 $0  # Use HAProxy 3.0 instead of default 3.2
+    HAPROXY_ENTERPRISE=true $0          # Use HAProxy Enterprise 3.2r1
+    HAPROXY_ENTERPRISE=true HAPROXY_VERSION=3.0 $0  # Use HAProxy Enterprise 3.0r1
 
 EOF
 }
@@ -630,6 +656,7 @@ deploy_controller() {
 
     log INFO "Deploying haproxy-template-ic to namespace '${CTRL_NAMESPACE}' using Helm..."
     log INFO "Using image tag: ${IMAGE_TAG}"
+    log INFO "Using HAProxy: ${HAPROXY_REPO}:${HAPROXY_TAG}"
 
     # Build Helm command with webhook CA bundle if provided
     local helm_args=(
@@ -638,11 +665,20 @@ deploy_controller() {
         "--namespace" "${CTRL_NAMESPACE}"
         "--values" "${ASSETS_DIR}/dev-values.yaml"
         "--set" "image.tag=${IMAGE_TAG}"
-        "--set" "haproxy.image.tag=${HAPROXY_VERSION}"
+        "--set" "haproxy.image.repository=${HAPROXY_REPO}"
+        "--set" "haproxy.image.tag=${HAPROXY_TAG}"
         # Note: --wait is removed because readiness probes are disabled in dev mode
         # We use kubectl rollout status instead to wait for pods
         "--timeout" "${TIMEOUT}s"
     )
+
+    # Add Enterprise settings if using Enterprise HAProxy
+    # Note: UIDs are automatically derived by the Helm chart based on enterprise.enabled
+    if [[ "$HAPROXY_ENTERPRISE" == "true" ]]; then
+        helm_args+=("--set" "haproxy.enterprise.enabled=true")
+        helm_args+=("--set" "haproxy.enterprise.version=${HAPROXY_ENTERPRISE_VERSION}")
+        debug "Added Enterprise Helm values"
+    fi
 
     # Add webhook CA bundle if set
     if [[ -n "${WEBHOOK_CA_BUNDLE:-}" ]]; then
@@ -674,13 +710,52 @@ deploy_controller() {
     ok "Controller deployed and ready."
 }
 
+load_haproxy_enterprise_image() {
+    # Only needed for Enterprise images which require authenticated registry
+    if [[ "$HAPROXY_ENTERPRISE" != "true" ]]; then
+        debug "Using Community HAProxy - no pre-loading needed"
+        return 0
+    fi
+
+    local image="${HAPROXY_REPO}:${HAPROXY_TAG}"
+    log INFO "Pre-loading HAProxy Enterprise image into kind cluster..."
+
+    # Check if image is already in the kind cluster
+    if docker exec "${CLUSTER_NAME}-control-plane" crictl images 2>/dev/null | grep -q "${HAPROXY_REPO}.*${HAPROXY_TAG}"; then
+        ok "HAProxy Enterprise image already present in cluster"
+        return 0
+    fi
+
+    # Pull the image locally (requires docker login to hapee-registry.haproxy.com)
+    log INFO "Pulling ${image} from registry..."
+    if ! docker pull "${image}" 2>&1; then
+        err "Failed to pull ${image}"
+        warn "Ensure you are logged in to the HAProxy Enterprise registry:"
+        echo "  docker login hapee-registry.haproxy.com"
+        return 1
+    fi
+    ok "Image pulled successfully"
+
+    # Load into kind cluster
+    run_with_spinner "Loading ${image} into kind cluster" \
+        kind load docker-image "${image}" --name "${CLUSTER_NAME}" || {
+        err "Failed to load image into kind cluster"
+        return 1
+    }
+
+    ok "HAProxy Enterprise image loaded into cluster"
+}
+
 deploy_haproxy() {
     print_section "🔧 Verifying HAProxy Deployment"
 
-    # HAProxy is now deployed via Helm chart alongside controller
-    # Nothing to deploy here - already handled by deploy_controller()
+    # Pre-load Enterprise image if needed (Community images are pulled directly)
+    load_haproxy_enterprise_image || {
+        err "Failed to load HAProxy Enterprise image"
+        return 1
+    }
 
-    log INFO "Waiting for HAProxy deployment to become ready (version ${HAPROXY_VERSION})..."
+    log INFO "Waiting for HAProxy deployment to become ready (${HAPROXY_REPO}:${HAPROXY_TAG})..."
     if ! kubectl -n "${CTRL_NAMESPACE}" rollout status deployment/${HELM_RELEASE_NAME}-haproxy --timeout="${TIMEOUT}s"; then
         warn "HAProxy deployment rollout did not complete in ${TIMEOUT}s."
         echo "  - Check HAProxy deployment: kubectl -n ${CTRL_NAMESPACE} describe deploy/${HELM_RELEASE_NAME}-haproxy"
@@ -886,10 +961,20 @@ dev_restart() {
         "--create-namespace"
         "--values" "${ASSETS_DIR}/dev-values.yaml"
         "--set" "image.tag=${IMAGE_TAG}"
+        "--set" "haproxy.image.repository=${HAPROXY_REPO}"
+        "--set" "haproxy.image.tag=${HAPROXY_TAG}"
         "--wait"
         "--timeout" "${TIMEOUT}s"
         "--reset-values"
     )
+
+    # Add Enterprise settings if using Enterprise HAProxy
+    # Note: UIDs are automatically derived by the Helm chart based on enterprise.enabled
+    if [[ "$HAPROXY_ENTERPRISE" == "true" ]]; then
+        helm_args+=("--set" "haproxy.enterprise.enabled=true")
+        helm_args+=("--set" "haproxy.enterprise.version=${HAPROXY_ENTERPRISE_VERSION}")
+        debug "Added Enterprise Helm values"
+    fi
 
     # Add webhook CA bundle if set
     if [[ -n "${WEBHOOK_CA_BUNDLE:-}" ]]; then
@@ -901,6 +986,7 @@ dev_restart() {
     # Using --install makes this idempotent (works even if release doesn't exist)
     # Override image.tag with unique SHA-based tag to force pod restart
     log INFO "Upgrading Helm release with image tag: ${IMAGE_TAG}..."
+    log INFO "Using HAProxy: ${HAPROXY_REPO}:${HAPROXY_TAG}"
     helm upgrade --install "${helm_args[@]}" || {
         warn "Helm upgrade failed, rolling back..."
         helm rollback "${HELM_RELEASE_NAME}" -n "${CTRL_NAMESPACE}" 2>/dev/null || true
@@ -1408,6 +1494,7 @@ dev_up() {
 
 main() {
     parse_args "$@"
+    compute_haproxy_image
 
     case "$COMMAND" in
         up)

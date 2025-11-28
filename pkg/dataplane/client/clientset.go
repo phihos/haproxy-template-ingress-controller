@@ -408,8 +408,13 @@ func buildCapabilities(_, minor int) Capabilities {
 //   - "v3.2.6 87ad0bcf" -> false (community version format)
 //   - "HAProxy Enterprise 3.0r1" -> true (contains "Enterprise")
 //
-// enterpriseVersionPattern matches enterprise version format: X.YrZ (e.g., 3.0r1, v3.1r1).
-var enterpriseVersionPattern = regexp.MustCompile(`^v?\d+\.\d+r\d+`)
+// enterpriseHAProxyVersionPattern matches enterprise HAProxy version format: X.YrZ (e.g., 3.0r1, v3.1r1).
+// This is used for detecting enterprise from HAProxy binary version strings.
+var enterpriseHAProxyVersionPattern = regexp.MustCompile(`^v?\d+\.\d+r\d+`)
+
+// enterpriseDataPlaneAPIPattern matches enterprise DataPlane API version format: vX.Y.Z-eeN (e.g., v3.0.15-ee1).
+// This is used for detecting enterprise from DataPlane API version strings.
+var enterpriseDataPlaneAPIPattern = regexp.MustCompile(`-ee\d+`)
 
 func IsEnterpriseVersion(version string) bool {
 	// Check for "Enterprise" keyword (case-insensitive)
@@ -417,12 +422,19 @@ func IsEnterpriseVersion(version string) bool {
 		return true
 	}
 
-	// Check for enterprise version format: X.YrZ (e.g., 3.0r1, 3.1r1)
+	// Check for DataPlane API enterprise suffix: -eeN (e.g., v3.0.15-ee1)
+	// This is the most reliable indicator from the DataPlane API /v3/info endpoint
+	if enterpriseDataPlaneAPIPattern.MatchString(version) {
+		return true
+	}
+
+	// Check for HAProxy enterprise version format: X.YrZ (e.g., 3.0r1, 3.1r1)
 	// This pattern matches versions like "v3.0r1", "3.1r1", "v3.2r1"
+	// Used for HAProxy binary version strings
 	versionPart := strings.Fields(version)
 	if len(versionPart) == 0 {
 		return false
 	}
 
-	return enterpriseVersionPattern.MatchString(versionPart[0])
+	return enterpriseHAProxyVersionPattern.MatchString(versionPart[0])
 }
