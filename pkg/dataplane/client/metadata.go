@@ -14,6 +14,8 @@
 
 package client
 
+import "encoding/json"
+
 // ConvertClientMetadataToAPI converts client-native flat metadata to Dataplane API nested format.
 //
 // The client-native library uses a flat map structure for metadata:
@@ -66,4 +68,34 @@ func ConvertAPIMetadataToClient(apiMetadata map[string]map[string]interface{}) m
 	}
 
 	return flat
+}
+
+// TransformClientMetadataInJSON converts metadata within a JSON object from
+// client-native flat format to API nested format.
+//
+// This is used when converting client-native models to version-specific API models
+// via JSON marshal/unmarshal. The metadata field format differs between the two:
+//
+// Input (client-native):
+//
+//	{"metadata": {"comment": "string value"}, ...}
+//
+// Output (API format):
+//
+//	{"metadata": {"comment": {"value": "string value"}}, ...}
+//
+// If the JSON doesn't contain a metadata field, or the metadata is not in the
+// expected format, the original JSON is returned unchanged.
+func TransformClientMetadataInJSON(jsonData []byte) ([]byte, error) {
+	var obj map[string]interface{}
+	if err := json.Unmarshal(jsonData, &obj); err != nil {
+		return nil, err
+	}
+
+	// Check if metadata field exists and needs transformation
+	if metadata, ok := obj["metadata"].(map[string]interface{}); ok {
+		obj["metadata"] = ConvertClientMetadataToAPI(metadata)
+	}
+
+	return json.Marshal(obj)
 }

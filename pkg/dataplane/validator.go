@@ -26,6 +26,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/haproxytech/client-native/v6/models"
 
+	"haproxy-template-ic/pkg/dataplane/client"
 	"haproxy-template-ic/pkg/dataplane/parser"
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
@@ -38,160 +39,36 @@ import (
 var haproxyCheckMutex sync.Mutex
 
 // =============================================================================
-// Version-aware Model Conversion
+// Version-aware Model Conversion (using centralized client converters)
 // =============================================================================
 
-// versionedConverter holds version-specific unmarshal functions for a model type.
-// This enables converting client-native models to version-specific API models
-// before validation against the OpenAPI schema.
-type versionedConverter struct {
-	v32 func([]byte) (interface{}, error)
-	v31 func([]byte) (interface{}, error)
-	v30 func([]byte) (interface{}, error)
+// versionMinor extracts the minor version from a Version pointer.
+// Returns 0 (v3.0) if version is nil, which is the safest default.
+func versionMinor(version *Version) int {
+	if version == nil {
+		return 0
+	}
+	return version.Minor
 }
 
-// convert unmarshals JSON into the appropriate version-specific API type.
-func (vc versionedConverter) convert(version *Version, jsonData []byte) (interface{}, error) {
-	switch {
-	case version != nil && version.Minor >= 2:
-		return vc.v32(jsonData)
-	case version != nil && version.Minor >= 1:
-		return vc.v31(jsonData)
-	default:
-		return vc.v30(jsonData)
+// validateModel validates a client-native model against the OpenAPI schema.
+// Uses generic type parameters for type-safe version conversion.
+// This uses the centralized conversion functions from pkg/dataplane/client.
+func validateModel[TV32, TV31, TV30 any](spec *openapi3.T, version *Version, schemaName string, model interface{}) error {
+	// Use centralized marshal + metadata transformation
+	jsonData, err := client.MarshalForVersion(model)
+	if err != nil {
+		return err
 	}
-}
 
-// Converters for each model type validated against the OpenAPI schema.
-// These convert client-native models to version-specific API models.
-var (
-	serverConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.Server; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.Server; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.Server; return &m, json.Unmarshal(data, &m) },
+	// Use centralized generic conversion
+	apiModel, err := client.ConvertToVersioned[TV32, TV31, TV30](jsonData, versionMinor(version))
+	if err != nil {
+		return fmt.Errorf("failed to convert to API model: %w", err)
 	}
-	serverTemplateConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.ServerTemplate; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.ServerTemplate; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.ServerTemplate; return &m, json.Unmarshal(data, &m) },
-	}
-	bindConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.Bind; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.Bind; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.Bind; return &m, json.Unmarshal(data, &m) },
-	}
-	aclConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.Acl; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.Acl; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.Acl; return &m, json.Unmarshal(data, &m) },
-	}
-	filterConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.Filter; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.Filter; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.Filter; return &m, json.Unmarshal(data, &m) },
-	}
-	logTargetConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.LogTarget; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.LogTarget; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.LogTarget; return &m, json.Unmarshal(data, &m) },
-	}
-	captureConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.Capture; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.Capture; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.Capture; return &m, json.Unmarshal(data, &m) },
-	}
-	httpRequestRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.HttpRequestRule; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.HttpRequestRule; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.HttpRequestRule; return &m, json.Unmarshal(data, &m) },
-	}
-	httpResponseRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) {
-			var m v32.HttpResponseRule
-			return &m, json.Unmarshal(data, &m)
-		},
-		v31: func(data []byte) (interface{}, error) {
-			var m v31.HttpResponseRule
-			return &m, json.Unmarshal(data, &m)
-		},
-		v30: func(data []byte) (interface{}, error) {
-			var m v30.HttpResponseRule
-			return &m, json.Unmarshal(data, &m)
-		},
-	}
-	httpAfterResponseRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) {
-			var m v32.HttpAfterResponseRule
-			return &m, json.Unmarshal(data, &m)
-		},
-		v31: func(data []byte) (interface{}, error) {
-			var m v31.HttpAfterResponseRule
-			return &m, json.Unmarshal(data, &m)
-		},
-		v30: func(data []byte) (interface{}, error) {
-			var m v30.HttpAfterResponseRule
-			return &m, json.Unmarshal(data, &m)
-		},
-	}
-	httpErrorRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.HttpErrorRule; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.HttpErrorRule; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.HttpErrorRule; return &m, json.Unmarshal(data, &m) },
-	}
-	tcpRequestRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.TcpRequestRule; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.TcpRequestRule; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.TcpRequestRule; return &m, json.Unmarshal(data, &m) },
-	}
-	tcpResponseRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.TcpResponseRule; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.TcpResponseRule; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.TcpResponseRule; return &m, json.Unmarshal(data, &m) },
-	}
-	httpCheckConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.HttpCheck; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.HttpCheck; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.HttpCheck; return &m, json.Unmarshal(data, &m) },
-	}
-	tcpCheckConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.TcpCheck; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.TcpCheck; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.TcpCheck; return &m, json.Unmarshal(data, &m) },
-	}
-	backendSwitchingRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) {
-			var m v32.BackendSwitchingRule
-			return &m, json.Unmarshal(data, &m)
-		},
-		v31: func(data []byte) (interface{}, error) {
-			var m v31.BackendSwitchingRule
-			return &m, json.Unmarshal(data, &m)
-		},
-		v30: func(data []byte) (interface{}, error) {
-			var m v30.BackendSwitchingRule
-			return &m, json.Unmarshal(data, &m)
-		},
-	}
-	serverSwitchingRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) {
-			var m v32.ServerSwitchingRule
-			return &m, json.Unmarshal(data, &m)
-		},
-		v31: func(data []byte) (interface{}, error) {
-			var m v31.ServerSwitchingRule
-			return &m, json.Unmarshal(data, &m)
-		},
-		v30: func(data []byte) (interface{}, error) {
-			var m v30.ServerSwitchingRule
-			return &m, json.Unmarshal(data, &m)
-		},
-	}
-	stickRuleConverter = versionedConverter{
-		v32: func(data []byte) (interface{}, error) { var m v32.StickRule; return &m, json.Unmarshal(data, &m) },
-		v31: func(data []byte) (interface{}, error) { var m v31.StickRule; return &m, json.Unmarshal(data, &m) },
-		v30: func(data []byte) (interface{}, error) { var m v30.StickRule; return &m, json.Unmarshal(data, &m) },
-	}
-)
+
+	return validateAgainstSchema(spec, schemaName, apiModel)
+}
 
 // ValidationPaths holds the filesystem paths for HAProxy validation.
 // These paths must match the HAProxy Dataplane API server's resource configuration.
@@ -353,11 +230,12 @@ func validateFrontendSections(spec *openapi3.T, version *Version, frontends []*m
 	return errors
 }
 
-// validateRuleSlice validates a slice of rules using the provided converter.
-func validateRuleSlice[T any](spec *openapi3.T, version *Version, schemaName string, converter versionedConverter, parentName, ruleType string, rules []T) []string {
+// validateRuleSlice validates a slice of rules using generic type parameters.
+// TV32, TV31, TV30 are the version-specific API types for the rule.
+func validateRuleSlice[T any, TV32, TV31, TV30 any](spec *openapi3.T, version *Version, schemaName, parentName, ruleType string, rules []T) []string {
 	var errors []string
 	for idx, rule := range rules {
-		if err := validateModelVersioned(spec, version, schemaName, converter, rule); err != nil {
+		if err := validateModel[TV32, TV31, TV30](spec, version, schemaName, rule); err != nil {
 			errors = append(errors, fmt.Sprintf("%s, %s %d: %v", parentName, ruleType, idx, err))
 		}
 	}
@@ -369,13 +247,13 @@ func validateBackendServers(spec *openapi3.T, version *Version, backend *models.
 	var errors []string
 	for serverName := range backend.Servers {
 		server := backend.Servers[serverName]
-		if err := validateModelVersioned(spec, version, "server", serverConverter, &server); err != nil {
+		if err := validateModel[v32.Server, v31.Server, v30.Server](spec, version, "server", &server); err != nil {
 			errors = append(errors, fmt.Sprintf("backend %s, server %s: %v", backend.Name, serverName, err))
 		}
 	}
 	for templateName := range backend.ServerTemplates {
 		template := backend.ServerTemplates[templateName]
-		if err := validateModelVersioned(spec, version, "server_template", serverTemplateConverter, &template); err != nil {
+		if err := validateModel[v32.ServerTemplate, v31.ServerTemplate, v30.ServerTemplate](spec, version, "server_template", &template); err != nil {
 			errors = append(errors, fmt.Sprintf("backend %s, server template %s: %v", backend.Name, templateName, err))
 		}
 	}
@@ -387,14 +265,14 @@ func validateBackendRules(spec *openapi3.T, version *Version, backend *models.Ba
 	var errors []string
 	name := "backend " + backend.Name
 
-	errors = append(errors, validateRuleSlice(spec, version, "http_request_rule", httpRequestRuleConverter, name, "http-request rule", backend.HTTPRequestRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "http_response_rule", httpResponseRuleConverter, name, "http-response rule", backend.HTTPResponseRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "tcp_request_rule", tcpRequestRuleConverter, name, "tcp-request rule", backend.TCPRequestRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "tcp_response_rule", tcpResponseRuleConverter, name, "tcp-response rule", backend.TCPResponseRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "http_after_response_rule", httpAfterResponseRuleConverter, name, "http-after-response rule", backend.HTTPAfterResponseRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "http_error_rule", httpErrorRuleConverter, name, "http-error rule", backend.HTTPErrorRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "server_switching_rule", serverSwitchingRuleConverter, name, "server switching rule", backend.ServerSwitchingRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "stick_rule", stickRuleConverter, name, "stick rule", backend.StickRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPRequestRule, v32.HttpRequestRule, v31.HttpRequestRule, v30.HttpRequestRule](spec, version, "http_request_rule", name, "http-request rule", backend.HTTPRequestRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPResponseRule, v32.HttpResponseRule, v31.HttpResponseRule, v30.HttpResponseRule](spec, version, "http_response_rule", name, "http-response rule", backend.HTTPResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.TCPRequestRule, v32.TcpRequestRule, v31.TcpRequestRule, v30.TcpRequestRule](spec, version, "tcp_request_rule", name, "tcp-request rule", backend.TCPRequestRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.TCPResponseRule, v32.TcpResponseRule, v31.TcpResponseRule, v30.TcpResponseRule](spec, version, "tcp_response_rule", name, "tcp-response rule", backend.TCPResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPAfterResponseRule, v32.HttpAfterResponseRule, v31.HttpAfterResponseRule, v30.HttpAfterResponseRule](spec, version, "http_after_response_rule", name, "http-after-response rule", backend.HTTPAfterResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPErrorRule, v32.HttpErrorRule, v31.HttpErrorRule, v30.HttpErrorRule](spec, version, "http_error_rule", name, "http-error rule", backend.HTTPErrorRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.ServerSwitchingRule, v32.ServerSwitchingRule, v31.ServerSwitchingRule, v30.ServerSwitchingRule](spec, version, "server_switching_rule", name, "server switching rule", backend.ServerSwitchingRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.StickRule, v32.StickRule, v31.StickRule, v30.StickRule](spec, version, "stick_rule", name, "stick rule", backend.StickRuleList)...)
 
 	errors = append(errors, validateACLList(spec, version, name, backend.ACLList)...)
 	errors = append(errors, validateFilterList(spec, version, name, backend.FilterList)...)
@@ -407,8 +285,8 @@ func validateBackendChecks(spec *openapi3.T, version *Version, backend *models.B
 	var errors []string
 	name := "backend " + backend.Name
 
-	errors = append(errors, validateRuleSlice(spec, version, "http_check", httpCheckConverter, name, "http-check", backend.HTTPCheckList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "tcp_check", tcpCheckConverter, name, "tcp-check", backend.TCPCheckRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPCheck, v32.HttpCheck, v31.HttpCheck, v30.HttpCheck](spec, version, "http_check", name, "http-check", backend.HTTPCheckList)...)
+	errors = append(errors, validateRuleSlice[*models.TCPCheck, v32.TcpCheck, v31.TcpCheck, v30.TcpCheck](spec, version, "tcp_check", name, "tcp-check", backend.TCPCheckRuleList)...)
 	return errors
 }
 
@@ -417,7 +295,7 @@ func validateFrontendBinds(spec *openapi3.T, version *Version, frontend *models.
 	var errors []string
 	for bindName := range frontend.Binds {
 		bind := frontend.Binds[bindName]
-		if err := validateModelVersioned(spec, version, "bind", bindConverter, &bind); err != nil {
+		if err := validateModel[v32.Bind, v31.Bind, v30.Bind](spec, version, "bind", &bind); err != nil {
 			errors = append(errors, fmt.Sprintf("frontend %s, bind %s: %v", frontend.Name, bindName, err))
 		}
 	}
@@ -429,12 +307,12 @@ func validateFrontendRules(spec *openapi3.T, version *Version, frontend *models.
 	var errors []string
 	name := "frontend " + frontend.Name
 
-	errors = append(errors, validateRuleSlice(spec, version, "http_request_rule", httpRequestRuleConverter, name, "http-request rule", frontend.HTTPRequestRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "http_response_rule", httpResponseRuleConverter, name, "http-response rule", frontend.HTTPResponseRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "tcp_request_rule", tcpRequestRuleConverter, name, "tcp-request rule", frontend.TCPRequestRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "http_after_response_rule", httpAfterResponseRuleConverter, name, "http-after-response rule", frontend.HTTPAfterResponseRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "http_error_rule", httpErrorRuleConverter, name, "http-error rule", frontend.HTTPErrorRuleList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "backend_switching_rule", backendSwitchingRuleConverter, name, "backend switching rule", frontend.BackendSwitchingRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPRequestRule, v32.HttpRequestRule, v31.HttpRequestRule, v30.HttpRequestRule](spec, version, "http_request_rule", name, "http-request rule", frontend.HTTPRequestRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPResponseRule, v32.HttpResponseRule, v31.HttpResponseRule, v30.HttpResponseRule](spec, version, "http_response_rule", name, "http-response rule", frontend.HTTPResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.TCPRequestRule, v32.TcpRequestRule, v31.TcpRequestRule, v30.TcpRequestRule](spec, version, "tcp_request_rule", name, "tcp-request rule", frontend.TCPRequestRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPAfterResponseRule, v32.HttpAfterResponseRule, v31.HttpAfterResponseRule, v30.HttpAfterResponseRule](spec, version, "http_after_response_rule", name, "http-after-response rule", frontend.HTTPAfterResponseRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.HTTPErrorRule, v32.HttpErrorRule, v31.HttpErrorRule, v30.HttpErrorRule](spec, version, "http_error_rule", name, "http-error rule", frontend.HTTPErrorRuleList)...)
+	errors = append(errors, validateRuleSlice[*models.BackendSwitchingRule, v32.BackendSwitchingRule, v31.BackendSwitchingRule, v30.BackendSwitchingRule](spec, version, "backend_switching_rule", name, "backend switching rule", frontend.BackendSwitchingRuleList)...)
 
 	errors = append(errors, validateACLList(spec, version, name, frontend.ACLList)...)
 	return errors
@@ -447,7 +325,7 @@ func validateFrontendElements(spec *openapi3.T, version *Version, frontend *mode
 
 	errors = append(errors, validateFilterList(spec, version, name, frontend.FilterList)...)
 	errors = append(errors, validateLogTargetList(spec, version, name, frontend.LogTargetList)...)
-	errors = append(errors, validateRuleSlice(spec, version, "capture", captureConverter, name, "capture", frontend.CaptureList)...)
+	errors = append(errors, validateRuleSlice[*models.Capture, v32.Capture, v31.Capture, v30.Capture](spec, version, "capture", name, "capture", frontend.CaptureList)...)
 	return errors
 }
 
@@ -455,7 +333,7 @@ func validateFrontendElements(spec *openapi3.T, version *Version, frontend *mode
 func validateACLList(spec *openapi3.T, version *Version, parentName string, aclList []*models.ACL) []string {
 	var errors []string
 	for idx, acl := range aclList {
-		if err := validateModelVersioned(spec, version, "acl", aclConverter, acl); err != nil {
+		if err := validateModel[v32.Acl, v31.Acl, v30.Acl](spec, version, "acl", acl); err != nil {
 			errors = append(errors, fmt.Sprintf("%s, ACL %d: %v", parentName, idx, err))
 		}
 	}
@@ -466,7 +344,7 @@ func validateACLList(spec *openapi3.T, version *Version, parentName string, aclL
 func validateFilterList(spec *openapi3.T, version *Version, parentName string, filterList []*models.Filter) []string {
 	var errors []string
 	for idx, filter := range filterList {
-		if err := validateModelVersioned(spec, version, "filter", filterConverter, filter); err != nil {
+		if err := validateModel[v32.Filter, v31.Filter, v30.Filter](spec, version, "filter", filter); err != nil {
 			errors = append(errors, fmt.Sprintf("%s, filter %d: %v", parentName, idx, err))
 		}
 	}
@@ -477,7 +355,7 @@ func validateFilterList(spec *openapi3.T, version *Version, parentName string, f
 func validateLogTargetList(spec *openapi3.T, version *Version, parentName string, logTargetList []*models.LogTarget) []string {
 	var errors []string
 	for idx, logTarget := range logTargetList {
-		if err := validateModelVersioned(spec, version, "log_target", logTargetConverter, logTarget); err != nil {
+		if err := validateModel[v32.LogTarget, v31.LogTarget, v30.LogTarget](spec, version, "log_target", logTarget); err != nil {
 			errors = append(errors, fmt.Sprintf("%s, log target %d: %v", parentName, idx, err))
 		}
 	}
@@ -621,25 +499,6 @@ func deduplicateRequired(required []string) []string {
 	}
 
 	return unique
-}
-
-// validateModelVersioned converts a client-native model to the version-specific
-// API model and validates it against the OpenAPI schema.
-func validateModelVersioned(spec *openapi3.T, version *Version, schemaName string, converter versionedConverter, model interface{}) error {
-	// Marshal client-native model to JSON
-	jsonData, err := json.Marshal(model)
-	if err != nil {
-		return fmt.Errorf("failed to marshal model: %w", err)
-	}
-
-	// Convert to version-specific API model
-	apiModel, err := converter.convert(version, jsonData)
-	if err != nil {
-		return fmt.Errorf("failed to convert to API model: %w", err)
-	}
-
-	// Validate API model against schema
-	return validateAgainstSchema(spec, schemaName, apiModel)
 }
 
 // validateAgainstSchema validates a model against an OpenAPI schema.

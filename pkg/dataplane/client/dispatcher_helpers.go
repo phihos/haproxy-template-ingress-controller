@@ -63,10 +63,10 @@ func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any](
 	v31Call func(TV31) (*http.Response, error),
 	v30Call func(TV30) (*http.Response, error),
 ) (*http.Response, error) {
-	// Marshal unified model to JSON once
-	jsonData, err := json.Marshal(unifiedModel)
+	// Marshal unified model to JSON with metadata transformation
+	jsonData, err := MarshalForVersion(unifiedModel)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal model: %w", err)
+		return nil, err
 	}
 
 	// Dispatch to version-specific client with automatic unmarshaling
@@ -126,10 +126,10 @@ func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any](
 	v31Call func(string, TV31) (*http.Response, error),
 	v30Call func(string, TV30) (*http.Response, error),
 ) (*http.Response, error) {
-	// Marshal unified model to JSON once
-	jsonData, err := json.Marshal(unifiedModel)
+	// Marshal unified model to JSON with metadata transformation
+	jsonData, err := MarshalForVersion(unifiedModel)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal model: %w", err)
+		return nil, err
 	}
 
 	// Dispatch to version-specific client with automatic unmarshaling
@@ -233,10 +233,10 @@ func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any](
 	v31Call func(string, int, TV31) (*http.Response, error),
 	v30Call func(string, int, TV30) (*http.Response, error),
 ) (*http.Response, error) {
-	// Marshal unified model to JSON once
-	jsonData, err := json.Marshal(unifiedModel)
+	// Marshal unified model to JSON with metadata transformation
+	jsonData, err := MarshalForVersion(unifiedModel)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal model: %w", err)
+		return nil, err
 	}
 
 	// Dispatch to version-specific client with automatic unmarshaling
@@ -297,10 +297,10 @@ func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any](
 	v31Call func(string, int, TV31) (*http.Response, error),
 	v30Call func(string, int, TV30) (*http.Response, error),
 ) (*http.Response, error) {
-	// Marshal unified model to JSON once
-	jsonData, err := json.Marshal(unifiedModel)
+	// Marshal unified model to JSON with metadata transformation
+	jsonData, err := MarshalForVersion(unifiedModel)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal model: %w", err)
+		return nil, err
 	}
 
 	// Dispatch to version-specific client with automatic unmarshaling
