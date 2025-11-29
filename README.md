@@ -312,8 +312,8 @@ For complete documentation on writing and running validation tests, see [docs/va
 ### User Guides
 
 - [Getting Started](docs/getting-started.md) - Step-by-step guide to deploying and configuring the controller
-- [Configuration Reference](docs/configuration.md) - Complete configuration syntax and field descriptions
-- [CRD Reference](docs/crd-reference.md) - HAProxyTemplateConfig custom resource documentation
+- [CRD Reference](docs/crd-reference.md) - HAProxyTemplateConfig custom resource documentation (recommended)
+- [Configuration Reference](docs/configuration.md) - Legacy ConfigMap configuration (deprecated)
 - [Templating Guide](docs/templating.md) - How to write templates for HAProxy configuration, maps, and certificates
 - [Validation Tests](docs/validation-tests.md) - Write and run embedded validation tests for template verification
 - [Watching Resources](docs/watching-resources.md) - Resource watching and storage strategies
@@ -323,6 +323,10 @@ For complete documentation on writing and running validation tests, see [docs/va
 ### Operations
 
 - [High Availability](docs/operations/high-availability.md) - Leader election and multi-replica deployments
+- [Monitoring](docs/operations/monitoring.md) - Prometheus metrics and alerting
+- [Debugging](docs/operations/debugging.md) - Runtime introspection and troubleshooting
+- [Security](docs/operations/security.md) - RBAC, secrets, and security best practices
+- [Performance](docs/operations/performance.md) - Resource sizing and optimization
 - [Helm Chart](charts/haproxy-template-ic/README.md) - Installation and configuration guide
 
 ### Package Documentation

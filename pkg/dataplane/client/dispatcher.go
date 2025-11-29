@@ -13,6 +13,10 @@ import (
 	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
+// ErrEnterpriseRequired is returned when an enterprise-only operation is attempted
+// on a HAProxy Community edition instance.
+var ErrEnterpriseRequired = fmt.Errorf("this operation requires HAProxy Enterprise edition")
+
 // CallFunc represents a versioned API call function.
 // Each field is a function that takes a version-specific client and returns a result of type T.
 // This allows type-safe dispatch to the appropriate client version based on runtime detection.
@@ -237,5 +241,137 @@ func DispatchGeneric[T any](
 	default:
 		var zero T
 		return zero, fmt.Errorf("unexpected client type: %T", client)
+	}
+}
+
+// EnterpriseCallFunc represents versioned API call functions for enterprise-only endpoints.
+// Unlike CallFunc, this only includes enterprise edition clients since these endpoints
+// are not available in HAProxy Community edition.
+//
+// Example usage for WAF profile management:
+//
+//	resp, err := c.DispatchEnterpriseOnly(ctx, EnterpriseCallFunc[*http.Response]{
+//	    V32EE: func(c *v32ee.Client) (*http.Response, error) {
+//	        return c.GetWafProfiles(ctx, &v32ee.GetWafProfilesParams{})
+//	    },
+//	    V31EE: func(c *v31ee.Client) (*http.Response, error) {
+//	        return c.GetWafProfiles(ctx, &v31ee.GetWafProfilesParams{})
+//	    },
+//	    V30EE: func(c *v30ee.Client) (*http.Response, error) {
+//	        return c.GetWafProfiles(ctx, &v30ee.GetWafProfilesParams{})
+//	    },
+//	})
+type EnterpriseCallFunc[T any] struct {
+	// V32EE is the function to call for HAProxy Enterprise DataPlane API v3.2+
+	V32EE func(*v32ee.Client) (T, error)
+
+	// V31EE is the function to call for HAProxy Enterprise DataPlane API v3.1
+	V31EE func(*v31ee.Client) (T, error)
+
+	// V30EE is the function to call for HAProxy Enterprise DataPlane API v3.0
+	V30EE func(*v30ee.Client) (T, error)
+}
+
+// DispatchEnterpriseOnly executes the appropriate versioned function for enterprise-only endpoints.
+// Returns ErrEnterpriseRequired if connected to HAProxy Community edition.
+//
+// Use this for enterprise-exclusive features like:
+//   - WAF management (waf_profiles, waf_body_rules, waf/rulesets)
+//   - Bot management (botmgmt_profiles, captchas)
+//   - UDP load balancing (udp_lbs)
+//   - Keepalived/VRRP (vrrp_instances, vrrp_sync_groups)
+//   - Advanced logging (logs/config, logs/inputs, logs/outputs)
+//   - Git integration (git/settings, git/actions)
+//   - Dynamic updates (dynamic_update_rules)
+//   - ALOHA features (aloha/actions)
+//
+// Example:
+//
+//	resp, err := c.DispatchEnterpriseOnly(ctx, EnterpriseCallFunc[*http.Response]{
+//	    V32EE: func(c *v32ee.Client) (*http.Response, error) {
+//	        return c.GetWafProfiles(ctx, &v32ee.GetWafProfilesParams{TransactionId: &txID})
+//	    },
+//	    V31EE: func(c *v31ee.Client) (*http.Response, error) {
+//	        return c.GetWafProfiles(ctx, &v31ee.GetWafProfilesParams{TransactionId: &txID})
+//	    },
+//	    V30EE: func(c *v30ee.Client) (*http.Response, error) {
+//	        return c.GetWafProfiles(ctx, &v30ee.GetWafProfilesParams{TransactionId: &txID})
+//	    },
+//	})
+func (c *DataplaneClient) DispatchEnterpriseOnly(
+	ctx context.Context,
+	call EnterpriseCallFunc[*http.Response],
+) (*http.Response, error) {
+	// Check if connected to enterprise edition
+	if !c.clientset.IsEnterprise() {
+		return nil, ErrEnterpriseRequired
+	}
+
+	// Route to appropriate enterprise version
+	switch c.clientset.MinorVersion() {
+	case 2:
+		if call.V32EE == nil {
+			return nil, fmt.Errorf("operation not supported by HAProxy Enterprise DataPlane API v3.2 (v3.2ee function is nil)")
+		}
+		return call.V32EE(c.clientset.V32EE())
+	case 1:
+		if call.V31EE == nil {
+			return nil, fmt.Errorf("operation not supported by HAProxy Enterprise DataPlane API v3.1 (v3.1ee function is nil)")
+		}
+		return call.V31EE(c.clientset.V31EE())
+	default:
+		if call.V30EE == nil {
+			return nil, fmt.Errorf("operation not supported by HAProxy Enterprise DataPlane API v3.0 (v3.0ee function is nil)")
+		}
+		return call.V30EE(c.clientset.V30EE())
+	}
+}
+
+// DispatchEnterpriseOnlyGeneric is a generic version of DispatchEnterpriseOnly for non-HTTP response types.
+// Use this when the return type is not *http.Response (e.g., for parsed data, structs, etc.).
+//
+// Example (returning parsed WAF profile list):
+//
+//	profiles, err := DispatchEnterpriseOnlyGeneric[[]WafProfile](ctx, c.clientset, EnterpriseCallFunc[[]WafProfile]{
+//	    V32EE: func(c *v32ee.Client) ([]WafProfile, error) {
+//	        resp, err := c.GetWafProfiles(ctx, &v32ee.GetWafProfilesParams{})
+//	        if err != nil {
+//	            return nil, err
+//	        }
+//	        defer resp.Body.Close()
+//	        // ... parse profiles from response ...
+//	        return profiles, nil
+//	    },
+//	    // ... similar for V31EE and V30EE ...
+//	})
+func DispatchEnterpriseOnlyGeneric[T any](
+	ctx context.Context,
+	clientset *Clientset,
+	call EnterpriseCallFunc[T],
+) (T, error) {
+	var zero T
+
+	// Check if connected to enterprise edition
+	if !clientset.IsEnterprise() {
+		return zero, ErrEnterpriseRequired
+	}
+
+	// Route to appropriate enterprise version
+	switch clientset.MinorVersion() {
+	case 2:
+		if call.V32EE == nil {
+			return zero, fmt.Errorf("operation not supported by HAProxy Enterprise DataPlane API v3.2 (v3.2ee function is nil)")
+		}
+		return call.V32EE(clientset.V32EE())
+	case 1:
+		if call.V31EE == nil {
+			return zero, fmt.Errorf("operation not supported by HAProxy Enterprise DataPlane API v3.1 (v3.1ee function is nil)")
+		}
+		return call.V31EE(clientset.V31EE())
+	default:
+		if call.V30EE == nil {
+			return zero, fmt.Errorf("operation not supported by HAProxy Enterprise DataPlane API v3.0 (v3.0ee function is nil)")
+		}
+		return call.V30EE(clientset.V30EE())
 	}
 }

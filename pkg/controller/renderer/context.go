@@ -39,6 +39,12 @@ import (
 //	  "config": Config,  // Controller configuration (e.g., config.debug.headers.enabled)
 //	  "file_registry": FileRegistry,  // For dynamic auxiliary file registration
 //	  "pathResolver": PathResolver,  // For resolving file paths (e.g., {{ pathResolver.GetPath("cert.pem", "cert") }})
+//	  "capabilities": {  // HAProxy/DataPlane API capabilities
+//	    "supports_waf": true,           // WAF (Enterprise only)
+//	    "supports_keepalived": true,    // Keepalived/VRRP (Enterprise only)
+//	    "supports_crt_list": true,      // CRT-list storage (v3.2+)
+//	    // ... other capability flags
+//	  },
 //	}
 //
 // Templates can access resources:
@@ -76,6 +82,13 @@ import (
 // And resolve static file paths:
 //
 //	use_backend {{ backend_name }} if { req.hdr(host) -f {{ pathResolver.GetPath("host.map", "map") }} }
+//
+// And conditionally generate Enterprise-specific configuration:
+//
+//	{%- if capabilities.supports_waf %}
+//	  # Enterprise WAF configuration
+//	  filter spoe engine modsecurity
+//	{%- endif %}
 func (c *Component) buildRenderingContext(pathResolver *templating.PathResolver) (map[string]interface{}, *FileRegistry) {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
@@ -122,7 +135,8 @@ func (c *Component) buildRenderingContext(pathResolver *templating.PathResolver)
 		"template_snippets": snippetNames,
 		"file_registry":     fileRegistry,
 		"pathResolver":      pathResolver,
-		"dataplane":         c.config.Dataplane, // Add dataplane config for absolute path access
+		"dataplane":         c.config.Dataplane,    // Add dataplane config for absolute path access
+		"capabilities":      c.capabilitiesToMap(), // Add HAProxy/DataPlane API capabilities
 	}
 
 	// Merge extraContext variables into top-level context
@@ -185,5 +199,56 @@ func MergeExtraContextInto(context map[string]interface{}, cfg *config.Config) {
 		for key, value := range cfg.TemplatingSettings.ExtraContext {
 			context[key] = value
 		}
+	}
+}
+
+// capabilitiesToMap converts the Capabilities struct to a template-friendly map.
+//
+// The map uses snake_case keys matching the Capabilities struct field names
+// (e.g., "supports_waf" for SupportsWAF) for consistency with template conventions.
+//
+// This enables conditional template generation based on HAProxy/DataPlane API features:
+//
+//	{%- if capabilities.supports_waf %}
+//	  # Enterprise WAF configuration
+//	  filter spoe engine modsecurity
+//	{%- endif %}
+//
+//	{%- if capabilities.supports_crt_list %}
+//	  # Use CRT-list for SSL certificates (v3.2+)
+//	{%- endif %}
+func (c *Component) capabilitiesToMap() map[string]interface{} {
+	caps := c.capabilities
+	return map[string]interface{}{
+		// Storage capabilities
+		"supports_crt_list":        caps.SupportsCrtList,
+		"supports_map_storage":     caps.SupportsMapStorage,
+		"supports_general_storage": caps.SupportsGeneralStorage,
+
+		// Configuration capabilities
+		"supports_http2": caps.SupportsHTTP2,
+		"supports_quic":  caps.SupportsQUIC,
+
+		// Runtime capabilities
+		"supports_runtime_maps":    caps.SupportsRuntimeMaps,
+		"supports_runtime_servers": caps.SupportsRuntimeServers,
+
+		// Enterprise-only capabilities
+		"supports_waf":                     caps.SupportsWAF,
+		"supports_waf_global":              caps.SupportsWAFGlobal,
+		"supports_waf_profiles":            caps.SupportsWAFProfiles,
+		"supports_udp_lb_acls":             caps.SupportsUDPLBACLs,
+		"supports_udp_lb_server_switching": caps.SupportsUDPLBServerSwitchingRules,
+		"supports_keepalived":              caps.SupportsKeepalived,
+		"supports_udp_load_balancing":      caps.SupportsUDPLoadBalancing,
+		"supports_bot_management":          caps.SupportsBotManagement,
+		"supports_git_integration":         caps.SupportsGitIntegration,
+		"supports_dynamic_update":          caps.SupportsDynamicUpdate,
+		"supports_aloha":                   caps.SupportsALOHA,
+		"supports_advanced_logging":        caps.SupportsAdvancedLogging,
+		"supports_ping":                    caps.SupportsPing,
+
+		// Edition detection (convenience flags)
+		"is_enterprise": caps.SupportsWAF, // Any enterprise capability indicates Enterprise edition
 	}
 }
