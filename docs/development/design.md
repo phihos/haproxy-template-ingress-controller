@@ -30,7 +30,7 @@ The design documentation is organized into focused documents:
 
 - **[Runtime Introspection](design/introspection.md)** - Debug HTTP endpoints for runtime state inspection, event history tracking, and integration with acceptance testing
 
-- **[Configuration](design/configuration.md)** - User interface design showing how you configure the controller through ConfigMaps with complete examples
+- **[Configuration](design/configuration.md)** - User interface design showing how you configure the controller through HAProxyTemplateConfig CRD
 
 - **[Appendices](design/appendices.md)** - Definitions, abbreviations, and external references
 
@@ -69,9 +69,20 @@ Pure business logic components (templating, k8s, dataplane) have no event depend
 
 ## See Also
 
+### User Guides
 - [Templating Guide](../templating.md) - User guide for writing templates
-- [Controller Package Documentation](../../pkg/controller/README.md) - Implementation details for the event-driven controller
-- [Template Engine Documentation](../../pkg/templating/README.md) - Template engine API reference
+- [CRD Reference](../crd-reference.md) - HAProxyTemplateConfig CRD documentation
+- [Supported Configuration Reference](../supported-configuration.md) - What HAProxy features you can configure
+
+### Operations
+- [High Availability](../operations/high-availability.md) - Leader election and HA deployments
+- [Monitoring](../operations/monitoring.md) - Prometheus metrics and alerting
+- [Debugging](../operations/debugging.md) - Runtime introspection and troubleshooting
+- [Security](../operations/security.md) - RBAC and security best practices
+- [Performance](../operations/performance.md) - Resource sizing and optimization
+
+### Package Documentation
+- [Controller Package](../../pkg/controller/README.md) - Event-driven controller implementation
+- [Template Engine](../../pkg/templating/README.md) - Template engine API reference
 - [Kubernetes Integration](../../pkg/k8s/README.md) - Resource watching and indexing API
 - [Dataplane Integration](../../pkg/dataplane/README.md) - HAProxy configuration synchronization
-- [Supported Configuration Reference](../supported-configuration.md) - What HAProxy features you can configure

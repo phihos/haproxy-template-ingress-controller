@@ -2,10 +2,16 @@
 
 ## Overview
 
-The `HAProxyTemplateConfig` custom resource defines the controller's configuration using a Kubernetes-native API. It replaces the previous ConfigMap-based approach with better validation, type safety, and embedded testing capabilities.
+The `HAProxyTemplateConfig` custom resource is the **recommended way** to configure the HAProxy Template Ingress Controller. It provides a Kubernetes-native API with built-in validation, type safety, and embedded testing capabilities.
+
+**Benefits over ConfigMap:**
+- Schema validation catches errors before deployment
+- Status conditions provide feedback on configuration health
+- Native Kubernetes resource with proper RBAC
+- Better GitOps integration with declarative configuration
 
 **API Group**: `haproxy-template-ic.github.io`
-**API Version**: `v1alpha1` (pre-release)
+**API Version**: `v1alpha1`
 **Kind**: `HAProxyTemplateConfig`
 **Short Names**: `htplcfg`, `haptpl`
 

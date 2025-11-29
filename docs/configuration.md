@@ -1,10 +1,20 @@
 # Controller Configuration Reference
 
+!!! warning "Deprecated: Use HAProxyTemplateConfig CRD Instead"
+    This ConfigMap-based configuration approach is **deprecated**. For new deployments, use the [HAProxyTemplateConfig CRD](./crd-reference.md) which provides:
+
+    - Kubernetes-native configuration with validation
+    - Better integration with GitOps workflows
+    - Schema validation and type safety
+    - Status reporting and conditions
+
+    This documentation is maintained for reference only. Migrate existing deployments to the CRD approach.
+
 ## Overview
 
 The HAProxy Template Ingress Controller is configured using two Kubernetes resources:
 
-1. **ConfigMap** - Contains the controller configuration, templates, and HAProxy settings
+1. **ConfigMap** (deprecated) - Contains the controller configuration, templates, and HAProxy settings
 2. **Secret** - Contains credentials for the HAProxy Dataplane API
 
 The controller automatically watches these resources for changes and reloads configuration dynamically without requiring

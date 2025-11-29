@@ -141,6 +141,32 @@ Different API versions support different features. The client provides capabilit
 | Runtime maps | ✅ | ✅ | ✅ | `SupportsRuntimeMaps` |
 | Runtime servers | ✅ | ✅ | ✅ | `SupportsRuntimeServers` |
 
+#### Enterprise-Only Capabilities
+
+Enterprise editions have additional capabilities not available in Community:
+
+| Feature | v3.0ee | v3.1ee | v3.2ee | Capability Flag |
+|---------|--------|--------|--------|-----------------|
+| **WAF** |
+| WAF body rules, rulesets | ✅ | ✅ | ✅ | `SupportsWAF` |
+| WAF global config | ❌ | ❌ | ✅ | `SupportsWAFGlobal` |
+| WAF profiles | ❌ | ❌ | ✅ | `SupportsWAFProfiles` |
+| **Security** |
+| Bot management | ✅ | ✅ | ✅ | `SupportsBotManagement` |
+| **Load Balancing** |
+| UDP load balancing | ✅ | ✅ | ✅ | `SupportsUDPLoadBalancing` |
+| UDP LB ACLs | ❌ | ❌ | ✅ | `SupportsUDPLBACLs` |
+| UDP LB server switching | ❌ | ❌ | ✅ | `SupportsUDPLBServerSwitchingRules` |
+| **High Availability** |
+| Keepalived/VRRP | ✅ | ✅ | ✅ | `SupportsKeepalived` |
+| **Configuration** |
+| Dynamic updates | ✅ | ✅ | ✅ | `SupportsDynamicUpdate` |
+| Git integration | ✅ | ✅ | ✅ | `SupportsGitIntegration` |
+| Advanced logging | ✅ | ✅ | ✅ | `SupportsAdvancedLogging` |
+| ALOHA features | ✅ | ✅ | ✅ | `SupportsALOHA` |
+| **Miscellaneous** |
+| Ping endpoint | ❌ | ❌ | ✅ | `SupportsPing` |
+
 **Usage with DataPlane API Client:**
 
 ```go

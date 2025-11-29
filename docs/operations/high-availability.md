@@ -392,5 +392,8 @@ To migrate an existing single-replica deployment to HA:
 ## See Also
 
 - [Leader Election Design](../development/design/leader-election.md) - Architecture and implementation details
-- [Metrics Reference](../../pkg/controller/metrics/README.md) - Leader election metrics documentation
+- [Monitoring Guide](./monitoring.md) - Prometheus metrics and alerting
+- [Debugging Guide](./debugging.md) - Runtime introspection and troubleshooting
+- [Security Guide](./security.md) - RBAC and security best practices
+- [Performance Guide](./performance.md) - Resource sizing and optimization
 - [Troubleshooting Guide](../troubleshooting.md) - General troubleshooting

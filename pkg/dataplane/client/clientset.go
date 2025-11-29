@@ -65,6 +65,62 @@ type Capabilities struct {
 	// Runtime capabilities
 	SupportsRuntimeMaps    bool // Runtime map operations (v3.0+)
 	SupportsRuntimeServers bool // Runtime server operations (v3.0+)
+
+	// Enterprise-only capabilities (all false for Community edition)
+	// These are available in all Enterprise API versions (v3.0, v3.1, v3.2)
+
+	// SupportsWAF indicates WAF management endpoints are available.
+	// Includes: waf_body_rules (frontend/backend), waf/rulesets
+	// Note: waf_global and waf_profiles require v3.2+ (see SupportsWAFGlobal, SupportsWAFProfiles)
+	SupportsWAF bool
+
+	// SupportsWAFGlobal indicates WAF global configuration endpoint is available.
+	// Only available in HAProxy Enterprise v3.2+ (waf_global endpoint)
+	SupportsWAFGlobal bool
+
+	// SupportsWAFProfiles indicates WAF profile management endpoints are available.
+	// Only available in HAProxy Enterprise v3.2+ (waf_profiles endpoint)
+	SupportsWAFProfiles bool
+
+	// SupportsUDPLBACLs indicates UDP load balancer ACL endpoints are available.
+	// Only available in HAProxy Enterprise v3.2+ (udp_lbs/{name}/acls endpoint)
+	SupportsUDPLBACLs bool
+
+	// SupportsUDPLBServerSwitchingRules indicates UDP load balancer server switching rule endpoints are available.
+	// Only available in HAProxy Enterprise v3.2+ (udp_lbs/{name}/server_switching_rules endpoint)
+	SupportsUDPLBServerSwitchingRules bool
+
+	// SupportsKeepalived indicates Keepalived/VRRP management endpoints are available.
+	// Includes: vrrp_instances, vrrp_sync_groups, vrrp_track_scripts, keepalived transactions
+	SupportsKeepalived bool
+
+	// SupportsUDPLoadBalancing indicates UDP load balancer management endpoints are available.
+	// Includes: udp_lbs with ACLs, dgram_binds, log_targets, server_switching_rules
+	SupportsUDPLoadBalancing bool
+
+	// SupportsBotManagement indicates bot management endpoints are available.
+	// Includes: botmgmt_profiles, captchas
+	SupportsBotManagement bool
+
+	// SupportsGitIntegration indicates Git integration endpoints are available.
+	// Includes: git/settings, git/actions
+	SupportsGitIntegration bool
+
+	// SupportsDynamicUpdate indicates dynamic update endpoints are available.
+	// Includes: dynamic_update_rules, dynamic_update_section
+	SupportsDynamicUpdate bool
+
+	// SupportsALOHA indicates ALOHA feature endpoints are available.
+	// Includes: aloha, aloha/actions
+	SupportsALOHA bool
+
+	// SupportsAdvancedLogging indicates advanced logging endpoints are available.
+	// Includes: logs/config, logs/inputs, logs/outputs
+	SupportsAdvancedLogging bool
+
+	// SupportsPing indicates the ping endpoint is available.
+	// Only available in HAProxy Enterprise v3.2+ (/v3/ping endpoint)
+	SupportsPing bool
 }
 
 // VersionInfo contains detected version information from /v3/info endpoint.
@@ -151,8 +207,8 @@ func NewClientset(ctx context.Context, endpoint *Endpoint, logger *slog.Logger) 
 		return nil, fmt.Errorf("unsupported DataPlane API major version: %d (only v3.x is supported)", major)
 	}
 
-	// Build capabilities map based on detected version
-	capabilities := buildCapabilities(major, minor)
+	// Build capabilities map based on detected version and edition
+	capabilities := buildCapabilities(major, minor, isEnterprise)
 
 	// Create request editor for basic auth
 	authEditor := func(ctx context.Context, req *http.Request) error {
@@ -377,9 +433,9 @@ func ParseVersion(version string) (major, minor int, err error) {
 	return major, minor, nil
 }
 
-// buildCapabilities constructs a capability map based on version.
-// Thresholds verified against OpenAPI specs for v3.0, v3.1, v3.2.
-func buildCapabilities(_, minor int) Capabilities {
+// buildCapabilities constructs a capability map based on version and edition.
+// Thresholds verified against OpenAPI specs for v3.0, v3.1, v3.2 (both Community and Enterprise).
+func buildCapabilities(_, minor int, isEnterprise bool) Capabilities {
 	// Baseline: all v3.0+ features (verified against OpenAPI specs)
 	caps := Capabilities{
 		SupportsGeneralStorage: true,
@@ -390,9 +446,30 @@ func buildCapabilities(_, minor int) Capabilities {
 		SupportsRuntimeServers: true,
 	}
 
-	// v3.2+ features
+	// v3.2+ features (community)
 	if minor >= 2 {
 		caps.SupportsCrtList = true // Only v3.2+ has /storage/ssl_crt_lists
+	}
+
+	// Enterprise-only features (available in all enterprise versions)
+	if isEnterprise {
+		caps.SupportsWAF = true // waf_body_rules, waf/rulesets available in all EE versions
+		caps.SupportsKeepalived = true
+		caps.SupportsUDPLoadBalancing = true
+		caps.SupportsBotManagement = true
+		caps.SupportsGitIntegration = true
+		caps.SupportsDynamicUpdate = true
+		caps.SupportsALOHA = true
+		caps.SupportsAdvancedLogging = true
+
+		// v3.2+ enterprise-only features
+		if minor >= 2 {
+			caps.SupportsWAFGlobal = true                 // waf_global only in v3.2ee
+			caps.SupportsWAFProfiles = true               // waf_profiles only in v3.2ee
+			caps.SupportsUDPLBACLs = true                 // udp_lbs/{name}/acls only in v3.2ee
+			caps.SupportsUDPLBServerSwitchingRules = true // udp_lbs/{name}/server_switching_rules only in v3.2ee
+			caps.SupportsPing = true                      // /v3/ping only in v3.2ee
+		}
 	}
 
 	return caps

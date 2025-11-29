@@ -88,15 +88,17 @@ func TestParseVersion(t *testing.T) {
 
 func TestBuildCapabilities(t *testing.T) {
 	tests := []struct {
-		name  string
-		major int
-		minor int
-		want  Capabilities
+		name         string
+		major        int
+		minor        int
+		isEnterprise bool
+		want         Capabilities
 	}{
 		{
-			name:  "v3.0 capabilities",
-			major: 3,
-			minor: 0,
+			name:         "v3.0 community capabilities",
+			major:        3,
+			minor:        0,
+			isEnterprise: false,
 			want: Capabilities{
 				SupportsCrtList:        false,
 				SupportsMapStorage:     true, // All v3.x have /storage/maps
@@ -108,9 +110,10 @@ func TestBuildCapabilities(t *testing.T) {
 			},
 		},
 		{
-			name:  "v3.1 capabilities",
-			major: 3,
-			minor: 1,
+			name:         "v3.1 community capabilities",
+			major:        3,
+			minor:        1,
+			isEnterprise: false,
 			want: Capabilities{
 				SupportsCrtList:        false,
 				SupportsMapStorage:     true,
@@ -122,9 +125,10 @@ func TestBuildCapabilities(t *testing.T) {
 			},
 		},
 		{
-			name:  "v3.2 capabilities",
-			major: 3,
-			minor: 2,
+			name:         "v3.2 community capabilities",
+			major:        3,
+			minor:        2,
+			isEnterprise: false,
 			want: Capabilities{
 				SupportsCrtList:        true, // Only v3.2+ has /storage/ssl_crt_lists
 				SupportsMapStorage:     true,
@@ -135,11 +139,66 @@ func TestBuildCapabilities(t *testing.T) {
 				SupportsRuntimeServers: true,
 			},
 		},
+		{
+			name:         "v3.0 enterprise capabilities",
+			major:        3,
+			minor:        0,
+			isEnterprise: true,
+			want: Capabilities{
+				SupportsCrtList:                   false,
+				SupportsMapStorage:                true,
+				SupportsGeneralStorage:            true,
+				SupportsHTTP2:                     true,
+				SupportsQUIC:                      true,
+				SupportsRuntimeMaps:               true,
+				SupportsRuntimeServers:            true,
+				SupportsWAF:                       true,
+				SupportsWAFGlobal:                 false, // v3.2+ only
+				SupportsWAFProfiles:               false, // v3.2+ only
+				SupportsUDPLBACLs:                 false, // v3.2+ only
+				SupportsUDPLBServerSwitchingRules: false, // v3.2+ only
+				SupportsKeepalived:                true,
+				SupportsUDPLoadBalancing:          true,
+				SupportsBotManagement:             true,
+				SupportsGitIntegration:            true,
+				SupportsDynamicUpdate:             true,
+				SupportsALOHA:                     true,
+				SupportsAdvancedLogging:           true,
+			},
+		},
+		{
+			name:         "v3.2 enterprise capabilities",
+			major:        3,
+			minor:        2,
+			isEnterprise: true,
+			want: Capabilities{
+				SupportsCrtList:                   true, // v3.2+ has CRT-list
+				SupportsMapStorage:                true,
+				SupportsGeneralStorage:            true,
+				SupportsHTTP2:                     true,
+				SupportsQUIC:                      true,
+				SupportsRuntimeMaps:               true,
+				SupportsRuntimeServers:            true,
+				SupportsWAF:                       true,
+				SupportsWAFGlobal:                 true, // v3.2+ only
+				SupportsWAFProfiles:               true, // v3.2+ only
+				SupportsUDPLBACLs:                 true, // v3.2+ only
+				SupportsUDPLBServerSwitchingRules: true, // v3.2+ only
+				SupportsKeepalived:                true,
+				SupportsUDPLoadBalancing:          true,
+				SupportsBotManagement:             true,
+				SupportsGitIntegration:            true,
+				SupportsDynamicUpdate:             true,
+				SupportsALOHA:                     true,
+				SupportsAdvancedLogging:           true,
+				SupportsPing:                      true, // v3.2+ only
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildCapabilities(tt.major, tt.minor)
+			got := buildCapabilities(tt.major, tt.minor, tt.isEnterprise)
 			assert.Equal(t, tt.want, got)
 		})
 	}
