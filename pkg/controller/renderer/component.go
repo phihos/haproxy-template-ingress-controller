@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"haproxy-template-ic/pkg/controller/events"
+	"haproxy-template-ic/pkg/controller/httpstore"
 	"haproxy-template-ic/pkg/core/config"
 	"haproxy-template-ic/pkg/dataplane"
 	"haproxy-template-ic/pkg/dataplane/auxiliaryfiles"
@@ -62,13 +63,15 @@ const (
 // CRT-list file paths are resolved to the general files directory instead of the SSL
 // directory, ensuring the generated configuration matches where files are actually stored.
 type Component struct {
-	eventBus        *busevents.EventBus
-	eventChan       <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
-	engine          *templating.TemplateEngine
-	config          *config.Config
-	stores          map[string]types.Store
-	haproxyPodStore types.Store // HAProxy controller pods store for pod-maxconn calculations
-	logger          *slog.Logger
+	eventBus           *busevents.EventBus
+	eventChan          <-chan busevents.Event // Subscribed in constructor for proper startup synchronization
+	engine             *templating.TemplateEngine
+	config             *config.Config
+	stores             map[string]types.Store
+	haproxyPodStore    types.Store          // HAProxy controller pods store for pod-maxconn calculations
+	httpStoreComponent *httpstore.Component // HTTP resource store for dynamic HTTP content fetching
+	logger             *slog.Logger
+	ctx                context.Context // Context from Start() for HTTP requests
 
 	// State protected by mutex (for leadership transition replay and capabilities)
 	mu                   sync.RWMutex
@@ -163,6 +166,12 @@ func New(
 	}, nil
 }
 
+// SetHTTPStoreComponent sets the HTTP store component for dynamic HTTP resource fetching.
+// This must be called before Start() to enable http.Fetch() in templates.
+func (c *Component) SetHTTPStoreComponent(httpStoreComponent *httpstore.Component) {
+	c.httpStoreComponent = httpStoreComponent
+}
+
 // Start begins the renderer's event loop.
 //
 // This method blocks until the context is cancelled or an error occurs.
@@ -182,6 +191,9 @@ func New(
 //   - Error only in exceptional circumstances
 func (c *Component) Start(ctx context.Context) error {
 	c.logger.Info("Renderer starting")
+
+	// Store context for HTTP requests during rendering
+	c.ctx = ctx
 
 	for {
 		select {
@@ -304,7 +316,7 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 
 	// RENDER 1: Production configuration (for deployment)
 	c.logger.Info("rendering production configuration")
-	productionContext, productionFileRegistry := c.buildRenderingContext(productionPathResolver)
+	productionContext, productionFileRegistry := c.buildRenderingContext(c.ctx, productionPathResolver, false)
 
 	productionHAProxyConfig, err := c.engine.Render("haproxy.cfg", productionContext)
 	if err != nil {
@@ -323,7 +335,7 @@ func (c *Component) handleReconciliationTriggered(event *events.ReconciliationTr
 
 	// RENDER 2: Validation configuration (for controller validation)
 	c.logger.Info("rendering validation configuration")
-	validationContext, validationFileRegistry := c.buildRenderingContext(validationPathResolver)
+	validationContext, validationFileRegistry := c.buildRenderingContext(c.ctx, validationPathResolver, true)
 
 	validationHAProxyConfig, err := c.engine.Render("haproxy.cfg", validationContext)
 	if err != nil {

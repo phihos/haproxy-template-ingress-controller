@@ -549,19 +549,24 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 
 	// 1. Merge global fixtures with test-specific fixtures
 	fixtures := test.Fixtures
+	httpFixtures := test.HTTPFixtures
 
 	// Check for global fixtures in validationTests._global
 	if globalTest, hasGlobal := r.config.ValidationTests["_global"]; hasGlobal {
 		r.logger.Debug("Merging global fixtures with test fixtures",
 			"test", testName,
 			"global_fixture_types", len(globalTest.Fixtures),
-			"test_fixture_types", len(test.Fixtures))
+			"test_fixture_types", len(test.Fixtures),
+			"global_http_fixtures", len(globalTest.HTTPFixtures),
+			"test_http_fixtures", len(test.HTTPFixtures))
 
 		fixtures = mergeFixtures(globalTest.Fixtures, test.Fixtures)
+		httpFixtures = mergeHTTPFixtures(globalTest.HTTPFixtures, test.HTTPFixtures)
 
 		r.logger.Debug("Fixture merge completed",
 			"test", testName,
-			"merged_fixture_types", len(fixtures))
+			"merged_fixture_types", len(fixtures),
+			"merged_http_fixtures", len(httpFixtures))
 	}
 
 	// 2. Create resource stores from merged fixtures
@@ -573,8 +578,16 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 		return result
 	}
 
-	// 2. Render HAProxy configuration and auxiliary files (using worker-specific engine)
-	haproxyConfig, auxiliaryFiles, err := r.renderWithStores(engine, stores, validationPaths)
+	// 3. Create HTTP store from HTTP fixtures
+	// Always create the wrapper so that http.Fetch() fails gracefully when a fixture is missing
+	store := createHTTPStoreFromFixtures(httpFixtures, r.logger)
+	httpStore := NewFixtureHTTPStoreWrapper(store, r.logger)
+	r.logger.Debug("Created HTTP fixture store",
+		"test", testName,
+		"fixture_count", len(httpFixtures))
+
+	// 4. Render HAProxy configuration and auxiliary files (using worker-specific engine)
+	haproxyConfig, auxiliaryFiles, err := r.renderWithStores(engine, stores, validationPaths, httpStore)
 	if err != nil {
 		result.RenderError = dataplane.SimplifyRenderingError(err)
 
@@ -593,10 +606,10 @@ func (r *Runner) runSingleTest(ctx context.Context, testName string, test config
 		r.storeAuxiliaryFiles(&result, auxiliaryFiles)
 	}
 
-	// 3. Build template context for JSONPath assertions
-	templateContext := r.buildRenderingContext(stores, validationPaths)
+	// 5. Build template context for JSONPath assertions
+	templateContext := r.buildRenderingContext(stores, validationPaths, httpStore)
 
-	// 4. Run all assertions (whether rendering succeeded or failed)
+	// 6. Run all assertions (whether rendering succeeded or failed)
 	r.executeAssertions(ctx, &result, &test, haproxyConfig, auxiliaryFiles, templateContext, validationPaths)
 
 	// Test passes if either:
@@ -675,9 +688,9 @@ func hasRenderingErrorAssertions(assertions []config.ValidationAssertion) bool {
 // renderWithStores renders HAProxy configuration using test fixture stores and worker-specific engine.
 //
 // This follows the same pattern as DryRunValidator.renderWithOverlayStores.
-func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[string]types.Store, validationPaths *dataplane.ValidationPaths) (string, *dataplane.AuxiliaryFiles, error) {
+func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[string]types.Store, validationPaths *dataplane.ValidationPaths, httpStore *FixtureHTTPStoreWrapper) (string, *dataplane.AuxiliaryFiles, error) {
 	// Build rendering context with fixture stores
-	context := r.buildRenderingContext(stores, validationPaths)
+	context := r.buildRenderingContext(stores, validationPaths, httpStore)
 
 	// Render main HAProxy configuration using worker-specific engine
 	haproxyConfig, err := engine.Render("haproxy.cfg", context)
@@ -714,7 +727,7 @@ func (r *Runner) renderWithStores(engine *templating.TemplateEngine, stores map[
 //
 // This mirrors DryRunValidator.buildRenderingContext and Renderer.buildRenderingContext.
 // The context includes resources (fixture stores), template snippets, file_registry, pathResolver, and controller configuration.
-func (r *Runner) buildRenderingContext(stores map[string]types.Store, validationPaths *dataplane.ValidationPaths) map[string]interface{} {
+func (r *Runner) buildRenderingContext(stores map[string]types.Store, validationPaths *dataplane.ValidationPaths, httpStore *FixtureHTTPStoreWrapper) map[string]interface{} {
 	// Create resources map with wrapped stores (excluding haproxy-pods)
 	resources := make(map[string]interface{})
 
@@ -764,6 +777,9 @@ func (r *Runner) buildRenderingContext(stores map[string]types.Store, validation
 		"pathResolver":      pathResolver,
 		"dataplane":         r.config.Dataplane, // Add dataplane config for absolute path access
 	}
+
+	// Add HTTP store wrapper for http.Fetch() calls in templates
+	context["http"] = httpStore
 
 	// Merge extraContext variables into top-level context
 	renderer.MergeExtraContextInto(context, r.config)
