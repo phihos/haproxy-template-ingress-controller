@@ -18,10 +18,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
-	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
-	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
 	"net/http"
+
+	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v30ee "haproxy-template-ic/pkg/generated/dataplaneapi/v30ee"
+	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v31ee "haproxy-template-ic/pkg/generated/dataplaneapi/v31ee"
+	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // DispatchCreate is a generic helper for create operations that handles:
@@ -34,7 +38,8 @@ import (
 //
 // Type parameters:
 //   - TUnified: The unified client-native model type (e.g., models.Backend)
-//   - TV32, TV31, TV30: The version-specific model types (e.g., v32.Backend, v31.Backend, v30.Backend)
+//   - TV32, TV31, TV30: Community edition version-specific model types
+//   - TV32EE, TV31EE, TV30EE: Enterprise edition version-specific model types
 //
 // Each callback receives only the unmarshaled model - params should be created inside the callback.
 // This ensures version-specific params are always created with the correct type.
@@ -54,14 +59,29 @@ import (
 //	        params := &v30.CreateBackendParams{TransactionId: &txID}
 //	        return clientset.V30().CreateBackend(ctx, params, m)
 //	    },
+//	    func(m v32ee.Backend) (*http.Response, error) {
+//	        params := &v32ee.CreateBackendParams{TransactionId: &txID}
+//	        return clientset.V32EE().CreateBackend(ctx, params, m)
+//	    },
+//	    func(m v31ee.Backend) (*http.Response, error) {
+//	        params := &v31ee.CreateBackendParams{TransactionId: &txID}
+//	        return clientset.V31EE().CreateBackend(ctx, params, m)
+//	    },
+//	    func(m v30ee.Backend) (*http.Response, error) {
+//	        params := &v30ee.CreateBackendParams{TransactionId: &txID}
+//	        return clientset.V30EE().CreateBackend(ctx, params, m)
+//	    },
 //	)
-func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any](
+func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any, TV32EE any, TV31EE any, TV30EE any](
 	ctx context.Context,
 	c *DataplaneClient,
 	unifiedModel TUnified,
 	v32Call func(TV32) (*http.Response, error),
 	v31Call func(TV31) (*http.Response, error),
 	v30Call func(TV30) (*http.Response, error),
+	v32eeCall func(TV32EE) (*http.Response, error),
+	v31eeCall func(TV31EE) (*http.Response, error),
+	v30eeCall func(TV30EE) (*http.Response, error),
 ) (*http.Response, error) {
 	// Marshal unified model to JSON with metadata transformation
 	jsonData, err := MarshalForVersion(unifiedModel)
@@ -71,6 +91,7 @@ func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any](
 
 	// Dispatch to version-specific client with automatic unmarshaling
 	return c.Dispatch(ctx, CallFunc[*http.Response]{
+		// Community edition callbacks
 		V32: func(client *v32.Client) (*http.Response, error) {
 			var model TV32
 			if err := json.Unmarshal(jsonData, &model); err != nil {
@@ -91,6 +112,28 @@ func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any](
 				return nil, fmt.Errorf("failed to unmarshal model for v3.0: %w", err)
 			}
 			return v30Call(model)
+		},
+		// Enterprise edition callbacks
+		V32EE: func(client *v32ee.Client) (*http.Response, error) {
+			var model TV32EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.2ee: %w", err)
+			}
+			return v32eeCall(model)
+		},
+		V31EE: func(client *v31ee.Client) (*http.Response, error) {
+			var model TV31EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.1ee: %w", err)
+			}
+			return v31eeCall(model)
+		},
+		V30EE: func(client *v30ee.Client) (*http.Response, error) {
+			var model TV30EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.0ee: %w", err)
+			}
+			return v30eeCall(model)
 		},
 	})
 }
@@ -116,8 +159,20 @@ func DispatchCreate[TUnified any, TV32 any, TV31 any, TV30 any](
 //	        params := &v30.ReplaceBackendParams{TransactionId: &txID}
 //	        return clientset.V30().ReplaceBackend(ctx, n, params, m)
 //	    },
+//	    func(n string, m v32ee.Backend) (*http.Response, error) {
+//	        params := &v32ee.ReplaceBackendParams{TransactionId: &txID}
+//	        return clientset.V32EE().ReplaceBackend(ctx, n, params, m)
+//	    },
+//	    func(n string, m v31ee.Backend) (*http.Response, error) {
+//	        params := &v31ee.ReplaceBackendParams{TransactionId: &txID}
+//	        return clientset.V31EE().ReplaceBackend(ctx, n, params, m)
+//	    },
+//	    func(n string, m v30ee.Backend) (*http.Response, error) {
+//	        params := &v30ee.ReplaceBackendParams{TransactionId: &txID}
+//	        return clientset.V30EE().ReplaceBackend(ctx, n, params, m)
+//	    },
 //	)
-func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any](
+func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any, TV32EE any, TV31EE any, TV30EE any](
 	ctx context.Context,
 	c *DataplaneClient,
 	name string,
@@ -125,6 +180,9 @@ func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any](
 	v32Call func(string, TV32) (*http.Response, error),
 	v31Call func(string, TV31) (*http.Response, error),
 	v30Call func(string, TV30) (*http.Response, error),
+	v32eeCall func(string, TV32EE) (*http.Response, error),
+	v31eeCall func(string, TV31EE) (*http.Response, error),
+	v30eeCall func(string, TV30EE) (*http.Response, error),
 ) (*http.Response, error) {
 	// Marshal unified model to JSON with metadata transformation
 	jsonData, err := MarshalForVersion(unifiedModel)
@@ -134,6 +192,7 @@ func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any](
 
 	// Dispatch to version-specific client with automatic unmarshaling
 	return c.Dispatch(ctx, CallFunc[*http.Response]{
+		// Community edition callbacks
 		V32: func(client *v32.Client) (*http.Response, error) {
 			var model TV32
 			if err := json.Unmarshal(jsonData, &model); err != nil {
@@ -154,6 +213,28 @@ func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any](
 				return nil, fmt.Errorf("failed to unmarshal model for v3.0: %w", err)
 			}
 			return v30Call(name, model)
+		},
+		// Enterprise edition callbacks
+		V32EE: func(client *v32ee.Client) (*http.Response, error) {
+			var model TV32EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.2ee: %w", err)
+			}
+			return v32eeCall(name, model)
+		},
+		V31EE: func(client *v31ee.Client) (*http.Response, error) {
+			var model TV31EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.1ee: %w", err)
+			}
+			return v31eeCall(name, model)
+		},
+		V30EE: func(client *v30ee.Client) (*http.Response, error) {
+			var model TV30EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.0ee: %w", err)
+			}
+			return v30eeCall(name, model)
 		},
 	})
 }
@@ -179,6 +260,18 @@ func DispatchUpdate[TUnified any, TV32 any, TV31 any, TV30 any](
 //	        params := &v30.DeleteBackendParams{TransactionId: &txID}
 //	        return clientset.V30().DeleteBackend(ctx, n, params)
 //	    },
+//	    func(n string) (*http.Response, error) {
+//	        params := &v32ee.DeleteBackendParams{TransactionId: &txID}
+//	        return clientset.V32EE().DeleteBackend(ctx, n, params)
+//	    },
+//	    func(n string) (*http.Response, error) {
+//	        params := &v31ee.DeleteBackendParams{TransactionId: &txID}
+//	        return clientset.V31EE().DeleteBackend(ctx, n, params)
+//	    },
+//	    func(n string) (*http.Response, error) {
+//	        params := &v30ee.DeleteBackendParams{TransactionId: &txID}
+//	        return clientset.V30EE().DeleteBackend(ctx, n, params)
+//	    },
 //	)
 func DispatchDelete(
 	ctx context.Context,
@@ -187,8 +280,12 @@ func DispatchDelete(
 	v32Call func(string) (*http.Response, error),
 	v31Call func(string) (*http.Response, error),
 	v30Call func(string) (*http.Response, error),
+	v32eeCall func(string) (*http.Response, error),
+	v31eeCall func(string) (*http.Response, error),
+	v30eeCall func(string) (*http.Response, error),
 ) (*http.Response, error) {
 	return c.Dispatch(ctx, CallFunc[*http.Response]{
+		// Community edition callbacks
 		V32: func(client *v32.Client) (*http.Response, error) {
 			return v32Call(name)
 		},
@@ -197,6 +294,16 @@ func DispatchDelete(
 		},
 		V30: func(client *v30.Client) (*http.Response, error) {
 			return v30Call(name)
+		},
+		// Enterprise edition callbacks
+		V32EE: func(client *v32ee.Client) (*http.Response, error) {
+			return v32eeCall(name)
+		},
+		V31EE: func(client *v31ee.Client) (*http.Response, error) {
+			return v31eeCall(name)
+		},
+		V30EE: func(client *v30ee.Client) (*http.Response, error) {
+			return v30eeCall(name)
 		},
 	})
 }
@@ -222,8 +329,20 @@ func DispatchDelete(
 //	        params := &v30.CreateAclFrontendParams{TransactionId: &txID}
 //	        return clientset.V30().CreateAclFrontend(ctx, parent, idx, params, m)
 //	    },
+//	    func(parent string, idx int, m v32ee.Acl) (*http.Response, error) {
+//	        params := &v32ee.CreateAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V32EE().CreateAclFrontend(ctx, parent, idx, params, m)
+//	    },
+//	    func(parent string, idx int, m v31ee.Acl) (*http.Response, error) {
+//	        params := &v31ee.CreateAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V31EE().CreateAclFrontend(ctx, parent, idx, params, m)
+//	    },
+//	    func(parent string, idx int, m v30ee.Acl) (*http.Response, error) {
+//	        params := &v30ee.CreateAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V30EE().CreateAclFrontend(ctx, parent, idx, params, m)
+//	    },
 //	)
-func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any](
+func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any, TV32EE any, TV31EE any, TV30EE any](
 	ctx context.Context,
 	c *DataplaneClient,
 	parentName string,
@@ -232,6 +351,9 @@ func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any](
 	v32Call func(string, int, TV32) (*http.Response, error),
 	v31Call func(string, int, TV31) (*http.Response, error),
 	v30Call func(string, int, TV30) (*http.Response, error),
+	v32eeCall func(string, int, TV32EE) (*http.Response, error),
+	v31eeCall func(string, int, TV31EE) (*http.Response, error),
+	v30eeCall func(string, int, TV30EE) (*http.Response, error),
 ) (*http.Response, error) {
 	// Marshal unified model to JSON with metadata transformation
 	jsonData, err := MarshalForVersion(unifiedModel)
@@ -241,6 +363,7 @@ func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any](
 
 	// Dispatch to version-specific client with automatic unmarshaling
 	return c.Dispatch(ctx, CallFunc[*http.Response]{
+		// Community edition callbacks
 		V32: func(client *v32.Client) (*http.Response, error) {
 			var model TV32
 			if err := json.Unmarshal(jsonData, &model); err != nil {
@@ -261,6 +384,28 @@ func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any](
 				return nil, fmt.Errorf("failed to unmarshal model for v3.0: %w", err)
 			}
 			return v30Call(parentName, index, model)
+		},
+		// Enterprise edition callbacks
+		V32EE: func(client *v32ee.Client) (*http.Response, error) {
+			var model TV32EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.2ee: %w", err)
+			}
+			return v32eeCall(parentName, index, model)
+		},
+		V31EE: func(client *v31ee.Client) (*http.Response, error) {
+			var model TV31EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.1ee: %w", err)
+			}
+			return v31eeCall(parentName, index, model)
+		},
+		V30EE: func(client *v30ee.Client) (*http.Response, error) {
+			var model TV30EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.0ee: %w", err)
+			}
+			return v30eeCall(parentName, index, model)
 		},
 	})
 }
@@ -286,8 +431,20 @@ func DispatchCreateChild[TUnified any, TV32 any, TV31 any, TV30 any](
 //	        params := &v30.ReplaceAclFrontendParams{TransactionId: &txID}
 //	        return clientset.V30().ReplaceAclFrontend(ctx, parent, idx, params, m)
 //	    },
+//	    func(parent string, idx int, m v32ee.Acl) (*http.Response, error) {
+//	        params := &v32ee.ReplaceAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V32EE().ReplaceAclFrontend(ctx, parent, idx, params, m)
+//	    },
+//	    func(parent string, idx int, m v31ee.Acl) (*http.Response, error) {
+//	        params := &v31ee.ReplaceAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V31EE().ReplaceAclFrontend(ctx, parent, idx, params, m)
+//	    },
+//	    func(parent string, idx int, m v30ee.Acl) (*http.Response, error) {
+//	        params := &v30ee.ReplaceAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V30EE().ReplaceAclFrontend(ctx, parent, idx, params, m)
+//	    },
 //	)
-func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any](
+func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any, TV32EE any, TV31EE any, TV30EE any](
 	ctx context.Context,
 	c *DataplaneClient,
 	parentName string,
@@ -296,6 +453,9 @@ func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any](
 	v32Call func(string, int, TV32) (*http.Response, error),
 	v31Call func(string, int, TV31) (*http.Response, error),
 	v30Call func(string, int, TV30) (*http.Response, error),
+	v32eeCall func(string, int, TV32EE) (*http.Response, error),
+	v31eeCall func(string, int, TV31EE) (*http.Response, error),
+	v30eeCall func(string, int, TV30EE) (*http.Response, error),
 ) (*http.Response, error) {
 	// Marshal unified model to JSON with metadata transformation
 	jsonData, err := MarshalForVersion(unifiedModel)
@@ -305,6 +465,7 @@ func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any](
 
 	// Dispatch to version-specific client with automatic unmarshaling
 	return c.Dispatch(ctx, CallFunc[*http.Response]{
+		// Community edition callbacks
 		V32: func(client *v32.Client) (*http.Response, error) {
 			var model TV32
 			if err := json.Unmarshal(jsonData, &model); err != nil {
@@ -325,6 +486,28 @@ func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any](
 				return nil, fmt.Errorf("failed to unmarshal model for v3.0: %w", err)
 			}
 			return v30Call(parentName, index, model)
+		},
+		// Enterprise edition callbacks
+		V32EE: func(client *v32ee.Client) (*http.Response, error) {
+			var model TV32EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.2ee: %w", err)
+			}
+			return v32eeCall(parentName, index, model)
+		},
+		V31EE: func(client *v31ee.Client) (*http.Response, error) {
+			var model TV31EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.1ee: %w", err)
+			}
+			return v31eeCall(parentName, index, model)
+		},
+		V30EE: func(client *v30ee.Client) (*http.Response, error) {
+			var model TV30EE
+			if err := json.Unmarshal(jsonData, &model); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal model for v3.0ee: %w", err)
+			}
+			return v30eeCall(parentName, index, model)
 		},
 	})
 }
@@ -350,6 +533,18 @@ func DispatchReplaceChild[TUnified any, TV32 any, TV31 any, TV30 any](
 //	        params := &v30.DeleteAclFrontendParams{TransactionId: &txID}
 //	        return clientset.V30().DeleteAclFrontend(ctx, parent, idx, params)
 //	    },
+//	    func(parent string, idx int) (*http.Response, error) {
+//	        params := &v32ee.DeleteAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V32EE().DeleteAclFrontend(ctx, parent, idx, params)
+//	    },
+//	    func(parent string, idx int) (*http.Response, error) {
+//	        params := &v31ee.DeleteAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V31EE().DeleteAclFrontend(ctx, parent, idx, params)
+//	    },
+//	    func(parent string, idx int) (*http.Response, error) {
+//	        params := &v30ee.DeleteAclFrontendParams{TransactionId: &txID}
+//	        return clientset.V30EE().DeleteAclFrontend(ctx, parent, idx, params)
+//	    },
 //	)
 func DispatchDeleteChild(
 	ctx context.Context,
@@ -359,8 +554,12 @@ func DispatchDeleteChild(
 	v32Call func(string, int) (*http.Response, error),
 	v31Call func(string, int) (*http.Response, error),
 	v30Call func(string, int) (*http.Response, error),
+	v32eeCall func(string, int) (*http.Response, error),
+	v31eeCall func(string, int) (*http.Response, error),
+	v30eeCall func(string, int) (*http.Response, error),
 ) (*http.Response, error) {
 	return c.Dispatch(ctx, CallFunc[*http.Response]{
+		// Community edition callbacks
 		V32: func(client *v32.Client) (*http.Response, error) {
 			return v32Call(parentName, index)
 		},
@@ -369,6 +568,16 @@ func DispatchDeleteChild(
 		},
 		V30: func(client *v30.Client) (*http.Response, error) {
 			return v30Call(parentName, index)
+		},
+		// Enterprise edition callbacks
+		V32EE: func(client *v32ee.Client) (*http.Response, error) {
+			return v32eeCall(parentName, index)
+		},
+		V31EE: func(client *v31ee.Client) (*http.Response, error) {
+			return v31eeCall(parentName, index)
+		},
+		V30EE: func(client *v30ee.Client) (*http.Response, error) {
+			return v30eeCall(parentName, index)
 		},
 	})
 }

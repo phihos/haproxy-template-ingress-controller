@@ -9,8 +9,11 @@ import (
 	"strings"
 
 	v30 "haproxy-template-ic/pkg/generated/dataplaneapi/v30"
+	v30ee "haproxy-template-ic/pkg/generated/dataplaneapi/v30ee"
 	v31 "haproxy-template-ic/pkg/generated/dataplaneapi/v31"
+	v31ee "haproxy-template-ic/pkg/generated/dataplaneapi/v31ee"
 	v32 "haproxy-template-ic/pkg/generated/dataplaneapi/v32"
+	v32ee "haproxy-template-ic/pkg/generated/dataplaneapi/v32ee"
 )
 
 // GetVersion retrieves the current configuration version from the Dataplane API.
@@ -36,6 +39,15 @@ func (c *DataplaneClient) GetVersion(ctx context.Context) (int64, error) {
 		},
 		V30: func(c *v30.Client) (*http.Response, error) {
 			return c.GetConfigurationVersion(ctx, &v30.GetConfigurationVersionParams{})
+		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.GetConfigurationVersion(ctx, &v32ee.GetConfigurationVersionParams{})
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.GetConfigurationVersion(ctx, &v31ee.GetConfigurationVersionParams{})
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
+			return c.GetConfigurationVersion(ctx, &v30ee.GetConfigurationVersionParams{})
 		},
 	})
 
@@ -88,6 +100,15 @@ func (c *DataplaneClient) GetRawConfiguration(ctx context.Context) (string, erro
 		},
 		V30: func(c *v30.Client) (*http.Response, error) {
 			return c.GetHAProxyConfiguration(ctx, &v30.GetHAProxyConfigurationParams{})
+		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.GetHAProxyConfiguration(ctx, &v32ee.GetHAProxyConfigurationParams{})
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.GetHAProxyConfiguration(ctx, &v31ee.GetHAProxyConfigurationParams{})
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
+			return c.GetHAProxyConfiguration(ctx, &v30ee.GetHAProxyConfigurationParams{})
 		},
 	})
 
@@ -144,6 +165,15 @@ func (c *DataplaneClient) PushRawConfiguration(ctx context.Context, config strin
 		},
 		V30: func(c *v30.Client) (*http.Response, error) {
 			return c.PostHAProxyConfigurationWithTextBody(ctx, &v30.PostHAProxyConfigurationParams{SkipVersion: &skipVersion}, config)
+		},
+		V32EE: func(c *v32ee.Client) (*http.Response, error) {
+			return c.PostHAProxyConfigurationWithTextBody(ctx, &v32ee.PostHAProxyConfigurationParams{SkipVersion: &skipVersion}, config)
+		},
+		V31EE: func(c *v31ee.Client) (*http.Response, error) {
+			return c.PostHAProxyConfigurationWithTextBody(ctx, &v31ee.PostHAProxyConfigurationParams{SkipVersion: &skipVersion}, config)
+		},
+		V30EE: func(c *v30ee.Client) (*http.Response, error) {
+			return c.PostHAProxyConfigurationWithTextBody(ctx, &v30ee.PostHAProxyConfigurationParams{SkipVersion: &skipVersion}, config)
 		},
 	})
 

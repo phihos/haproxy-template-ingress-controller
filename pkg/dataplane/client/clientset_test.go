@@ -322,3 +322,104 @@ func TestClientset_MinorVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestIsEnterpriseVersion(t *testing.T) {
+	tests := []struct {
+		name           string
+		version        string
+		wantEnterprise bool
+	}{
+		// DataPlane API enterprise format: vX.Y.Z-eeN
+		{
+			name:           "DataPlane API enterprise v3.0",
+			version:        "v3.0.15-ee1 d7be8cc4",
+			wantEnterprise: true,
+		},
+		{
+			name:           "DataPlane API enterprise v3.1",
+			version:        "v3.1.11-ee2 abc12345",
+			wantEnterprise: true,
+		},
+		{
+			name:           "DataPlane API enterprise v3.2",
+			version:        "v3.2.6-ee1",
+			wantEnterprise: true,
+		},
+		// HAProxy binary enterprise format: X.YrZ
+		{
+			name:           "HAProxy enterprise 3.0r1",
+			version:        "3.0r1",
+			wantEnterprise: true,
+		},
+		{
+			name:           "HAProxy enterprise v3.0r1",
+			version:        "v3.0r1",
+			wantEnterprise: true,
+		},
+		{
+			name:           "HAProxy enterprise 3.1r1",
+			version:        "3.1r1",
+			wantEnterprise: true,
+		},
+		{
+			name:           "HAProxy enterprise 3.2r1",
+			version:        "v3.2r1",
+			wantEnterprise: true,
+		},
+		// Enterprise keyword detection
+		{
+			name:           "contains Enterprise keyword",
+			version:        "HAProxy Enterprise 3.0r1",
+			wantEnterprise: true,
+		},
+		{
+			name:           "contains enterprise lowercase",
+			version:        "haproxy enterprise 3.0",
+			wantEnterprise: true,
+		},
+		// Community versions (should return false)
+		{
+			name:           "DataPlane API community v3.0",
+			version:        "v3.0.15 abc123de",
+			wantEnterprise: false,
+		},
+		{
+			name:           "DataPlane API community v3.1",
+			version:        "v3.1.11 def456gh",
+			wantEnterprise: false,
+		},
+		{
+			name:           "DataPlane API community v3.2",
+			version:        "v3.2.6 87ad0bcf",
+			wantEnterprise: false,
+		},
+		{
+			name:           "simple community version",
+			version:        "3.2.6",
+			wantEnterprise: false,
+		},
+		{
+			name:           "community version with v prefix",
+			version:        "v3.2",
+			wantEnterprise: false,
+		},
+		// Edge cases
+		{
+			name:           "empty string",
+			version:        "",
+			wantEnterprise: false,
+		},
+		{
+			name:           "only whitespace",
+			version:        "   ",
+			wantEnterprise: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsEnterpriseVersion(tt.version)
+			assert.Equal(t, tt.wantEnterprise, got)
+		})
+	}
+}

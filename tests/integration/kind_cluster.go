@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -126,6 +127,18 @@ func SetupKindCluster(cfg *KindClusterConfig) (*KindCluster, error) {
 	// Trigger background cleanup of old test namespaces
 	// This runs asynchronously and doesn't block test execution
 	cluster.CleanupOldTestNamespacesAsync()
+
+	// Load HAProxy Enterprise image if enterprise mode is enabled
+	// This is necessary because the enterprise registry requires authentication
+	// and Kind cannot pull from it directly
+	if os.Getenv("HAPROXY_ENTERPRISE") == "true" {
+		haproxyImage := getHAProxyEnterpriseImage()
+		fmt.Printf("📦 Loading HAProxy Enterprise image '%s' into Kind cluster...\n", haproxyImage)
+		if err := cluster.LoadDockerImage(haproxyImage); err != nil {
+			return nil, fmt.Errorf("failed to load HAProxy Enterprise image: %w", err)
+		}
+		fmt.Printf("✓ HAProxy Enterprise image loaded\n")
+	}
 
 	return cluster, nil
 }
@@ -285,4 +298,45 @@ func ShouldKeepCluster() string {
 		return "true" // Default to keeping cluster for faster test iterations
 	}
 	return val
+}
+
+// LoadDockerImage loads a Docker image from the host into the Kind cluster.
+// This is necessary for images from private registries that require authentication,
+// as Kind nodes cannot authenticate to pull images directly.
+// The image must already be pulled locally (e.g., via `docker pull`).
+func (k *KindCluster) LoadDockerImage(image string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "kind", "load", "docker-image", image, "--name", k.Name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to load image: %w\nOutput: %s", err, output)
+	}
+
+	return nil
+}
+
+// getHAProxyEnterpriseImage returns the HAProxy Enterprise image name based on
+// the HAPROXY_VERSION environment variable.
+func getHAProxyEnterpriseImage() string {
+	version := os.Getenv("HAPROXY_VERSION")
+	if version == "" {
+		version = "3.2"
+	}
+
+	// Map community version to enterprise version format
+	var tag string
+	switch {
+	case len(version) >= 3 && version[:3] == "3.0":
+		tag = "3.0r1"
+	case len(version) >= 3 && version[:3] == "3.1":
+		tag = "3.1r1"
+	case len(version) >= 3 && version[:3] == "3.2":
+		tag = "3.2r1"
+	default:
+		tag = version
+	}
+
+	return fmt.Sprintf("hapee-registry.haproxy.com/haproxy-enterprise:%s", tag)
 }

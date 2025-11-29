@@ -216,6 +216,7 @@ issues:
     - vendor
     - third_party
     - charts # Helm charts directory
+    - pkg/generated # Generated code (DataPlane API clients, K8s clientsets)
 
 output:
   formats:

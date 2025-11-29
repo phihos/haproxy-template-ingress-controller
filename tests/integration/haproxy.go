@@ -30,6 +30,8 @@ type HAProxyConfig struct {
 	DataplaneUser   string
 	DataplanePass   string
 	HAProxyStatPort int32
+	HAProxyBin      string // Path to haproxy binary
+	DataplaneBin    string // Path to dataplaneapi binary
 }
 
 // DefaultHAProxyConfig returns default HAProxy configuration
@@ -41,13 +43,48 @@ func DefaultHAProxyConfig() *HAProxyConfig {
 		version = "3.2"
 	}
 
-	return &HAProxyConfig{
+	// Check if HAProxy Enterprise should be used
+	// Enterprise versions use format X.YrZ (e.g., 3.0r1, 3.1r1, 3.2r1)
+	enterprise := os.Getenv("HAPROXY_ENTERPRISE")
+
+	var image, haproxyBin, dataplaneBin string
+
+	if enterprise == "true" {
+		// Map community version to enterprise version format and get binary paths
+		// Enterprise has versioned paths: /opt/hapee-X.Y/sbin/hapee-lb
+		var tag, majorMinor string
+		switch {
+		case len(version) >= 3 && version[:3] == "3.0":
+			tag = "3.0r1"
+			majorMinor = "3.0"
+		case len(version) >= 3 && version[:3] == "3.1":
+			tag = "3.1r1"
+			majorMinor = "3.1"
+		case len(version) >= 3 && version[:3] == "3.2":
+			tag = "3.2r1"
+			majorMinor = "3.2"
+		default:
+			tag = version
+			majorMinor = version
+		}
+		image = fmt.Sprintf("hapee-registry.haproxy.com/haproxy-enterprise:%s", tag)
+		haproxyBin = fmt.Sprintf("/opt/hapee-%s/sbin/hapee-lb", majorMinor)
+		dataplaneBin = "/opt/hapee-extras/sbin/hapee-dataplaneapi"
+	} else {
 		// Use debian image which includes dataplaneapi binary
-		Image:           fmt.Sprintf("haproxytech/haproxy-debian:%s", version),
+		image = fmt.Sprintf("haproxytech/haproxy-debian:%s", version)
+		haproxyBin = "/usr/local/sbin/haproxy"
+		dataplaneBin = "/usr/local/bin/dataplaneapi"
+	}
+
+	return &HAProxyConfig{
+		Image:           image,
 		DataplanePort:   5555,
 		DataplaneUser:   "admin",
 		DataplanePass:   "adminpwd",
 		HAProxyStatPort: 8404,
+		HAProxyBin:      haproxyBin,
+		DataplaneBin:    dataplaneBin,
 	}
 }
 
@@ -113,7 +150,7 @@ frontend status
     spoe_dir: /etc/haproxy/spoe
 haproxy:
   config_file: /etc/haproxy/haproxy.cfg
-  haproxy_bin: /usr/local/sbin/haproxy
+  haproxy_bin: %s
   master_worker_mode: true
   master_runtime: /etc/haproxy/haproxy-master.sock
   reload:
@@ -127,7 +164,7 @@ log_targets:
   log_types:
   - access
   - app
-`, cfg.DataplanePort, cfg.DataplaneUser, cfg.DataplanePass)
+`, cfg.DataplanePort, cfg.DataplaneUser, cfg.DataplanePass, cfg.HAProxyBin)
 
 	// Create ConfigMap with both configs
 	configMap := &corev1.ConfigMap{
@@ -190,7 +227,7 @@ log_targets:
 				{
 					Name:    "haproxy",
 					Image:   cfg.Image,
-					Command: []string{"/usr/local/sbin/haproxy"},
+					Command: []string{cfg.HAProxyBin},
 					Args: []string{
 						"-W",                                     // master-worker mode
 						"-db",                                    // disable background mode
@@ -214,7 +251,7 @@ log_targets:
 				{
 					Name:    "dataplane",
 					Image:   cfg.Image,
-					Command: []string{"/usr/local/bin/dataplaneapi"},
+					Command: []string{cfg.DataplaneBin},
 					Args:    []string{"-f", "/etc/haproxy/dataplaneapi.yaml"},
 					Ports: []corev1.ContainerPort{
 						{

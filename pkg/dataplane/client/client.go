@@ -28,6 +28,7 @@ type Endpoint struct {
 	CachedMajorVersion int
 	CachedMinorVersion int
 	CachedFullVersion  string
+	CachedIsEnterprise bool // True if this is HAProxy Enterprise edition
 }
 
 // HasCachedVersion returns true if version info has been cached.

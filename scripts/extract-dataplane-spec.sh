@@ -7,21 +7,30 @@ set -euo pipefail
 # the OpenAPI v3 specification from the /v3/specification_openapiv3 endpoint.
 #
 # Usage:
-#   ./extract-dataplane-spec.sh <haproxy-version> [output-file]
+#   ./extract-dataplane-spec.sh [--enterprise] <haproxy-version> [output-file]
 #
 # Examples:
-#   ./extract-dataplane-spec.sh 3.2
-#   ./extract-dataplane-spec.sh 3.1 /tmp/spec.json
-#   ./extract-dataplane-spec.sh 3.0 pkg/generated/dataplaneapi/v30/spec.json
+#   ./extract-dataplane-spec.sh 3.2                                              # Community
+#   ./extract-dataplane-spec.sh 3.1 /tmp/spec.json                               # Community
+#   ./extract-dataplane-spec.sh 3.0 pkg/generated/dataplaneapi/v30/spec.json     # Community
+#   ./extract-dataplane-spec.sh --enterprise 3.0r1                               # Enterprise
+#   ./extract-dataplane-spec.sh -e 3.1r1 pkg/generated/dataplaneapi/v31ee/spec.json
+#
+# Options:
+#   --enterprise, -e  Use HAProxy Enterprise registry (hapee-registry.haproxy.com)
 #
 # Arguments:
-#   haproxy-version  HAProxy version (e.g., 3.0, 3.1, 3.2)
+#   haproxy-version  HAProxy version (e.g., 3.0, 3.1, 3.2 for community; 3.0r1, 3.1r1, 3.2r1 for enterprise)
 #   output-file      Optional output file path (default: spec.json in current directory)
 #
 # Requirements:
 #   - Docker
 #   - curl
 #   - jq
+#
+# For HAProxy Enterprise:
+#   You must authenticate to the enterprise registry before running this script:
+#   docker login hapee-registry.haproxy.com
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -52,23 +61,32 @@ log_step() {
 # Print usage
 usage() {
     cat <<EOF
-Usage: $0 <haproxy-version> [output-file]
+Usage: $0 [--enterprise] <haproxy-version> [output-file]
 
 Extract HAProxy DataPlane API OpenAPI specification from a Docker container.
 
+Options:
+  --enterprise, -e   Use HAProxy Enterprise registry
+
 Arguments:
-  haproxy-version    HAProxy version (e.g., 3.0, 3.1, 3.2)
+  haproxy-version    HAProxy version (e.g., 3.0, 3.1, 3.2 for community; 3.0r1, 3.1r1, 3.2r1 for enterprise)
   output-file        Optional output file path (default: spec.json)
 
 Examples:
-  $0 3.2
-  $0 3.1 /tmp/spec-v31.json
-  $0 3.0 pkg/generated/dataplaneapi/v30/spec.json
+  $0 3.2                                              # Community edition
+  $0 3.1 /tmp/spec-v31.json                           # Community edition
+  $0 3.0 pkg/generated/dataplaneapi/v30/spec.json     # Community edition
+  $0 --enterprise 3.0r1                               # Enterprise edition
+  $0 -e 3.1r1 pkg/generated/dataplaneapi/v31ee/spec.json
 
 Requirements:
   - Docker
   - curl
   - jq
+
+For HAProxy Enterprise:
+  You must authenticate to the enterprise registry before running this script:
+  docker login hapee-registry.haproxy.com
 EOF
     exit 1
 }
@@ -111,16 +129,43 @@ cleanup() {
 extract_spec() {
     local haproxy_version=$1
     local output_file=$2
+    local is_enterprise=$3
     local container_name="dataplaneapi-extract-${haproxy_version//./-}"
     local temp_dir="/tmp/dpapi-extract-$$"
     local port=5555
+    local docker_image
+    local dataplaneapi_bin
+    local haproxy_config_path
+
+    # Select Docker image and paths based on edition
+    local haproxy_bin_path
+    if [ "$is_enterprise" = "true" ]; then
+        docker_image="hapee-registry.haproxy.com/haproxy-enterprise:${haproxy_version}"
+        container_name="${container_name}-ee"
+        dataplaneapi_bin="/opt/hapee-extras/sbin/hapee-dataplaneapi"
+        # Enterprise uses version-specific paths (e.g., /etc/hapee-3.0/, /opt/hapee-3.0/)
+        local major_minor="${haproxy_version%r*}"  # Strip rN suffix: 3.0r1 -> 3.0
+        haproxy_config_path="/etc/hapee-${major_minor}/hapee-lb.cfg"
+        haproxy_bin_path="/opt/hapee-${major_minor}/sbin/hapee-lb"
+    else
+        docker_image="haproxytech/haproxy-alpine:${haproxy_version}"
+        dataplaneapi_bin="/usr/bin/dataplaneapi"
+        haproxy_config_path="/etc/haproxy/haproxy.cfg"
+        haproxy_bin_path="/usr/local/sbin/haproxy"
+    fi
 
     # Find available port
     while nc -z localhost $port 2>/dev/null; do
         port=$((port + 1))
     done
 
-    log_info "Extracting OpenAPI spec for HAProxy DataPlane API v${haproxy_version}"
+    local edition_label="Community"
+    if [ "$is_enterprise" = "true" ]; then
+        edition_label="Enterprise"
+    fi
+
+    log_info "Extracting OpenAPI spec for HAProxy DataPlane API v${haproxy_version} (${edition_label})"
+    log_info "Using Docker image: $docker_image"
     log_info "Using port: $port"
 
     # Setup cleanup trap
@@ -131,7 +176,7 @@ extract_spec() {
     mkdir -p "$temp_dir"
 
     # Create DataPlane API config
-    cat > "$temp_dir/dataplaneapi.yaml" <<'EOF'
+    cat > "$temp_dir/dataplaneapi.yaml" <<EOF
 config_version: 2
 name: spec_extractor
 dataplaneapi:
@@ -142,7 +187,8 @@ dataplaneapi:
       insecure: true
       password: adminpwd
 haproxy:
-  config_file: /etc/haproxy/haproxy.cfg
+  config_file: ${haproxy_config_path}
+  haproxy_bin: ${haproxy_bin_path}
   reload:
     reload_cmd: "true"
     restart_cmd: "true"
@@ -167,14 +213,43 @@ EOF
 
     # Start DataPlane API container
     log_step "Starting DataPlane API container..."
+    local docker_volumes
+    local docker_cmd
+
+    if [ "$is_enterprise" = "true" ]; then
+        # Enterprise: create directory structure and mount it
+        local hapee_version="${haproxy_version%r*}"  # 3.0r1 -> 3.0
+        mkdir -p "$temp_dir/hapee-extras"
+        mkdir -p "$temp_dir/hapee-${hapee_version}"
+        cp "$temp_dir/dataplaneapi.yaml" "$temp_dir/hapee-extras/dataplaneapi.yml"
+        cp "$temp_dir/haproxy.cfg" "$temp_dir/hapee-${hapee_version}/hapee-lb.cfg"
+        docker_volumes="-v $temp_dir/hapee-extras:/etc/hapee-extras -v $temp_dir/hapee-${hapee_version}:/etc/hapee-${hapee_version}"
+        docker_cmd="${dataplaneapi_bin} -f /etc/hapee-extras/dataplaneapi.yml"
+    else
+        # Community: mount to /etc/haproxy/ with config file
+        docker_volumes="-v $temp_dir:/etc/haproxy"
+        docker_cmd="${dataplaneapi_bin} -f /etc/haproxy/dataplaneapi.yaml"
+    fi
+
+    local entrypoint_opt=""
+    if [ "$is_enterprise" = "true" ]; then
+        # Enterprise containers use s6 init which auto-starts dataplaneapi
+        # Use --entrypoint to bypass and run directly
+        entrypoint_opt="--entrypoint ${dataplaneapi_bin}"
+        docker_cmd="-f /etc/hapee-extras/dataplaneapi.yml"
+    fi
+
     if ! docker run -d \
         --name "$container_name" \
         -p "${port}:5555" \
-        -v "$temp_dir:/etc/haproxy" \
-        "haproxytech/haproxy-alpine:${haproxy_version}" \
-        /usr/bin/dataplaneapi \
+        $docker_volumes \
+        $entrypoint_opt \
+        "$docker_image" \
+        $docker_cmd \
         >/dev/null 2>&1; then
         log_error "Failed to start container"
+        log_error "If using enterprise edition, ensure you are logged in:"
+        log_error "  docker login hapee-registry.haproxy.com"
         return 1
     fi
 
@@ -236,7 +311,9 @@ EOF
     log_info "======================================================"
     log_info "Successfully extracted OpenAPI specification!"
     log_info "======================================================"
+    log_info "HAProxy edition:    ${edition_label}"
     log_info "HAProxy version:    ${haproxy_version}"
+    log_info "Docker image:       ${docker_image}"
     log_info "API version:        ${api_version}"
     log_info "Spec version:       ${spec_version}"
     log_info "Spec title:         ${spec_title}"
@@ -249,18 +326,59 @@ EOF
 
 # Main execution
 main() {
-    if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+    local is_enterprise="false"
+    local haproxy_version=""
+    local output_file=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --enterprise|-e)
+                is_enterprise="true"
+                shift
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                usage
+                ;;
+            *)
+                if [ -z "$haproxy_version" ]; then
+                    haproxy_version="$1"
+                elif [ -z "$output_file" ]; then
+                    output_file="$1"
+                else
+                    log_error "Too many arguments"
+                    usage
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Check required arguments
+    if [ -z "$haproxy_version" ]; then
+        log_error "Missing required argument: haproxy-version"
         usage
     fi
 
-    local haproxy_version=$1
-    local output_file="${2:-spec.json}"
+    # Set default output file
+    output_file="${output_file:-spec.json}"
 
-    # Validate version format
-    if ! [[ "$haproxy_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        log_error "Invalid version format: $haproxy_version"
-        log_error "Expected format: X.Y (e.g., 3.0, 3.1, 3.2)"
-        exit 1
+    # Validate version format based on edition
+    if [ "$is_enterprise" = "true" ]; then
+        # Enterprise versions: X.Yr1 (e.g., 3.0r1, 3.1r1, 3.2r1)
+        if ! [[ "$haproxy_version" =~ ^[0-9]+\.[0-9]+r[0-9]+$ ]]; then
+            log_error "Invalid enterprise version format: $haproxy_version"
+            log_error "Expected format: X.YrZ (e.g., 3.0r1, 3.1r1, 3.2r1)"
+            exit 1
+        fi
+    else
+        # Community versions: X.Y (e.g., 3.0, 3.1, 3.2)
+        if ! [[ "$haproxy_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            log_error "Invalid community version format: $haproxy_version"
+            log_error "Expected format: X.Y (e.g., 3.0, 3.1, 3.2)"
+            exit 1
+        fi
     fi
 
     # Check dependencies
@@ -275,7 +393,7 @@ main() {
     fi
 
     # Extract the spec
-    if extract_spec "$haproxy_version" "$output_file"; then
+    if extract_spec "$haproxy_version" "$output_file" "$is_enterprise"; then
         exit 0
     else
         log_error "Failed to extract specification"

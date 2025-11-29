@@ -189,10 +189,108 @@ Uses explicit tag from values (independent versioning from controller)
 {{- end -}}
 
 {{/*
+HAProxy binary path
+Enterprise: /opt/hapee-{version}/sbin/hapee-lb
+Community: /usr/local/sbin/haproxy
+*/}}
+{{- define "haproxy-template-ic.haproxy.bin" -}}
+{{- if .Values.haproxy.haproxyBin -}}
+{{- .Values.haproxy.haproxyBin -}}
+{{- else if .Values.haproxy.enterprise.enabled -}}
+{{- printf "/opt/hapee-%s/sbin/hapee-lb" .Values.haproxy.enterprise.version -}}
+{{- else -}}
+/usr/local/sbin/haproxy
+{{- end -}}
+{{- end -}}
+
+{{/*
+Dataplane API binary path
+Enterprise: /opt/hapee-extras/sbin/hapee-dataplaneapi
+Community: /usr/local/bin/dataplaneapi
+*/}}
+{{- define "haproxy-template-ic.haproxy.dataplanebin" -}}
+{{- if .Values.haproxy.dataplaneBin -}}
+{{- .Values.haproxy.dataplaneBin -}}
+{{- else if .Values.haproxy.enterprise.enabled -}}
+/opt/hapee-extras/sbin/hapee-dataplaneapi
+{{- else -}}
+/usr/local/bin/dataplaneapi
+{{- end -}}
+{{- end -}}
+
+{{/*
+HAProxy user
+Enterprise: hapee-lb
+Community: haproxy
+*/}}
+{{- define "haproxy-template-ic.haproxy.user" -}}
+{{- if .Values.haproxy.user -}}
+{{- .Values.haproxy.user -}}
+{{- else if .Values.haproxy.enterprise.enabled -}}
+hapee-lb
+{{- else -}}
+haproxy
+{{- end -}}
+{{- end -}}
+
+{{/*
 Component labels
 Generates app.kubernetes.io/component label for a given component name
 Usage: {{ include "haproxy-template-ic.componentLabels" "loadbalancer" }}
 */}}
 {{- define "haproxy-template-ic.componentLabels" -}}
 app.kubernetes.io/component: {{ . }}
+{{- end -}}
+
+{{/*
+HAProxy runAsUser
+Enterprise: 1000 (hapee-lb user)
+Community: 99 (haproxy user)
+*/}}
+{{- define "haproxy-template-ic.haproxy.runAsUser" -}}
+{{- if .Values.haproxy.enterprise.enabled -}}
+1000
+{{- else -}}
+99
+{{- end -}}
+{{- end -}}
+
+{{/*
+HAProxy runAsGroup
+Enterprise: 1000 (hapee group)
+Community: 99 (haproxy group)
+*/}}
+{{- define "haproxy-template-ic.haproxy.runAsGroup" -}}
+{{- if .Values.haproxy.enterprise.enabled -}}
+1000
+{{- else -}}
+99
+{{- end -}}
+{{- end -}}
+
+{{/*
+HAProxy fsGroup
+Enterprise: 1000 (hapee group)
+Community: 99 (haproxy group)
+*/}}
+{{- define "haproxy-template-ic.haproxy.fsGroup" -}}
+{{- if .Values.haproxy.enterprise.enabled -}}
+1000
+{{- else -}}
+99
+{{- end -}}
+{{- end -}}
+
+{{/*
+Dataplane API runAsUser
+Uses same UID as HAProxy to share volumes
+Enterprise: 1000 (hapee-lb user, same group as hapee-dataplaneapi)
+Community: 99 (haproxy user)
+*/}}
+{{- define "haproxy-template-ic.haproxy.dataplaneRunAsUser" -}}
+{{- if .Values.haproxy.enterprise.enabled -}}
+1000
+{{- else -}}
+99
+{{- end -}}
 {{- end -}}
