@@ -15,8 +15,10 @@
 package renderer
 
 import (
+	"context"
 	"sort"
 
+	"haproxy-template-ic/pkg/controller/httpstore"
 	"haproxy-template-ic/pkg/core/config"
 	"haproxy-template-ic/pkg/templating"
 )
@@ -89,7 +91,7 @@ import (
 //	  # Enterprise WAF configuration
 //	  filter spoe engine modsecurity
 //	{%- endif %}
-func (c *Component) buildRenderingContext(pathResolver *templating.PathResolver) (map[string]interface{}, *FileRegistry) {
+func (c *Component) buildRenderingContext(ctx context.Context, pathResolver *templating.PathResolver, isValidation bool) (map[string]interface{}, *FileRegistry) {
 	// Create resources map with wrapped stores
 	resources := make(map[string]interface{})
 
@@ -129,7 +131,7 @@ func (c *Component) buildRenderingContext(pathResolver *templating.PathResolver)
 		"snippet_count", len(snippetNames))
 
 	// Build final context
-	context := map[string]interface{}{
+	templateContext := map[string]interface{}{
 		"resources":         resources,
 		"controller":        controller,
 		"template_snippets": snippetNames,
@@ -139,15 +141,25 @@ func (c *Component) buildRenderingContext(pathResolver *templating.PathResolver)
 		"capabilities":      c.capabilitiesToMap(), // Add HAProxy/DataPlane API capabilities
 	}
 
+	// Add HTTP store wrapper if available
+	if c.httpStoreComponent != nil {
+		templateContext["http"] = httpstore.NewHTTPStoreWrapper(
+			c.httpStoreComponent,
+			c.logger,
+			isValidation,
+			ctx,
+		)
+	}
+
 	// Merge extraContext variables into top-level context
-	MergeExtraContextInto(context, c.config)
+	MergeExtraContextInto(templateContext, c.config)
 
 	if c.config.TemplatingSettings.ExtraContext != nil {
 		c.logger.Info("added extra context variables to template context",
 			"variable_count", len(c.config.TemplatingSettings.ExtraContext))
 	}
 
-	return context, fileRegistry
+	return templateContext, fileRegistry
 }
 
 // sortSnippetsByPriority sorts template snippet names by priority, then alphabetically.

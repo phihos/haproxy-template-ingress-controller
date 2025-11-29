@@ -145,6 +145,9 @@ func (r *Reconciler) handleEvent(event busevents.Event) {
 
 	case *events.ConfigValidatedEvent:
 		r.handleConfigChange(e)
+
+	case *events.HTTPResourceUpdatedEvent:
+		r.handleHTTPResourceChange(e)
 	}
 }
 
@@ -203,6 +206,22 @@ func (r *Reconciler) handleConfigChange(event *events.ConfigValidatedEvent) {
 
 	// Trigger reconciliation immediately
 	r.triggerReconciliation("config_change")
+}
+
+// handleHTTPResourceChange processes HTTP resource update events.
+//
+// HTTP resource changes are debounced like other resource changes.
+// When external HTTP content changes (e.g., IP blocklists, API responses),
+// this triggers a re-render to incorporate the new content.
+func (r *Reconciler) handleHTTPResourceChange(event *events.HTTPResourceUpdatedEvent) {
+	r.logger.Debug("HTTP resource change detected, resetting debounce timer",
+		"url", event.URL,
+		"content_size", event.ContentSize,
+		"debounce_interval", r.debounceInterval)
+
+	r.pendingTrigger = true
+	r.lastTriggerReason = "http_resource_change"
+	r.resetDebounceTimer()
 }
 
 // resetDebounceTimer resets the debounce timer to the configured interval.
